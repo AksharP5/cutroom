@@ -90,9 +90,14 @@ export function editAnchors(
     }
   }
   const targets = new Set(
-    commands.flatMap((command) =>
-      command.type === "split" ? (command.clipIds ?? []) : [],
-    ),
+    commands.flatMap((command) => {
+      if (command.type === "split") return command.clipIds ?? [];
+      // A grade write can replace an existing wheel even if it looked unchanged
+      // when the command was built. A retry must still check the intended clip.
+      if (command.type === "setClip" && command.grade !== undefined)
+        return [command.clipId];
+      return [];
+    }),
   );
   return {
     clips: before.clips.filter(

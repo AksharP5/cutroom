@@ -760,3 +760,78 @@ test("a wheel preserves concurrent fields and cancels if the Inspector closes", 
       midtones: { hue: 220, amount: 0.25 },
     });
 });
+
+test("a wheel keeps a typed hue across a level edit and skips an unchanged drag", async ({
+  page,
+  request,
+}) => {
+  const { project, grade, steps } = await gradeProject(request);
+  const api = `/api/cutroom/projects/${project.id}`;
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const wheel = inspector.getByRole("group", { name: "Midtones colour wheel" });
+  const hue = inspector.getByRole("textbox", { name: "Hue", exact: true });
+  const level = inspector.getByRole("textbox", { name: "Level", exact: true });
+  const setLevel = async (level: number) => {
+    const revision = z
+      .object({ revision: z.string() })
+      .parse(await (await request.get(`${api}/timeline`)).json()).revision;
+    const response = await request.post(`${api}/commands`, {
+      data: {
+        expectedRevision: revision,
+        commands: [
+          {
+            type: "setClip",
+            clipId: "a",
+            grade: {
+              wheels: { midtones: { level } },
+            },
+          },
+        ],
+      },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  };
+
+  await hue.fill("220°");
+  await hue.press("Enter");
+  await setLevel(0.42);
+  await expect(level).toHaveValue("42%");
+  const amount = inspector.getByRole("textbox", {
+    name: "Amount",
+    exact: true,
+  });
+  await amount.fill("50%");
+  await amount.press("Enter");
+  await expect
+    .poll(async () => (await grade("a"))?.wheels)
+    .toEqual({
+      midtones: { hue: 220, amount: 0.5, level: 0.42 },
+    });
+  await expect.poll(() => warmth(page)).toBeLessThan(-10);
+
+  await wheel.scrollIntoViewIfNeeded();
+  const box = (await wheel.boundingBox())!;
+  const at = { x: box.x + box.width * 0.85, y: box.y + box.height / 2 };
+  await page.mouse.click(at.x, at.y);
+  await expect.poll(() => warmth(page)).toBeGreaterThan(20);
+  await expect
+    .poll(async () => (await grade("a"))?.wheels)
+    .toMatchObject({
+      midtones: { hue: 0, amount: expect.closeTo(0.7, 1) },
+    });
+  const before = await steps();
+  let writes = 0;
+  page.on("request", (event) => {
+    if (event.method() === "POST" && event.url().endsWith(`${api}/commands`))
+      writes++;
+  });
+  await page.mouse.click(at.x, at.y);
+  await setLevel(0.27);
+  await expect(level).toHaveValue("27%");
+  expect(writes).toBe(0);
+  expect(await steps()).toBe(before + 1);
+});

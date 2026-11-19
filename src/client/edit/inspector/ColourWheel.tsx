@@ -14,6 +14,7 @@ const neutral: Wheel = { hue: 0, amount: 0, level: 0 };
 type Drag = {
   pointer: number;
   bounds: DOMRect;
+  start: ColourPush;
   value: ColourPush;
   release(): void;
 };
@@ -67,7 +68,13 @@ export function ColourWheel({
     drag.release();
     useWorkspace.setState({ gesture: false });
     setDraft(null);
-    if (commit) onCommit(drag.value);
+    const { start, value } = drag;
+    if (
+      commit &&
+      (start.amount !== value.amount ||
+        (value.amount !== 0 && start.hue !== value.hue))
+    )
+      onCommit(value);
     else onCancel();
   };
 
@@ -99,10 +106,12 @@ export function ColourWheel({
     };
     pad.setPointerCapture(pointer);
     window.addEventListener("keydown", escape, true);
+    const start = { hue: saved.hue, amount: saved.amount };
     editor.current = {
       pointer,
       bounds: pad.getBoundingClientRect(),
-      value: { hue: saved.hue, amount: saved.amount },
+      start,
+      value: start,
       release() {
         window.removeEventListener("keydown", escape, true);
         if (pad.hasPointerCapture(pointer)) pad.releasePointerCapture(pointer);
@@ -119,7 +128,7 @@ export function ColourWheel({
   };
 
   const editField = (key: keyof Wheel, next: number): WheelEdit => ({
-    ...(!value && key !== "hue" && { hue: direction }),
+    ...(value?.hue === undefined && key !== "hue" && { hue: direction }),
     [key]: next,
   });
   const fields = [
@@ -183,7 +192,8 @@ export function ColourWheel({
                   return;
                 }
                 onCommit({
-                  ...(!value && key !== "hue" && { hue: direction }),
+                  ...(value?.hue === undefined &&
+                    key !== "hue" && { hue: direction }),
                   [key]: next,
                 });
               }}
