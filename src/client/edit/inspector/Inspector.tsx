@@ -642,7 +642,7 @@ export function Inspector({
               key={`${projectId}:${view!.composition}:${clip.id}`}
               projectId={projectId}
               composition={view!.composition}
-              clipId={clip.id}
+              clip={clip}
               revision={view!.revision}
               fps={timeline.fps}
               disabled={track?.track.locked ?? false}

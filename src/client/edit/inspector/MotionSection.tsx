@@ -1,16 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { CaretRight } from "@phosphor-icons/react";
 import { MotionSnapshotSchema } from "../../../shared/motion";
-import type { MotionChange, MotionSnapshot } from "../../../shared/motion";
-import type { Fps } from "../../../shared/timeline/schema";
+import type {
+  MotionAddFade,
+  MotionChange,
+  MotionSnapshot,
+  MotionUpdate,
+} from "../../../shared/motion";
+import { clipEnd } from "../../../shared/timeline/apply";
+import type { Clip, Fps } from "../../../shared/timeline/schema";
 import { api, json } from "../../api";
 import { SelectMenu } from "../../components/SelectMenu";
 import { showToast, useWorkspace } from "../../workspace";
 import {
   afterTimelineEdits,
   editCompositionSource,
+  ROOT_COMPOSITION,
   useTimeline,
 } from "../timeline";
+import { useTransport } from "../transport";
 import { openFile, useCode } from "../code/code";
 import { FieldRow, ValueCell } from "./ValueField";
 
@@ -30,22 +38,24 @@ const EASES = [
   "back.out(1.7)",
 ];
 
-/** Authored motion is source, not a second set of Cutroom keyframes. No playhead subscription. */
+/** Authored motion is saved as source edits in the timeline's queue. */
 export function MotionSection({
   projectId,
   composition,
-  clipId,
+  clip,
   revision,
   fps,
   disabled,
 }: {
   projectId: string;
   composition: string;
-  clipId: string;
+  clip: Clip;
   revision: string;
   fps: Fps;
   disabled: boolean;
 }) {
+  const clipId = clip.id;
+  const scene = composition !== ROOT_COMPOSITION;
   const [open, setOpen] = useState(true);
   const [loaded, setLoaded] = useState<{
     projectId: string;
@@ -108,7 +118,11 @@ export function MotionSection({
   const source = async () => {
     if (await openFile(composition)) useWorkspace.setState({ code: true });
   };
-  const commit = async (animationId: string, change: MotionChange) => {
+  const write = async (
+    input:
+      | Pick<MotionUpdate, "animationId" | "change">
+      | Pick<MotionAddFade, "frame">,
+  ) => {
     if (!snapshot || loaded?.revision !== revision || writing.current) return;
     writing.current = true;
     setSaving(true);
@@ -133,8 +147,7 @@ export function MotionSection({
             composition,
             clipId,
             expectedVersion: snapshot.version,
-            animationId,
-            change,
+            ...input,
           }),
         );
         editedVersion.current = next.version;
@@ -150,11 +163,19 @@ export function MotionSection({
       setSaving(false);
     }
   };
+  const commit = (animationId: string, change: MotionChange) =>
+    write({ animationId, change });
   const blocked = disabled || codeBusy || !!snapshot?.reason;
   const readOnly = saving || loaded?.revision !== revision;
+  const fadeAvailable = scene && snapshot?.fadeReason === null;
+  // Only crossing the clip's edges changes the action, even while playing.
+  const underPlayhead = useTransport(
+    ({ frame }) =>
+      fadeAvailable && frame >= clip.start && frame < clipEnd(clip),
+  );
   if (
     !error &&
-    (!snapshot || (!snapshot.animations.length && !snapshot.reason))
+    (!snapshot || (!scene && !snapshot.animations.length && !snapshot.reason))
   )
     return null;
   return (
@@ -202,6 +223,32 @@ export function MotionSection({
                 {notice}
               </p>
             ))}
+          {scene && (
+            <div className="inspector-motion-actions">
+              <button
+                className="text-button quiet"
+                type="button"
+                aria-disabled={blocked || readOnly || !underPlayhead}
+                title={
+                  snapshot.fadeReason ??
+                  (underPlayhead
+                    ? "Start the fade at the playhead"
+                    : "Move the playhead over the clip")
+                }
+                onClick={() => {
+                  if (!blocked && !readOnly && underPlayhead)
+                    void write({ frame: useTransport.getState().frame });
+                }}
+              >
+                Add fade in
+              </button>
+              {snapshot.fadeReason &&
+                snapshot.fadeReason !== snapshot.reason &&
+                !snapshot.animations.length && (
+                  <p className="inspector-field-hint">{snapshot.fadeReason}</p>
+                )}
+            </div>
+          )}
           {snapshot.animations.map((animation, index) => (
             <div
               key={`${loaded?.renderVersion}:${index}`}

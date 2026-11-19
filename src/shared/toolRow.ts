@@ -218,6 +218,11 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => (target ? `${target} motion` : "authored motion"),
   },
+  motion_add_fade: {
+    verb: ["Added", "Adding", "Add"],
+    kind: "edit",
+    object: (target) => (target ? `a fade in for ${target}` : "a fade in"),
+  },
   variables_bind: {
     verb: ["Bound", "Binding", "Bind"],
     kind: "edit",

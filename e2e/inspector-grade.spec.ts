@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { z } from "zod";
 import { ProjectSchema } from "../src/shared/project";
+import { GradeSchema } from "../src/shared/timeline/grade";
 import { expect, test } from "./fixtures";
 import { seekFrame } from "./position-helpers";
 import { waitForPreview } from "./preview-ready";
@@ -910,4 +911,123 @@ test("a wheel keeps a typed hue across a level edit and skips an unchanged drag"
   await expect(level).toHaveValue("27%");
   expect(writes).toBe(0);
   expect(await steps()).toBe(before + 1);
+});
+
+test("hue curves change the selected hue in the viewer and save by channel", async ({
+  page,
+  request,
+}, info) => {
+  const { project, steps, grade } = await gradeProject(request, [
+    "drawbox=x=0:y=0:w=iw:h=ih:color=lime:t=fill",
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const plot = inspector.getByRole("group", { name: "Hue vs hue curve" });
+  await plot.scrollIntoViewIfNeeded();
+  const { x, y, width, height } = (await plot.boundingBox())!;
+  const before = await centrePixel(page);
+  expect(before.green).toBeGreaterThan(230);
+  await page.screenshot({ path: info.outputPath("neutral-hue.png") });
+  const history = await steps();
+  const turnGreenTowardRed = async () => {
+    await page.mouse.move(x + width / 3, y + height / 2);
+    await page.mouse.down();
+    await page.mouse.move(x + width / 3, y + height * 0.833, { steps: 6 });
+    await expect.poll(() => warmth(page)).toBeGreaterThan(100);
+  };
+  await turnGreenTowardRed();
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await centrePixel(page)).green)
+    .toBeGreaterThan(230);
+  expect(await steps()).toBe(history);
+  await turnGreenTowardRed();
+  expect(await steps()).toBe(history);
+  await page.mouse.up();
+  await expect.poll(steps).toBe(history + 1);
+  await expect.poll(() => warmth(page)).toBeGreaterThan(100);
+  const shifted = GradeSchema.parse(await grade("a"));
+  expect(shifted.hueCurves).toMatchObject({
+    hueVsHue: [
+      [0, 0],
+      [expect.closeTo(120, 0), expect.closeTo(-120, -1)],
+      [240, 0],
+    ],
+  });
+  await page.screenshot({ path: info.outputPath("rotated-hue.png") });
+
+  const channels = inspector.getByRole("combobox", { name: "Hue curves" });
+  await channels.click();
+  await page.getByRole("option", { name: "Hue vs saturation" }).click();
+  await inspector
+    .getByRole("slider", { name: "Hue vs saturation point 2" })
+    .press("Shift+ArrowDown");
+  await expect.poll(steps).toBe(history + 2);
+  expect((await grade("a"))?.hueCurves).toMatchObject({
+    hueVsHue: shifted.hueCurves?.hueVsHue,
+    hueVsSaturation: [
+      [0, 0],
+      [120, expect.closeTo(-0.2, 6)],
+      [240, 0],
+    ],
+  });
+  await inspector
+    .getByRole("button", { name: "Reset Hue vs saturation curve" })
+    .click();
+  await expect
+    .poll(async () => (await grade("a"))?.hueCurves)
+    .toEqual(shifted.hueCurves);
+});
+
+test("a hue drag leaves a newer edit to that curve intact", async ({
+  page,
+  request,
+}) => {
+  const { project, grade, steps } = await gradeProject(request);
+  const api = `/api/cutroom/projects/${project.id}`;
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const plot = inspector.getByRole("group", { name: "Hue vs hue curve" });
+  await plot.scrollIntoViewIfNeeded();
+  const { x, y, width, height } = (await plot.boundingBox())!;
+  const before = await steps();
+  await page.mouse.move(x + width / 3, y + height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x + width / 3, y + height * 0.75);
+  const point = plot.getByRole("slider", { name: "Hue vs hue point 2" });
+  await expect(point).toHaveAttribute("aria-valuenow", "-90");
+
+  const revision = z
+    .object({ revision: z.string() })
+    .parse(await (await request.get(`${api}/timeline`)).json()).revision;
+  const external = {
+    hueVsHue: [
+      [0, 0],
+      [120, 45],
+      [240, 0],
+    ],
+  };
+  const response = await request.post(`${api}/commands`, {
+    data: {
+      expectedRevision: revision,
+      commands: [
+        { type: "setClip", clipId: "a", grade: { hueCurves: external } },
+      ],
+    },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  await expect(
+    inspector.getByRole("button", { name: "Reset Hue vs hue curve" }),
+  ).toBeEnabled();
+  await page.mouse.up();
+  await expect(point).toHaveAttribute("aria-valuenow", "45");
+  expect(await steps()).toBe(before + 1);
+  expect((await grade("a"))?.hueCurves).toEqual(external);
 });

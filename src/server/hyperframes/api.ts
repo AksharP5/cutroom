@@ -447,10 +447,6 @@ export function createHyperframesApi(
           overrides?.[variable.id] ?? variableDefaultValue(variable);
         if (typeof value === "string" && value) images.set(variable.id, value);
       }
-      // The project's renders folder is made on demand, as for any export.
-      const own = await projectStatePath(project, ".cutroom/renders", true);
-      const directory = input.directory ?? own;
-      if (directory === own) await mkdir(own, { recursive: true });
       return c.json(
         await exportResolve(
           {
@@ -462,7 +458,7 @@ export function createHyperframesApi(
             images,
           },
           {
-            directory,
+            directory: input.directory,
             copyMedia: input.copyMedia,
             // Each layer is an ordinary MOV render job, so the editor shows its progress.
             render: async (layer, output) => {

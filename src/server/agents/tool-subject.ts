@@ -231,6 +231,7 @@ export async function toolSubject(
     case "variables_set_default":
       return text("id");
     case "motion_update":
+    case "motion_add_fade":
       return text("clipId");
     case "layer_text_update":
       return text("layerId");
