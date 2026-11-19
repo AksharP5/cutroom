@@ -334,6 +334,22 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
           await Bun.sleep(20);
         expect(state.error).toBeUndefined();
         expect(state.status).toBe("complete");
+        const start = (range?.start ?? 0) / 60;
+        const end = (range?.end ?? 240) / 60;
+        const duration = end - start;
+        const audioDuration = await command([
+          "ffprobe",
+          "-v",
+          "error",
+          "-select_streams",
+          "a:0",
+          "-show_entries",
+          "stream=duration",
+          "-of",
+          "csv=p=0",
+          path,
+        ]);
+        expect(Number(audioDuration.toString())).toBeCloseTo(duration, 3);
         const pcm = await command([
           "ffmpeg",
           "-v",
@@ -345,6 +361,9 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
           "2",
           "-ar",
           String(sampleRate),
+          // Some decoders return the final AAC packet's padding past the MP4 edit list.
+          "-t",
+          String(duration),
           "-f",
           "f32le",
           "pipe:1",
@@ -354,9 +373,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
           pcm.byteOffset,
           pcm.byteLength / 4,
         );
-        const start = (range?.start ?? 0) / 60;
-        const end = (range?.end ?? 240) / 60;
-        expect(sound.length).toBe((end - start) * sampleRate * 2);
+        expect(sound.length).toBe(duration * sampleRate * 2);
         for (const { timeline } of landmarks) {
           if (timeline <= start || timeline >= end) continue;
           const expected = timeline - start;
