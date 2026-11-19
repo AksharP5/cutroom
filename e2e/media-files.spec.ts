@@ -133,12 +133,12 @@ test("Media search finds an unused file and MCP places that same file", async ({
   baseURL,
 }, info) => {
   const { project, media, row, timeline } = await open(page, request);
-  const asset = "assets/dailies/Day 2 # slate.svg";
+  const asset = "assets/dailies/Day 2 # slate; cut.svg";
   const still =
     '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="36"><rect width="64" height="36" fill="cyan"/></svg>';
   for (const path of [
     asset,
-    "assets/picks/Day 2 # slate.svg",
+    "assets/picks/Day 2 # slate; cut.svg",
     "trash/old-slate.svg",
   ]) {
     const file = join(project.path, path);
@@ -211,14 +211,14 @@ test("Media search finds an unused file and MCP places that same file", async ({
         {
           path: asset,
           kind: "image",
-          src: "assets/dailies/Day%202%20%23%20slate.svg",
+          src: "assets/dailies/Day%202%20%23%20slate%3B%20cut.svg",
         },
       ],
       nextOffset: null,
     });
     const nested = await find("dailies/day 2", "\\compositions\\.\\scene.html");
     expect(nested.files[0]?.src).toBe(
-      "../assets/dailies/Day%202%20%23%20slate.svg",
+      "../assets/dailies/Day%202%20%23%20slate%3B%20cut.svg",
     );
     expect((await find("old-slate")).files).toEqual([]);
     expect((await find("dangling")).files).toEqual([]);
@@ -246,10 +246,16 @@ test("Media search finds an unused file and MCP places that same file", async ({
     await client.close();
   }
   await expect(timeline.locator('[data-clip="found-slate"]')).toBeVisible();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await expect(
+    inspector.getByText(/^Added Day 2 # slate; cut\.svg/),
+  ).toBeVisible();
+  await expect(inspector.getByText("and 1 more")).toHaveCount(0);
   await seekFrame(page, 135);
   await expect(
     page.frameLocator("iframe[data-live]").locator("img#found-slate"),
   ).toHaveJSProperty("naturalWidth", 64);
+  await page.screenshot({ path: info.outputPath("media-inserted.png") });
 });
 
 test("Down Arrow brings the first search result into view in a scrolled Media list", async ({

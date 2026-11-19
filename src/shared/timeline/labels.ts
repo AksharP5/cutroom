@@ -37,6 +37,9 @@ export const REGION_NAMES = {
   highlight: "Highlight",
 } as const;
 
+const sourceName = (src: string) =>
+  (localMediaPath("index.html", src) ?? src).split("/").at(-1);
+
 /**
  * A clip's name as the timeline shows it. A title without a label goes by its first line, and an
  * adjustment layer by its effect.
@@ -47,10 +50,7 @@ export function clipName(
 ) {
   const { label, src } = clip;
   if (label !== null) return label;
-  if (src !== null)
-    return (
-      (localMediaPath("index.html", src) ?? src).split("/").at(-1) ?? clip.id
-    );
+  if (src !== null) return sourceName(src) ?? clip.id;
   return (
     (clip.title && clip.textPreview) ||
     (clip.adjustment && clip.region && REGION_NAMES[clip.region.effect]) ||
@@ -98,7 +98,7 @@ export function editLabel(
       const clip = clips.find((clip) => clip.id === id);
       return clip
         ? (clip.label ??
-            clip.src?.split("/").at(-1) ??
+            (clip.src === null ? undefined : sourceName(clip.src)) ??
             ((clip.title && clip.textPreview) ||
               `a ${clip.kind === "element" ? "text" : clip.kind} clip`))
         : "a clip";
@@ -197,7 +197,7 @@ export function editLabel(
               ? (command.clip.label ??
                 `${REGION_NAMES[command.clip.region.effect].toLowerCase()} layer`)
               : (command.clip.label ??
-                command.clip.src.split("/").at(-1) ??
+                sourceName(command.clip.src) ??
                 command.clip.kind);
         if (pending && command.mode === "overwrite") {
           const tracks = [trackName(command.track)];
