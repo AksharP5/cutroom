@@ -139,7 +139,7 @@ A clip with sound can carry a volume envelope, which the editor draws as points 
 }
 ```
 
-`setClip.automation.volume` replaces the whole envelope with the points given, in any order; two points on one frame are refused, and so is an envelope on a clip without sound. Frames may be fractional, as baked ramps read back. `[]` removes the envelope and keeps effect lanes; `automation: null` removes every lane. The envelope multiplies with the clip's gain, its fades and its track's gain. It is clip-local, so it moves with the clip; a tail trim keeps it, and a razor or a head trim keeps the level at the cut but drops points before the clip's new first frame. A transition on a clip with an envelope crossfades with straight fades. A baked ramp may bend between its points; writing points back makes straight runs. Preview and export play the same envelope.
+`setClip.automation.volume` replaces the whole envelope with the points given, in any order; two points on one frame are refused, and so is an envelope on a clip without sound. Frames may be fractional, as baked ramps read back. `[]` removes the volume envelope and keeps effect automation. `automation: null` removes volume and effect automation and preserves clip speed. The envelope multiplies with the clip's gain, its fades and its track's gain. It is clip-local, so it moves with the clip; a tail trim keeps it, and a razor or a head trim keeps the level at the cut but drops points before the clip's new first frame. A transition on a clip with an envelope crossfades with straight fades. A baked ramp may bend between its points; writing points back makes straight runs. Preview and export play the same envelope.
 
 ### Audio effects
 

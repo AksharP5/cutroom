@@ -426,7 +426,11 @@ export function editLabel(
                 : "Disabled clip",
           );
         if (pending && command.automation !== undefined)
-          parts.push("Clear automation");
+          parts.push(
+            command.automation === null
+              ? "Clear audio automation"
+              : "Edit volume automation",
+          );
         return `${parts.join("; ") || (pending ? fallback : "")}${named && (pending || parts.length) ? ` for ${target([command.clipId])}` : ""}`;
       }
       case "setKeyframe":

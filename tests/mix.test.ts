@@ -62,6 +62,41 @@ test("clearing a split's automation removes its baked ramp with exact HTML readb
   ).toBe(false);
 });
 
+test("clearing audio automation preserves both linked speed curves in the saved timeline", () => {
+  const rate = {
+    target: "rate",
+    points: [
+      { t: 0, v: 0.25 },
+      { t: 4, v: 4 },
+    ],
+  };
+  const volume = { target: "volume", points: [{ t: 0, v: 0.5 }] };
+  const effect = { target: "fx.n1.threshold", points: [{ t: 0, v: -12 }] };
+  const automation = (lanes: unknown[]) =>
+    JSON.stringify({ version: 1, lanes });
+  const html = `<main data-composition-id="main" data-duration="4" data-fps="30">
+    <video id="picture" src="shot.mp4" muted data-link="shot" data-start="0" data-duration="4" data-track-index="0" data-automation='${automation([rate])}'></video>
+    <audio id="sound" src="shot.mp4" data-link="shot" data-start="0" data-duration="4" data-track-index="1" data-automation='${automation([rate, volume, effect])}'></audio>
+  </main>`;
+  const result = edited(html, [
+    { type: "setClip", clipId: "sound", automation: null },
+  ]);
+  expect(
+    result.timeline.clips.map(({ id, automation: saved }) => ({
+      id,
+      lanes: saved ? parseAutomation(saved).lanes : [],
+    })),
+  ).toEqual([
+    { id: "picture", lanes: [rate] },
+    { id: "sound", lanes: [rate] },
+  ]);
+  expect(
+    edited(result.html, [
+      { type: "setClip", clipId: "sound", automation: null },
+    ]).html,
+  ).toBe(result.html);
+});
+
 test("a gain drag leaves the line under the pointer, lands on unity, and recovers from silence", () => {
   const plain = { dy: 0, fine: false, body: 25, lane: 1, fade: 1 };
   const at = (db: number) => audioDbToGain(db);

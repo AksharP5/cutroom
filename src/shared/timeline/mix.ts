@@ -1,6 +1,7 @@
 import {
   HF_AUDIO_AUTOMATION_VERSION,
   MAX_AUTOMATION_POINTS,
+  RATE_TARGET,
   VOLUME_TARGET,
   gainedVolume,
   isBentSegment,
@@ -102,6 +103,17 @@ export function withVolumePoints(
     ...(timed.length ? [{ target: VOLUME_TARGET, points: timed }] : []),
   ];
   return lanes.length ? serializeAutomation({ ...parsed, lanes }) : null;
+}
+
+/** Clip speed governs media timing, even though HyperFrames stores it beside the mix lanes. */
+export function clearAudioAutomation(automation: string | null) {
+  if (!automation) return null;
+  const parsed = parseAutomation(automation);
+  const lanes = parsed.lanes.filter((lane) => lane.target === RATE_TARGET);
+  if (!lanes.length) return null;
+  return lanes.length === parsed.lanes.length
+    ? automation
+    : serializeAutomation({ ...parsed, lanes });
 }
 
 /** Effective fades, in frames, using the same proportional clamp as preview and render. */
