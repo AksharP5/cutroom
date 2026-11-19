@@ -21,8 +21,8 @@ import {
 import { editTimeline } from "../timeline";
 import { Row } from "./TitleSection";
 import { ValueField } from "./ValueField";
-import { CurveEditor, IDENTITY } from "./CurveEditor";
-import type { CurveChannel } from "./CurveEditor";
+import { CurveEditor, GradeCurvePlot, IDENTITY } from "./CurveEditor";
+import type { CurveChannel, CurvePoint } from "./CurveEditor";
 import { ColourWheel } from "./ColourWheel";
 import type { WheelEdit, WheelRange } from "./ColourWheel";
 
@@ -31,6 +31,19 @@ const WHEELS = {
   midtones: "Midtones",
   highlights: "Highlights",
 } satisfies Record<WheelRange, string>;
+
+type GradeCurve = readonly (readonly [number, number])[];
+type HueCurve = keyof NonNullable<Grade["hueCurves"]>;
+const HUE_CURVES = {
+  hueVsHue: { label: "Hue vs hue", range: 180 },
+  hueVsSaturation: { label: "Hue vs saturation", range: 1 },
+  hueVsLuma: { label: "Hue vs luma", range: 1 },
+} satisfies Record<HueCurve, { label: string; range: number }>;
+const NEUTRAL_HUE: CurvePoint[] = [
+  [0, 0],
+  [120, 0],
+  [240, 0],
+];
 
 type AdjustKey = keyof NonNullable<Grade["adjust"]>;
 
@@ -285,6 +298,8 @@ export function ColorSection({
   const { luts, reload } = useLuts(projectId, open);
   const [channel, setChannel] = useState<CurveChannel>("master");
   const [wheel, setWheel] = useState<WheelRange>("midtones");
+  const [hueCurve, setHueCurve] = useState<HueCurve>("hueVsHue");
+  const hue = HUE_CURVES[hueCurve];
   const file = useRef<HTMLInputElement>(null);
 
   const save = (label: string, change: GradeEdit | null) =>
@@ -301,6 +316,31 @@ export function ColorSection({
     wheels: { [wheel]: { ...base?.wheels?.[wheel], ...change } },
   });
 
+  const hueChange = (points: CurvePoint[]): GradeEdit => ({
+    hueCurves: {
+      [hueCurve]: points.map(([input, output]) => [
+        input * 360,
+        (2 * output - 1) * hue.range,
+      ]),
+    },
+  });
+
+  const saveCurve = (
+    label: string,
+    change: GradeEdit,
+    read: (value: Grade | null) => GradeCurve | undefined,
+  ) =>
+    void commitGradePreview(() =>
+      editTimeline(projectId, label, (timeline) => {
+        const current = timeline.clips.find(({ id }) => id === clip.id);
+        if (
+          !current ||
+          JSON.stringify(read(current.grade)) !== JSON.stringify(read(grade))
+        )
+          return [];
+        return [{ type: "setClip", clipId: clip.id, grade: change }];
+      }),
+    );
   const lutPath = (src: string) =>
     luts?.find((lut) => sourceUrl(composition, lut.path) === src)?.path ?? src;
   const current = grade?.lut ? lutPath(grade.lut.src) : NONE;
@@ -546,18 +586,82 @@ export function ColorSection({
           Reset
         </button>
       </Row>
-      <CurveEditor
-        key={`${clip.id}:${channel}`}
-        channel={channel}
-        points={grade?.curves?.[channel] ?? IDENTITY}
-        disabled={locked}
-        onChannel={setChannel}
-        onPreview={(points) => draft({ curves: { [channel]: points } })}
-        onCancel={() => cancelGradePreview(clip.id)}
-        onCommit={(points) =>
-          commit(`Set ${channel} curve`, { curves: { [channel]: points } })
-        }
-      />
+      {open && visible && (
+        <>
+          <CurveEditor
+            key={`${clip.id}:${channel}:${locked}`}
+            channel={channel}
+            points={grade?.curves?.[channel] ?? IDENTITY}
+            disabled={locked}
+            onChannel={setChannel}
+            onPreview={(points) => draft({ curves: { [channel]: points } })}
+            onCancel={() => cancelGradePreview(clip.id)}
+            onCommit={(points) =>
+              saveCurve(
+                `Set ${channel} curve`,
+                { curves: { [channel]: points } },
+                (value) => value?.curves?.[channel],
+              )
+            }
+          />
+          <div className="inspector-wheel-header">
+            <SelectMenu
+              label="Hue curves"
+              value={hueCurve}
+              disabled={locked}
+              options={Object.entries(HUE_CURVES).map(([value, { label }]) => ({
+                value,
+                label,
+              }))}
+              onChange={(value) => {
+                if (
+                  value === "hueVsHue" ||
+                  value === "hueVsSaturation" ||
+                  value === "hueVsLuma"
+                )
+                  setHueCurve(value);
+              }}
+            />
+            <button
+              type="button"
+              className="inspector-curve-reset"
+              aria-label={`Reset ${hue.label} curve`}
+              disabled={locked || !grade?.hueCurves?.[hueCurve]}
+              onClick={() =>
+                void save(`Reset ${hue.label} curve`, {
+                  hueCurves: { [hueCurve]: null },
+                })
+              }
+            >
+              Reset
+            </button>
+          </div>
+          <div className="inspector-curve">
+            <GradeCurvePlot
+              key={`${clip.id}:${hueCurve}:${locked}`}
+              label={hue.label}
+              points={(grade?.hueCurves?.[hueCurve] ?? NEUTRAL_HUE)
+                .map(
+                  ([input, output]) =>
+                    [input / 360, 0.5 + output / (2 * hue.range)] as const,
+                )
+                .sort(([a], [b]) => a - b)}
+              hueRange={hue.range}
+              disabled={locked}
+              onPreview={(points) => draft(hueChange(points))}
+              onCommit={(points) =>
+                saveCurve(
+                  `Set ${hue.label} curve`,
+                  hueChange(points),
+                  (value) => value?.hueCurves?.[hueCurve],
+                )
+              }
+              onCancel={() => cancelGradePreview(clip.id)}
+            />
+            <div className="inspector-hue-spectrum" aria-hidden />
+          </div>
+        </>
+      )}
     </details>
   );
 }
