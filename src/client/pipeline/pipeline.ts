@@ -1,6 +1,7 @@
 import { PipelineResponseSchema } from "../../shared/pipeline";
 import type { FootageColour, PipelinePlan } from "../../shared/pipeline";
 import type { TimelineView } from "../../shared/timeline/schema";
+import { localMediaPath } from "../../shared/media";
 import { useGradeBypass, usePreviewGrade } from "../edit/preview";
 import { previewGrades } from "./grades";
 import type { GradeTexture } from "./grades";
@@ -164,7 +165,10 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       preparing.delete(path);
     }
   };
-  const sources = sourceCache(async (path): Promise<Source> => {
+  const sources = sourceCache(async (src): Promise<Source> => {
+    const path = localMediaPath("index.html", src);
+    if (path === null)
+      throw new Error("Choose footage from the project folder.");
     // A file the server cannot read a grid for shows its frames at their own times.
     const grid = fetch(
       `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/frames?path=${encodeURIComponent(path)}`,
@@ -179,7 +183,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const { createDecoder, intrinsic } = await openSource(
       mediaUrl(projectId, path),
       closing.signal,
-      { colour: sourceColours[path] },
+      { colour: sourceColours[src] },
     ).catch(async (error: unknown) => {
       const url = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/proxy?path=${encodeURIComponent(path)}`;
       const response = await fetch(url, {

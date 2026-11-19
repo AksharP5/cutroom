@@ -339,15 +339,16 @@ async function cutsProject(
   rate: { num: number; den: number },
 ) {
   const text = `${rate.num}/${rate.den}`;
+  const secondFile = "B # %23.mp4";
   const created = await project(request, rate, (seconds) =>
     [
       `<video id="v0" src="a.mp4" muted data-start="0" data-duration="${seconds(30)}" data-media-start="0" data-track-index="0" style="${fill}"></video>`,
       `<video id="v1" src="a.mp4" muted data-start="${seconds(30)}" data-duration="${seconds(30)}" data-media-start="${seconds(47)}" data-track-index="0" style="${fill}"></video>`,
-      `<video id="v2" src="b.mp4" muted data-start="${seconds(60)}" data-duration="${seconds(50)}" data-media-start="${seconds(13)}" data-track-index="0" style="${fill};object-fit:contain"></video>`,
+      `<video id="v2" src="${encodeURIComponent(secondFile)}" muted data-start="${seconds(60)}" data-duration="${seconds(50)}" data-media-start="${seconds(13)}" data-track-index="0" style="${fill};object-fit:contain"></video>`,
     ].join("\n"),
   );
   await numbered(join(created.path, "a.mp4"), text);
-  await numbered(join(created.path, "b.mp4"), text, "480x360");
+  await numbered(join(created.path, secondFile), text, "480x360");
   return created;
 }
 
