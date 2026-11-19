@@ -28,6 +28,8 @@ type FieldProps = {
   hint?: string;
   /** Pixels without their unit, for four values across one row. Typing " px" still works. */
   bare?: boolean;
+  /** Capture the source before a scrub, text edit, or run of arrow steps starts. */
+  onStart?(): void;
   onCommit(value: number | null): void;
   onPreview?(value: number): void;
   onCancel?(): void;
@@ -49,6 +51,7 @@ function useValue({
   tip,
   hint,
   bare = false,
+  onStart,
   onCommit,
   onPreview,
   onCancel,
@@ -119,6 +122,7 @@ function useValue({
       if (disabled || readOnly || event.button !== 0) return;
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
+      onStart?.();
       const start = value ?? 1;
       // Esc during a scrub cancels it, before the drawer or editor sees the key.
       const cancel = (key: KeyboardEvent) => {
@@ -205,7 +209,9 @@ function useValue({
       value={draft ?? (mixed ? "Mixed" : format(value))}
       onFocus={(event) => event.currentTarget.select()}
       onChange={(event) => {
-        if (!readOnly) setDraft(event.target.value);
+        if (readOnly) return;
+        if (draft === null) onStart?.();
+        setDraft(event.target.value);
       }}
       onBlur={() => {
         if (cancelled.current) {
@@ -223,6 +229,7 @@ function useValue({
         ) {
           event.preventDefault();
           try {
+            if (draft === null) onStart?.();
             const current =
               draft === null || draft.trim().toLowerCase() === "auto"
                 ? (value ?? 1)

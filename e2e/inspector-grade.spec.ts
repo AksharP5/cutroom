@@ -6,6 +6,7 @@ import type { APIRequestContext, Page } from "@playwright/test";
 import { z } from "zod";
 import { ProjectSchema } from "../src/shared/project";
 import { GradeSchema } from "../src/shared/timeline/grade";
+import type { GradeEdit } from "../src/shared/timeline/grade";
 import { expect, test } from "./fixtures";
 import { seekFrame } from "./position-helpers";
 import { waitForPreview } from "./preview-ready";
@@ -86,23 +87,35 @@ async function gradeProject(
   return { project, steps, grade };
 }
 
+async function picturePixels(page: Page, columns: number[]) {
+  const picture = await page.locator(".edit-picture").boundingBox();
+  if (!picture) throw new Error("The viewer picture is not visible.");
+  // Chromium's cropped capture can round a channel differently from the visible viewer.
+  const png = await page.screenshot({ scale: "css" });
+  return page.evaluate(
+    async ({ data, columns, picture }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = new OffscreenCanvas(image.width, image.height);
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return columns.map((column) => {
+        const [red, green, blue] = context.getImageData(
+          Math.round(picture.x + picture.width * column),
+          Math.round(picture.y + picture.height / 2),
+          1,
+          1,
+        ).data;
+        return { red: red!, green: green!, blue: blue!, warmth: red! - blue! };
+      });
+    },
+    { data: png.toString("base64"), columns, picture },
+  );
+}
+
 async function centrePixel(page: Page) {
-  const png = await page.locator(".edit-picture").screenshot();
-  return page.evaluate(async (data) => {
-    const image = new Image();
-    image.src = `data:image/png;base64,${data}`;
-    await image.decode();
-    const canvas = new OffscreenCanvas(image.width, image.height);
-    const context = canvas.getContext("2d")!;
-    context.drawImage(image, 0, 0);
-    const [red, green, blue] = context.getImageData(
-      Math.round(image.width / 2),
-      Math.round(image.height / 2),
-      1,
-      1,
-    ).data;
-    return { warmth: red! - blue!, green: green! };
-  }, png.toString("base64"));
+  return (await picturePixels(page, [0.5]))[0]!;
 }
 
 /** Red minus blue at the picture's centre: positive is warm. */
@@ -911,6 +924,200 @@ test("a wheel keeps a typed hue across a level edit and skips an unchanged drag"
   await expect(level).toHaveValue("27%");
   expect(writes).toBe(0);
   expect(await steps()).toBe(before + 1);
+});
+
+test("an HSL correction changes only the qualified colour and saves once", async ({
+  page,
+  request,
+}, info) => {
+  const { project, grade, steps } = await gradeProject(request, [
+    "drawbox=x=0:y=0:w=iw/2:h=ih:color=lime:t=fill",
+    "drawbox=x=iw/2:y=0:w=iw/2:h=ih:color=blue:t=fill",
+    "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv",
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const secondaries = inspector.getByRole("region", { name: "HSL secondary" });
+  await secondaries.getByRole("button", { name: "Add secondary" }).click();
+  await expect
+    .poll(async () => (await grade("a"))?.secondaries)
+    .toEqual([{ key: {}, correction: {} }]);
+  for (const [name, value] of [
+    ["Hue center", "120°"],
+    ["Hue range", "30°"],
+    ["Saturation minimum", "60%"],
+  ] as const) {
+    const field = secondaries.getByRole("textbox", { name, exact: true });
+    await field.fill(value);
+    await field.press("Enter");
+  }
+  const key = { hue: { center: 120, range: 30 }, saturation: { min: 0.6 } };
+  await expect
+    .poll(async () => (await grade("a"))?.secondaries)
+    .toEqual([{ key, correction: {} }]);
+
+  const shift = secondaries.getByText("Hue shift", { exact: true });
+  await secondaries
+    .getByRole("textbox", { name: "Tint", exact: true })
+    .scrollIntoViewIfNeeded();
+  const before = await picturePixels(page, [0.25, 0.75]);
+  expect(before[0]!.green - before[0]!.red).toBeGreaterThan(120);
+  expect(before[1]!.blue - before[1]!.red).toBeGreaterThan(120);
+  await page.screenshot({ path: info.outputPath("before-hsl.png") });
+  const history = await steps();
+  const box = (await shift.boundingBox())!;
+  const scrub = async () => {
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - 120, box.y + box.height / 2, {
+      steps: 12,
+    });
+  };
+  await scrub();
+  await expect
+    .poll(async () => (await picturePixels(page, [0.25]))[0]!.red)
+    .toBeGreaterThan(before[0]!.red + 120);
+  const drafted = (await picturePixels(page, [0.75]))[0]!;
+  expect(drafted).toMatchObject({
+    red: expect.closeTo(before[1]!.red, -1),
+    green: expect.closeTo(before[1]!.green, -1),
+    blue: expect.closeTo(before[1]!.blue, -1),
+  });
+  expect(await steps()).toBe(history);
+  await page.mouse.up();
+  await expect.poll(steps).toBe(history + 1);
+  await expect
+    .poll(async () => (await grade("a"))?.secondaries)
+    .toEqual([{ key, correction: { hueShift: -120 } }]);
+  await expect
+    .poll(async () => (await picturePixels(page, [0.25]))[0]!.red)
+    .toBeGreaterThan(before[0]!.red + 120);
+  await page.screenshot({ path: info.outputPath("after-hsl.png") });
+
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect.poll(() => picturePixels(page, [0.25, 0.75])).toEqual(before);
+  const beforeCancel = await steps();
+  await scrub();
+  await expect
+    .poll(async () => (await picturePixels(page, [0.25]))[0]!.red)
+    .toBeGreaterThan(before[0]!.red + 120);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect.poll(() => picturePixels(page, [0.25, 0.75])).toEqual(before);
+  expect(await steps()).toBe(beforeCancel);
+  await expect
+    .poll(async () => (await grade("a"))?.secondaries)
+    .toEqual([{ key, correction: {} }]);
+});
+
+test("HSL edits preserve other stages and refuse a replaced selection", async ({
+  page,
+  request,
+}) => {
+  const { project, grade, steps } = await gradeProject(request);
+  const api = `/api/cutroom/projects/${project.id}`;
+  const write = async (grade: GradeEdit) => {
+    const revision = z
+      .object({ revision: z.string() })
+      .parse(await (await request.get(`${api}/timeline`)).json()).revision;
+    const response = await request.post(`${api}/commands`, {
+      data: {
+        expectedRevision: revision,
+        commands: [{ type: "setClip", clipId: "a", grade }],
+      },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  };
+  const lime = { key: { hue: { center: 120, range: 20 } }, correction: {} };
+  const blue = {
+    key: { hue: { center: 240, range: 20 } },
+    correction: { luma: 0.25 },
+  };
+  await write({ secondaries: [lime, blue] });
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const secondaries = inspector.getByRole("region", { name: "HSL secondary" });
+  const center = secondaries.getByRole("textbox", { name: "Hue center" });
+  const shift = secondaries.getByRole("textbox", { name: "Hue shift" });
+  await expect(center).toHaveValue("120°");
+  await expect(
+    secondaries.getByRole("textbox", { name: "Luma softness" }),
+  ).toHaveValue("5%");
+  await shift.fill("-60°");
+  await write({ adjust: { contrast: 0.25 } });
+  await expect(
+    inspector.getByRole("textbox", { name: "Contrast" }),
+  ).toHaveValue("25");
+  await shift.press("Enter");
+  await expect
+    .poll(() => grade("a"))
+    .toEqual({
+      adjust: { contrast: 0.25 },
+      secondaries: [{ ...lime, correction: { hueShift: -60 } }, blue],
+    });
+
+  const luma = secondaries.getByText("Luma", { exact: true }).last();
+  await luma.scrollIntoViewIfNeeded();
+  await shift.fill("-70°");
+  const box = (await luma.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 - 10, box.y + box.height / 2);
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await grade("a"))?.secondaries)
+    .toEqual([{ ...lime, correction: { hueShift: -70, luma: -0.1 } }, blue]);
+
+  const saturationMax = secondaries.getByRole("textbox", {
+    name: "Saturation maximum",
+  });
+  await saturationMax.fill("0.08%");
+  await saturationMax.press("Enter");
+  const saturationMin = secondaries.getByRole("textbox", {
+    name: "Saturation minimum",
+  });
+  await saturationMin.fill("0.07%");
+  await saturationMin.press("Enter");
+  await expect
+    .poll(async () => (await grade("a"))?.secondaries)
+    .toEqual([
+      {
+        key: { ...lime.key, saturation: { min: 0.0007, max: 0.0008 } },
+        correction: { hueShift: -70, luma: -0.1 },
+      },
+      blue,
+    ]);
+
+  await shift.fill("-90°");
+  await write({ secondaries: [blue, lime] });
+  await expect(center).toHaveValue("240°");
+  const history = await steps();
+  await secondaries.getByText("Tint", { exact: true }).click();
+  await expect(
+    page.getByText("The HSL selections changed. Try the edit again."),
+  ).toBeVisible();
+  expect(await steps()).toBe(history);
+  await expect
+    .poll(async () => (await grade("a"))?.secondaries)
+    .toEqual([blue, lime]);
+
+  await secondaries.getByRole("combobox", { name: "HSL selection" }).click();
+  await page.getByRole("option", { name: "Selection 2" }).click();
+  await expect(center).toHaveValue("120°");
+  await secondaries.getByRole("button", { name: "Remove secondary" }).click();
+  await expect(center).toHaveValue("240°");
+  await expect
+    .poll(() => grade("a"))
+    .toEqual({
+      adjust: { contrast: 0.25 },
+      secondaries: [blue],
+    });
 });
 
 test("hue curves change the selected hue in the viewer and save by channel", async ({

@@ -925,6 +925,46 @@
   font-size: var(--type-xs);
 }
 
+.inspector-secondaries {
+  margin-block-start: var(--space-3);
+}
+.inspector-secondary-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.inspector-secondary-header h3 {
+  margin: 0 auto 0 0;
+  color: var(--text-primary);
+  font-size: var(--type-xs);
+  font-weight: var(--weight-semibold);
+}
+.inspector-secondary-header .select-trigger {
+  padding-inline: var(--space-2);
+  font-size: var(--type-xs);
+}
+.inspector-secondary-key .inspector-value[data-paired] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.inspector-secondary-correction {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--space-3);
+}
+.inspector-secondary-correction h4 {
+  grid-column: 1 / -1;
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+  font-weight: var(--weight-medium);
+}
+.inspector-secondary-correction .inspector-field {
+  grid-template-columns: minmax(0, 1fr) var(--size-inspector-value);
+}
+.inspector-secondary-correction .inspector-value {
+  display: block;
+}
+
 .inspector-wheel-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
