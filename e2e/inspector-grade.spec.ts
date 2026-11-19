@@ -349,7 +349,7 @@ test("the footage pipeline draws a grade draft and bypass from the same paused f
   ).toHaveCount(0);
 });
 
-test("the pipeline's 33-point grade matches export on synthetic swatches", async ({
+test("the pipeline's 33-point grade matches export on swatches and a luma ramp", async ({
   page,
   request,
 }) => {
@@ -365,10 +365,13 @@ test("the pipeline's 33-point grade matches export on synthetic swatches", async
   ];
   const { project } = await gradeProject(
     request,
-    swatches.map(
-      (colour, index) =>
-        `drawbox=x=${index * 80}:y=0:w=80:h=360:color=0x${colour}:t=fill`,
-    ),
+    [
+      ...swatches.map(
+        (colour, index) =>
+          `drawbox=x=${index * 80}:y=0:w=80:h=360:color=0x${colour}:t=fill`,
+      ),
+      "geq=lum='if(lt(Y,120),16+219*X/(W-1),lum(X,Y))':cb='if(lt(Y,60),128,cb(X,Y))':cr='if(lt(Y,60),128,cr(X,Y))'",
+    ],
     true,
   );
   const file = join(project.path, "index.html");
@@ -417,21 +420,30 @@ test("the pipeline's 33-point grade matches export on synthetic swatches", async
     "data-frame",
     "15",
   );
+  const swatchPoints = swatches.map((_, index) => ({
+    x: index * 80 + 40,
+    y: 180,
+  }));
+  const rampPoints = Array.from({ length: 16 }, (_, index) => ({
+    x: index * 40 + 20,
+    y: 60,
+  }));
+  const points = [...swatchPoints, ...rampPoints];
   const png = await page.locator(".edit-picture").screenshot();
   const preview = await page.evaluate(
-    async ({ data, count }) => {
+    async ({ data, points }) => {
       const image = new Image();
       image.src = `data:image/png;base64,${data}`;
       await image.decode();
       const canvas = new OffscreenCanvas(image.width, image.height);
       const context = canvas.getContext("2d")!;
       context.drawImage(image, 0, 0);
-      return Array.from({ length: count }, (_, i) =>
+      return points.map(({ x, y }) =>
         Array.from(
           context
             .getImageData(
-              Math.floor(((i + 0.5) * image.width) / count),
-              Math.floor(image.height / 2),
+              Math.floor((x * image.width) / 640),
+              Math.floor((y * image.height) / 360),
               1,
               1,
             )
@@ -439,7 +451,7 @@ test("the pipeline's 33-point grade matches export on synthetic swatches", async
         ),
       );
     },
-    { data: png.toString("base64"), count: swatches.length },
+    { data: png.toString("base64"), points },
   );
   const response = await request.post(`/api/projects/${project.id}/export`, {
     data: {
@@ -472,20 +484,31 @@ test("the pipeline's 33-point grade matches export on synthetic swatches", async
     ],
     { encoding: "buffer", maxBuffer: 1024 * 1024 },
   );
-  const offsets = preview.flatMap((pixel, i) =>
-    pixel.map((value, channel) =>
-      Math.abs(value - stdout[(180 * 640 + i * 80 + 40) * 3 + channel]!),
-    ),
-  );
-  const mean = offsets.reduce((sum, delta) => sum + delta, 0) / offsets.length;
-  const max = Math.max(...offsets);
-  console.log(
-    `Grade swatches differ from export by ${mean.toFixed(2)} levels on average, max ${max}.`,
-  );
-  expect(mean, `mean colour error, max ${max}`).toBeLessThan(1.6);
-  expect(max, `max colour error, mean ${mean.toFixed(2)}`).toBeLessThanOrEqual(
-    6,
-  );
+  const offsets = (from: number, to: number) =>
+    points
+      .slice(from, to)
+      .flatMap(({ x, y }, index) =>
+        preview[from + index]!.map((value, channel) =>
+          Math.abs(value - stdout[(y * 640 + x) * 3 + channel]!),
+        ),
+      );
+
+  for (const [name, errors] of [
+    // Test both independently so one pattern cannot average out the other.
+    ["swatches", offsets(0, swatchPoints.length)],
+    ["luma ramp", offsets(swatchPoints.length, points.length)],
+  ] as const) {
+    const mean = errors.reduce((sum, delta) => sum + delta, 0) / errors.length;
+    const max = Math.max(...errors);
+    console.log(
+      `Grade ${name} differ from export by ${mean.toFixed(2)} levels on average, max ${max}.`,
+    );
+    expect(mean, `${name} mean colour error, max ${max}`).toBeLessThan(1.6);
+    expect(
+      max,
+      `${name} max colour error, mean ${mean.toFixed(2)}`,
+    ).toBeLessThanOrEqual(6);
+  }
 });
 test("Curves add, move and remove points on each channel, drafting while they move", async ({
   page,

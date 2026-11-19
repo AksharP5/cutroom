@@ -57,7 +57,7 @@ export { chromeColourGuess };
 
 /**
  * FFmpeg filters that give extracted SDR frames the colours Chrome draws for the same video.
- * Chrome fills each untagged field with its BT.601 or BT.709 guess, then converts the gamut and
+ * Chrome uses a tagged BT.709 matrix to resolve missing primaries, then converts the gamut and
  * transfer to sRGB. HyperFrames copies only the matrix guess, so BT.601 footage, including every
  * untagged SD H.264 file, exported more saturated than the editor showed it.
  */
@@ -65,7 +65,9 @@ export function chromeSdrColourFilters(metadata: SdrSource) {
   const guess = chromeColourGuess(metadata.height, metadata.videoCodec);
   const taggedMatrix = tagged(metadata.colorSpace?.colorSpace);
   const matrix = taggedMatrix ?? guess;
-  const primary = tagged(metadata.colorSpace?.colorPrimaries) ?? guess;
+  const primary =
+    tagged(metadata.colorSpace?.colorPrimaries) ??
+    (matrix === "bt709" ? "bt709" : guess);
   const transfer = metadata.colorSpace?.colorTransfer ?? "";
   const drawnAsIs = primary === "bt709" && srgbTransfers.has(transfer);
   // FFmpeg's colorspace filter drops alpha, so transparent footage keeps the plain passthrough.

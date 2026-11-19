@@ -143,11 +143,8 @@ export function createTimelineRoutes(
     const settings = document.timelines[composition] ?? emptyTimelineSettings();
     // One scope for reading, media discovery, and the readback after an edit.
     const scope = compositionScope(composition);
-    const { lengths, footageRefusals } = await compositionMediaFacts(
-      project,
-      composition,
-      source.content,
-    );
+    const { lengths, footageRefusals, footageColours } =
+      await compositionMediaFacts(project, composition, source.content);
     const fonts = new Set([
       ...declaredFonts(source.content),
       ...(composition === "index.html"
@@ -160,6 +157,7 @@ export function createTimelineRoutes(
       scope,
       lengths,
       footageRefusals,
+      footageColours,
       parsed: parseComposition(source.content, settings, {
         scope,
         mediaLengths: lengths,
@@ -711,7 +709,7 @@ export function createTimelineRoutes(
     const project = await store.get(c.req.param("id"));
     c.header("cache-control", "no-store");
     try {
-      const { source, parsed, footageRefusals } = await read(
+      const { source, parsed, footageRefusals, footageColours } = await read(
         project,
         "index.html",
       );
@@ -726,6 +724,7 @@ export function createTimelineRoutes(
       );
       return c.json({
         revision: source.version,
+        colours: Object.fromEntries(footageColours),
         plan: planPreviewPipeline(
           source.content,
           parsed.timeline.fps,

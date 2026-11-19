@@ -31,8 +31,18 @@ export const PipelinePlanSchema = z.union([
 ]);
 export type PipelinePlan = z.infer<typeof PipelinePlanSchema>;
 
+/** SDR tags FFmpeg reads from the source, including tags carried only in the bitstream. */
+export const FootageColourSchema = z.object({
+  primaries: z.enum(["bt709", "bt470bg", "smpte170m"]).optional(),
+  transfer: z.enum(["bt709", "smpte170m", "iec61966-2-1"]).optional(),
+  matrix: z.enum(["rgb", "bt709", "bt470bg", "smpte170m"]).optional(),
+  fullRange: z.boolean().optional(),
+});
+export type FootageColour = z.infer<typeof FootageColourSchema>;
+
 export const PipelineResponseSchema = z.object({
   /** The entry composition's source version the plan was read from. */
   revision: z.string(),
   plan: PipelinePlanSchema,
+  colours: z.record(z.string(), FootageColourSchema).default({}),
 });

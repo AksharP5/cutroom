@@ -1,6 +1,8 @@
 import { stat } from "node:fs/promises";
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { z } from "zod";
+import { FootageColourSchema } from "../../shared/pipeline";
+import type { FootageColour } from "../../shared/pipeline";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { projectPath, unavailableProjectFile } from "../projects/path";
@@ -15,6 +17,9 @@ const ProbeSchema = z.object({
         width: z.number().optional(),
         height: z.number().optional(),
         pix_fmt: z.string().optional(),
+        color_primaries: z.string().optional(),
+        color_space: z.string().optional(),
+        color_range: z.string().optional(),
         color_transfer: z.string().optional(),
         tags: z.object({ alpha_mode: z.string().optional() }).optional(),
       }),
@@ -28,6 +33,7 @@ interface Probe {
   /** The file was read and holds no audio stream. */
   silent: boolean;
   footageRefusal?: string;
+  colour?: FootageColour;
 }
 
 /**
@@ -45,7 +51,7 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       "error",
       ...localMediaInputOptions,
       "-show_entries",
-      "format=duration:stream=codec_type,width,height,pix_fmt,color_transfer:stream_tags=alpha_mode",
+      "format=duration:stream=codec_type,width,height,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode",
       "-of",
       "json",
       path,
@@ -74,7 +80,21 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   )
     footageRefusal = "its source is HDR";
 
+  const primaries = FootageColourSchema.shape.primaries.safeParse(
+    video?.color_primaries,
+  );
+  const transfer = FootageColourSchema.shape.transfer.safeParse(
+    video?.color_transfer,
+  );
+  const matrix = FootageColourSchema.shape.matrix.safeParse(video?.color_space);
+  const range = video?.color_range;
   return {
+    colour: video && {
+      primaries: primaries.data,
+      transfer: transfer.data,
+      matrix: matrix.data,
+      fullRange: range === "pc" ? true : range === "tv" ? false : undefined,
+    },
     seconds:
       seconds !== undefined && Number.isFinite(seconds) && seconds > 0
         ? seconds
@@ -90,6 +110,7 @@ export interface MediaFacts {
   /** Every `src` that was read and holds no audio stream. */
   silent: Set<string>;
   footageRefusals: Map<string, string>;
+  footageColours: Map<string, FootageColour>;
 }
 
 /** What ffprobe reports for the given `src` values; files that are missing or unreadable are left out. */
@@ -103,6 +124,7 @@ export async function mediaFacts(
     lengths: new Map(),
     silent: new Set(),
     footageRefusals: new Map(),
+    footageColours: new Map(),
   };
   await Promise.all(
     [...new Set(sources)].map(async (src) => {
@@ -125,6 +147,7 @@ export async function mediaFacts(
       if (!result) return;
       if (result.seconds) facts.lengths.set(src, result.seconds);
       if (result.silent) facts.silent.add(src);
+      if (result.colour) facts.footageColours.set(src, result.colour);
       if (result.footageRefusal)
         facts.footageRefusals.set(src, result.footageRefusal);
     }),
