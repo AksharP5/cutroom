@@ -20,7 +20,7 @@ import { ValueField } from "./ValueField";
 import { CurveEditor, IDENTITY } from "./CurveEditor";
 import type { CurveChannel } from "./CurveEditor";
 import { ColourWheel } from "./ColourWheel";
-import type { WheelRange } from "./ColourWheel";
+import type { WheelEdit, WheelRange } from "./ColourWheel";
 
 const WHEELS = {
   shadows: "Shadows",
@@ -256,6 +256,7 @@ type Props = {
   fps: Fps;
   disabled: boolean;
   open: boolean;
+  visible: boolean;
   onToggle(open: boolean): void;
 };
 
@@ -270,6 +271,7 @@ export function ColorSection({
   fps,
   disabled,
   open,
+  visible,
   onToggle,
 }: Props) {
   const grade = clip.grade;
@@ -291,6 +293,9 @@ export function ColorSection({
   };
   const commit = (label: string, change: GradeEdit) =>
     void commitGradePreview(() => save(label, change));
+  const wheelChange = (base: Grade | null, change: WheelEdit): GradeEdit => ({
+    wheels: { [wheel]: { ...base?.wheels?.[wheel], ...change } },
+  });
 
   const lutPath = (src: string) =>
     luts?.find((lut) => sourceUrl(composition, lut.path) === src)?.path ?? src;
@@ -474,46 +479,51 @@ export function ColorSection({
           />
         );
       })}
-      <div className="inspector-wheel-header">
-        <SelectMenu
-          label="Colour wheels"
-          value={wheel}
-          disabled={locked}
-          options={Object.entries(WHEELS).map(([value, label]) => ({
-            value,
-            label,
-          }))}
-          onChange={(value) => {
-            if (
-              value === "shadows" ||
-              value === "midtones" ||
-              value === "highlights"
-            )
-              setWheel(value);
-          }}
-        />
-        <button
-          type="button"
-          className="inspector-curve-reset"
-          disabled={locked || !grade?.wheels?.[wheel]}
-          aria-label={`Reset ${wheel} wheel`}
-          onClick={() =>
-            void save(`Reset ${wheel} wheel`, { wheels: { [wheel]: {} } })
-          }
-        >
-          Reset
-        </button>
-      </div>
-      {open && (
+      {open && visible && (
         <ColourWheel
           key={`${clip.id}:${wheel}`}
           label={WHEELS[wheel]}
           value={grade?.wheels?.[wheel]}
           fps={fps}
           disabled={locked}
-          onPreview={(value) => draft({ wheels: { [wheel]: value } })}
+          selector={
+            <SelectMenu
+              label="Colour wheels"
+              value={wheel}
+              disabled={locked}
+              options={Object.entries(WHEELS).map(([value, label]) => ({
+                value,
+                label,
+              }))}
+              onChange={(value) => {
+                if (
+                  value === "shadows" ||
+                  value === "midtones" ||
+                  value === "highlights"
+                )
+                  setWheel(value);
+              }}
+            />
+          }
+          onPreview={(value) => draft(wheelChange(grade, value))}
           onCommit={(value) =>
-            commit(`Set ${wheel} wheel`, { wheels: { [wheel]: value } })
+            void commitGradePreview(() =>
+              editTimeline(projectId, `Set ${wheel} wheel`, (timeline) => {
+                const current = timeline.clips.find(({ id }) => id === clip.id);
+                return current
+                  ? [
+                      {
+                        type: "setClip",
+                        clipId: clip.id,
+                        grade: wheelChange(current.grade, value),
+                      },
+                    ]
+                  : [];
+              }),
+            )
+          }
+          onReset={() =>
+            void save(`Reset ${wheel} wheel`, { wheels: { [wheel]: {} } })
           }
           onCancel={() => cancelGradePreview(clip.id)}
         />

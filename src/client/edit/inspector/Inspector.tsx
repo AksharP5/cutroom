@@ -813,6 +813,7 @@ export function Inspector({
               fps={timeline.fps}
               disabled={track?.track.locked ?? false}
               open={colorOpen}
+              visible={open}
               onToggle={setColorOpen}
             />
           )}

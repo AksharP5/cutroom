@@ -620,7 +620,11 @@ test("colour wheels draft, cancel and save independently for each tonal range", 
   await expect.poll(steps).toBe(before + 1);
   await expect.poll(() => warmth(page)).toBeGreaterThan(grey + 20);
   const midtones = z
-    .object({ hue: z.number(), amount: z.number(), level: z.number() })
+    .object({
+      hue: z.number(),
+      amount: z.number(),
+      level: z.number().optional(),
+    })
     .parse(
       z.object({ midtones: z.unknown() }).parse((await grade("a"))?.wheels)
         .midtones,
@@ -643,7 +647,7 @@ test("colour wheels draft, cancel and save independently for each tonal range", 
     .poll(async () => (await grade("a"))?.wheels)
     .toEqual({
       midtones,
-      highlights: { hue: 220, amount: 0.25, level: 0 },
+      highlights: { hue: 220, amount: 0.25 },
     });
   await inspector
     .getByRole("button", { name: "Reset highlights wheel" })
@@ -651,11 +655,108 @@ test("colour wheels draft, cancel and save independently for each tonal range", 
   await expect
     .poll(async () => (await grade("a"))?.wheels)
     .toEqual({ midtones });
+  await expect(hue).toHaveValue("0°");
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect
     .poll(async () => (await grade("a"))?.wheels)
     .toEqual({
       midtones,
-      highlights: { hue: 220, amount: 0.25, level: 0 },
+      highlights: { hue: 220, amount: 0.25 },
+    });
+});
+
+test("a wheel preserves concurrent fields and cancels if the Inspector closes", async ({
+  page,
+  request,
+}) => {
+  const { project, grade, steps } = await gradeProject(request);
+  const api = `/api/cutroom/projects/${project.id}`;
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const wheel = inspector.getByRole("group", { name: "Midtones colour wheel" });
+  const drag = async () => {
+    await wheel.scrollIntoViewIfNeeded();
+    const bounds = (await wheel.boundingBox())!;
+    await page.mouse.move(
+      bounds.x + bounds.width * 0.82,
+      bounds.y + bounds.height / 2,
+    );
+    await page.mouse.down();
+  };
+  await drag();
+  const level = inspector.getByRole("textbox", { name: "Level", exact: true });
+  const revision = z
+    .object({ revision: z.string() })
+    .parse(await (await request.get(`${api}/timeline`)).json()).revision;
+  const external = await request.post(`${api}/commands`, {
+    data: {
+      expectedRevision: revision,
+      commands: [
+        {
+          type: "setClip",
+          clipId: "a",
+          grade: {
+            wheels: { midtones: { level: 0.42 } },
+          },
+        },
+      ],
+    },
+  });
+  expect(external.ok(), await external.text()).toBe(true);
+  await expect(level).toHaveValue("42%");
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await grade("a"))?.wheels)
+    .toMatchObject({
+      midtones: { amount: expect.any(Number), level: 0.42 },
+    });
+
+  const beforeClose = await steps();
+  const saved = await grade("a");
+  await drag();
+  await inspector
+    .getByRole("button", { name: "Close inspector" })
+    .press("Enter");
+  await expect(inspector).toBeHidden();
+  await page.mouse.up();
+  await page.getByRole("button", { name: "Inspector", exact: true }).click();
+  await expect(wheel).toBeVisible();
+  expect(await steps()).toBe(beforeClose);
+  expect(await grade("a")).toEqual(saved);
+
+  await inspector.getByRole("button", { name: "Reset midtones wheel" }).click();
+  await expect.poll(() => grade("a")).toBeNull();
+  const arrived = Promise.withResolvers<void>();
+  const continueSave = Promise.withResolvers<void>();
+  await page.route(
+    "**/commands",
+    async (route) => {
+      arrived.resolve();
+      await continueSave.promise;
+      await route.continue();
+    },
+    { times: 1 },
+  );
+  const amount = inspector.getByRole("textbox", {
+    name: "Amount",
+    exact: true,
+  });
+  const hue = inspector.getByRole("textbox", { name: "Hue", exact: true });
+  try {
+    await amount.fill("25%");
+    await amount.press("Enter");
+    await arrived.promise;
+    await hue.fill("220°");
+    await hue.press("Enter");
+  } finally {
+    continueSave.resolve();
+  }
+  await expect
+    .poll(async () => (await grade("a"))?.wheels)
+    .toEqual({
+      midtones: { hue: 220, amount: 0.25 },
     });
 });
