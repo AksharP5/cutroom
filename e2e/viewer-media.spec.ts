@@ -203,10 +203,16 @@ async function capturePicture(page: Page, expected = red()) {
       samples.push({ time: metadata.timestamp!, color });
       if (!blank && !expected(color)) {
         blank = data;
-        const contexts = await Promise.all(
+        // A detached iframe can outlive the sample. Diagnostics must not delay the frame queue.
+        void Promise.all(
           page
             .frames()
-            .filter((frame) => frame !== page.mainFrame())
+            .filter(
+              (frame) =>
+                frame !== page.mainFrame() &&
+                frame.url() &&
+                frame.url() !== "about:blank",
+            )
             .map((frame) =>
               frame
                 .evaluate(() => ({
@@ -236,8 +242,9 @@ async function capturePicture(page: Page, expected = red()) {
                   error: String(error),
                 })),
             ),
-        );
-        console.log("BLANK CONTEXTS", JSON.stringify(contexts));
+        ).then((contexts) => {
+          console.log("BLANK CONTEXTS", JSON.stringify(contexts));
+        });
       }
     });
   });
@@ -637,24 +644,25 @@ test("an edit that would start an animation is taken back before the old picture
   await waitForPreview(page, { after: loaded });
   await waitForPreview(page, { timing: true });
   await seek("0311");
+  const ready = await page
+    .locator(".edit-stage")
+    .getAttribute("data-preview-ready");
   const before = await page.locator("iframe[data-live]").getAttribute("src");
-  await page.evaluate((before) => {
-    const switched: number[] = [];
-    Object.assign(window, { switched });
-    new MutationObserver(() => {
-      const src = document
-        .querySelector("iframe[data-live]")
-        ?.getAttribute("src");
-      if (src && src !== before && !switched.length)
-        switched.push((performance.timeOrigin + performance.now()) / 1000);
-    }).observe(document.body, {
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["data-live", "src"],
-    });
-  }, before);
+  const replacement = Promise.withResolvers<void>();
+  let heldNavigation: Promise<void> | undefined;
+  const previewRoute = (url: URL) =>
+    url.pathname ===
+      `/api/projects/${encodeURIComponent(project.id)}/isolated-preview` &&
+    url.searchParams.has("document");
   const capture = await capturePicture(page, red());
   try {
+    // Hold only the fresh document. The timing and mix checks must finish first.
+    await page.route(previewRoute, (route) => {
+      if (heldNavigation || !route.request().isNavigationRequest())
+        return route.fallback();
+      heldNavigation = replacement.promise.then(() => route.continue());
+      return heldNavigation;
+    });
     capture.reset();
     await writeFile(
       path,
@@ -663,21 +671,25 @@ test("an edit that would start an animation is taken back before the old picture
         'id="spinner" class="clip spinner"',
       ),
     );
-    await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
+    await expect.poll(() => Boolean(heldNavigation)).toBe(true);
+    const old = await capture.read();
+    await expect(page.locator("iframe[data-live]")).toHaveAttribute(
       "src",
       before!,
     );
-    await waitForPreview(page);
+    expect(old.samples.filter(({ color }) => !red()(color))).toEqual([]);
+    replacement.resolve();
+    await waitForPreview(page, { after: ready });
     const { samples } = await capture.read();
-    const [switched] = await page.evaluate(
-      () => (window as unknown as { switched: number[] }).switched,
-    );
-    const early = samples.filter(({ time }) => time < switched!);
-    expect(early.length).toBeGreaterThan(1);
-    expect(early.filter(({ color }) => !red()(color))).toEqual([]);
     expect(blue(samples.at(-1)!.color)).toBe(true);
   } finally {
-    await capture.stop();
+    replacement.resolve();
+    try {
+      await heldNavigation;
+      await page.unroute(previewRoute);
+    } finally {
+      await capture.stop();
+    }
   }
 });
 
