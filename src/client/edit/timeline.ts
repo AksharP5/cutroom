@@ -105,6 +105,7 @@ const project = (projectId: string) =>
   `/projects/${encodeURIComponent(projectId)}`;
 
 let queue = Promise.resolve();
+let compositionRequest = 0;
 /** The engine's last answer for the open composition, which the shown view starts from. */
 let confirmed: { projectId: string; view: TimelineView } | null = null;
 /** Each composition's last answer in the open project, so returning to one shows it at once. */
@@ -153,6 +154,7 @@ function noticeOutside(before: TimelineView, after: TimelineView) {
 
 /** Opens a project's timeline, dropping what was shown for the last one. */
 export function openTimeline(projectId: string, signal?: AbortSignal) {
+  compositionRequest++;
   dismissAnimationFeedback();
   confirmed = null;
   answers.clear();
@@ -371,6 +373,7 @@ async function read(
   signal?: AbortSignal,
   notify = true,
   composition = useTimeline.getState().composition,
+  select?: (view: TimelineView | null) => void,
 ) {
   const historyRead = readHistory(projectId, signal);
   const [view, history] = await Promise.all([
@@ -385,6 +388,7 @@ async function read(
     ).catch(async (error: unknown) => {
       if (error instanceof ApiError && error.status === 422) {
         const history = await historyRead.catch(() => null);
+        if (!signal?.aborted) select?.(null);
         if (!signal?.aborted && isOpen(projectId, composition)) {
           const edits = TimelineEditsSchema.safeParse(error.body);
           if (history)
@@ -403,6 +407,7 @@ async function read(
   ]);
   if (useTimeline.getState().projectId !== projectId) return view;
   answers.set(view.composition, view);
+  select?.(view);
   if (!isOpen(projectId, view.composition)) return view;
   if (
     confirmed?.view.composition === view.composition &&
@@ -416,9 +421,8 @@ async function read(
 }
 
 /**
- * Edits another composition of the open project. One seen before shows at once from its last
- * answer while a read catches up; one not seen yet shows once it is read, so the editor never
- * shows an empty or mismatched timeline. Edits still saving to the composition left land first.
+ * Compositions seen before show their last projection while a read catches up. A first read can
+ * open the source and picture even if there is no valid timeline for it.
  */
 export function showComposition(
   projectId: string,
@@ -426,9 +430,13 @@ export function showComposition(
   parents: readonly string[],
   selection: Selection,
 ) {
-  const show = (view: TimelineView) => {
-    if (useTimeline.getState().projectId !== projectId) return;
-    confirmed = { projectId, view };
+  const request = ++compositionRequest;
+  const current = () =>
+    request === compositionRequest &&
+    useTimeline.getState().projectId === projectId;
+  const show = (view: TimelineView | null) => {
+    if (!current()) return;
+    confirmed = view ? { projectId, view } : null;
     dismissRipple();
     rippleRevision = null;
     useTimeline.setState({
@@ -438,12 +446,25 @@ export function showComposition(
       view: shown(projectId),
       recoveryEdits: null,
     });
+    if (view) reportEditorError("timeline", null);
   };
   const known = answers.get(composition);
   if (known) show(known);
   return enqueue(async () => {
-    const view = await read(projectId, undefined, false, composition);
-    if (!known) show(answers.get(composition) ?? view);
+    if (!current()) return;
+    try {
+      await read(
+        projectId,
+        undefined,
+        false,
+        composition,
+        known ? undefined : show,
+      );
+    } catch (error) {
+      if (!current()) return;
+      if (!(error instanceof ApiError && error.status === 422)) throw error;
+      reportEditorError("timeline", error);
+    }
   });
 }
 

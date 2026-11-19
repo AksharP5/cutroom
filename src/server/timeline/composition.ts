@@ -854,12 +854,15 @@ export function parseComposition(
     mediaLengths = new Map(),
     rootId,
     fonts = new Set(declaredFonts(html)),
+    sourceAttribution = false,
   }: {
     scope?: CompositionScope;
     /** A bundled scene instance whose tracks are mixed independently of its parent. */
     rootId?: string;
     /** Font faces available from this composition and the project's entry document. */
     fonts?: ReadonlySet<string>;
+    /** Source history needs clip identities and byte ranges even when an envelope is invalid. */
+    sourceAttribution?: boolean;
     /** Measured source lengths in seconds, by `src`. */
     mediaLengths?: ReadonlyMap<string, number>;
   } = {},
@@ -948,10 +951,11 @@ export function parseComposition(
         );
       } catch (error) {
         if (!(error instanceof AudioAutomationError)) throw error;
-        throw new TimelineError(
-          "unsupported",
-          `Clip ${id} has invalid audio automation. ${error.message}`,
-        );
+        if (!sourceAttribution)
+          throw new TimelineError(
+            "unsupported",
+            `Clip ${id} has invalid audio automation. ${error.message}`,
+          );
       }
     }
     const clip: Clip = {

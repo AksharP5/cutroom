@@ -51,6 +51,7 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
   try {
     const parsed = parseComposition(source, emptyTimelineSettings(), {
       scope: compositionScope(composition),
+      sourceAttribution: true,
     });
     const clips = parsed.timeline.clips
       .filter((clip) => !parsed.anonymous.has(clip.id))

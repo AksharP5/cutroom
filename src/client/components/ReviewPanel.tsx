@@ -205,7 +205,10 @@ export function ReviewPanel({
   const edits = recoveryEdits ?? view?.clipEdits;
   const hasChanges = edits?.some(pendingEdit);
   const compositionChanges = reviewRows(
-    edits?.filter((edit) => edit.clipId === null && pendingEdit(edit)) ?? [],
+    edits?.filter(
+      (edit) =>
+        (recoveryEdits !== null || edit.clipId === null) && pendingEdit(edit),
+    ) ?? [],
   );
   const draftFps = useFps();
   const noteFps = useNoteFps(projectId, items);

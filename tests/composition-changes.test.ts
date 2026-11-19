@@ -45,15 +45,25 @@ test("a saved invalid clip envelope keeps the source reviewable and editable", a
   const f = await setup(html);
   f.app.route("/api/cutroom", createTimelineRoutes(f.store, f.review));
   try {
+    const earlier = html.replace("</main>", `${clip("earlier")}</main>`);
+    await f.save(earlier);
+    const added = (await f.read()).clipEdits.find(
+      ({ clipId }) => clipId === "earlier",
+    );
+    expect(added).toBeDefined();
     await f.save(
-      html.replace(
+      earlier.replace(
         envelope,
         '{"version":1,"lanes":[{"target":"rate","points":null}]}',
       ),
     );
     const view = await f.read();
     expect(view.clipEdits).toContainEqual(
-      expect.objectContaining({ composition: "index.html", clipId: null }),
+      expect.objectContaining({
+        id: added!.id,
+        accepted: false,
+        resolution: undefined,
+      }),
     );
     const rejected = await f.request(`${f.base}/timeline`);
     expect(rejected.status).toBe(422);
@@ -63,8 +73,17 @@ test("a saved invalid clip envelope keeps the source reviewable and editable", a
         expect.objectContaining({ id, clipId, by, accepted }),
       ),
     });
-    await f.save(html);
+    const accepted = await f.request(
+      `${f.base}/review/changes/accept`,
+      "POST",
+      { editId: added!.id },
+    );
+    expect(accepted.status).toBe(200);
+    await f.save(earlier);
     expect((await f.request(`${f.base}/timeline`)).status).toBe(200);
+    expect((await f.read()).clipEdits).toContainEqual(
+      expect.objectContaining({ id: added!.id, accepted: true }),
+    );
   } finally {
     await f.close();
   }
