@@ -88,9 +88,12 @@ async function gradeProject(
 }
 
 async function picturePixels(page: Page, columns: number[]) {
-  const png = await page.locator(".edit-picture").screenshot();
+  const picture = await page.locator(".edit-picture").boundingBox();
+  if (!picture) throw new Error("The viewer picture is not visible.");
+  // Chromium's cropped capture can round a channel differently from the visible viewer.
+  const png = await page.screenshot({ scale: "css" });
   return page.evaluate(
-    async ({ data, columns }) => {
+    async ({ data, columns, picture }) => {
       const image = new Image();
       image.src = `data:image/png;base64,${data}`;
       await image.decode();
@@ -99,15 +102,15 @@ async function picturePixels(page: Page, columns: number[]) {
       context.drawImage(image, 0, 0);
       return columns.map((column) => {
         const [red, green, blue] = context.getImageData(
-          Math.round(image.width * column),
-          Math.round(image.height / 2),
+          Math.round(picture.x + picture.width * column),
+          Math.round(picture.y + picture.height / 2),
           1,
           1,
         ).data;
         return { red: red!, green: green!, blue: blue!, warmth: red! - blue! };
       });
     },
-    { data: png.toString("base64"), columns },
+    { data: png.toString("base64"), columns, picture },
   );
 }
 

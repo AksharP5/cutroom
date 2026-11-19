@@ -17,10 +17,18 @@ import { isAudioKind } from "../../shared/timeline/schema";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { localMediaInputOptions } from "../media/input";
-import { projectPath, unavailableProjectFile } from "../projects/path";
+import {
+  projectPath,
+  projectStatePath,
+  unavailableProjectFile,
+} from "../projects/path";
 import { layerTracks } from "./layers";
 import type { LayerTrack } from "./layers";
-import { planResolveTimeline } from "./plan";
+import {
+  label,
+  planResolveTimeline,
+  sourceClipWithSpeedAutomation,
+} from "./plan";
 import { writeResolveGrades } from "./grades";
 import type { ClipMedia } from "./plan";
 import { probeMedia } from "./probe";
@@ -219,7 +227,7 @@ const describeRate = ({ num, den }: { num: number; den: number }) =>
 export async function exportResolve(
   source: ResolveSource,
   options: {
-    directory: string;
+    directory?: string;
     copyMedia: boolean;
     /** Renders one layer as a ProRes 4444 MOV in `directory`, answering its path. */
     render?: (
@@ -228,15 +236,36 @@ export async function exportResolve(
     ) => Promise<string>;
   },
 ): Promise<ResolveExport> {
-  if (!isAbsolute(options.directory))
+  if (options.directory !== undefined && !isAbsolute(options.directory))
     throw new HttpError(400, "Enter an absolute output folder.");
-  const directory = await realpath(options.directory).catch(() => {
-    throw new HttpError(400, "The output folder does not exist.");
-  });
-  if (!(await stat(directory)).isDirectory())
-    throw new HttpError(400, "The output folder is not a folder.");
-  const stem = safeName(source.name, "Cut");
+  const renders = ".cutroom/renders";
+  const own = await projectStatePath(source.project, renders, true);
+  const requested = options.directory ?? own;
+  let directory = own;
+  if (requested !== own) {
+    directory = await realpath(requested).catch(() => {
+      throw new HttpError(400, "The output folder does not exist.");
+    });
+    if (!(await stat(directory)).isDirectory())
+      throw new HttpError(400, "The output folder is not a folder.");
+  }
+
   const found = await clipMedia(source);
+  const ramped = sourceClipWithSpeedAutomation(
+    source.timeline.clips,
+    found.media,
+  );
+  if (ramped)
+    throw new HttpError(
+      422,
+      `Resolve timeline export cannot carry the speed automation on "${label(ramped)}". Choose MP4 or MOV for a rendered export.`,
+    );
+
+  if (requested === own) {
+    directory = await projectStatePath(source.project, renders, true);
+    await mkdir(directory, { recursive: true });
+  }
+  const stem = safeName(source.name, "Cut");
   const folder = await claimFolder(directory, `${stem} Resolve`);
   try {
     return await writePackage(source, options, stem, folder, found);

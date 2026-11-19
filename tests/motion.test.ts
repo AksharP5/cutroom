@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { createMotionRoutes } from "../src/server/projects/motion";
@@ -491,6 +491,226 @@ test("a shared selector cannot change a locked target, even when the selected cl
     expect(response.status).toBe(422);
     expect(await response.text()).toContain("locked track");
     expect(await f.source()).toBe(source);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a scene's first fade uses the scene clock, exact source version and current track lock", async () => {
+  const f = await fixture();
+  const server = createMcpServer({
+    fetch: (url, init) => f.app.request(url, init),
+  });
+  const client = new Client({ name: "scene-fade-test", version: "1" });
+  const [local, remote] = InMemoryTransport.createLinkedPair();
+  await server.connect(remote);
+  await client.connect(local);
+  try {
+    const composition = "compositions/intro.html";
+    const file = join(f.project.path, composition);
+    const declaration = "const tl = gsap.timeline({ paused: true });";
+    const source = `<template><div data-composition-id="intro" data-duration="3" data-fps="30">
+<div id="card" class="clip" data-start="1" data-duration="2" data-track-index="0"></div>
+<script>
+${declaration}
+window.__timelines ??= {};
+window.__timelines.intro = tl;
+</script></div></template>`;
+    await mkdir(join(f.project.path, "compositions"));
+    await writeFile(file, source);
+    const snapshot = await f.read(composition);
+    expect(snapshot.fadeReason).toBeNull();
+    expect(snapshot.animations).toEqual([]);
+    const input = {
+      composition,
+      clipId: "card",
+      expectedVersion: snapshot.version,
+      frame: 84,
+    };
+    const add = (change: Partial<typeof input> = {}) =>
+      f.request(`${f.base}/motion`, "POST", { ...input, ...change });
+    expect((await add({ frame: 29 })).status).toBe(422);
+    expect((await add({ frame: 90 })).status).toBe(422);
+    const root = await f.read();
+    expect(
+      (await add({ composition: "index.html", expectedVersion: root.version }))
+        .status,
+    ).toBe(422);
+    const setLocked = async (locked: boolean, opened = composition) => {
+      const timeline = TimelineViewSchema.parse(
+        await (
+          await f.request(
+            `${f.base}/timeline?${new URLSearchParams({ composition: opened })}`,
+          )
+        ).json(),
+      );
+      expect(
+        (
+          await f.request(`${f.base}/commands`, "POST", {
+            composition: opened,
+            expectedRevision: timeline.revision,
+            commands: [{ type: "setTrack", index: 0, locked }],
+          })
+        ).ok,
+      ).toBe(true);
+    };
+    await setLocked(true);
+    const locked = await add();
+    expect(locked.status).toBe(422);
+    expect(await locked.text()).toContain("locked track");
+    const alias = "compositions/alias.html";
+    await symlink("intro.html", join(f.project.path, alias));
+    expect((await f.read(alias)).fadeReason).toContain("file link");
+    expect((await add({ composition: alias })).status).toBe(422);
+    expect(await readFile(file, "utf8")).toBe(source);
+    await setLocked(false);
+
+    await setLocked(true, alias);
+    expect((await f.read(composition)).fadeReason).toContain("locked track");
+    expect((await add()).status).toBe(422);
+    expect(await readFile(file, "utf8")).toBe(source);
+    await setLocked(false, alias);
+
+    const response = await client.callTool({
+      name: "motion_add_fade",
+      arguments: { projectId: f.project.id, ...input },
+    });
+    expect(response.isError).not.toBe(true);
+    const result = z
+      .object({ structuredContent: z.object({ result: MotionSnapshotSchema }) })
+      .parse(response).structuredContent.result;
+    expect(result.animations).toEqual([
+      expect.objectContaining({
+        method: "from",
+        position: 2.8,
+        duration: 0.2,
+        from: { opacity: 0 },
+        targets: ["#card"],
+      }),
+    ]);
+    const after = source.replace(
+      declaration,
+      `${declaration}\ntl.from("#card", { opacity: 0, duration: 0.2, ease: "none", immediateRender: false }, 2.8);`,
+    );
+    expect(await readFile(file, "utf8")).toBe(after);
+    expect((await add()).status).toBe(409);
+    expect((await add({ expectedVersion: result.version })).status).toBe(422);
+    expect((await f.request(`${f.base}/history/undo`, "POST")).ok).toBe(true);
+    expect(await readFile(file, "utf8")).toBe(source);
+    expect((await f.request(`${f.base}/history/redo`, "POST")).ok).toBe(true);
+    expect(await readFile(file, "utf8")).toBe(after);
+    await setLocked(true, alias);
+    const lockedUpdate = await f.update(result, { kind: "position", value: 2 });
+    expect(lockedUpdate.status).toBe(422);
+    expect(await lockedUpdate.text()).toContain("locked track");
+    expect(await readFile(file, "utf8")).toBe(after);
+    await setLocked(false, alias);
+  } finally {
+    await client.close();
+    await server.close();
+    await f.close();
+  }
+});
+
+test("adding a fade refuses unsafe insertion sites, timing and file links without changing source", async () => {
+  const f = await fixture();
+  try {
+    const composition = "compositions/intro.html";
+    const file = join(f.project.path, composition);
+    const source = `<div data-composition-id="intro" data-duration="3">
+<div id="card" class="clip" data-start="0" data-duration="3" data-track-index="0"></div>
+<div id="other" class="clip" data-start="0" data-duration="3" data-track-index="1"></div>
+</div><script>
+const tl = gsap.timeline({ paused: true });
+window.__timelines ??= {};
+window.__timelines.intro = tl;
+</script>`;
+    const add = (snapshot: MotionSnapshot) =>
+      f.request(`${f.base}/motion`, "POST", {
+        composition: snapshot.composition,
+        clipId: snapshot.clipId,
+        expectedVersion: snapshot.version,
+        frame: 30,
+      });
+    await mkdir(join(f.project.path, "compositions"));
+    await writeFile(f.file, source);
+    await symlink("index.html", join(f.project.path, "root-alias.html"));
+    const aliasedRoot = await f.read("root-alias.html");
+    expect(aliasedRoot.fadeReason).toContain("file link");
+    expect((await add(aliasedRoot)).status).toBe(422);
+    expect(await f.source()).toBe(source);
+
+    const host =
+      '<div data-composition-id="child" data-composition-src="child.html" data-start="0" data-duration="3" data-track-index="2"></div>';
+    await writeFile(
+      join(f.project.path, "compositions", "child.html"),
+      '<template><div data-composition-id="child" data-duration="3"><div id="card" data-start="0" data-duration="3"></div></div></template>',
+    );
+    for (const [body, reason] of [
+      [
+        source.replace("</div><script>", `${host}\n</div><script>`),
+        "nested compositions",
+      ],
+      [
+        source.replace(
+          "</script>",
+          `function setup(){ gsap.set("#other", { x: 10 }); }\n</script>`,
+        ),
+        "Only direct literal calls",
+      ],
+      [
+        source.replace(
+          "</script>",
+          `tl.to("#other", { x: 10, duration: 1 }, +1e309);\n</script>`,
+        ),
+        "could not be inspected",
+      ],
+      [
+        source.replace(
+          "window.__timelines ??= {};",
+          `tl.to("#other", { x: 10, duration: 1 }, -1);\nwindow.__timelines ??= {};`,
+        ),
+        "nonnegative",
+      ],
+      [
+        source.replace(
+          "window.__timelines ??= {};",
+          `tl.to("#other", { x: +10, duration: 1, delay: -1 }, 0);\nwindow.__timelines ??= {};`,
+        ),
+        "nonnegative",
+      ],
+    ] as const) {
+      await writeFile(file, body);
+      const snapshot = await f.read(composition);
+      expect(snapshot.fadeReason).toContain(reason);
+      expect((await add(snapshot)).status).toBe(422);
+      expect(await readFile(file, "utf8")).toBe(body);
+    }
+    const other = await f.read(composition, "other");
+    expect(other.animations[0]?.to.x).toBe(10);
+    expect(
+      (
+        await f.update(other, {
+          kind: "property",
+          side: "to",
+          name: "x",
+          value: 20,
+        })
+      ).ok,
+    ).toBe(true);
+    expect(await readFile(file, "utf8")).toContain("x: 20");
+    await writeFile(
+      file,
+      (await readFile(file, "utf8"))
+        .replace("delay: -1", "delay: 1")
+        .replace("</script>", `gsap.set("#other", { y: 20 });\n</script>`),
+    );
+    const available = await f.read(composition);
+    expect(available.fadeReason).toBeNull();
+    expect((await add(available)).ok).toBe(true);
+    expect(await readFile(file, "utf8")).toContain(
+      'gsap.set("#other", { y: 20 });\ntl.from("#card",',
+    );
   } finally {
     await f.close();
   }
