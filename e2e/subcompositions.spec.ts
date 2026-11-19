@@ -147,6 +147,64 @@ test("a scene opens in the editor, edits and undoes there, and Esc returns to th
   await expect(path).toHaveCount(0);
 });
 
+test("a delayed root failure stays off the valid scene's status bar", async ({
+  page,
+  request,
+}) => {
+  const { project } = await scenes(request);
+  await page.goto(`/#project/${project.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  const openScene = () => timeline.locator('[data-clip="intro"]').dblclick();
+  const subtitle = timeline.locator('[data-clip="intro-sub"]');
+  const path = page.getByRole("navigation", { name: "Composition" });
+  await openScene();
+  await expect(subtitle).toBeVisible();
+  await path.getByRole("button", { name: "Scenes" }).click();
+  await expect(path).toHaveCount(0);
+
+  const rootRead = Promise.withResolvers<void>();
+  const releaseRoot = Promise.withResolvers<void>();
+  const sceneRead = Promise.withResolvers<void>();
+  const releaseScene = Promise.withResolvers<void>();
+  await page.route(
+    (url) => url.pathname === `/api/cutroom/projects/${project.id}/timeline`,
+    async (route) => {
+      const response = await route.fetch();
+      if (response.status() === 422) {
+        rootRead.resolve();
+        await releaseRoot.promise;
+      } else if (
+        new URL(route.request().url()).searchParams.has("composition")
+      ) {
+        sceneRead.resolve();
+        await releaseScene.promise;
+      }
+      await route.fulfill({ response });
+    },
+  );
+  try {
+    const source = join(project.path, "index.html");
+    await writeFile(
+      source,
+      (await readFile(source, "utf8")).replace(
+        "</main>",
+        `<audio id="broken" src="voice.wav" data-start="0" data-duration="1" data-hidden data-automation='{"version":1,"lanes":[{"target":"rate","points":null}]}'></audio></main>`,
+      ),
+    );
+    await rootRead.promise;
+    await openScene();
+    await expect(subtitle).toBeVisible();
+    releaseRoot.resolve();
+    await sceneRead.promise;
+    await expect(
+      page.getByText(/Clip broken has invalid audio automation/),
+    ).toHaveCount(0);
+  } finally {
+    releaseRoot.resolve();
+    releaseScene.resolve();
+  }
+});
+
 test("media placed inside a scene is written from the scene's folder and plays there", async ({
   page,
   request,

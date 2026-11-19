@@ -405,7 +405,8 @@ async function read(
     }),
     historyRead,
   ]);
-  if (useTimeline.getState().projectId !== projectId) return view;
+  if (signal?.aborted || useTimeline.getState().projectId !== projectId)
+    return view;
   answers.set(view.composition, view);
   select?.(view);
   if (!isOpen(projectId, view.composition)) return view;
@@ -468,11 +469,24 @@ export function showComposition(
   });
 }
 
+/** A projection failure belongs to the composition read when the queued refresh starts. */
+async function refreshOpenTimeline(
+  projectId: string,
+  signal?: AbortSignal,
+  notify = true,
+) {
+  if (signal?.aborted || useTimeline.getState().projectId !== projectId) return;
+  const { composition } = useTimeline.getState();
+  try {
+    await read(projectId, signal, notify, composition);
+  } catch (error) {
+    if (!signal?.aborted && isOpen(projectId, composition))
+      reportEditorError("timeline", error);
+  }
+}
+
 export const loadTimeline = (projectId: string, signal: AbortSignal) =>
-  enqueue(async () => {
-    signal.throwIfAborted();
-    await read(projectId, signal);
-  });
+  enqueue(() => refreshOpenTimeline(projectId, signal));
 
 /** How long the first project file event waits for the rest of its burst. */
 const BURST_MS = 100;
@@ -492,8 +506,7 @@ export function refreshTimeline(projectId: string, signal: AbortSignal) {
     done: new Promise((resolve) => setTimeout(resolve, BURST_MS)).then(() =>
       enqueue(async () => {
         if (refresh === next) refresh = null;
-        signal.throwIfAborted();
-        await read(projectId, signal);
+        await refreshOpenTimeline(projectId, signal);
       }),
     ),
   };
@@ -752,9 +765,7 @@ export async function editTimeline(
         // Before the next edit runs, the queue forgets this one and the edits that named its
         // pieces, and reads what the server holds.
         dropDependents(made);
-        await read(projectId).catch((failure: unknown) =>
-          reportEditorError("timeline", failure),
-        );
+        await refreshOpenTimeline(projectId);
         throw error;
       }
       pending = pending.filter((item) => item !== made);
@@ -857,7 +868,7 @@ export const stepHistory = (
           z.unknown(),
           json("POST"),
         );
-        await read(projectId, undefined, false);
+        await refreshOpenTimeline(projectId, undefined, false);
         if (!before?.items.length) return;
         const after = await api(
           `${project(projectId)}/review`,
