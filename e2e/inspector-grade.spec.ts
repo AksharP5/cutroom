@@ -585,3 +585,77 @@ test("Curves add, move and remove points on each channel, drafting while they mo
     .poll(async () => Object.keys((await grade("a"))?.curves ?? {}))
     .toEqual(["red"]);
 });
+
+test("colour wheels draft, cancel and save independently for each tonal range", async ({
+  page,
+  request,
+}, info) => {
+  const { project, steps, grade } = await gradeProject(request);
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const wheel = inspector.getByRole("group", { name: "Midtones colour wheel" });
+  await wheel.scrollIntoViewIfNeeded();
+  const { x, y, width, height } = (await wheel.boundingBox())!;
+  const drag = async () => {
+    await page.mouse.move(x + width / 2, y + height / 2);
+    await page.mouse.down();
+    await page.mouse.move(x + width * 0.85, y + height / 2, { steps: 5 });
+  };
+  const before = await steps();
+  const grey = await warmth(page);
+  await page.screenshot({ path: info.outputPath("neutral.png") });
+  await drag();
+  await expect.poll(() => warmth(page)).toBeGreaterThan(grey + 20);
+  expect(await grade("a")).toBeNull();
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect.poll(() => warmth(page)).toBeLessThan(grey + 6);
+  expect(await steps()).toBe(before);
+
+  await drag();
+  await page.mouse.up();
+  await expect.poll(steps).toBe(before + 1);
+  await expect.poll(() => warmth(page)).toBeGreaterThan(grey + 20);
+  const midtones = z
+    .object({ hue: z.number(), amount: z.number(), level: z.number() })
+    .parse(
+      z.object({ midtones: z.unknown() }).parse((await grade("a"))?.wheels)
+        .midtones,
+    );
+  expect(midtones.amount).toBeCloseTo(0.7, 1);
+  expect(midtones.hue < 2 || midtones.hue > 358).toBe(true);
+  await page.screenshot({ path: info.outputPath("midtones.png") });
+  await inspector.getByRole("combobox", { name: "Colour wheels" }).click();
+  await page.getByRole("option", { name: "Highlights" }).click();
+  const hue = inspector.getByRole("textbox", { name: "Hue", exact: true });
+  const amount = inspector.getByRole("textbox", {
+    name: "Amount",
+    exact: true,
+  });
+  await hue.fill("220°");
+  await hue.press("Enter");
+  await amount.fill("25%");
+  await amount.press("Enter");
+  await expect
+    .poll(async () => (await grade("a"))?.wheels)
+    .toEqual({
+      midtones,
+      highlights: { hue: 220, amount: 0.25, level: 0 },
+    });
+  await inspector
+    .getByRole("button", { name: "Reset highlights wheel" })
+    .click();
+  await expect
+    .poll(async () => (await grade("a"))?.wheels)
+    .toEqual({ midtones });
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect
+    .poll(async () => (await grade("a"))?.wheels)
+    .toEqual({
+      midtones,
+      highlights: { hue: 220, amount: 0.25, level: 0 },
+    });
+});

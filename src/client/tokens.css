@@ -68,6 +68,11 @@
   --curve-red: #e5605a;
   --curve-green: #5bbf72;
   --curve-blue: #5b8ff0;
+  /* Angle and distance carry the wheel's hue and strength. The control's text stays neutral. */
+  --grade-wheel-hues: conic-gradient(
+    from 90deg,
+    #ad5555, #adad55, #55ad55, #55adad, #5555ad, #ad55ad, #ad5555
+  );
 
   /* Signals. Yellow is a human mark. Blue is agent work: active OR awaiting review. */
   --human: #f2c94c; /* 11.8 on panel */

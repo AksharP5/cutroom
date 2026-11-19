@@ -19,6 +19,14 @@ import { Row } from "./TitleSection";
 import { ValueField } from "./ValueField";
 import { CurveEditor, IDENTITY } from "./CurveEditor";
 import type { CurveChannel } from "./CurveEditor";
+import { ColourWheel } from "./ColourWheel";
+import type { WheelRange } from "./ColourWheel";
+
+const WHEELS = {
+  shadows: "Shadows",
+  midtones: "Midtones",
+  highlights: "Highlights",
+} satisfies Record<WheelRange, string>;
 
 type AdjustKey = keyof NonNullable<Grade["adjust"]>;
 
@@ -270,6 +278,7 @@ export function ColorSection({
   const bypass = useGradeBypass((state) => state.bypass);
   const { luts, reload } = useLuts(projectId, open);
   const [channel, setChannel] = useState<CurveChannel>("master");
+  const [wheel, setWheel] = useState<WheelRange>("midtones");
   const file = useRef<HTMLInputElement>(null);
 
   const save = (label: string, change: GradeEdit | null) =>
@@ -465,6 +474,50 @@ export function ColorSection({
           />
         );
       })}
+      <div className="inspector-wheel-header">
+        <SelectMenu
+          label="Colour wheels"
+          value={wheel}
+          disabled={locked}
+          options={Object.entries(WHEELS).map(([value, label]) => ({
+            value,
+            label,
+          }))}
+          onChange={(value) => {
+            if (
+              value === "shadows" ||
+              value === "midtones" ||
+              value === "highlights"
+            )
+              setWheel(value);
+          }}
+        />
+        <button
+          type="button"
+          className="inspector-curve-reset"
+          disabled={locked || !grade?.wheels?.[wheel]}
+          aria-label={`Reset ${wheel} wheel`}
+          onClick={() =>
+            void save(`Reset ${wheel} wheel`, { wheels: { [wheel]: {} } })
+          }
+        >
+          Reset
+        </button>
+      </div>
+      {open && (
+        <ColourWheel
+          key={`${clip.id}:${wheel}`}
+          label={WHEELS[wheel]}
+          value={grade?.wheels?.[wheel]}
+          fps={fps}
+          disabled={locked}
+          onPreview={(value) => draft({ wheels: { [wheel]: value } })}
+          onCommit={(value) =>
+            commit(`Set ${wheel} wheel`, { wheels: { [wheel]: value } })
+          }
+          onCancel={() => cancelGradePreview(clip.id)}
+        />
+      )}
       <Row label="Curves">
         <button
           type="button"
