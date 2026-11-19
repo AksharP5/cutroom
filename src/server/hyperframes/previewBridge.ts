@@ -2262,11 +2262,17 @@ function installPreviewBridge(
                 frames.delete(video);
               }
               // The runtime decides whether an added video that has no frame here shows.
+              const grading = win.__hf?.colorGrading;
+              let redrawGrade = false;
               for (const video of pendingVideos) {
                 pendingVideos.delete(video);
-                if (!holds.has(video))
-                  video.removeAttribute("data-cutroom-held");
+                if (holds.has(video)) continue;
+                video.removeAttribute("data-cutroom-held");
+                redrawGrade ||= grading?.isGraded(video) ?? false;
               }
+              // A canvas can inherit the temporary hidden state while its video loads.
+              // A paused source has no next frame to update the canvas's visibility.
+              if (redrawGrade) grading?.redraw();
               exactVersion = version;
               frameStatus(null);
             } finally {

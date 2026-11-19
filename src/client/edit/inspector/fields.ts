@@ -83,7 +83,7 @@ export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
   }
   if (!/^-?\d+(?:\.\d+)?\s*%?$/.test(input))
     throw new Error("Enter a percentage, such as 75%.");
-  return Number.parseFloat(input) / 100;
+  return Number(`${input.replace(/\s*%$/, "")}e-2`);
 }
 
 export const formatField = (value: number | null, unit: FieldUnit, fps: Fps) =>

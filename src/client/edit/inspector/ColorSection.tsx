@@ -25,6 +25,7 @@ import { CurveEditor, GradeCurvePlot, IDENTITY } from "./CurveEditor";
 import type { CurveChannel, CurvePoint } from "./CurveEditor";
 import { ColourWheel } from "./ColourWheel";
 import type { WheelEdit, WheelRange } from "./ColourWheel";
+import { HslSecondaries } from "./HslSecondaries";
 
 const WHEELS = {
   shadows: "Shadows",
@@ -660,6 +661,13 @@ export function ColorSection({
             />
             <div className="inspector-hue-spectrum" aria-hidden />
           </div>
+          <HslSecondaries
+            key={`${clip.id}:${locked}`}
+            projectId={projectId}
+            clip={clip}
+            fps={fps}
+            disabled={locked}
+          />
         </>
       )}
     </details>
