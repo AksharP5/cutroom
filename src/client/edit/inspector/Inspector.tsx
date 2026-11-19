@@ -37,6 +37,7 @@ import { FieldRow, ValueCell, ValueField } from "./ValueField";
 import { FxRack } from "./FxRack";
 import { AudioGroupRouting } from "./AudioGroupRouting";
 import { TextField } from "./TextField";
+import { LayerTextFields } from "./LayerTextFields";
 import { TitleSection } from "./TitleSection";
 import { isTitle } from "../../../shared/timeline/title";
 import { StyleSection } from "./StyleSection";
@@ -399,7 +400,7 @@ export function Inspector({
     useTextEdit.setState({ clipId: null });
     if (textEdit !== clip?.id) return;
     const field = root.current?.querySelector<HTMLTextAreaElement>(
-      ".inspector-text textarea",
+      '.inspector-text textarea[aria-label="Text"]',
     );
     // A field that cannot be edited still shows its reason; there is nothing to type into.
     if (!field || field.disabled) return;
@@ -477,6 +478,19 @@ export function Inspector({
       timingCommands(current, clip.id, field, value),
     );
   };
+  const textField = clip?.text != null && (
+    <TextField
+      key={clip.id}
+      value={clip.text}
+      disabled={track?.track.locked}
+      reason={clip.sourceRestrictions?.text}
+      onCommit={(text) => {
+        void editTimeline(projectId, "Edit text", () => [
+          { type: "setClip", clipId: clip.id, text },
+        ]);
+      }}
+    />
+  );
   return (
     <aside
       ref={root}
@@ -644,17 +658,20 @@ export function Inspector({
                 <CaretRight size={10} aria-hidden />
                 Text
               </summary>
-              <TextField
-                key={clip.id}
-                value={clip.text}
-                disabled={track?.track.locked}
-                reason={clip.sourceRestrictions?.text}
-                onCommit={(text) => {
-                  void editTimeline(projectId, "Edit text", () => [
-                    { type: "setClip", clipId: clip.id, text },
-                  ]);
-                }}
-              />
+              {clip.kind === "element" && clip.sourceRestrictions?.text ? (
+                <LayerTextFields
+                  key={`${projectId}:${view!.composition}:${clip.id}`}
+                  projectId={projectId}
+                  composition={view!.composition}
+                  clipId={clip.id}
+                  revision={view!.revision}
+                  active={open && textOpen}
+                  disabled={track?.track.locked}
+                  fallback={textField}
+                />
+              ) : (
+                textField
+              )}
               {textWarningFrame !== null && timeline && (
                 <p className="inspector-warning" role="status">
                   <Warning size={14} aria-hidden />

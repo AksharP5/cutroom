@@ -29,6 +29,7 @@ import { registerExportTools } from "./exportTools";
 import { registerCaptionTools } from "./captionTools";
 import { registerVariableTools } from "./variableTools";
 import { registerMotionTools } from "./motionTools";
+import { registerLayerTextTools } from "./layerTextTools";
 import { registerFontTools } from "./fontTools";
 import { registerGradeTools } from "./gradeTools";
 import { compactLint } from "../../shared/lint";
@@ -412,6 +413,7 @@ export function createMcpServer(options: McpOptions = {}) {
   registerCaptionTools(registry, request);
   registerVariableTools(registry, request);
   registerMotionTools(registry, request);
+  registerLayerTextTools(registry, request);
   registerFontTools(registry, request);
   registerGradeTools(registry, request);
   registry.registerTool(

@@ -29,7 +29,7 @@ export function previewTimingPolicy(dir: string) {
       within.split(sep)[0] === APP_STATE_DIR
     );
   };
-  const read = (file: string) => {
+  const read = (file: string, source?: string) => {
     if (!allowed || !/\.html?$/i.test(file)) return;
     try {
       const path = realpathSync(file);
@@ -82,7 +82,7 @@ export function previewTimingPolicy(dir: string) {
       };
       // Use the compiler's parser: it can hoist scripts from fallback tags that
       // a browser parser treats as inert text. Inspect template contents too.
-      visit(parseHTML(readFileSync(path, "utf8")).document);
+      visit(parseHTML(source ?? readFileSync(path, "utf8")).document);
     } catch {
       allowed = false;
     }

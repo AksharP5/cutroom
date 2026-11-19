@@ -7,11 +7,13 @@ import { showToast } from "../../workspace";
  * and Escape puts the saved words back. `reason` says why the words cannot be edited here.
  */
 export function TextField({
+  label = "Text",
   value,
   disabled = false,
   reason,
   onCommit,
 }: {
+  label?: string;
   value: string;
   disabled?: boolean;
   reason?: string;
@@ -24,7 +26,7 @@ export function TextField({
   return (
     <div className="inspector-text">
       <textarea
-        aria-label="Text"
+        aria-label={label}
         aria-describedby={reason ? `${id}-reason` : undefined}
         rows={Math.min(4, shown.split("\n").length)}
         disabled={disabled || Boolean(reason)}

@@ -306,3 +306,9 @@ Undo can conflict with a newer outside edit. Resolve that conflict before applyi
 Select a visual clip to inspect its existing inline GSAP animation in **Motion**. Numeric From and To properties edit the authored values. Start and Duration are seconds; Ease changes an existing literal ease. Tab and Shift+Tab save a field and move between controls. Each committed field is one Undo step, and the viewer reloads at the current frame. Motion shares source, history, and permissions with agents' [motion tools](mcp.md#authored-gsap-motion).
 
 A shared selector lists every affected element. Source-only fields and unsupported constructions show their reason; **Source** opens the composition's code. Save or discard an edited code buffer before changing motion. A source conflict refreshes the inspector instead of overwriting another edit. External HTML scenes are supported in their own scope, with nested templates kept separate. External JavaScript and standalone `gsap.to/from/fromTo` calls remain source-only. Motion does not add or remove tweens, convert computed motion, or expose paths and curves.
+
+### Text layers in a graphic
+
+Select the graphic on the timeline and choose a child element under **Inspector → Text → Layer**. Edit the words and press Enter or leave the field to save. Shift+Enter inserts a line break, and Escape discards typing. The viewer refreshes at the current frame and one Undo restores the old words.
+
+The picker uses authored HTML element IDs in this composition. Markup, duplicate IDs, variable-bound words, and custom spacing the inspector cannot preserve stay in Source. Compositions with authored JavaScript use Source for text edits, and the starter project's pinned GSAP library is supported. Open a separate scene to edit its own graphics. [Agents can edit the same layers through MCP.](mcp.md#authored-text-layers)

@@ -12,6 +12,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `media_rename`, `media_remove`                                  | Rename a media file with its references, or move it to the trash.           |
 | `source_read`, `source_write`                                   | Read source and save with its exact expected version.                       |
 | `motion_read`, `motion_update`                                  | Inspect existing inline GSAP motion and edit one authored literal.          |
+| `layer_text_list`, `layer_text_update`                          | Edit one authored text layer inside a timed graphic.                        |
 | `annotation_add`, `annotation_update`, `annotation_remove`      | Add a new timed note, edit its content, or remove an unsent note.           |
 | `review_list`, `review_add`                                     | Read the review queue or add a queued request.                              |
 | `review_claim`, `review_complete`, `review_block`               | Start, finish, or ask a question about a queued note.                       |
@@ -698,3 +699,9 @@ Media rename integration: after the filesystem rename succeeds, call `moveSource
 Use `side: "from"` for a `from` tween's properties or a `fromTo` tween's starting properties. Timing changes are `{"kind":"position","value":0.5}` and `{"kind":"duration","value":2}` in seconds. Easing is `{"kind":"ease","value":"power2.out"}`. Only fields already authored as literals are writable. The response is a fresh snapshot. Every other source byte stays unchanged, and each update is one shared Undo step with normal actor attribution and project permission checks.
 
 `targets` lists every element affected by the selector, so a shared selector edits all of them. Locked target tracks refuse the edit. `reason`, `notices`, and `sourceOnly` explain limits. This slice accepts direct `to`, `from`, `fromTo`, and `set` calls on one top-level named timeline, plus literal standalone `gsap.set`. Computed fields, helper/loop construction, indirect vars, aliases, ambiguous timelines, keyframes, motion paths, standalone `gsap.to/from/fromTo`, and external JavaScript stay in source. There is no add, delete, unroll, or conversion operation. Inherited or implicit timing and easing are not materialized.
+
+## Authored text layers
+
+`layer_text_list` takes `projectId`, the timed graphic's `clipId`, and its HTML `composition` path, defaulting to `index.html`. The response gives the canonical path, the exact source `version`, and each layer's authored `id`, `text`, and source-only `reason` when one applies. Nested timed elements and scene mounts belong to their own editing scope.
+
+`layer_text_update` takes the same fields plus `layerId`, `expectedVersion`, and replacement `text`. It edits the words of one identified child on an unlocked track and returns a fresh snapshot. The update is one shared Undo step. List again after a conflict.
