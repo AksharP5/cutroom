@@ -14,6 +14,7 @@ import {
   compositionFps,
   NO_COMPOSITION_ROOT,
   reportEditorError,
+  showToast,
   useWorkspace,
 } from "../workspace";
 import { useProjectNotes } from "./noteStore";
@@ -691,12 +692,36 @@ export function Viewer({
 
   const load = async (gen: number, frame: HTMLIFrameElement) => {
     if (gen !== latest.current || !frame.isConnected) return;
-    const preview = connectPreview(frame, () => {
-      transition({
-        type: "unloaded",
-        gen,
-        deadline: performance.now() + READY_TIMEOUT,
-      });
+    const useAuthoredAudio = () => {
+      if (gen !== latest.current) return;
+      if (rampSwap.current?.gen === gen) {
+        rampSwap.current = null;
+        loadingRevision.current = null;
+        transition({ type: "cancelled", gen });
+        return;
+      }
+      const loading = loadingRevision.current;
+      const shown = shownHandoff.current.confirmed;
+      const picture = loading?.gen === gen ? loading : shown;
+      if (picture?.gen !== gen) return;
+      if (
+        shown?.gen === gen &&
+        useTransport.getState().state.kind === "playing"
+      ) {
+        transport.dispatch({ type: "stop" });
+        showToast("Playback paused. Reloading the original audio.");
+      }
+      reload(picture.revision, undefined, "native");
+    };
+    const preview = connectPreview(frame, {
+      onUnload: () => {
+        transition({
+          type: "unloaded",
+          gen,
+          deadline: performance.now() + READY_TIMEOUT,
+        });
+      },
+      onRampFailure: useAuthoredAudio,
     });
     const reloaded = connections.current.has(gen);
     connections.current.get(gen)?.dispose();
@@ -766,14 +791,7 @@ export function Viewer({
         preview.signal.throwIfAborted();
         if (gen !== latest.current) return;
         if (!available) {
-          if (rampSwap.current?.gen === gen) {
-            rampSwap.current = null;
-            transition({ type: "cancelled", gen });
-          } else if (loadingRevision.current?.gen === gen) {
-            reload(loadingRevision.current.revision, undefined, "native");
-          } else {
-            throw new Error("Prepared ramp audio could not be loaded.");
-          }
+          useAuthoredAudio();
           return;
         }
       }

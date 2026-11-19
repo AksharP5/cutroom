@@ -1408,9 +1408,10 @@ export function createHyperframesApi(
       dependencies,
       mix.signature,
       Boolean(ramp?.pending.length),
-      [...(ramp?.assets.keys() ?? [])].map(
-        (key) => `${prefix}ramp-audio/${key}.wav`,
-      ),
+      Array.from(ramp?.assets ?? [], ([key, { window }]) => [
+        `${prefix}ramp-audio/${key}.wav`,
+        window.duration,
+      ]),
     );
     if (timingOnly) {
       c.header("Cache-Control", "no-store");

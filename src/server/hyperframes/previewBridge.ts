@@ -168,8 +168,9 @@ function installPreviewBridge(
       })
     | null,
   rampPending: boolean,
-  rampFiles: string[],
+  rampWindows: [src: string, seconds: number][],
 ) {
+  const rampFiles = new Map(rampWindows);
   const animatedTitles = new Set<string>();
   const titleAnimations = new Map<string, Set<Animation>>();
   let timingRevision = initialTiming?.revision;
@@ -1479,7 +1480,7 @@ function installPreviewBridge(
     };
     return {
       rampPending,
-      rampPrepared: rampFiles.length > 0,
+      rampPrepared: rampFiles.size > 0,
       mixSignature:
         document
           .querySelector('meta[name="cutroom-mix-signature"]')
@@ -1763,6 +1764,72 @@ function installPreviewBridge(
   /** Parked media, and whether parking released media the element had loaded. */
   const parked = new Map<HTMLMediaElement, { released: boolean }>();
   win.__cutroomParkedMedia = parked;
+  // Chromium can report HAVE_ENOUGH_DATA even for a WAV with no PCM payload.
+  const invalidRamp = (audio: HTMLAudioElement, duration: number) =>
+    audio.error !== null ||
+    (audio.readyState >= HTMLMediaElement.HAVE_METADATA &&
+      (!Number.isFinite(audio.duration) ||
+        Math.abs(audio.duration - duration) > 0.00005));
+  let rampFailed = false;
+  const watchRamp = (audio: EventTarget | null) => {
+    if (
+      retired ||
+      rampFailed ||
+      !(audio instanceof HTMLAudioElement) ||
+      parked.has(audio)
+    )
+      return;
+    const duration = rampFiles.get(audio.getAttribute("src") ?? "");
+    if (duration !== undefined && invalidRamp(audio, duration)) {
+      rampFailed = true;
+      parent.postMessage(
+        { source: "cutroom-preview", type: "ramp-audio-failed" },
+        "*",
+      );
+    }
+  };
+  if (rampFiles.size) {
+    const inspectRamp = (event: Event) => watchRamp(event.target);
+    document.addEventListener("loadedmetadata", inspectRamp, true);
+    document.addEventListener("durationchange", inspectRamp, true);
+    document.addEventListener("error", inspectRamp, true);
+  }
+  const loadRamp = (
+    audio: HTMLAudioElement,
+    duration: number,
+    signal: AbortSignal,
+  ) =>
+    new Promise<void>((resolve, reject) => {
+      const events = [
+        "loadedmetadata",
+        "loadeddata",
+        "progress",
+        "canplay",
+        "error",
+      ];
+      const finish = (error?: Error) => {
+        for (const name of events) audio.removeEventListener(name, inspect);
+        signal.removeEventListener("abort", timeout);
+        if (error) reject(error);
+        else resolve();
+      };
+      const failure = () =>
+        new Error("Prepared ramp audio could not be loaded.");
+      const timeout = () => finish(failure());
+      const inspect = () => {
+        if (parked.has(audio)) finish();
+        else if (invalidRamp(audio, duration)) finish(failure());
+        else if (
+          audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+          audio.buffered.length > 0
+        )
+          finish();
+      };
+      for (const name of events) audio.addEventListener(name, inspect);
+      signal.addEventListener("abort", timeout, { once: true });
+      audio.preload = "auto";
+      inspect();
+    });
   const PARKED = [
     "currentTime",
     "readyState",
@@ -1845,6 +1912,7 @@ function installPreviewBridge(
       const time = expectedMediaTime(media);
       if (time !== null) mediaTime.set.call(media, time);
     }
+    if (rampFiles.size) watchRamp(media);
   };
   const rootMedia = (kind: "video" | "audio") =>
     document.querySelectorAll<HTMLMediaElement>(
@@ -3907,23 +3975,24 @@ function installPreviewBridge(
             "*",
           );
           break;
-        case "check-ramp":
-          await Promise.all(
-            rampFiles.map(async (url) => {
-              const response = await fetch(url, {
-                headers: { Range: "bytes=0-43" },
-                signal: AbortSignal.timeout(4000),
-              });
-              if (response.status !== 206) {
-                await response.body?.cancel();
-                throw new Error("Prepared ramp audio could not be loaded.");
-              }
-              const header = await response.arrayBuffer();
-              if (new TextDecoder().decode(header.slice(0, 4)) !== "RIFF")
-                throw new Error("Prepared ramp audio could not be loaded.");
-            }),
-          );
+        case "check-ramp": {
+          const deadline = AbortSignal.timeout(4000);
+          const loaded = new Set<string>();
+          const checks = [];
+          for (const audio of document.querySelectorAll<HTMLAudioElement>(
+            "audio[src]",
+          )) {
+            const src = audio.getAttribute("src") ?? "";
+            const duration = rampFiles.get(src);
+            if (duration === undefined) continue;
+            loaded.add(src);
+            checks.push(loadRamp(audio, duration, deadline));
+          }
+          await Promise.all(checks);
+          if (loaded.size !== rampFiles.size)
+            throw new Error("A prepared ramp audio clip is missing.");
           break;
+        }
         case "paint":
           discoverScrubs();
           await picture;
@@ -4054,7 +4123,7 @@ export function previewDocument(
   dependencies: string | null = null,
   mixSignature?: string,
   rampPending = false,
-  rampFiles: string[] = [],
+  rampWindows: [src: string, seconds: number][] = [],
 ) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
@@ -4184,7 +4253,7 @@ export function previewDocument(
       })),
     },
     rampPending,
-    rampFiles,
+    rampWindows,
   ]).replaceAll("<", "\\u003c");
   const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.

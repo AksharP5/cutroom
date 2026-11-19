@@ -44,6 +44,11 @@ export const PreviewUnloadedSchema = z.object({
   type: z.literal("unloaded"),
 });
 
+export const RampAudioFailedSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("ramp-audio-failed"),
+});
+
 /** A clip's box in composition pixels, as the preview lays it out at the shown frame. */
 export const PictureBoxSchema = z.object({
   x: z.number().finite(),

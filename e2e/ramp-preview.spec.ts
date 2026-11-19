@@ -1,16 +1,42 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import type { Locator } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { expect, test } from "./fixtures";
 import { seekFrame } from "./position-helpers";
+
+const masterPeak = (audio: Locator) =>
+  audio.evaluate(async () => {
+    const runtime = window as Window & {
+      __hf?: { audioMeter: { read(): { master: { l: number } } } };
+    };
+    const meter = runtime.__hf?.audioMeter;
+    if (!meter) throw new Error("The playback meter is missing.");
+    let peak = 0;
+    for (let index = 0; index < 25; index++) {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      peak = Math.max(peak, meter.read().master.l);
+    }
+    return peak;
+  });
 
 for (const mode of [
   "separate audio",
   "embedded audio",
   "mounted scene",
   "unavailable audio",
+  "truncated WAV",
   "Play during the swap",
 ])
   test(`preview handles a ramp with ${mode} without interrupting playback`, async ({
@@ -27,6 +53,7 @@ for (const mode of [
     const embedded = mode === "embedded audio";
     const nested = mode === "mounted scene";
     const unavailable = mode === "unavailable audio";
+    const truncated = mode === "truncated WAV";
     const playDuringSwap = mode === "Play during the swap";
     const folder = nested ? join(project.path, "scenes") : project.path;
     await mkdir(folder, { recursive: true });
@@ -157,24 +184,52 @@ for (const mode of [
       await expect(time).not.toHaveText(beforeReady!);
       await expect(live).toHaveAttribute("src", old!);
       expect(navigations).toBe(0);
-      if (unavailable) {
-        let checked = false;
-        await page.route("**/ramp-audio/*.wav", async (route) => {
-          if (route.request().headers()["range"] === "bytes=0-43")
-            checked = true;
-          await route.abort();
-        });
+      if (unavailable || truncated) {
+        if (unavailable)
+          await page.route("**/ramp-audio/*.wav", (route) =>
+            route.request().headers()["range"] === "bytes=0-43"
+              ? route.continue()
+              : route.abort(),
+          );
+        if (truncated) {
+          const cache = join(project.path, ".cutroom/cache");
+          let wrote = 0;
+          for (const key of await readdir(cache)) {
+            const path = join(cache, key, "ramp.wav");
+            if (!(await readFile(path).catch(() => null))) continue;
+            await truncate(path, 44);
+            wrote++;
+          }
+          expect(wrote).toBe(1);
+        }
+        const mediaRequest = page.waitForRequest("**/ramp-audio/*.wav");
         await stop.click();
-        await expect.poll(() => checked).toBe(true);
+        const preparedUrl = (await mediaRequest).url();
         await expect(page.locator("iframe.edit-frame")).toHaveCount(1);
         await expect(stage).toHaveAttribute("data-preview-ready");
         await expect(live).toHaveAttribute("src", old!);
         await expect(audio).toHaveCount(0);
-        await expect(frame.locator("#sound")).toHaveAttribute("src", /Tone/);
+        const header = await request.get(preparedUrl, {
+          headers: { Range: "bytes=0-43" },
+        });
+        expect(header.status()).toBe(206);
+        expect((await header.body()).subarray(0, 4).toString()).toBe("RIFF");
         await page.reload();
-        await expect(stage).toHaveAttribute("data-preview-ready");
         await expect(live).toHaveAttribute("src", /cutroom-native-ramp=1/);
+        await expect(stage).toHaveAttribute("data-preview-ready");
         await expect(frame.locator("#sound")).toHaveAttribute("src", /Tone/);
+        await seekFrame(page, 60);
+        await page
+          .getByRole("button", { name: "Play forward", exact: true })
+          .click();
+        const peak = await masterPeak(frame.locator("#sound"));
+        expect(peak).toBeGreaterThan(0.047);
+        expect(peak).toBeLessThan(0.073);
+        await writeFile(
+          info.outputPath("native-level.json"),
+          JSON.stringify({ mode, peak }),
+        );
+        expect(await readFile(source, "utf8")).toBe(html);
         return;
       }
       await stop.click();
@@ -249,6 +304,37 @@ for (const mode of [
         info.outputPath("audio-clock.json"),
         JSON.stringify({ mode, peak, samples }, null, 2),
       );
+      if (mode === "separate audio") {
+        // A new request can fail after the prepared document was already confirmed.
+        const beforeFailure = Number(
+          (await time.textContent())?.replaceAll(":", "").trim(),
+        );
+        await page.route("**/ramp-audio/*.wav", (route) => route.abort());
+        const requested = page.waitForRequest("**/ramp-audio/*.wav");
+        await audio.evaluate((element) => (element as HTMLAudioElement).load());
+        await requested;
+        await expect(live).toHaveAttribute("src", /cutroom-native-ramp=1/);
+        await expect(stage).toHaveAttribute("data-preview-ready");
+        const play = page.getByRole("button", {
+          name: "Play forward",
+          exact: true,
+        });
+        await expect(play).toBeVisible();
+        const parked = (await time.textContent())?.trim();
+        expect(Number(parked?.replaceAll(":", ""))).toBeGreaterThanOrEqual(
+          beforeFailure,
+        );
+        await page.screenshot({ path: info.outputPath("native-recovery.png") });
+        await play.click();
+        await expect(time).not.toHaveText(parked!);
+        const recovered = await masterPeak(frame.locator("#sound"));
+        expect(recovered).toBeGreaterThan(0.047);
+        expect(recovered).toBeLessThan(0.073);
+        await writeFile(
+          info.outputPath("resumed-level.json"),
+          JSON.stringify({ peak: recovered }),
+        );
+      }
       await stop.click();
       expect(await readFile(source, "utf8")).toBe(html);
       await page.screenshot({ path: info.outputPath("prepared-ramp.png") });
