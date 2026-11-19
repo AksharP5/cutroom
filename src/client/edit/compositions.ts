@@ -46,8 +46,11 @@ function go(
     saved?.selection ?? emptySelection,
   );
   // A composition seen before shows at once; a new one once it is read.
-  if (useTimeline.getState().composition === composition) seek();
-  else void reading.then(seek);
+  const opened = useTimeline.getState().composition === composition;
+  if (opened) seek();
+  void (opened ? reading : reading.then(seek)).catch((error: unknown) =>
+    showToast(error instanceof Error ? error.message : String(error)),
+  );
 }
 
 /** The project file a sub-composition host plays, or null for any other clip. */

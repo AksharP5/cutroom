@@ -48,6 +48,7 @@ export class ApiError extends Error {
     message: string,
     /** The error's code when the server sends one, such as a timeline refusal's. */
     public readonly code?: string,
+    public readonly body?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
@@ -78,6 +79,7 @@ export async function api<T>(
       response.status,
       error.success ? error.data.error : `Request failed (${response.status})`,
       error.success ? error.data.code : undefined,
+      value,
     );
   }
   return schema.parse(value);

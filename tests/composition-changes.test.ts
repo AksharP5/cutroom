@@ -4,6 +4,7 @@ import { SourceSchema } from "../src/shared/project";
 import { sourceClipVersions } from "../src/server/projects/changes";
 import { projectFixture } from "./project-fixture";
 import { createReviewService } from "../src/server/projects/review";
+import { createTimelineRoutes } from "../src/server/timeline/routes";
 
 const clip = (id: string) =>
   `<div id="${id}" class="clip" data-start="0" data-duration="5">${id}</div>`;
@@ -36,6 +37,57 @@ async function setup(content = source) {
     read: () => fixture.review.clipChanges(project, "index.html"),
   };
 }
+
+test("a saved invalid clip envelope keeps the source reviewable and editable", async () => {
+  const envelope =
+    '{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":1}]}]}';
+  const html = `<main data-composition-id="main" data-duration="5"><audio id="voice" src="voice.wav" data-start="0" data-duration="5" data-automation='${envelope}'></audio></main>`;
+  const f = await setup(html);
+  f.app.route("/api/cutroom", createTimelineRoutes(f.store, f.review));
+  try {
+    const earlier = html.replace("</main>", `${clip("earlier")}</main>`);
+    await f.save(earlier);
+    const added = (await f.read()).clipEdits.find(
+      ({ clipId }) => clipId === "earlier",
+    );
+    expect(added).toBeDefined();
+    await f.save(
+      earlier.replace(
+        envelope,
+        '{"version":1,"lanes":[{"target":"rate","points":null}]}',
+      ),
+    );
+    const view = await f.read();
+    expect(view.clipEdits).toContainEqual(
+      expect.objectContaining({
+        id: added!.id,
+        accepted: false,
+        resolution: undefined,
+      }),
+    );
+    const rejected = await f.request(`${f.base}/timeline`);
+    expect(rejected.status).toBe(422);
+    expect(await rejected.json()).toMatchObject({
+      error: expect.stringContaining("Clip voice has invalid audio automation"),
+      clipEdits: view.clipEdits.map(({ id, clipId, by, accepted }) =>
+        expect.objectContaining({ id, clipId, by, accepted }),
+      ),
+    });
+    const accepted = await f.request(
+      `${f.base}/review/changes/accept`,
+      "POST",
+      { editId: added!.id },
+    );
+    expect(accepted.status).toBe(200);
+    await f.save(earlier);
+    expect((await f.request(`${f.base}/timeline`)).status).toBe(200);
+    expect((await f.read()).clipEdits).toContainEqual(
+      expect.objectContaining({ id: added!.id, accepted: true }),
+    );
+  } finally {
+    await f.close();
+  }
+});
 
 for (const [name, before, after] of [
   ["timeline receiver", 'intro.to("#title"', 'outro.to("#title"'],

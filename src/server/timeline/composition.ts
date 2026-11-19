@@ -1,5 +1,6 @@
 import { offsetSourceTime } from "../../shared/timeline/time";
 import {
+  AudioAutomationError,
   RATE_TARGET,
   parseAutomation,
   serializeAutomation,
@@ -853,12 +854,15 @@ export function parseComposition(
     mediaLengths = new Map(),
     rootId,
     fonts = new Set(declaredFonts(html)),
+    sourceAttribution = false,
   }: {
     scope?: CompositionScope;
     /** A bundled scene instance whose tracks are mixed independently of its parent. */
     rootId?: string;
     /** Font faces available from this composition and the project's entry document. */
     fonts?: ReadonlySet<string>;
+    /** Source history needs clip identities and byte ranges even when an envelope is invalid. */
+    sourceAttribution?: boolean;
     /** Measured source lengths in seconds, by `src`. */
     mediaLengths?: ReadonlyMap<string, number>;
   } = {},
@@ -937,6 +941,23 @@ export function parseComposition(
           ? null
           : sourceOf(element);
     const versions = readVersions(kind, src, element.attrs[VERSIONS_ATTRIBUTE]);
+    const rawAutomation = element.attrs["data-automation"];
+    let automation: string | null = null;
+    if (rawAutomation) {
+      try {
+        automation = offsetAutomation(
+          serializeAutomation(parseAutomation(rawAutomation)),
+          -frameTime(edges.in ? framesBefore(edges.in) : 0, fps),
+        );
+      } catch (error) {
+        if (!(error instanceof AudioAutomationError)) throw error;
+        if (!sourceAttribution)
+          throw new TimelineError(
+            "unsupported",
+            `Clip ${id} has invalid audio automation. ${error.message}`,
+          );
+      }
+    }
     const clip: Clip = {
       id,
       track: read.trackIndex,
@@ -1020,14 +1041,7 @@ export function parseComposition(
       grade: gradedKind(kind)
         ? readableGrade(element.attrs[GRADE_ATTRIBUTE])
         : null,
-      automation: element.attrs["data-automation"]
-        ? offsetAutomation(
-            serializeAutomation(
-              parseAutomation(element.attrs["data-automation"]),
-            ),
-            -frameTime(edges.in ? framesBefore(edges.in) : 0, fps),
-          )
-        : null,
+      automation,
       enabled:
         element.attrs["data-hidden"] === undefined ||
         element.attrs["data-cutroom-track-hidden"] !== undefined,

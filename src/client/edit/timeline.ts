@@ -26,12 +26,7 @@ import { ApiError, api, json, tabOrigin } from "../api";
 import { clipName, trackRows } from "../timeline/math";
 import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
-import {
-  NO_COMPOSITION_ROOT,
-  reportEditorError,
-  showToast,
-  useWorkspace,
-} from "../workspace";
+import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "./anchors";
 import {
@@ -61,6 +56,7 @@ const HistorySchema = z.object({
   canRedo: z.boolean(),
   entries: z.array(z.object({ id: z.string(), undone: z.boolean() })),
 });
+const TimelineEditsSchema = TimelineViewSchema.pick({ clipEdits: true });
 
 /** The engine's timeline for the open composition, shared by the viewer, transport, and timeline. */
 export const useTimeline = create(() => ({
@@ -72,6 +68,8 @@ export const useTimeline = create(() => ({
   parents: [] as readonly string[],
   /** The engine's last answer with the edits it has not answered yet applied on top. */
   view: null as TimelineView | null,
+  /** Edits still available to review when the current source cannot produce a timeline. */
+  recoveryEdits: null as NonNullable<TimelineView["clipEdits"]> | null,
   history: { canUndo: false, canRedo: false },
   /** Selected clip ids. A clip id names one clip for good, so an id is that clip or gone. */
   selection: emptySelection as Selection,
@@ -107,6 +105,7 @@ const project = (projectId: string) =>
   `/projects/${encodeURIComponent(projectId)}`;
 
 let queue = Promise.resolve();
+let compositionRequest = 0;
 /** The engine's last answer for the open composition, which the shown view starts from. */
 let confirmed: { projectId: string; view: TimelineView } | null = null;
 /** Each composition's last answer in the open project, so returning to one shows it at once. */
@@ -155,6 +154,7 @@ function noticeOutside(before: TimelineView, after: TimelineView) {
 
 /** Opens a project's timeline, dropping what was shown for the last one. */
 export function openTimeline(projectId: string, signal?: AbortSignal) {
+  compositionRequest++;
   dismissAnimationFeedback();
   confirmed = null;
   answers.clear();
@@ -163,11 +163,14 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
   dismissRipple();
   dismissOutside();
   rippleRevision = null;
+  historyHead = undefined;
   useTimeline.setState({
     projectId,
     composition: ROOT_COMPOSITION,
     parents: [],
     view: null,
+    recoveryEdits: null,
+    history: { canUndo: false, canRedo: false },
     selection: emptySelection,
   });
   signal?.addEventListener(
@@ -180,6 +183,8 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
       useTimeline.setState({
         projectId: null,
         view: null,
+        recoveryEdits: null,
+        history: { canUndo: false, canRedo: false },
         selection: emptySelection,
       });
     },
@@ -354,7 +359,11 @@ function settle(
     dismissRipple();
     rippleRevision = null;
   }
-  useTimeline.setState({ view: shown(projectId), history });
+  useTimeline.setState({
+    view: shown(projectId),
+    history,
+    recoveryEdits: null,
+  });
   // The engine read this timeline, so an earlier refusal no longer stands.
   reportEditorError("timeline", null);
 }
@@ -364,6 +373,7 @@ async function read(
   signal?: AbortSignal,
   notify = true,
   composition = useTimeline.getState().composition,
+  select?: (view: TimelineView | null) => void,
 ) {
   const historyRead = readHistory(projectId, signal);
   const [view, history] = await Promise.all([
@@ -375,19 +385,30 @@ async function read(
       }`,
       TimelineViewSchema,
       { signal },
-    ),
+    ).catch(async (error: unknown) => {
+      if (error instanceof ApiError && error.status === 422) {
+        const history = await historyRead.catch(() => null);
+        if (!signal?.aborted) select?.(null);
+        if (!signal?.aborted && isOpen(projectId, composition)) {
+          const edits = TimelineEditsSchema.safeParse(error.body);
+          if (history)
+            historyHead = history.entries.findLast(
+              (entry) => !entry.undone,
+            )?.id;
+          useTimeline.setState({
+            ...(history && { history }),
+            recoveryEdits: edits.success ? (edits.data.clipEdits ?? []) : [],
+          });
+        }
+      }
+      throw error;
+    }),
     historyRead,
-  ]).catch(async (error: unknown) => {
-    // A bad source can still be repaired by undoing the edit that broke it.
-    if (error instanceof ApiError && error.message === NO_COMPOSITION_ROOT) {
-      const history = await historyRead.catch(() => null);
-      if (history && !signal?.aborted && isOpen(projectId, composition))
-        useTimeline.setState({ history });
-    }
-    throw error;
-  });
-  if (useTimeline.getState().projectId !== projectId) return view;
+  ]);
+  if (signal?.aborted || useTimeline.getState().projectId !== projectId)
+    return view;
   answers.set(view.composition, view);
+  select?.(view);
   if (!isOpen(projectId, view.composition)) return view;
   if (
     confirmed?.view.composition === view.composition &&
@@ -401,9 +422,8 @@ async function read(
 }
 
 /**
- * Edits another composition of the open project. One seen before shows at once from its last
- * answer while a read catches up; one not seen yet shows once it is read, so the editor never
- * shows an empty or mismatched timeline. Edits still saving to the composition left land first.
+ * Compositions seen before show their last projection while a read catches up. A first read can
+ * open the source and picture even if there is no valid timeline for it.
  */
 export function showComposition(
   projectId: string,
@@ -411,9 +431,13 @@ export function showComposition(
   parents: readonly string[],
   selection: Selection,
 ) {
-  const show = (view: TimelineView) => {
-    if (useTimeline.getState().projectId !== projectId) return;
-    confirmed = { projectId, view };
+  const request = ++compositionRequest;
+  const current = () =>
+    request === compositionRequest &&
+    useTimeline.getState().projectId === projectId;
+  const show = (view: TimelineView | null) => {
+    if (!current()) return;
+    confirmed = view ? { projectId, view } : null;
     dismissRipple();
     rippleRevision = null;
     useTimeline.setState({
@@ -421,21 +445,48 @@ export function showComposition(
       parents,
       selection,
       view: shown(projectId),
+      recoveryEdits: null,
     });
+    if (view) reportEditorError("timeline", null);
   };
   const known = answers.get(composition);
   if (known) show(known);
   return enqueue(async () => {
-    const view = await read(projectId, undefined, false, composition);
-    if (!known) show(answers.get(composition) ?? view);
+    if (!current()) return;
+    try {
+      await read(
+        projectId,
+        undefined,
+        false,
+        composition,
+        known ? undefined : show,
+      );
+    } catch (error) {
+      if (!current()) return;
+      if (!(error instanceof ApiError && error.status === 422)) throw error;
+      reportEditorError("timeline", error);
+    }
   });
 }
 
+/** A projection failure belongs to the composition read when the queued refresh starts. */
+async function refreshOpenTimeline(
+  projectId: string,
+  signal?: AbortSignal,
+  notify = true,
+) {
+  if (signal?.aborted || useTimeline.getState().projectId !== projectId) return;
+  const { composition } = useTimeline.getState();
+  try {
+    await read(projectId, signal, notify, composition);
+  } catch (error) {
+    if (!signal?.aborted && isOpen(projectId, composition))
+      reportEditorError("timeline", error);
+  }
+}
+
 export const loadTimeline = (projectId: string, signal: AbortSignal) =>
-  enqueue(async () => {
-    signal.throwIfAborted();
-    await read(projectId, signal);
-  });
+  enqueue(() => refreshOpenTimeline(projectId, signal));
 
 /** How long the first project file event waits for the rest of its burst. */
 const BURST_MS = 100;
@@ -455,8 +506,7 @@ export function refreshTimeline(projectId: string, signal: AbortSignal) {
     done: new Promise((resolve) => setTimeout(resolve, BURST_MS)).then(() =>
       enqueue(async () => {
         if (refresh === next) refresh = null;
-        signal.throwIfAborted();
-        await read(projectId, signal);
+        await refreshOpenTimeline(projectId, signal);
       }),
     ),
   };
@@ -715,9 +765,7 @@ export async function editTimeline(
         // Before the next edit runs, the queue forgets this one and the edits that named its
         // pieces, and reads what the server holds.
         dropDependents(made);
-        await read(projectId).catch((failure: unknown) =>
-          reportEditorError("timeline", failure),
-        );
+        await refreshOpenTimeline(projectId);
         throw error;
       }
       pending = pending.filter((item) => item !== made);
@@ -793,8 +841,11 @@ export const stepHistory = (
     clipboardTask.then(() =>
       enqueue(async () => {
         if (expectedHistoryId) {
-          await read(projectId);
-          if (historyHead !== expectedHistoryId)
+          const history = await readHistory(projectId);
+          if (
+            history.entries.findLast((entry) => !entry.undone)?.id !==
+            expectedHistoryId
+          )
             throw new Error("The history changed. Use Undo in the toolbar.");
         }
         dismissRipple();
@@ -817,7 +868,7 @@ export const stepHistory = (
           z.unknown(),
           json("POST"),
         );
-        await read(projectId, undefined, false);
+        await refreshOpenTimeline(projectId, undefined, false);
         if (!before?.items.length) return;
         const after = await api(
           `${project(projectId)}/review`,

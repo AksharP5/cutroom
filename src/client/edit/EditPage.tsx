@@ -181,12 +181,12 @@ export function EditPage({
     const fail = (error: unknown) => {
       if (!closing.signal.aborted) report(error);
     };
-    void loadTimeline(projectId, closing.signal).catch(fail);
+    void loadTimeline(projectId, closing.signal);
     // Any project change can move the timeline or the undo history.
     const stopProject = subscribeProjectEvents(
       projectId,
       "message",
-      () => void refreshTimeline(projectId, closing.signal).catch(fail),
+      () => void refreshTimeline(projectId, closing.signal),
     );
     // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
     const stopAnimationFeedback = subscribeProjectEvents(

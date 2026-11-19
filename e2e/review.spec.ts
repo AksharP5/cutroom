@@ -1,9 +1,122 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "./fixtures";
-import { AnnotationSchema, ProjectSchema } from "../src/shared/project";
+import {
+  AnnotationSchema,
+  ProjectSchema,
+  SourceSchema,
+} from "../src/shared/project";
 import { ReviewItemSchema } from "../src/shared/review";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+
+test("an invalid clip envelope keeps the picture, Review, and Undo usable", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Audio source recovery" },
+      })
+    ).json(),
+  );
+  const path = `/api/cutroom/projects/${project.id}/source`;
+  const read = async () =>
+    SourceSchema.parse(await (await request.get(path)).json());
+  const original = (await read()).content;
+  await mkdir(join(project.path, "compositions"), { recursive: true });
+  await writeFile(
+    join(project.path, "compositions", "intro.html"),
+    '<template><main data-composition-id="intro" data-duration="5" data-width="640" data-height="360"><div id="scene-title" data-start="0" data-duration="5">A valid scene</div></main></template>',
+  );
+  const save = async (content: string, agent = false) => {
+    const result = await request.put(path, {
+      ...(agent && { headers: { "x-cutroom-agent": "external" } }),
+      data: {
+        path: "index.html",
+        expectedVersion: (await read()).version,
+        content,
+      },
+    });
+    expect(result.status(), await result.text()).toBe(200);
+  };
+
+  await page.goto(`/#project/${project.id}`);
+  const headline = page.frameLocator("iframe[data-live]").locator("#headline");
+  await expect(headline).toHaveText("Audio source recovery");
+  const corrected = original.replaceAll(
+    "Audio source recovery",
+    "Updated picture",
+  );
+  await save(
+    corrected.replace(
+      "</main>",
+      `<audio id="voice" src="voice.wav" data-start="0" data-duration="1" data-hidden data-automation='{"version":1,"lanes":[{"target":"rate","points":null}]}'></audio></main>`,
+    ),
+    true,
+  );
+  await expect(headline).toHaveText("Updated picture");
+  await expect(
+    page.getByText(/Clip voice has invalid audio automation/).first(),
+  ).toBeVisible();
+  const openReview = () =>
+    page.getByRole("button", { name: "Review", exact: true }).click();
+  const changes = page.getByRole("list", { name: "Composition changes" });
+  const accept = page.getByRole("button", { name: "Accept agent changes" });
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  await openReview();
+  await expect(changes).toContainText("Edit index.html");
+  await expect(accept).toBeVisible();
+  await expect(undo).toBeEnabled();
+  await page.screenshot({
+    path: info.outputPath("invalid-source-review.png"),
+    animations: "disabled",
+  });
+
+  await page.reload();
+  await expect(headline).toHaveText("Updated picture");
+  await openReview();
+  await expect(changes).toContainText("Edit index.html");
+  const media = page.getByRole("region", { name: "Media" });
+  await media.getByRole("button", { name: /^Compositions/ }).click();
+  const compositions = media.getByRole("list", { name: "Compositions" });
+  await compositions
+    .locator('[data-path="compositions/intro.html"]')
+    .dblclick();
+  const breadcrumb = page.getByRole("navigation", { name: "Composition" });
+  await expect(breadcrumb).toContainText("intro");
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#scene-title"),
+  ).toHaveText("A valid scene");
+  await expect(
+    page.getByText(/Clip voice has invalid audio automation/),
+  ).toHaveCount(0);
+  await breadcrumb
+    .getByRole("button", { name: "Audio source recovery" })
+    .click();
+  await expect(breadcrumb).toHaveCount(0);
+  await expect(headline).toHaveText("Updated picture");
+  await expect(
+    page.getByText(/Clip voice has invalid audio automation/).first(),
+  ).toBeVisible();
+  await undo.click();
+  await expect(headline).toHaveText("Audio source recovery");
+  await expect(changes).toHaveCount(0);
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  await expect(headline).toHaveText("Updated picture");
+  await expect(accept).toBeVisible();
+  await accept.click();
+  await expect(changes).toHaveCount(0);
+  await expect(
+    page.getByText(/Clip voice has invalid audio automation/).first(),
+  ).toBeVisible();
+  await save(corrected);
+  await expect(headline).toHaveText("Updated picture");
+  await expect(page.locator('[data-clip="headline"]')).toBeVisible();
+  await expect(
+    page.getByText(/Clip voice has invalid audio automation/),
+  ).toHaveCount(0);
+});
 
 test("review notes stay grouped by state until the owner accepts, answers, or restores them", async ({
   page,
