@@ -312,3 +312,9 @@ Select a visual clip to inspect its existing inline GSAP animation in **Motion**
 Open a scene, select a visual clip, and put the playhead over it. **Add fade in** writes a GSAP opacity tween lasting half a second or however much time remains on the clip, whichever is shorter. It works on a clip with a unique authored ID and no existing tween or keyed opacity. Open the original scene file. It needs one supported registered inline timeline, explicit nonnegative tween starts and delays, and no nested scenes. The scene carries the fade when you move the scene clip on its parent timeline.
 
 A shared selector lists every affected element. Source-only fields and unsupported constructions show their reason. **Source** opens the composition's code. Save or discard an edited code buffer before changing motion. A source conflict refreshes the inspector instead of overwriting another edit. External HTML scenes are supported in their own scope, with nested templates kept separate. Use Source for external JavaScript, standalone `gsap.to/from/fromTo` calls, removing tweens, computed motion, paths, and curves.
+
+### Text layers in a graphic
+
+Select the graphic on the timeline and choose a child element under **Inspector → Text → Layer**. Edit the words and press Enter or leave the field to save. Shift+Enter inserts a line break, and Escape discards typing. The viewer refreshes at the current frame and one Undo restores the old words.
+
+The picker uses authored HTML element IDs in this composition. Markup, duplicate IDs, variable-bound words, and custom spacing the inspector cannot preserve stay in Source. Compositions with authored JavaScript use Source for text edits, and the starter project's pinned GSAP library is supported. Open a separate scene to edit its own graphics. [Agents can edit the same layers through MCP.](mcp.md#authored-text-layers)

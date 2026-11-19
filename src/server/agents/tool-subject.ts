@@ -233,6 +233,8 @@ export async function toolSubject(
     case "motion_update":
     case "motion_add_fade":
       return text("clipId");
+    case "layer_text_update":
+      return text("layerId");
     case "variables_declare":
       return z.object({ id: z.string().trim().min(1) }).safeParse(args.variable)
         .data?.id;

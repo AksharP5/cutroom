@@ -485,6 +485,9 @@
 .inspector-text {
   display: grid;
 }
+.inspector-layer-text .select-trigger {
+  width: 100%;
+}
 .inspector-text textarea {
   width: 100%;
   min-width: 0;

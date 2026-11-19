@@ -98,6 +98,7 @@ import {
 import type { ClipTiming, HtmlOpeningTagSpan } from "@hyperframes/parsers";
 import { defaultTreeAdapter, parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
+import type { LayerTextSnapshot } from "../../shared/layerText";
 import {
   TimelineError,
   canonicalSeconds,
@@ -649,6 +650,199 @@ export function compositionClipLocations(
   );
 }
 
+/** Plain authored descendants are addresses within one timed source owner, not timeline clips. */
+export function inspectLayerText(
+  html: string,
+  composition: string,
+  lockedTracks: ReadonlySet<number>,
+  clipId: string,
+  staticSource: boolean,
+) {
+  const scope = compositionScope(composition);
+  const { all, roots, rows, nodes, owned } = projectComposition(html, {
+    scope,
+  });
+  const owner = rows.find(({ id }) => id === clipId);
+  if (!owner) throw new TimelineError("not_found", `No clip ${clipId}.`);
+  const locked = lockedTracks.has(owner.read.trackIndex);
+  const layers: LayerTextSnapshot["layers"] = [];
+  const targets = new Map<string, SourceElement>();
+  const write = (id: string, text: string) => {
+    const target = targets.get(id);
+    if (!target)
+      throw new TimelineError(
+        "unsupported",
+        "This layer's words stay in Source.",
+      );
+    return applyEdits(html, [textEdit({ html, nodes }, target, text)]);
+  };
+  const graphic = owner.element;
+  if (
+    owner.end === null ||
+    clipKind(graphic) !== "element" ||
+    graphic.attrs[ADJUSTMENT_ATTRIBUTE] !== undefined
+  )
+    return { locked, layers, write };
+
+  const counts = new Map<string, number>();
+  for (const { attrs } of all)
+    if (attrs.id) counts.set(attrs.id, (counts.get(attrs.id) ?? 0) + 1);
+
+  const candidates: { element: SourceElement; bound: boolean }[] = [];
+  const visit = (parent: SourceElement, ancestorBound: boolean) => {
+    const bound = ancestorBound || parent.attrs["data-var-text"] !== undefined;
+    for (const element of parent.children) {
+      if (
+        isSubCompositionHost(element) ||
+        isTimedElement(element) ||
+        element.attrs["data-duration"] !== undefined ||
+        element.attrs["data-end"] !== undefined ||
+        [
+          "template",
+          "script",
+          "style",
+          "noscript",
+          "noembed",
+          "noframes",
+          "xmp",
+          "svg",
+          "math",
+          "canvas",
+          "iframe",
+        ].includes(element.tag)
+      )
+        continue;
+      if (element.attrs.id)
+        candidates.push({
+          element,
+          bound: bound || element.attrs["data-var-text"] !== undefined,
+        });
+      visit(element, bound);
+    }
+  };
+  visit(graphic, false);
+  // HyperFrames can use declarations outside a scene's first template when it compiles it.
+  const sourceElements =
+    scope === "sub-composition"
+      ? [...all, ...scopeElements(roots, "document")]
+      : all;
+  const hasCustomBase = sourceElements.some(
+    ({ tag, attrs }) => tag === "base" && attrs.href !== undefined,
+  );
+  const restriction = (
+    element: SourceElement,
+    id: string,
+    bound: boolean,
+    text: string,
+  ) => {
+    if (graphic.attrs.id !== clipId || counts.get(clipId) !== 1)
+      return "The graphic needs a unique authored ID. Edit it in Source.";
+    if (counts.get(id) !== 1)
+      return "This layer ID appears more than once. Edit it in Source.";
+    if (bound) return "A variable controls this text. Edit it in Source.";
+    if (!staticSource || hasCustomBase)
+      return "This composition can change its contents at runtime. Edit layer text in Source.";
+    const reason = textMarkupRestriction(nodes, element);
+    if (reason) return reason;
+    if (!plainLayerRange(nodes, element))
+      return "This layer has authored markup. Edit it in Source.";
+    const { prefix, suffix } = textRange({ html, nodes }, element);
+    const decoded = element.nodes
+      .map((node) => (defaultTreeAdapter.isTextNode(node) ? node.value : "\n"))
+      .join("");
+    // The HTML parser normalizes CRLF in text nodes. The writer keeps the raw outer bytes.
+    const exact = decoded.slice(
+      prefix.replaceAll("\r\n", "\n").length,
+      decoded.length - suffix.replaceAll("\r\n", "\n").length,
+    );
+    if (exact !== text)
+      return "This text has authored spacing the inspector cannot preserve. Edit it in Source.";
+    try {
+      elementEnd({ nodes, owned }, element, id);
+    } catch (error) {
+      if (!(error instanceof TimelineError)) throw error;
+      return "This layer's markup is misnested. Edit it in Source.";
+    }
+    return null;
+  };
+  const seen = new Set<string>();
+  for (const { element, bound } of candidates) {
+    const id = element.attrs.id!;
+    const text = elementText(element)?.text;
+    if (!text || seen.has(id)) continue;
+    seen.add(id);
+    const reason = restriction(element, id, bound, text);
+    if (!reason) targets.set(id, element);
+    layers.push({ id, text, reason });
+  }
+  return { locked, layers, write };
+}
+
+/** Confirm that parsing placed exactly the text and bare line breaks inside these tags. */
+function plainLayerRange(nodes: SourceRange[], element: SourceElement) {
+  let at = element.openEnd;
+  for (const node of element.nodes) {
+    const location = node.sourceCodeLocation;
+    if (
+      (!defaultTreeAdapter.isTextNode(node) &&
+        !(
+          defaultTreeAdapter.isElementNode(node) &&
+          node.tagName === "br" &&
+          !node.attrs.length
+        )) ||
+      location?.startOffset !== at
+    )
+      return false;
+    at = location.endOffset;
+  }
+  return at === nodes[element.index]!.own[1]?.[0];
+}
+
+function readTextLayout(
+  html: string,
+  all: SourceElement[],
+  elements: SourceElement[],
+) {
+  // CSS selectors, inheritance and external sheets are not a CSS cascade we
+  // can resolve in this parser. Keep multiline source visible and refuse uncertain rewrites.
+  const sharedWhiteSpace = all.some(
+    (element) =>
+      ["pre", "textarea"].includes(element.tag) ||
+      (element.tag === "style" &&
+        /white-space\s*:/i.test(html.slice(element.openEnd, element.end))) ||
+      (element.tag === "link" &&
+        /\bstylesheet\b/i.test(element.attrs.rel ?? "")),
+  );
+  const inlineWhiteSpace = all.filter((element) =>
+    /white-space\s*:/i.test(element.attrs.style ?? ""),
+  );
+  const textLayout: ParsedComposition["textLayout"] = new Map();
+  for (const element of elements) {
+    const preserveLines =
+      sharedWhiteSpace ||
+      inlineWhiteSpace.length > 0 ||
+      ["pre", "textarea"].includes(element.tag);
+    const multiline = elementText(element, true)?.text.includes("\n");
+    const inlinePreLine =
+      !sharedWhiteSpace &&
+      inlineWhiteSpace.length === 1 &&
+      inlineWhiteSpace[0] === element &&
+      /(?:^|;)\s*white-space\s*:\s*pre-line\s*(?:!important\s*)?(?:;|$)/i.test(
+        element.attrs.style ?? "",
+      );
+    textLayout.set(element, {
+      preserveLines,
+      ...(preserveLines &&
+        multiline &&
+        !inlinePreLine && {
+          reason:
+            "This text may preserve source line breaks. Edit it in the source.",
+        }),
+    });
+  }
+  return textLayout;
+}
+
 /** Projects composition HTML and its sidecar settings onto the frames the runtime shows. */
 export function parseComposition(
   html: string,
@@ -694,43 +888,11 @@ export function parseComposition(
     return { id, element, read, start, end, edges };
   });
 
-  // CSS selectors, inheritance and external sheets are not a CSS cascade we
-  // can resolve in this parser. Keep multiline source visible and refuse uncertain rewrites.
-  const sharedWhiteSpace = all.some(
-    (element) =>
-      ["pre", "textarea"].includes(element.tag) ||
-      (element.tag === "style" &&
-        /white-space\s*:/i.test(html.slice(element.openEnd, element.end))) ||
-      (element.tag === "link" &&
-        /\bstylesheet\b/i.test(element.attrs.rel ?? "")),
+  const textLayout = readTextLayout(
+    html,
+    all,
+    rows.map(({ element }) => element),
   );
-  const inlineWhiteSpace = all.filter((element) =>
-    /white-space\s*:/i.test(element.attrs.style ?? ""),
-  );
-  const textLayout: ParsedComposition["textLayout"] = new Map();
-  for (const { element } of rows) {
-    const preserveLines =
-      sharedWhiteSpace ||
-      inlineWhiteSpace.length > 0 ||
-      ["pre", "textarea"].includes(element.tag);
-    const multiline = elementText(element, true)?.text.includes("\n");
-    const inlinePreLine =
-      !sharedWhiteSpace &&
-      inlineWhiteSpace.length === 1 &&
-      inlineWhiteSpace[0] === element &&
-      /(?:^|;)\s*white-space\s*:\s*pre-line\s*(?:!important\s*)?(?:;|$)/i.test(
-        element.attrs.style ?? "",
-      );
-    textLayout.set(element, {
-      preserveLines,
-      ...(preserveLines &&
-        multiline &&
-        !inlinePreLine && {
-          reason:
-            "This text may preserve source line breaks. Edit it in the source.",
-        }),
-    });
-  }
   const groupDeclarations = compositionAudioGroups(root);
   const managedGroups = new Set(
     managedAudioGroups(root).map((bus) => bus.attrs.id),
@@ -1046,7 +1208,7 @@ function firstReachingPast(owned: OwnedBytes[], offset: number): number {
  * merged into the text before it, or the `</b>` that closes a bold begun outside it.
  */
 function elementEnd(
-  parsed: ParsedComposition,
+  parsed: Pick<ParsedComposition, "nodes" | "owned">,
   element: SourceElement,
   name: string,
 ): number {
@@ -1375,20 +1537,32 @@ function clipChanges(
   return changes;
 }
 
-/** Replaces a text element's words, keeping the whitespace that indents them in the source. */
-function textEdit(
-  parsed: ParsedComposition,
+/** The words' source offsets, after the whitespace that indents them. */
+function textRange(
+  parsed: Pick<ParsedComposition, "html" | "nodes">,
   element: SourceElement,
-  text: string,
-): Edit {
+) {
   // The engine refused restricted text before this, so the element has a closing tag.
   const close = parsed.nodes[element.index]!.own[1]!;
   const inner = parsed.html.slice(element.openEnd, close[0]);
+  const prefix = /^[\t\n\f\r ]*/.exec(inner)![0];
+  const suffix = /[\t\n\f\r ]*$/.exec(inner)![0];
   return {
-    start: element.openEnd + /^[\t\n\f\r ]*/.exec(inner)![0].length,
-    end: close[0] - /[\t\n\f\r ]*$/.exec(inner)![0].length,
-    text: textMarkup(text),
+    start: element.openEnd + prefix.length,
+    end: close[0] - suffix.length,
+    prefix,
+    suffix,
   };
+}
+
+/** Replaces a text element's words, keeping the whitespace that indents them in the source. */
+function textEdit(
+  parsed: Pick<ParsedComposition, "html" | "nodes">,
+  element: SourceElement,
+  text: string,
+): Edit {
+  const { start, end } = textRange(parsed, element);
+  return { start, end, text: textMarkup(text) };
 }
 
 /**
@@ -1791,13 +1965,12 @@ function indentOf(html: string, at: number): string {
   return /^[\t ]*$/.test(indent) ? indent : "";
 }
 
-/** Why a clip's words cannot be replaced as plain text, if they cannot. */
-function textRestriction(
-  parsed: ParsedComposition,
-  clip: Clip,
+/** Why editing plain words would change the markup or spacing authored around them. */
+function textMarkupRestriction(
+  nodes: SourceRange[],
   element: SourceElement,
+  spacing?: string,
 ): string | undefined {
-  if (clip.text === null) return undefined;
   if (!elementText(element)?.plain)
     return "This text has markup inside it. Edit it in the source.";
   if (
@@ -1808,10 +1981,23 @@ function textRestriction(
     )
   )
     return "This text keeps its exact spacing. Edit it in the source.";
-  const spacing = parsed.textLayout.get(element)?.reason;
   if (spacing) return spacing;
-  if (!parsed.nodes[element.index]!.own[1])
+  if (!nodes[element.index]!.own[1])
     return "This element has no closing tag. Edit it in the source.";
+}
+
+function textRestriction(
+  parsed: ParsedComposition,
+  clip: Clip,
+  element: SourceElement,
+) {
+  if (clip.text === null) return undefined;
+  const reason = textMarkupRestriction(
+    parsed.nodes,
+    element,
+    parsed.textLayout.get(element)?.reason,
+  );
+  if (reason) return reason;
   if (element.attrs.id && scriptWritesText(parsed.scripts, element.attrs.id))
     return "A script sets this text. Edit it in the source.";
   return undefined;

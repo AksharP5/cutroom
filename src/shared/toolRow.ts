@@ -197,6 +197,17 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => (target ? `the default of ${target}` : "a default"),
   },
+  layer_text_list: {
+    verb: ["Listed", "Listing", "List"],
+    kind: "project",
+    object: () => "text layers",
+  },
+  layer_text_update: {
+    verb: edited,
+    kind: "edit",
+    object: (target) =>
+      target ? `text in layer ${target}` : "text in a layer",
+  },
   motion_read: {
     verb: read,
     kind: "project",
