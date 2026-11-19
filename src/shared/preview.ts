@@ -152,6 +152,7 @@ export const RuntimeStateSchema = z.object({
   type: z.literal("state"),
   currentTime: z.number().nonnegative().finite(),
   isPlaying: z.boolean(),
+  buffering: z.boolean().default(false),
 });
 
 export const PreviewLevelsSchema = z.object({

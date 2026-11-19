@@ -73,7 +73,7 @@ export interface RuntimePlayer {
    */
   seek(seconds: number, moving?: boolean): void;
   /** Seconds on the runtime's own clock, which leads at 1x so audio stays in sync. */
-  time(): number;
+  time(at?: DOMHighResTimeStamp): number;
   /** Continuous playback time paired with the instant it was observed in the preview. */
   clock(): PlaybackClock | null;
   /** False once the runtime stops by itself at the end of the composition. */
@@ -163,7 +163,7 @@ export function createTransport() {
     // At 1x the runtime plays its media and its clock leads; shuttles step frames on ours.
     let frame =
       state.kind === "playing" && player
-        ? frameAt(player.time())
+        ? frameAt(player.time(now))
         : origin.frame +
           Math.trunc((((now - origin.at) / 1000) * speed * fps.num) / fps.den);
     // At 23.976 and 29.97 the runtime's end time floors to the last frame, one short of the
