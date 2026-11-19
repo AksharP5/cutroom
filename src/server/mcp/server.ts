@@ -39,6 +39,7 @@ import { registerLayerTextTools } from "./layerTextTools";
 import { registerFontTools } from "./fontTools";
 import { registerGradeTools } from "./gradeTools";
 import { compactLint } from "../../shared/lint";
+import { canonicalProjectPath } from "../projects/path";
 
 type LocalFetch = (
   url: string,
@@ -270,7 +271,12 @@ export function createMcpServer(options: McpOptions = {}) {
       inputSchema: {
         ...project,
         query: z.string().max(255).default(""),
-        composition: z.string().min(1).max(2000).default("index.html"),
+        composition: z
+          .string()
+          .min(1)
+          .max(2000)
+          .overwrite(canonicalProjectPath)
+          .default("index.html"),
         offset: z.int().nonnegative().default(0),
       },
       outputSchema: {
@@ -290,14 +296,21 @@ export function createMcpServer(options: McpOptions = {}) {
     ({ projectId, query, composition, offset }) =>
       requestApi(`/projects/${id(projectId)}`, "GET", undefined, {
         reply: (result) => {
-          const { files } = z
-            .object({ files: z.array(z.string()) })
+          const { files, fileVersions } = z
+            .object({
+              files: z.array(z.string()),
+              fileVersions: z.record(z.string(), z.string().nullable()),
+            })
             .parse(result);
           const matches = mediaSearch(query);
           const assets = files
             .flatMap((path) => {
               const media = mediaKind(path);
-              return media && matches(path) ? [{ path, kind: media.kind }] : [];
+              return media &&
+                typeof fileVersions[path] === "string" &&
+                matches(path)
+                ? [{ path, kind: media.kind }]
+                : [];
             })
             .sort((a, b) => a.path.localeCompare(b.path));
           const end = offset + 100;

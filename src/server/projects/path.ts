@@ -4,6 +4,7 @@ import {
   dirname,
   isAbsolute,
   join,
+  posix,
   relative,
   resolve,
   sep,
@@ -11,6 +12,11 @@ import {
 import type { Project } from "../../shared/project.ts";
 import { HttpError } from "../../shared/errors.ts";
 import { protectedPath } from "../../shared/sourcePaths.ts";
+
+/** Leading slashes, dot segments, and Windows separators all name files within the project. */
+export function canonicalProjectPath(path: string) {
+  return posix.normalize(path.replaceAll("\\", "/")).replace(/^\/+/, "");
+}
 
 export async function resolveProjectPath(
   project: Pick<Project, "path">,

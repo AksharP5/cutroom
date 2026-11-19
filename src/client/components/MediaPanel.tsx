@@ -57,6 +57,11 @@ const uploadSchema = z.object({
 
 const fileName = (path: string) => path.split("/").at(-1) ?? path;
 
+function focusMediaRow(element: HTMLElement | null | undefined) {
+  focusByKeyboard(element);
+  element?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
 /** The name in place of the row's label. The extension stays: a rename never converts a file. */
 function RenameField({
   name,
@@ -429,7 +434,7 @@ export function MediaPanel({
   useKeymap({
     viewActiveWindowSelectionMediaPoolClips: () => {
       if (hidden) return;
-      focusByKeyboard(
+      focusMediaRow(
         panel.current?.querySelector<HTMLElement>('.media-row[tabindex="0"]') ??
           search.current ??
           importButton.current,
@@ -493,7 +498,9 @@ export function MediaPanel({
       files
         .flatMap((path) => {
           const type = mediaKind(path);
-          return type ? [{ path, kind: type.kind }] : [];
+          return type && typeof fileVersions[path] === "string"
+            ? [{ path, kind: type.kind }]
+            : [];
         })
         .sort((a, b) => a.path.localeCompare(b.path)),
     );
@@ -525,7 +532,7 @@ export function MediaPanel({
         : list.current?.querySelector<HTMLElement>(
             `[data-path="${CSS.escape(path)}"]`,
           );
-    focusByKeyboard(row ?? search.current ?? importButton.current);
+    focusMediaRow(row ?? search.current ?? importButton.current);
   }, [media]);
 
   const failed = (error: unknown) =>
@@ -685,6 +692,10 @@ export function MediaPanel({
 
   const acceptsFiles = (event: DragEvent) =>
     event.dataTransfer.types.includes("Files");
+  const updateSearch = (value: string) => {
+    setQuery(value);
+    if (!value && !media?.length) focusByKeyboard(importButton.current);
+  };
 
   return (
     <section
@@ -778,19 +789,19 @@ export function MediaPanel({
               spellCheck={false}
               autoComplete="off"
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => updateSearch(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Escape" && query) {
                   event.preventDefault();
                   event.stopPropagation();
-                  setQuery("");
+                  updateSearch("");
                 }
                 if (event.key === "ArrowDown") {
                   const first =
                     list.current?.querySelector<HTMLElement>(".media-row");
                   if (!first) return;
                   event.preventDefault();
-                  focusByKeyboard(first);
+                  focusMediaRow(first);
                 }
               }}
             />
@@ -849,7 +860,7 @@ export function MediaPanel({
               );
               if (next === null) return;
               event.preventDefault();
-              focusByKeyboard(rows[next]);
+              focusMediaRow(rows[next]);
             }}
           >
             {visibleMedia?.map(({ path, kind }) => (

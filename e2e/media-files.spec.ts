@@ -145,6 +145,7 @@ test("Media search finds an unused file and MCP places that same file", async ({
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, still);
   }
+  await symlink("missing.svg", join(project.path, "assets", "dangling.svg"));
   const rows = media.getByRole("listitem");
   await expect(rows).toHaveCount(6);
   await row("still.png").dblclick();
@@ -215,11 +216,12 @@ test("Media search finds an unused file and MCP places that same file", async ({
       ],
       nextOffset: null,
     });
-    const nested = await find("dailies/day 2", "compositions/scene.html");
+    const nested = await find("dailies/day 2", "\\compositions\\.\\scene.html");
     expect(nested.files[0]?.src).toBe(
       "../assets/dailies/Day%202%20%23%20slate.svg",
     );
     expect((await find("old-slate")).files).toEqual([]);
+    expect((await find("dangling")).files).toEqual([]);
     const before = TimelineViewSchema.parse(
       await (await request.get(endpoint)).json(),
     );
@@ -248,6 +250,45 @@ test("Media search finds an unused file and MCP places that same file", async ({
   await expect(
     page.frameLocator("iframe[data-live]").locator("img#found-slate"),
   ).toHaveJSProperty("naturalWidth", 64);
+});
+
+test("Down Arrow brings the first search result into view in a scrolled Media list", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Dailies search" },
+      })
+    ).json(),
+  );
+  const assets = join(project.path, "assets");
+  await mkdir(assets, { recursive: true });
+  await Promise.all(
+    Array.from({ length: 30 }, (_, index) =>
+      writeFile(
+        join(assets, `Slate ${String(index).padStart(2, "0")}.svg`),
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="36"/>',
+      ),
+    ),
+  );
+  await page.goto(`/#project/${project.id}`);
+  const media = page.getByRole("region", { name: "Media", exact: true });
+  const search = media.getByRole("searchbox", { name: "Search media" });
+  await search.fill("slate");
+  await expect(media.getByRole("listitem")).toHaveCount(30);
+  const first = media.getByRole("listitem", {
+    name: "assets/Slate 00.svg",
+    exact: true,
+  });
+  await media
+    .locator(".media-list")
+    .evaluate((list) => (list.scrollTop = list.scrollHeight));
+  await expect(first).not.toBeInViewport();
+  await search.press("ArrowDown");
+  await expect(first).toBeFocused();
+  await expect(first).toBeInViewport({ ratio: 1 });
 });
 
 test("Rename in a media row's menu renames the file and every clip that plays it, in one undo step", async ({
