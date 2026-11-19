@@ -209,7 +209,11 @@ test.skipIf(!Bun.which("ffmpeg"))(
 
       const script = await readFile(result.gradeScript!, "utf8");
       expect(script).toContain(JSON.stringify('Chart "A" & cut.fcpxml'));
-      expect(script).toContain("ImportTimelineFromFile(str(path))");
+      expect(script).toContain(
+        'ImportTimelineFromFile(str(path), {"importSourceClips": True})',
+      );
+      expect(script).toContain("project.RefreshLUTList()");
+      expect(script).toContain('destination.open("xb")');
       expect(script).toMatch(
         /GetSetting\("colorUseLocalVersionsAsDefault"\)[\s\S]+raise RuntimeError[\s\S]+ImportTimelineFromFile/,
       );
@@ -233,7 +237,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       const summary = await readFile(result.summary, "utf8");
       expect(summary).toContain("Use local version for new clips in timeline");
       expect(summary).toContain("Open LUT Folder");
-      expect(summary).toContain("Update Lists");
+      expect(summary).toContain("cutroom_lut_root");
       expect(summary).toContain("Workspace > Console");
       expect(summary).toContain(
         `runpy.run_path(${JSON.stringify(result.gradeScript)}`,
