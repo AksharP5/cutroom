@@ -739,6 +739,26 @@ option {
   display: flex;
   flex-direction: column;
 }
+.media-search {
+  position: relative;
+  margin: var(--space-2) 12px 0;
+}
+.media-search svg {
+  position: absolute;
+  top: 50%;
+  left: var(--space-2);
+  width: 14px;
+  height: 14px;
+  translate: 0 -50%;
+  pointer-events: none;
+  color: var(--text-tertiary);
+}
+.media-search input {
+  width: 100%;
+  height: var(--size-row);
+  padding-inline-start: var(--size-icon-button);
+  font-size: var(--type-sm);
+}
 .media-list {
   flex: 1;
   min-height: 0;

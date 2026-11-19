@@ -54,6 +54,11 @@ export const isFreezeExport = (path: string) =>
 export const isMediaItem = (path: string) =>
   !!mediaKind(path) && !inMediaTrash(path) && !isFreezeExport(path);
 
+export function mediaSearch(query: string) {
+  const needle = query.trim().toLowerCase();
+  return (path: string) => !needle || path.toLowerCase().includes(needle);
+}
+
 /** A generated still may have a second PNG with the same name for export. */
 export function freezeExportPath(path: string) {
   if (!path.startsWith(`${FREEZE_DIR}/`)) return;
