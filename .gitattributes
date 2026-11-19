@@ -1,0 +1,2 @@
+src/server/hyperframes/vendor/signalsmith-stretch.cjs whitespace=-trailing-space
+licenses/EMSCRIPTEN.txt whitespace=-trailing-space,-blank-at-eof
