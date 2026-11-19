@@ -1,4 +1,5 @@
 import type { Project, ProjectDocument } from "../../shared/project";
+import { HttpError } from "../../shared/errors";
 import { resolveProjectPath, unavailableProjectFile } from "./path";
 
 /** Track locks follow the source file, including settings saved under its project-local aliases. */
@@ -14,7 +15,11 @@ export async function lockedCompositionTracks(
       if (path !== composition) {
         const alias = await resolveProjectPath(project, path).catch(
           (error: unknown) => {
-            if (unavailableProjectFile(error)) return null;
+            if (
+              unavailableProjectFile(error) ||
+              (error instanceof HttpError && error.status === 400)
+            )
+              return null;
             throw error;
           },
         );
