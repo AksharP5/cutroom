@@ -289,6 +289,14 @@ test("Down Arrow brings the first search result into view in a scrolled Media li
   await search.press("ArrowDown");
   await expect(first).toBeFocused();
   await expect(first).toBeInViewport({ ratio: 1 });
+  await media.locator(".media-list").evaluate((list) => {
+    list.scrollTop = list.scrollHeight;
+  });
+  await expect(first).not.toBeInViewport();
+  await page.keyboard.press("Delete");
+  await expect(first).toBeInViewport({ ratio: 1 });
+  await expect(media.getByRole("listitem")).toHaveCount(30);
+  expect((await stat(join(assets, "Slate 00.svg"))).isFile()).toBe(true);
 });
 
 test("Rename in a media row's menu renames the file and every clip that plays it, in one undo step", async ({

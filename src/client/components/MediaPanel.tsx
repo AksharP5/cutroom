@@ -836,6 +836,12 @@ export function MediaPanel({
                 path !== undefined
               ) {
                 event.preventDefault();
+                const row = event.target.getBoundingClientRect();
+                const viewport = event.currentTarget.getBoundingClientRect();
+                if (row.bottom <= viewport.top || row.top >= viewport.bottom) {
+                  focusMediaRow(event.target);
+                  return;
+                }
                 if (!offline.has(path)) void remove(path, true);
                 return;
               }
