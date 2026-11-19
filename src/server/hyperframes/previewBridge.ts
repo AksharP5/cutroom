@@ -168,6 +168,7 @@ function installPreviewBridge(
       })
     | null,
   rampPending: boolean,
+  rampFiles: string[],
 ) {
   const animatedTitles = new Set<string>();
   const titleAnimations = new Map<string, Set<Animation>>();
@@ -1478,6 +1479,7 @@ function installPreviewBridge(
     };
     return {
       rampPending,
+      rampPrepared: rampFiles.length > 0,
       mixSignature:
         document
           .querySelector('meta[name="cutroom-mix-signature"]')
@@ -3905,6 +3907,23 @@ function installPreviewBridge(
             "*",
           );
           break;
+        case "check-ramp":
+          await Promise.all(
+            rampFiles.map(async (url) => {
+              const response = await fetch(url, {
+                headers: { Range: "bytes=0-43" },
+                signal: AbortSignal.timeout(4000),
+              });
+              if (response.status !== 206) {
+                await response.body?.cancel();
+                throw new Error("Prepared ramp audio could not be loaded.");
+              }
+              const header = await response.arrayBuffer();
+              if (new TextDecoder().decode(header.slice(0, 4)) !== "RIFF")
+                throw new Error("Prepared ramp audio could not be loaded.");
+            }),
+          );
+          break;
         case "paint":
           discoverScrubs();
           await picture;
@@ -4035,6 +4054,7 @@ export function previewDocument(
   dependencies: string | null = null,
   mixSignature?: string,
   rampPending = false,
+  rampFiles: string[] = [],
 ) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
@@ -4164,6 +4184,7 @@ export function previewDocument(
       })),
     },
     rampPending,
+    rampFiles,
   ]).replaceAll("<", "\\u003c");
   const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.

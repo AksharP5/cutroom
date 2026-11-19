@@ -128,6 +128,7 @@ export function Viewer({
   const latest = useRef(0);
   const [rampReady, setRampReady] = useState<number | null>(null);
   const rampSwap = useRef<{ gen: number; previous: number } | null>(null);
+  const nativeRampDocuments = useRef(new Set<number>());
   const [mixedRevision, setMixedRevision] = useState<number | null>(null);
   const checking = useRef<AbortController | null>(null);
   const loadingRevision = useRef<{ gen: number; revision: number } | null>(
@@ -143,7 +144,10 @@ export function Viewer({
       ? handoff.candidate
       : null;
   const live =
-    handoff.kind === "promoting" ? handoff.candidate : handoff.confirmed;
+    handoff.kind === "promoting" &&
+    rampSwap.current?.gen !== handoff.candidate.gen
+      ? handoff.candidate
+      : handoff.confirmed;
 
   // Readiness follows acknowledgments and painted pixels without rendering React per frame.
   useLayoutEffect(() => {
@@ -274,16 +278,19 @@ export function Viewer({
         : `&composition=${encodeURIComponent(shown)}`
     }${documentVariables.current.get(gen) ?? ""}${auditionQuery(
       documentAuditions.current.get(gen) ?? null,
-    )}`;
+    )}${nativeRampDocuments.current.has(gen) ? "&cutroom-native-ramp=1" : ""}`;
   };
   const reload = (
     revision: number,
     deadline = performance.now() + READY_TIMEOUT,
-    ramp?: number,
+    ramp?: { previous: number } | "native",
   ) => {
     latest.current += 1;
     rampSwap.current =
-      ramp === undefined ? null : { gen: latest.current, previous: ramp };
+      ramp && ramp !== "native"
+        ? { gen: latest.current, previous: ramp.previous }
+        : null;
+    if (ramp === "native") nativeRampDocuments.current.add(latest.current);
     documentCompositions.current.set(latest.current, shownComposition.current);
     documentVariables.current.set(
       latest.current,
@@ -307,6 +314,13 @@ export function Viewer({
     transition({ type: "cancelled", gen });
     return false;
   };
+  useLayoutEffect(() => {
+    if (!candidate || rampSwap.current?.gen !== candidate.gen) return;
+    if (!canPromote(candidate.gen)) return;
+    return useTransport.subscribe(() => {
+      canPromote(candidate.gen);
+    });
+  }, [candidate?.gen]);
   useEffect(() => {
     if (
       rampReady === null ||
@@ -325,7 +339,7 @@ export function Viewer({
         return;
       setRampReady(null);
       stop();
-      reload(shownRevision.current, undefined, rampReady);
+      reload(shownRevision.current, undefined, { previous: rampReady });
     };
     const stop = useTransport.subscribe(apply);
     apply();
@@ -646,6 +660,7 @@ export function Viewer({
     if (!picture) return;
     const preview = connections.current.get(picture.gen);
     if (!preview) return;
+    if (rampSwap.current?.gen === picture.gen) rampSwap.current = null;
     if (loadingRevision.current?.gen === picture.gen)
       loadingRevision.current = null;
     useWorkspace.setState({
@@ -739,6 +754,31 @@ export function Viewer({
         await preview.inspect();
       }
       if (!preview.state.root) throw new Error(NO_COMPOSITION_ROOT);
+      if (preview.state.rampPrepared) {
+        const available = await preview.checkRampAudio().then(
+          () => true,
+          (error: unknown) => {
+            if (!preview.signal.aborted)
+              console.warn("Could not open prepared ramp audio:", error);
+            return false;
+          },
+        );
+        preview.signal.throwIfAborted();
+        if (gen !== latest.current) return;
+        if (!available) {
+          if (rampSwap.current?.gen === gen) {
+            rampSwap.current = null;
+            transition({ type: "cancelled", gen });
+          } else if (loadingRevision.current?.gen === gen) {
+            reload(loadingRevision.current.revision, undefined, "native");
+          } else {
+            throw new Error("Prepared ramp audio could not be loaded.");
+          }
+          return;
+        }
+      }
+      preview.signal.throwIfAborted();
+      if (gen !== latest.current) return;
       const { player } = preview;
       let shown = -1;
       /** Seeks until the frame painted is the latest one asked for. False once superseded. */
@@ -840,6 +880,7 @@ export function Viewer({
         {slots.map((gen) => {
           const retained =
             handoff.kind === "promoting" &&
+            live?.gen === candidate?.gen &&
             gen === handoff.confirmed?.gen &&
             gen !== candidate?.gen;
           const size = gen === handoff.confirmed?.gen ? handoff.confirmed : fit;

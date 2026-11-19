@@ -1378,6 +1378,7 @@ export function createHyperframesApi(
       !audition &&
       eligiblePreviews.has(compiled) &&
       !timingOnly &&
+      !url.searchParams.has("cutroom-native-ramp") &&
       !url.searchParams.has("hf-capture") &&
       (path === "preview" || path.startsWith("preview/comp/"))
         ? await prepareRampPreview(html, url, prefix, project, media)
@@ -1407,6 +1408,9 @@ export function createHyperframesApi(
       dependencies,
       mix.signature,
       Boolean(ramp?.pending.length),
+      [...(ramp?.assets.keys() ?? [])].map(
+        (key) => `${prefix}ramp-audio/${key}.wav`,
+      ),
     );
     if (timingOnly) {
       c.header("Cache-Control", "no-store");

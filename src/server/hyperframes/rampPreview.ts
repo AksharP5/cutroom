@@ -4,11 +4,14 @@ import type { DefaultTreeAdapterTypes } from "parse5";
 import { transform } from "lightningcss";
 import type { Selector } from "lightningcss";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
+import { hostInPointSeconds } from "@hyperframes/core/media-timing";
 import {
+  AudioAutomationError,
   parseAutomation,
   RATE_TARGET,
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
+import type { HfAutomation } from "@hyperframes/core/audio-automation";
 import { readMediaOffsetSeconds } from "@hyperframes/parsers/media-duration";
 import { requestSubPath } from "@hyperframes/studio-server";
 import { isPrivateProjectFile } from "@hyperframes/studio-server/safe-path";
@@ -35,7 +38,7 @@ const companionAttrs = [
   "data-hf-group-render-id",
   "data-fade-in",
   "data-fade-out",
-  "data-audio-fx",
+  "data-fx-chain",
   "data-muted",
 ];
 const attr = (name: string, value: string) =>
@@ -166,7 +169,18 @@ export async function prepareRampPreview(
         );
       const parsed = parseFpsWithDefault(attrs.get("data-fps") ?? String(fps));
       const nodeFps = parsed.ok ? parsed.value.num / parsed.value.den : fps;
-      const disabled = hidden || attrs.has("data-hidden");
+      // The producer rebases a rate lane at a trimmed mount's in-point.
+      // Keep the native path until both render paths share that phase.
+      const trimmedMount =
+        [
+          "data-composition-id",
+          "data-composition-src",
+          "data-composition-file",
+        ].some((name) => attrs.has(name)) &&
+        hostInPointSeconds({
+          getAttribute: (name) => attrs.get(name) ?? null,
+        }) > 0;
+      const disabled = hidden || attrs.has("data-hidden") || trimmedMount;
       if (!disabled && (node.tagName === "audio" || node.tagName === "video"))
         entries.push({ node, fps: nodeFps });
       visit(node, nodeFps, disabled);
@@ -185,13 +199,10 @@ export async function prepareRampPreview(
       if (node.tagName === "audio" ? !safe.audio : !safe.video) return;
       const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
       const raw = attrs.get("data-automation");
-      if (!raw) return;
-      const envelope = parseAutomation(raw);
-      const lane = envelope.lanes.find((entry) => entry.target === RATE_TARGET);
-      if (!lane?.points.length) return;
       const location = node.sourceCodeLocation;
       const src = attrs.get("src");
       if (
+        !raw ||
         !src ||
         !location?.startTag ||
         attrs.has("loop") ||
@@ -202,6 +213,16 @@ export async function prepareRampPreview(
             ![undefined, "true"].includes(attrs.get("data-has-audio"))))
       )
         return;
+      let envelope: HfAutomation;
+      try {
+        envelope = parseAutomation(raw);
+      } catch (error) {
+        if (!(error instanceof AudioAutomationError)) throw error;
+        // A source diagnostic shouldn't make the whole viewer unavailable.
+        return;
+      }
+      const lane = envelope.lanes.find((entry) => entry.target === RATE_TARGET);
+      if (!lane?.points.length) return;
       // Nested mounts retain their clip-local timing, including the original ease
       // phase. A numeric local window keeps the dry audio independent of its hosts.
       const start = Number(attrs.get("data-start"));
@@ -226,6 +247,12 @@ export async function prepareRampPreview(
       const canonical = await projectPath(project, path).catch(
         (error: unknown) => {
           if (error instanceof HttpError && error.status < 500) return null;
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            ["ENOTDIR", "EACCES", "EPERM"].includes(String(error.code))
+          )
+            return null;
           throw error;
         },
       );
@@ -270,7 +297,7 @@ export async function prepareRampPreview(
         edits.push({
           from: location.endTag!.endOffset,
           to: location.endTag!.endOffset,
-          text: `<audio${attr("id", id)}${attr("src", prepared)}${routing}${audio ? attr("data-automation", audio) : ""}></audio>`,
+          text: `<audio style="display:none!important"${attr("id", id)}${attr("src", prepared)}${routing}${audio ? attr("data-automation", audio) : ""}></audio>`,
         });
         const offset = location.startTag.endOffset - 1;
         edits.push({ from: offset, to: offset, text: " muted" });

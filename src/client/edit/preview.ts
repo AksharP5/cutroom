@@ -788,6 +788,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       return state;
     },
     inspect: async () => void (await request("inspect")),
+    checkRampAudio: async () => void (await request("check-ramp")),
     async waitForRamp() {
       const response = await fetch(`${frame.src}&cutroom-ramp=1`, {
         signal: closing.signal,
