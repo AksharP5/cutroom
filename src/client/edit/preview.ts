@@ -788,6 +788,15 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       return state;
     },
     inspect: async () => void (await request("inspect")),
+    async waitForRamp() {
+      const response = await fetch(`${frame.src}&cutroom-ramp=1`, {
+        signal: closing.signal,
+      });
+      return (
+        response.ok &&
+        z.object({ ready: z.boolean() }).parse(await response.json()).ready
+      );
+    },
     painted: async () => void (await request("paint")),
     get hasTimingHint() {
       return Boolean(timingRevision);

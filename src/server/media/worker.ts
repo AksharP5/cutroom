@@ -25,10 +25,12 @@ import { chromeColourGuess } from "../hyperframes/videoColour";
 import { localMediaInputOptions } from "./input";
 
 const task = MediaTaskSchema.parse(await Bun.stdin.json());
+const abort = new AbortController();
 let cancelled = false;
 let child: ReturnType<typeof Bun.spawn> | undefined;
 process.on("SIGTERM", () => {
   cancelled = true;
+  abort.abort();
   child?.kill("SIGTERM");
 });
 let writing: Promise<unknown> = Promise.resolve();
@@ -217,6 +219,25 @@ try {
       },
     });
     await Bun.write(join(task.directory, "probe.json"), JSON.stringify(info));
+  } else if (task.kind === "ramp") {
+    if (!task.ramp) throw new Error("A ramp job needs its source window.");
+    const { parseAutomation, RATE_TARGET } =
+      await import("@hyperframes/core/audio-automation");
+    const { prepareLocalRamp } = await import("../hyperframes/rampSource");
+    const lane = parseAutomation(task.ramp.rate).lanes.find(
+      (lane) => lane.target === RATE_TARGET,
+    );
+    if (!lane?.points.length) throw new Error("A ramp job needs a rate lane.");
+    const result = await prepareLocalRamp(
+      task.source,
+      join(task.directory, "ramp.wav"),
+      task.ramp.start,
+      task.ramp.duration,
+      lane,
+      abort.signal,
+    );
+    if (!result?.success)
+      throw new Error(result?.stderr || "Could not prepare ramp audio.");
   } else if (task.kind === "peaks") {
     const channels = task.info?.channels;
     if (!channels) throw new Error("The media has no audio stream.");

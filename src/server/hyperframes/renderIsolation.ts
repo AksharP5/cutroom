@@ -281,8 +281,8 @@ export function registerRenderIsolation(
   const frameCache = JSON.stringify(
     new URL("./frameCache.ts", import.meta.url).href,
   );
-  const rampAudio = JSON.stringify(
-    new URL("./rampAudio.ts", import.meta.url).href,
+  const rampSource = JSON.stringify(
+    new URL("./rampSource.ts", import.meta.url).href,
   );
   let producerLoaded = false;
   let audioMixerLoaded = false;
@@ -301,11 +301,13 @@ export function registerRenderIsolation(
             "    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);",
             `    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);
     if (typeof normalizedPlaybackRate === "object" && !options?.loop && !isHttpUrl(srcPath)) {
-        const { prepareRampAudio } = await import(${rampAudio});
-        const prepared = await prepareRampAudio(outputPath, duration, normalizedPlaybackRate,
-            (path, seconds) => extractAudioSegment(srcPath, path, stage, mediaStart, seconds, 1, signal, config, undefined, { padToDuration: true }),
-            signal);
-        if (prepared) return prepared;
+        const { prepareLocalRamp } = await import(${rampSource});
+        const prepared = await prepareLocalRamp(srcPath, outputPath, mediaStart, duration, normalizedPlaybackRate, signal, ffmpegProcessTimeout)
+            .catch((error) => {
+                if (signal?.aborted) throw error;
+                return null;
+            });
+        if (prepared?.success) return prepared;
     }`,
             url,
           ),

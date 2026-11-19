@@ -120,6 +120,7 @@ import {
   isAudioKind,
 } from "../../shared/timeline/schema";
 import { trackGainPreview } from "./trackGainPreview";
+import { prepareRampPreview } from "./rampPreview";
 import { frameTime } from "../../shared/timeline/apply";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { parseFps } from "@hyperframes/core";
@@ -217,7 +218,14 @@ export function createHyperframesApi(
   // Bound to a parent-owned navigation, never to a claim made by composition code.
   const timingDocuments = new Map<
     string,
-    { projectId: string; allowed: boolean }
+    {
+      projectId: string;
+      allowed: boolean;
+      ramp?: Pick<
+        NonNullable<Awaited<ReturnType<typeof prepareRampPreview>>>,
+        "assets" | "pending"
+      >;
+    }
   >();
   // Keep the compiler's decision outside authored HTML. The upstream cache's write
   // hook supplies the final, stable response bytes, including all augmentations.
@@ -1172,6 +1180,40 @@ export function createHyperframesApi(
       isolate(response.headers);
       return response;
     }
+    const rampFile = /^ramp-audio\/([a-f0-9]{64})\.wav$/.exec(path)?.[1];
+    if (media && rampFile) {
+      const project = await store.get(projectId);
+      const file = await media
+        .rampArtifact(project, rampFile)
+        .catch(async (error: unknown) => {
+          if (!(error instanceof HttpError) || error.status !== 404)
+            throw error;
+          for (const record of timingDocuments.values()) {
+            const asset =
+              record.projectId === projectId &&
+              record.ramp?.assets.get(rampFile);
+            if (!asset) continue;
+            const prepared = await media.rampAudio(
+              project,
+              asset.path,
+              asset.window,
+            );
+            if (
+              prepared.key === rampFile &&
+              (prepared.available || (await prepared.pending))
+            )
+              return media.rampArtifact(project, rampFile);
+            break;
+          }
+          throw error;
+        });
+      const headers = new Headers({
+        "Content-Type": "audio/wav",
+        "Cache-Control": "private, max-age=31536000, immutable",
+      });
+      isolate(headers);
+      return new Response(Bun.file(file), { headers });
+    }
     if (media && (path === "scrub" || path.startsWith("scrub/"))) {
       // Returned as built, so Bun answers the video's byte-range requests from the file.
       const response = await scrubPreview(
@@ -1191,6 +1233,28 @@ export function createHyperframesApi(
           : null;
     if (!target) return c.notFound();
     const documentId = url.searchParams.get("document");
+    if (url.searchParams.has("cutroom-ramp")) {
+      const record = timingDocuments.get(documentId ?? "");
+      const pending =
+        record?.projectId === projectId ? record.ramp?.pending : undefined;
+      const signal = c.req.raw.signal;
+      c.header("Cache-Control", "no-store");
+      if (!pending?.length || signal.aborted) return c.json({ ready: false });
+      const aborted = Promise.withResolvers<boolean>();
+      const cancel = () => aborted.resolve(false);
+      signal.addEventListener("abort", cancel, { once: true });
+      try {
+        const ready = await Promise.race([
+          aborted.promise,
+          Promise.all(pending).then((jobs) => jobs.some(Boolean)),
+        ]);
+        return c.json({
+          ready: ready && timingDocuments.get(documentId ?? "") === record,
+        });
+      } finally {
+        signal.removeEventListener("abort", cancel);
+      }
+    }
     if (url.searchParams.has("cutroom-status")) {
       c.header("Cache-Control", "no-store");
       const record = timingDocuments.get(documentId ?? "");
@@ -1308,7 +1372,21 @@ export function createHyperframesApi(
             audition,
           )
         : rewritten;
-    const mix = trackGainPreview(html, activeCompositionPath);
+    const ramp =
+      media &&
+      response.ok &&
+      !audition &&
+      eligiblePreviews.has(compiled) &&
+      !timingOnly &&
+      !url.searchParams.has("hf-capture") &&
+      (path === "preview" || path.startsWith("preview/comp/"))
+        ? await prepareRampPreview(html, url, prefix, project, media)
+        : null;
+    if (ramp) {
+      headers.delete("ETag");
+      headers.set("Cache-Control", "no-store");
+    }
+    const mix = trackGainPreview(ramp?.html ?? html, activeCompositionPath);
     if (url.searchParams.get("cutroom-mix") === "1") {
       headers.set("Content-Type", "application/json");
       return new Response(JSON.stringify(mix), {
@@ -1319,14 +1397,16 @@ export function createHyperframesApi(
     // The HTTP CSP applies before any authored markup, including malformed documents.
     // The root HTML is compared after masking timing. Other files, including nested
     // sources and assets, must remain identical even if their watcher event is late.
-    const dependencies = eligible
-      ? await previewDependencies(project.path, activeCompositionPath)
-      : null;
+    const dependencies =
+      eligible && !ramp
+        ? await previewDependencies(project.path, activeCompositionPath)
+        : null;
     const document = previewDocument(
-      html,
+      ramp?.html ?? html,
       activeCompositionPath,
       dependencies,
       mix.signature,
+      Boolean(ramp?.pending.length),
     );
     if (timingOnly) {
       c.header("Cache-Control", "no-store");
@@ -1371,6 +1451,7 @@ export function createHyperframesApi(
       timingDocuments.set(documentId, {
         projectId,
         allowed: document.timing !== null,
+        ramp: ramp ? { assets: ramp.assets, pending: ramp.pending } : undefined,
       });
       if (timingDocuments.size > 64)
         timingDocuments.delete(timingDocuments.keys().next().value!);

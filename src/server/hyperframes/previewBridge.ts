@@ -167,6 +167,7 @@ function installPreviewBridge(
         })[];
       })
     | null,
+  rampPending: boolean,
 ) {
   const animatedTitles = new Set<string>();
   const titleAnimations = new Map<string, Set<Animation>>();
@@ -1476,6 +1477,7 @@ function installPreviewBridge(
       return Number.isFinite(value) && value > 0 ? value : fallback;
     };
     return {
+      rampPending,
       mixSignature:
         document
           .querySelector('meta[name="cutroom-mix-signature"]')
@@ -4032,6 +4034,7 @@ export function previewDocument(
   composition = "index.html",
   dependencies: string | null = null,
   mixSignature?: string,
+  rampPending = false,
 ) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
@@ -4160,6 +4163,7 @@ export function previewDocument(
         ),
       })),
     },
+    rampPending,
   ]).replaceAll("<", "\\u003c");
   const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.

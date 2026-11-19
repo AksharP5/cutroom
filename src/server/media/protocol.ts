@@ -9,8 +9,15 @@ export const MediaKindSchema = z.enum([
   "scrub",
   "proxy",
   "pieces",
+  "ramp",
 ]);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
+export const RampWindowSchema = z.object({
+  start: z.number().finite().nonnegative(),
+  duration: z.number().finite().positive(),
+  rate: z.string(),
+});
+export type RampWindow = z.infer<typeof RampWindowSchema>;
 export const MediaInfoSchema = z.object({
   channels: z.number().int().positive().optional(),
   video: z
@@ -55,6 +62,7 @@ export const MediaTaskSchema = z.object({
   ffprobe: z.string(),
   info: MediaInfoSchema.optional(),
   time: z.number().nonnegative().optional(),
+  ramp: RampWindowSchema.optional(),
   encoder: z.enum(["nvenc", "x264"]).optional(),
   /** An editing proxy is made a run of pieces at a time, then joined into one file. */
   proxy: z

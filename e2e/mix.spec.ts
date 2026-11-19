@@ -812,18 +812,23 @@ test("clearing audio automation leaves the speed ramp on both linked clips, and 
   await page.screenshot({ path: info.outputPath("before-clear.png") });
   await clear.click();
   await expect(clear).toHaveCount(0);
-  const video = page.frameLocator("iframe[data-live]").locator("video#picture");
-  const audio = page.frameLocator("iframe[data-live]").locator("audio#sound");
-  const lanes = async (element: Locator) => {
-    const attribute = await element.getAttribute("data-automation");
-    return attribute ? parseAutomation(attribute).lanes : [];
+  const lanes = async (id: string) => {
+    const view = TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    );
+    const authored = view.timeline.clips.find(
+      (clip) => clip.id === id,
+    )?.automation;
+    return authored ? parseAutomation(authored).lanes : [];
   };
-  await expect.poll(() => lanes(audio)).toEqual([rate]);
-  expect(await lanes(video)).toEqual([rate]);
+  await expect.poll(() => lanes("sound")).toEqual([rate]);
+  expect(await lanes("picture")).toEqual([rate]);
   await page.screenshot({ path: info.outputPath("after-clear.png") });
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(clear).toBeVisible();
-  await expect.poll(() => lanes(audio)).toEqual([rate, volume]);
+  await expect.poll(() => lanes("sound")).toEqual([rate, volume]);
   expect(await readFile(file, "utf8")).toBe(authored);
 });
 

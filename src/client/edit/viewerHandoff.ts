@@ -44,6 +44,7 @@ type Event =
   | { type: "prepared"; picture: Picture }
   | { type: "painted"; gen: number }
   | { type: "failed"; gen: number; reason: unknown }
+  | { type: "cancelled"; gen: number }
   | { type: "updated"; gen: number; revision: number }
   | { type: "reported" }
   | { type: "retired"; gen: number };
@@ -156,5 +157,7 @@ function advance(
         confirmed: state.confirmed,
         reason: event.reason,
       };
+    case "cancelled":
+      return { kind: "showing", confirmed: state.confirmed };
   }
 }

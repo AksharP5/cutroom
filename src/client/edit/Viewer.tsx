@@ -126,6 +126,8 @@ export function Viewer({
   const [roomFor, setRoomFor] = useState<string | null>(null);
   const reserveNote = drawing && roomFor === draftId;
   const latest = useRef(0);
+  const [rampReady, setRampReady] = useState<number | null>(null);
+  const rampSwap = useRef<{ gen: number; previous: number } | null>(null);
   const [mixedRevision, setMixedRevision] = useState<number | null>(null);
   const checking = useRef<AbortController | null>(null);
   const loadingRevision = useRef<{ gen: number; revision: number } | null>(
@@ -277,8 +279,11 @@ export function Viewer({
   const reload = (
     revision: number,
     deadline = performance.now() + READY_TIMEOUT,
+    ramp?: number,
   ) => {
     latest.current += 1;
+    rampSwap.current =
+      ramp === undefined ? null : { gen: latest.current, previous: ramp };
     documentCompositions.current.set(latest.current, shownComposition.current);
     documentVariables.current.set(
       latest.current,
@@ -288,6 +293,44 @@ export function Viewer({
     loadingRevision.current = { gen: latest.current, revision };
     transition({ type: "navigate", gen: latest.current, deadline });
   };
+  const canPromote = (gen: number) => {
+    const ramp = rampSwap.current;
+    const transport = useTransport.getState();
+    if (
+      ramp?.gen !== gen ||
+      (transport.state.kind === "stopped" && !transport.held)
+    )
+      return true;
+    // Keep the same running player if Play arrives while the prepared document warms.
+    rampSwap.current = null;
+    setRampReady(ramp.previous);
+    transition({ type: "cancelled", gen });
+    return false;
+  };
+  useEffect(() => {
+    if (
+      rampReady === null ||
+      handoff.kind !== "showing" ||
+      handoff.confirmed?.gen !== rampReady
+    )
+      return;
+    const apply = () => {
+      const state = useTransport.getState();
+      if (
+        state.state.kind !== "stopped" ||
+        state.held ||
+        checking.current ||
+        editPicture()
+      )
+        return;
+      setRampReady(null);
+      stop();
+      reload(shownRevision.current, undefined, rampReady);
+    };
+    const stop = useTransport.subscribe(apply);
+    apply();
+    return stop;
+  }, [rampReady, handoff]);
   useLayoutEffect(() => {
     const closing = new AbortController();
     refresh.current = previewRefresh(
@@ -590,6 +633,7 @@ export function Viewer({
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       );
       preview.signal.throwIfAborted();
+      if (!canPromote(candidate.gen)) return;
       transition({ type: "painted", gen: candidate.gen });
     })().catch((reason: unknown) => {
       if (!preview.signal.aborted)
@@ -644,6 +688,18 @@ export function Viewer({
     connections.current.set(gen, preview);
     try {
       await preview.inspect();
+      if (preview.state.rampPending) {
+        void preview
+          .waitForRamp()
+          .then((ready) => {
+            if (ready && gen === latest.current && !preview.signal.aborted)
+              setRampReady(gen);
+          })
+          .catch((error: unknown) => {
+            if (!preview.signal.aborted)
+              console.debug("Ramp audio could not be prepared:", error);
+          });
+      }
       const { active, drawn } = usePipeline.getState();
       if (active) preview.pipeline(true, drawn);
       const resume = () => {
@@ -708,6 +764,7 @@ export function Viewer({
       )
         return;
       const { width, height } = preview.state;
+      if (!canPromote(gen)) return;
       transition({
         type: "prepared",
         picture: {
