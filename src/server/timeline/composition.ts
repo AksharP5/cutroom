@@ -1,5 +1,6 @@
 import { offsetSourceTime } from "../../shared/timeline/time";
 import {
+  RATE_TARGET,
   parseAutomation,
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
@@ -1397,6 +1398,44 @@ function readAuthoredAudioGroups(
   });
 }
 
+/** Reading a transition samples its head. A mix edit must keep the element's original speed there. */
+function automationForElement(
+  before: Clip,
+  after: Clip,
+  authored: string | undefined,
+) {
+  const head = before.transitionIn ? framesBefore(before.transitionIn) : 0;
+  if (
+    !head ||
+    !after.transitionIn ||
+    framesBefore(after.transitionIn) !== head ||
+    !authored ||
+    !before.automation ||
+    !after.automation
+  )
+    return after.automation;
+
+  const next = parseAutomation(after.automation);
+  const rateLanes = (value: ReturnType<typeof parseAutomation>) =>
+    value.lanes.filter(({ target }) => target === RATE_TARGET);
+  const rates = rateLanes(next);
+  if (
+    !rates.length ||
+    !Bun.deepEquals(rates, rateLanes(parseAutomation(before.automation)))
+  )
+    return after.automation;
+
+  const original = rateLanes(parseAutomation(authored));
+  if (original.length !== rates.length) return after.automation;
+  let index = 0;
+  return serializeAutomation({
+    ...next,
+    lanes: next.lanes.map((lane) =>
+      lane.target === RATE_TARGET ? original[index++]! : lane,
+    ),
+  });
+}
+
 /** The attribute changes that turn `before` into `after` on `element`. */
 function clipChanges(
   before: Clip,
@@ -1480,7 +1519,10 @@ function clipChanges(
         after[field] ? String(toSeconds(after[field], fps)) : null,
       ]);
   if (before.automation !== after.automation)
-    changes.push(["data-automation", after.automation]);
+    changes.push([
+      "data-automation",
+      automationForElement(before, after, element.attrs["data-automation"]),
+    ]);
   if (!Bun.deepEquals(before.grade, after.grade))
     changes.push([GRADE_ATTRIBUTE, writeGrade(after.grade)]);
   if (!Bun.deepEquals(before.fx, after.fx))

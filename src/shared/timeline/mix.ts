@@ -110,10 +110,9 @@ export function clearAudioAutomation(automation: string | null) {
   if (!automation) return null;
   const parsed = parseAutomation(automation);
   const lanes = parsed.lanes.filter((lane) => lane.target === RATE_TARGET);
+  if (lanes.length === parsed.lanes.length) return automation;
   if (!lanes.length) return null;
-  return lanes.length === parsed.lanes.length
-    ? automation
-    : serializeAutomation({ ...parsed, lanes });
+  return serializeAutomation({ ...parsed, lanes });
 }
 
 /** Effective fades, in frames, using the same proportional clamp as preview and render. */
