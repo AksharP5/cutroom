@@ -973,6 +973,11 @@
   width: 100%;
 }
 
+.inspector-hue-spectrum {
+  block-size: var(--space-1);
+  background: linear-gradient(to right, var(--grade-hues));
+}
+
 /* Curves: a square plot, the neutral diagonal faint, the curve in its channel's colour. */
 .inspector-curve {
   display: grid;
