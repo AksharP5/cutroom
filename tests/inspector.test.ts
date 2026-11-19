@@ -458,6 +458,27 @@ test("the timeline's ledger is one row per history step, in the step's own words
   ]);
 });
 
+test("the ledger keeps punctuation in a file name and only shows the actual agent attribution", () => {
+  const summary = "Added Day 2; Agent label: slate.svg at 00:00:00:00";
+  const [row] = ledgerChanges([
+    {
+      id: "insert",
+      clipId: null,
+      composition: "index.html",
+      label: `${summary}; Agent label: "Use the slate"`,
+      batchLabels: [summary],
+      by: "agent",
+      at: "",
+      accepted: false,
+    },
+  ]);
+  expect(row).toMatchObject({
+    label: summary,
+    more: null,
+    details: `${summary}\nAgent label: "Use the slate"`,
+  });
+});
+
 test("away from its clip, an edit label names the clip and says how far it changed", () => {
   const timeline = parseComposition(
     '<main data-composition-id="main" data-fps="30" data-duration="6"><img id="still" class="clip" src="media/still.png" data-start="2" data-duration="2" data-track-index="0"><video id="shot" class="clip" src="media/shot.mp4" data-start="0" data-duration="2" data-track-index="1"></video></main>',

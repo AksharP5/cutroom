@@ -1,4 +1,7 @@
-import { EDIT_LABEL_LIMIT } from "../../../shared/timeline/labels";
+import {
+  EDIT_LABEL_LIMIT,
+  joinEditLabels,
+} from "../../../shared/timeline/labels";
 import type { TimelineView } from "../../../shared/timeline/schema";
 
 type ClipEdits = NonNullable<TimelineView["clipEdits"]>;
@@ -29,8 +32,12 @@ export function ledgerChanges(edits: ClipEdits, clipIds?: ReadonlySet<string>) {
       ? [...new Set(members.map((member) => member.label))].join("; ")
       : (members.find((member) => member.clipId === null) ?? members[0]!).label;
     const saved = batchLabels.get(key);
-    const annotation = raw.match(/; (Agent label: [\s\S]+)$/);
-    const summary = annotation ? raw.slice(0, annotation.index) : raw;
+    const factual = saved ? joinEditLabels(saved, "Edited timeline") : null;
+    // Saved command text can contain the same punctuation as the old summary format.
+    const tail =
+      factual && raw.startsWith(factual) ? raw.slice(factual.length) : raw;
+    const annotation = tail.match(/; (Agent label: [\s\S]+)$/);
+    const summary = annotation ? raw.slice(0, -annotation[0].length) : raw;
     // Older rows only have the bounded history label, which may end mid-batch.
     const labels = saved ?? summary.split("; ");
     const more =

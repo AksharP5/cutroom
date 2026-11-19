@@ -517,7 +517,10 @@ export function createTimelineRoutes(
       label,
       summary,
       encodedSummary,
-      batchLabels: summaries.length > 1 ? summaries : undefined,
+      batchLabels:
+        summaries.length > 1 || summaries.some((item) => item.includes("; "))
+          ? summaries
+          : undefined,
       save: async () => {
         // Preparation precedes the store queue; preserve other metadata saved while it waited.
         const document = await store.document(project);
