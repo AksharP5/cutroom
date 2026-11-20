@@ -50,6 +50,8 @@ export function renderFailure(stage: ExportStage["code"], cause: string) {
     return `${prefix} Free space on the export and Cutroom data drives, then try again.`;
   if (/\b(?:EPIPE|EIO)\b|unknown error, write|broken pipe/i.test(cause))
     return `${prefix} A write stopped before it finished. Check available disk space. ${retry}`;
+  if (/Runtime\.evaluate timed out|Navigation timeout of/i.test(cause))
+    return `${prefix} Chromium stopped responding. ${retry}`;
   if (/\[Parallel\] Capture failed:|\[Browser:[A-Z]+\]/i.test(cause))
     return `${prefix} ${retry}`;
   const detail = (

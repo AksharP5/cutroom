@@ -550,6 +550,16 @@ export function registerRenderIsolation(
             "  job.progress = Math.max(job.progress, boundedProgress);\n  publishRangeProgress(job);",
             url,
           );
+          source = replaceOnce(
+            source,
+            "      if (chunkWorkerCount === 1) {\n        const bootStarted = Date.now();",
+            `      if (chunkWorkerCount === 1) {
+        job.currentStage = "Starting Chromium";
+        job.stageProgress = { code: "start_browsers", done: 0, total: 1 };
+        publishRangeProgress(job);
+        const bootStarted = Date.now();`,
+            url,
+          );
           // Frames drawn from the sources are encoded beside the plan; only the rest are captured.
           source = replaceOnce(
             source,

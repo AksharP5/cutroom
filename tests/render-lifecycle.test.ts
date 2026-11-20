@@ -273,6 +273,15 @@ test("capture and encoder write failures name the failing stage and tell the edi
         message:
           "Encoding video failed. Free space on the export and Cutroom data drives, then try again.",
       },
+      {
+        error: {
+          stage: "start_browsers",
+          message:
+            "Runtime.evaluate timed out. Increase the 'protocolTimeout' setting.",
+        },
+        message:
+          "Starting Chromium failed. Chromium stopped responding. Try again and check the Chromium installation if it repeats.",
+      },
     ]) {
       await writeFile(
         workerPath,
