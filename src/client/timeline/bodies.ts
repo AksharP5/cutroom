@@ -323,10 +323,21 @@ export function createBodies(
         const wide = Math.round((start + x + tile) * dpr) - originX - at;
         const shown = Math.min(wide, x1 - at);
         if (shown <= 0) return;
+        const graded = clip.grade
+          ? media.grades.tile(
+              picture,
+              [sx, sy, sw, sh],
+              clip.grade,
+              settled &&
+                inView &&
+                start + x < visible.x.to &&
+                start + x + tile > visible.x.from,
+            )
+          : undefined;
         ctx.drawImage(
-          picture,
-          sx,
-          sy,
+          graded ?? picture,
+          graded ? 0 : sx,
+          graded ? 0 : sy,
           (sw * shown) / wide,
           sh,
           at,
@@ -477,6 +488,7 @@ export function createBodies(
       // The clips' rounded bottom corners, which square tiles and strips would cover.
       for (const [x, y] of corners) ctx.clearRect(x, y - hair, hair, hair);
     }
+    media.grades.endPaint();
   }
 
   return {
@@ -511,8 +523,9 @@ export function createBodies(
     view(next: ViewState) {
       const covered = covers(next, fit(next));
       view = next;
-      if (!covered) paint();
       settled = false;
+      media.grades.beginPaint();
+      if (!covered) paint();
       media.wantFrames([]);
       clearTimeout(resting);
       resting = setTimeout(() => {

@@ -5,6 +5,7 @@ import {
   previewMediaPath,
 } from "../../shared/media";
 import { waveformPeak } from "./math";
+import { filmGrades } from "./filmGrades";
 
 /** Waveform buckets fetched per request: 16 seconds at the finest level, 18 hours at the coarsest. */
 export const PEAK_CHUNK = 8192;
@@ -62,6 +63,12 @@ export function createTimelineMedia(
 ) {
   const project = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media`;
   const closing = new AbortController();
+  const grades = filmGrades(
+    projectId,
+    composition,
+    (path) => (Object.hasOwn(versions, path) ? versions[path]! : ""),
+    onLoad,
+  );
   // Every clip asks on every paint, so a source's path is resolved and encoded once.
   const paths = new Map<
     string,
@@ -268,7 +275,11 @@ export function createTimelineMedia(
       return changed;
     },
     /** Call when a paint begins: what it reads from here on is what the view shows. */
-    beginPaint: () => drawn.clear(),
+    beginPaint() {
+      drawn.clear();
+      grades.beginPaint();
+    },
+    grades,
     /** A video's sprite sheets: one tile every `filmstripInterval` seconds. */
     film(src: string) {
       const url = route("filmstrip", src);
@@ -311,6 +322,7 @@ export function createTimelineMedia(
     },
     dispose() {
       closing.abort();
+      grades.dispose();
       wanted = [];
       firstPeaks.clear();
       paths.clear();
