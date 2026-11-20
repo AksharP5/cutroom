@@ -18,6 +18,7 @@ import { canonicalText } from "../../shared/timeline/schema";
 import { previewTiming } from "./previewTiming";
 import type { PreviewTiming } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
+import { adjustmentCapture } from "./adjustmentCapture";
 import { frameSeek } from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
 
@@ -153,6 +154,7 @@ export function liveUpdatePlan(
 function installPreviewBridge(
   plan: typeof liveUpdatePlan,
   seekInFrame: typeof frameSeek,
+  createAdjustmentCapture: typeof adjustmentCapture,
   /** The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does. */
   [minRate, maxRate]: [number, number],
   texts: [string, string[]][],
@@ -170,6 +172,7 @@ function installPreviewBridge(
   rampPending: boolean,
   rampWindows: [src: string, seconds: number][],
 ) {
+  const adjustment = createAdjustmentCapture();
   const rampFiles = new Map(rampWindows);
   const animatedTitles = new Set<string>();
   const titleAnimations = new Map<string, Set<Animation>>();
@@ -1538,10 +1541,12 @@ function installPreviewBridge(
       "*",
     );
   };
-  const paint = () =>
-    new Promise<void>((resolve) =>
+  const paint = () => {
+    adjustment.update();
+    return new Promise<void>((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
     );
+  };
   const holds = new Map<
     HTMLVideoElement,
     {
@@ -1970,6 +1975,7 @@ function installPreviewBridge(
   };
   /** True when media comes back, so the runtime must seek again for it to load and draw. */
   const setPipeline = (active: boolean, drawn: Set<string>) => {
+    if (active) adjustment.block(true);
     pipelineActive = active;
     pipelineDrawn = drawn;
     writePipelineSheet();
@@ -1996,6 +2002,7 @@ function installPreviewBridge(
       win.__hf?.colorGrading?.refresh();
       if (gradeBypass) writeGradeBypass();
     }
+    adjustment.block(gradeBypass);
     return released;
   };
   const holdStyle = document.createElement("style");
@@ -3133,6 +3140,8 @@ function installPreviewBridge(
             return;
           writeGradeDraft(data.clipId, data.attribute, data.restore);
           const target = clipElement(data.clipId);
+          if (target?.hasAttribute("data-cutroom-adjustment"))
+            adjustment.changed();
           if (target instanceof HTMLVideoElement && parked.has(target)) return;
           if (gradeBypass) writeGradeBypass();
           return;
@@ -3141,6 +3150,7 @@ function installPreviewBridge(
           if (!("bypass" in data) || typeof data.bypass !== "boolean") return;
           gradeBypass = data.bypass;
           writeGradeBypass();
+          adjustment.block(pipelineActive || gradeBypass);
           return;
         }
         case "keyframe": {
@@ -3218,6 +3228,7 @@ function installPreviewBridge(
           }
           if (
             !initialTiming ||
+            adjustment.grouped ||
             confirmedStructure === null ||
             liveStructure() !== confirmedStructure
           )
@@ -3886,6 +3897,7 @@ function installPreviewBridge(
           recordRuntime();
           residentAudio(false);
           win.__player?.play();
+          adjustment.play();
           clearInterval(residency);
           if (pipelineActive)
             residency = window.setInterval(() => residentAudio(false), 1000);
@@ -4293,7 +4305,7 @@ export function previewDocument(
     rampPending,
     rampWindows,
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${adjustmentCapture.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

@@ -18,7 +18,7 @@ export interface LayerTrack {
   start: number;
   end: number;
   clips: Clip[];
-  /** A blur or highlight shows the picture beneath it, so its render draws the tracks below. */
+  /** The exported layer includes the picture from lower tracks where its effect needs it. */
   flatten: boolean;
 }
 
@@ -39,7 +39,7 @@ export function layerTracks(
     if (
       isAudioKind(clip.kind) ||
       native.has(clip.id) ||
-      isZoomLayer(clip) ||
+      (clip.adjustment && !clip.grade && (!clip.region || isZoomLayer(clip))) ||
       !clip.enabled ||
       hidden.has(clip.track)
     )
@@ -73,9 +73,16 @@ export function layerHtml(parsed: ParsedComposition, layer: LayerTrack) {
   const shows = (clip: Clip) =>
     !isAudioKind(clip.kind) &&
     (shown.has(clip.id) || isZoomLayer(clip) || below(clip.track));
-  // The composition's own background would paint the whole frame: a layer shows only its clips.
+  // An exported grade replaces the lower picture. A timeline backdrop prevents
+  // Resolve from blending the same translucent footage a second time.
+  const replacesPicture = layer.clips.some(
+    (clip) => clip.adjustment && clip.grade,
+  );
+  // Titles and scenes keep transparency around their own picture.
   const id = parsed.root.attrs["data-composition-id"];
-  const clear = `<style>html,body${id ? `,[data-composition-id=${cssString(id)}]` : ""}{background:transparent!important}</style>`;
+  const clear = replacesPicture
+    ? "<style>html{background-color:#000}</style>"
+    : `<style>html,body${id ? `,[data-composition-id=${cssString(id)}]` : ""}{background:transparent!important}</style>`;
   const html = applyTrackMix({
     ...parsed,
     timeline: {

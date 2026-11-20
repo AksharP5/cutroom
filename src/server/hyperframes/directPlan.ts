@@ -502,6 +502,16 @@ export function planDirectExport(
     if (element.tagName === "audio") continue;
     if (element.tagName === "video" || element.tagName === "img")
       pictures.push(element);
+    const layer = attribute(element, "data-cutroom-adjustment") !== undefined;
+    const adjustment =
+      layer && attribute(element, GRADE_ATTRIBUTE) !== undefined;
+    if (
+      layer &&
+      !adjustment &&
+      attribute(element, REGION_ATTRIBUTE) === undefined
+    )
+      continue;
+    if (adjustment) effects.push({ start: first, end: last });
     visual.push({ element, start: first, end: last });
     if (transitions) {
       for (const edge of ["in", "out"] as const) {

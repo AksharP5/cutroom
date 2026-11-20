@@ -108,7 +108,7 @@ function layerQuery(
       const level = plan.trackZ[String(clip.track)] ?? 0;
       const index = order.get(clip.id) ?? Infinity;
       if (clip.adjustment && (clip.grade || clip.id === draftClip)) {
-        if (clip.region) return null;
+        if (clip.region || fractional.has(clip.id)) return null;
         adjustments.push(clip);
         continue;
       }

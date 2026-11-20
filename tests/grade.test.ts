@@ -144,6 +144,36 @@ test("a region-free adjustment layer keeps a grade without changing its source s
   });
 });
 
+test("a grade on an adjustment layer captures only the frames it covers", () => {
+  const html = edit(page(shot), [
+    { type: "setTrack", index: 1, kind: "video" },
+    {
+      type: "insert",
+      at: 60,
+      track: 1,
+      clip: { kind: "adjustment", id: "look", duration: 30 },
+    },
+    { type: "setClip", clipId: "look", grade: look },
+  ]);
+  const plan = planDirectExport(html, { num: 30, den: 1 }, null);
+  if ("reason" in plan) throw new Error(plan.reason);
+  expect(
+    plan.segments.map(({ kind, start, end }) => [kind, start, end]),
+  ).toEqual([
+    ["source", 0, 60],
+    ["capture", 60, 90],
+    ["source", 90, 300],
+  ]);
+  const neutral = edit(html, [
+    { type: "setClip", clipId: "look", grade: null },
+  ]);
+  const plain = planDirectExport(neutral, { num: 30, den: 1 }, null);
+  if ("reason" in plain) throw new Error(plain.reason);
+  expect(
+    plain.segments.map(({ kind, start, end }) => [kind, start, end]),
+  ).toEqual([["source", 0, 300]]);
+});
+
 test("a razor cut and a freeze frame keep the grade", () => {
   const graded = edit(page(shot), [
     { type: "setClip", clipId: "shot", grade: { adjust: { saturation: -1 } } },

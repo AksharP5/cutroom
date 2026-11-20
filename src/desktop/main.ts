@@ -13,6 +13,7 @@ import {
 } from "./runtime";
 
 app.setName("Cutroom");
+app.commandLine.appendSwitch("enable-blink-features", "CanvasDrawElement");
 if (process.platform === "linux") {
   app.setDesktopName("io.github.AksharP5.Cutroom.desktop");
   // By default Chromium copies software-decoded video into native GPU buffers. On NVIDIA

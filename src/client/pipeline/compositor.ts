@@ -51,6 +51,7 @@ uniform sampler2D cb;
 uniform sampler2D cr;
 uniform bool planes;
 uniform bool adjusting;
+uniform vec4 stageColour;
 uniform mat3 toRgb;
 uniform vec3 offset;
 uniform vec4 content;
@@ -74,6 +75,10 @@ vec3 applyGrade(vec3 rgb) {
   return gradeGrid.x > 0.0 ? texture(grade, rgb * gradeGrid.x + gradeGrid.y).rgb : rgb;
 }
 void main() {
+  if (stageColour.a > 0.0) {
+    colour = stageColour;
+    return;
+  }
   if (adjusting) {
     vec4 below = texelFetch(luma, ivec2(gl_FragCoord.xy), 0);
     colour = below.a > 0.0 ? vec4(applyGrade(below.rgb / below.a) * below.a, below.a) : below;
@@ -188,6 +193,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   const brightness = uniform("brightness");
   const planes = uniform("planes");
   const adjusting = uniform("adjusting");
+  const stageColour = uniform("stageColour");
   const toRgb = uniform("toRgb");
   const offset = uniform("offset");
   const corners = gl.createBuffer();
@@ -407,7 +413,8 @@ export function createCompositor(canvas: HTMLCanvasElement) {
             (at) => parseInt(background.slice(at, at + 2), 16) / 255,
           )
         : [0, 0, 0];
-      gl.clearColor(r!, g!, b!, background ? 1 : 0);
+      if (adjustments.length) gl.clearColor(0, 0, 0, 0);
+      else gl.clearColor(r!, g!, b!, background ? 1 : 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniform2f(view, width, height);
       gl.bufferData(
@@ -475,6 +482,15 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       }
       while (adjustment < adjustments.length)
         applyAdjustment(adjustments[adjustment++]!);
+      // The page colour lies behind the tracks. It does not enter a graded composite.
+      if (adjustments.length && background) {
+        gl.uniformMatrix3fv(place, false, ORIENT[0]);
+        gl.uniform4f(stageColour, r!, g!, b!, 1);
+        gl.blendFunc(gl.ONE_MINUS_DST_ALPHA, gl.ONE);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.uniform4f(stageColour, 0, 0, 0, 0);
+      }
     },
     isAvailable,
     dispose() {

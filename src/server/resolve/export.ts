@@ -369,7 +369,7 @@ async function writePackage(
     }
     layerNotes.push(
       layer.flatten
-        ? `${trackName(layer.track)}'s blur or highlight is drawn over the tracks beneath it in Layers/${filename}, as they were when exported.`
+        ? `${trackName(layer.track)}'s adjustment layer is rendered with the tracks beneath it in Layers/${filename}, as they were when exported.`
         : `${trackName(layer.track)}'s titles, scenes and other clips Resolve can't open are rendered with transparency in Layers/${filename}, one clip each.`,
     );
   }

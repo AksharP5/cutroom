@@ -47,7 +47,7 @@ const sourceName = (src: string) =>
 
 /**
  * A clip's name as the timeline shows it. A title without a label goes by its first line, and an
- * adjustment layer by its effect.
+ * adjustment layer by its effect when it has one.
  */
 export function clipName(
   clip: Pick<Clip, "id" | "label" | "src" | "title" | "textPreview"> &
@@ -58,7 +58,8 @@ export function clipName(
   if (src !== null) return sourceName(src) ?? clip.id;
   return (
     (clip.title && clip.textPreview) ||
-    (clip.adjustment && clip.region && REGION_NAMES[clip.region.effect]) ||
+    (clip.adjustment &&
+      (clip.region ? REGION_NAMES[clip.region.effect] : "Adjustment layer")) ||
     clip.id
   );
 }

@@ -27,7 +27,12 @@ import { ROOT_COMPOSITION, useTimeline } from "./timeline";
 import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
-import { connectPreview, usePreparing } from "./preview";
+import {
+  connectPreview,
+  useGradeBypass,
+  usePreparing,
+  usePreviewGrade,
+} from "./preview";
 import { previewRefresh } from "./previewRefresh";
 import { previewVariablesQuery, useVariables } from "./variables";
 import { auditionClip, auditionQuery, useVersions } from "./versions";
@@ -939,6 +944,14 @@ export function Viewer({
             />
           );
         })}
+        {live &&
+          !pipelineActive &&
+          (typeof Reflect.get(
+            CanvasRenderingContext2D.prototype,
+            "drawElementImage",
+          ) !== "function" ||
+            typeof Reflect.get(HTMLCanvasElement.prototype, "requestPaint") !==
+              "function") && <AdjustmentGradeNotice />}
         {copies && copies.ready < copies.total && (
           <div className="edit-preparing" role="status">
             {copies.failed
@@ -982,4 +995,31 @@ export function Viewer({
       />
     </div>
   );
+}
+
+/** Observe only whether the playhead is inside a grade this browser cannot draw. */
+function AdjustmentGradeNotice() {
+  const timeline = useTimeline((state) => state.view?.timeline);
+  const draft = usePreviewGrade((state) => state.draft);
+  const bypass = useGradeBypass((state) => state.bypass);
+  const showing = useTransport(
+    ({ frame }) =>
+      !bypass &&
+      timeline?.clips.some(
+        (clip) =>
+          clip.adjustment &&
+          clip.enabled &&
+          clip.start <= frame &&
+          frame < clip.start + clip.duration &&
+          !!(draft?.clipId === clip.id ? draft.grade : clip.grade) &&
+          timeline.tracks.some(
+            (track) => track.index === clip.track && track.enabled,
+          ),
+      ),
+  );
+  return showing ? (
+    <div className="edit-adjustment-notice" role="status">
+      This adjustment layer's grade appears in export and in the desktop app.
+    </div>
+  ) : null;
 }

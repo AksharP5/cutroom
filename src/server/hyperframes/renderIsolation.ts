@@ -4,6 +4,7 @@ import { registerHooks } from "node:module";
 import { join } from "node:path";
 import { COLOR_GRADING_SOURCE_HIDDEN_ATTR } from "@hyperframes/core/color-grading";
 import { MEDIA_TRASH } from "../../shared/media.ts";
+import { adjustmentCapture } from "./adjustmentCapture.ts";
 import { previewPolicy } from "./isolation.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
 import type { RenderJob } from "@hyperframes/producer";
@@ -225,7 +226,7 @@ function replaceOnce(
 }
 
 /** Frame injection supplies the decoded pixels. The source element still owns opacity. */
-export function renderGradeRuntime(source: string) {
+export function renderGradeRuntime(source: string, adjustment = false) {
   const adapted = replaceOnce(
     source,
     'i=r&&!n;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=a.opacity||"1"',
@@ -240,6 +241,7 @@ export function renderGradeRuntime(source: string) {
   const style = document.createElement("style");
   style.textContent = ${JSON.stringify(hideGradedFrame)};
   document.head.append(style);
+${adjustment ? "window.__cutroomAdjustmentCapture = (" + adjustmentCapture.toString() + ")();" : ""}
 }`;
 }
 
@@ -254,6 +256,7 @@ export function registerRenderIsolation(
     projectDir: string;
     scopedMedia?: boolean;
   },
+  adjustment = false,
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
   for (const [name, version] of [
@@ -424,7 +427,7 @@ export function registerRenderIsolation(
         source = replaceOnce(
           source,
           "return resolveVerifiedHyperframeRuntime().runtimeSource;",
-          "return cutroomGradeRuntime(resolveVerifiedHyperframeRuntime().runtimeSource);",
+          `return cutroomGradeRuntime(resolveVerifiedHyperframeRuntime().runtimeSource, ${adjustment});`,
           url,
         );
         source = replaceOnce(
@@ -755,6 +758,12 @@ export function registerRenderIsolation(
           source,
           "    const page = await session.browser.newPage();",
           "    const page = await session.browser.newPage();\n    await cutroomIsolatePage(page, session.serverUrl + '/');",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    await page.evaluate(async () => {\n        const runtime = window.__hf?.colorGrading;\n        await runtime?.waitForActiveLuts?.();\n    });",
+          "    await page.evaluate(async (time) => {\n        const runtime = window.__hf?.colorGrading;\n        await runtime?.waitForActiveLuts?.();\n        await window.__cutroomAdjustmentCapture?.render(time);\n    }, quantizedTime);",
           url,
         );
         captureLoaded = true;
