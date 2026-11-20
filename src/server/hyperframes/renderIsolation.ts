@@ -252,6 +252,7 @@ export function registerRenderIsolation(
     progress: (job: RenderJob) => void;
     scratchDir: string;
     projectDir: string;
+    scopedMedia?: boolean;
   },
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
@@ -541,7 +542,7 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "      { chunksCarryAudio: true }\n    );",
-            "      { chunksCarryAudio: false }\n    );",
+            `      { chunksCarryAudio: false${range.scopedMedia ? ", deferVideoExtraction: true" : ""} }\n    );`,
             url,
           );
           source = replaceOnce(
@@ -601,6 +602,54 @@ export function registerRenderIsolation(
             "const chunkFrameNumbers = Array.from({ length: framesInChunk }, (_, i) => cutroomCapturedFrame(range.startFrame + i));",
             url,
           );
+          if (range.scopedMedia) {
+            // FFmpeg has already mixed the audio. Browser audio requests can occupy every
+            // connection to the capture server before the first frame arrives.
+            const chunkServer = `    const fileServer = await createFileServer({
+      projectDir: compiledDir,
+      compiledDir,
+      port: 0,`;
+            source = replaceOnce(
+              source,
+              chunkServer,
+              `${chunkServer}\n      cutroomFramesOnly: true,`,
+              url,
+            );
+            // The decoder supplies every visible frame, as in a whole export. Leave the native
+            // video elements idle and give visible ones the decoder's intrinsic size.
+            source = replaceOnce(
+              source,
+              `      skipReadinessVideoIds: deferredVideos.filter(
+        (video) => !shownFrames.get(video.videoId)?.size || remoteVideoIds.has(video.videoId)
+      ).map((video) => video.videoId),
+      videoMetadataHints: collectVideoMetadataHints(
+        deferredVideos.filter((video) => remoteVideoIds.has(video.videoId))
+      )`,
+              `      skipReadinessVideoIds: collectVideoReadinessSkipIds(
+        planVideos?.videos.filter((video) => !shownFrames.get(video.id)?.size).map((video) => video.id) ?? [],
+        planVideos?.extracted ?? []
+      ),
+      videoMetadataHints: collectVideoMetadataHints(
+        planVideos?.extracted.filter((video) => shownFrames.get(video.videoId)?.size) ?? []
+      )`,
+              url,
+            );
+            // Seeking each frame just to size its extraction can time out on a long edit.
+            // Keep source dimensions, as the span did before it could defer extraction.
+            source = replaceOnce(
+              source,
+              `      const measureBoxes = async (page) => {
+        shownBoxes = await measureVideoShownBoxes(
+          page,
+          [...shownFrames.keys()],
+          chunkFrameNumbers.map((frame) => frame * chunkFps.den / chunkFps.num)
+        );
+        boxesMeasured();
+      };`,
+              "      const measureBoxes = async () => boxesMeasured();",
+              url,
+            );
+          }
           source = replaceOnce(
             source,
             "overlap.current = canEncodeWhileCapturing(encodeInput,",
@@ -675,7 +724,9 @@ export function registerRenderIsolation(
     c.header("Access-Control-Allow-Origin", "null");
     c.header("X-Content-Type-Options", "nosniff");
   });
-  app.get("/*", async (c) => {`,
+  app.get("/*", async (c) => {
+    if (options.cutroomFramesOnly && c.req.header("sec-fetch-dest") === "audio")
+      return c.body(null, 204);`,
           url,
         );
         source = replaceOnce(

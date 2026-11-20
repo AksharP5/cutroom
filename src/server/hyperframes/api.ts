@@ -91,6 +91,7 @@ import {
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { createRenderIndex } from "./renders";
 import type { ExportRequest } from "./jobs";
+import { timedCaptureMedia } from "./captureWorkload";
 import { measureLoudness } from "../timeline/audio";
 import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
@@ -349,13 +350,18 @@ export function createHyperframesApi(
       dir: join(store.dataDir, "cache", "frames"),
       maxBytes: 2 * 1024 ** 3,
     },
-    workload: async (id, composition) => {
-      const { timeline } = await readComposition(id, composition);
+    workload: async (id, composition, sourceOverride) => {
+      const { parsed, timeline } = await readComposition(id, composition);
       return {
         mediaClips: timeline.clips.filter(
           (clip) => clip.kind === "video" || isAudioKind(clip.kind),
         ).length,
         durationFrames: timeline.duration,
+        fps: timeline.fps,
+        timedMedia:
+          composition === "index.html"
+            ? timedCaptureMedia(sourceOverride ?? parsed.html)
+            : undefined,
       };
     },
     published: async (id, path) =>
