@@ -543,6 +543,7 @@ export function createRenderWorkers(configuration: {
             options: config,
             sources,
             range: output?.range,
+            scopedMedia: workload?.timedMedia !== undefined,
             scratchDir: scratch,
             gpu: (await nvenc) ?? false,
             direct: direct && {

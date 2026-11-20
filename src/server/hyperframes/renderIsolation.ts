@@ -252,6 +252,7 @@ export function registerRenderIsolation(
     progress: (job: RenderJob) => void;
     scratchDir: string;
     projectDir: string;
+    scopedMedia?: boolean;
   },
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
@@ -538,7 +539,7 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "      { chunksCarryAudio: true }\n    );",
-            "      { chunksCarryAudio: false }\n    );",
+            `      { chunksCarryAudio: false${range.scopedMedia ? ", deferVideoExtraction: true" : ""} }\n    );`,
             url,
           );
           source = replaceOnce(
@@ -588,6 +589,31 @@ export function registerRenderIsolation(
             "const chunkFrameNumbers = Array.from({ length: framesInChunk }, (_, i) => cutroomCapturedFrame(range.startFrame + i));",
             url,
           );
+          if (range.scopedMedia) {
+            // Short and variable-rate clips can still be extracted eagerly. Keep their native
+            // video elements idle too when no captured frame can show them.
+            source = replaceOnce(
+              source,
+              "      ).map((video) => video.videoId),\n      videoMetadataHints:",
+              "      ).map((video) => video.videoId).concat(planVideos?.videos.filter((video) => !shownFrames.get(video.id)?.size).map((video) => video.id) ?? []),\n      videoMetadataHints:",
+              url,
+            );
+            // Seeking each frame just to size its extraction can time out on a long edit.
+            // Keep source dimensions, as the span did before it could defer extraction.
+            source = replaceOnce(
+              source,
+              `      const measureBoxes = async (page) => {
+        shownBoxes = await measureVideoShownBoxes(
+          page,
+          [...shownFrames.keys()],
+          chunkFrameNumbers.map((frame) => frame * chunkFps.den / chunkFps.num)
+        );
+        boxesMeasured();
+      };`,
+              "      const measureBoxes = async () => boxesMeasured();",
+              url,
+            );
+          }
           source = replaceOnce(
             source,
             "overlap.current = canEncodeWhileCapturing(encodeInput,",

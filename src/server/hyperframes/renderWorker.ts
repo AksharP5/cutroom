@@ -21,6 +21,7 @@ const Input = z.object({
   options: z.looseObject({ fps: FpsSchema, format: ExportFormatSchema }),
   sources: z.record(z.string(), z.string()).default({}),
   range: ExportRangeSchema.nullish(),
+  scopedMedia: z.boolean().default(false),
   scratchDir: z.string(),
   /** Frames drawn wholly from the sources encode with NVENC, which the server's probe found working. */
   gpu: z.boolean(),
@@ -66,6 +67,7 @@ try {
     progress,
     scratchDir: input.scratchDir,
     projectDir: input.projectDir,
+    scopedMedia: input.scopedMedia,
   });
   const {
     createConsoleLogger,

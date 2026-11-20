@@ -16,7 +16,7 @@ const sourceEncoderBytes = (pixels: number) =>
  * One capture browser. Chromium PSS was 0.72 GiB plus about 11 MB per loaded video or audio clip:
  * 0.90, 2.08 and 3.82 GiB at 16, 120 and 280 clips. A marked render defers unused videos but
  * still loads the full document. On 1,038 clips, four initializing browsers plus source encoders
- * reached 11.35 GiB with only 60 clips in the capture runs. Allow for the rest of the document.
+ * reached 11.35 GiB with 42 clips in the capture runs. Allow for the rest of the document.
  */
 const browserBytes = (mediaClips: number, outsideRange: number) =>
   (0.75 + 0.012 * mediaClips + 0.0025 * outsideRange) * GiB;
