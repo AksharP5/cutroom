@@ -685,6 +685,23 @@ For live-supported edits, byte-identical live/fresh PNG comparisons cover all in
 
 The local full unit run passed 779 tests with five optional skips; the full functional run ran once with 445/448 passing. The scaled case became an explicit reload and the export/trim timeouts passed reruns. CI on `4599690` passed all 779 units, 449 functional tests and 11 performance cases before the final Scale restriction and main integration. On the integrated code, types, 56 focused units, 30 timing/title/gain workflows and both latency cases passed. The latest-main recheck passed 13 title/handoff workflows, including moved-playhead and playback continuity cases. The title/gain regression changes style, words, linked source timing and a fader in one operation, then retains the document for another title edit after a gain-only change. Final-head CI is linked in the PR.
 
+## Mixer
+
+The mixer must not cost playback, must be heard within about 50 ms of a fader move, and must paint every frame of a drag. Measured on November 20, 2026 on the shared i5-14400F, with other agents' browser runs between ours.
+
+Playback with the mixer open against `main` used `scripts/bench-vs-studio.ts --editor cutroom --footage-only --bus` (the five-minute, 100-cut 1080p project with its music bed through a bus with a compressor), adding `--mixer` on this branch. Headed Chromium on XWayland, two runs per invocation, in the order main, branch, branch, main. Late holds are 30 fps pictures held longer than two display frames in ten seconds of 1x playback, read from the frame numbers in the composited screencast; editor frames are the editor page's animation-frame intervals during the same ten seconds.
+
+| Build      |   Pictures/s | Late holds / 10 s |  Longest hold | Editor frame p95 | Editor frames over 25 ms |
+| ---------- | -----------: | ----------------: | ------------: | ---------------: | -----------------------: |
+| main       | 29.4 to 29.5 |      10, 14, 7, 6 | 133 to 150 ms |  18.0 to 18.5 ms |               2, 6, 0, 0 |
+| mixer open | 29.3 to 29.6 |      6, 5, 10, 12 | 116 to 133 ms |  17.8 to 18.6 ms |               2, 0, 2, 1 |
+
+Fader to sound, headed: a press on the Voices cap and one move from -30 dB to 0 dB while a tone played through the bus, timed from the editor's `pointermove` to the first sample of the bus's post-fader meter in the preview at least halfway (in dB) to the new level, on one clock (`performance.timeOrigin`). Eight trials: median 20.5 ms, longest 23.9 ms. That includes the meter's own read granularity.
+
+A 60-step drag at one move per animation frame moved the cap on all 60 frames, with a 17.5 ms frame p95 and no frame over 25 ms.
+
+Meters, headed: 12 tracks playing tones, three of them through three buses, and Main, so 16 strips, for 5 s of 1x playback. Editor script time was 0.28 ms a frame with the mixer open and 0.29 ms with it closed; total main-thread task time was 3.63 ms against 1.94 ms. The bars move whole 3 px segments with transforms on their own layers, and a bar that did not change is not written. The first version clipped the lit segments with `clip-path`, which repainted them: 4.56 ms of task time a frame. Nothing runs while stopped.
+
 ## Range exports
 
 A marked export mixes only the audio heard within a second of its range ([architecture](architecture.md#export-dialog)). Each case below exports two seconds (60 frames, Draft, 720p) through the editor's render route, one export at a time on a shared machine. The 500-clip project is `timelineWorkload(500)`: 240 linked picture and sound pairs over ten minutes. The interview project has ten linked interview cuts, b-roll, titles and a 60-second music bed. Planning is the time between the extraction and browser-start stages, where the mix runs beside plan hashing.
