@@ -221,13 +221,11 @@ test("the preview polls a pending scrub proxy once per source across repeated cu
   await page.addInitScript(() =>
     localStorage.setItem("cutroom.footagePipeline", "false"),
   );
-  const project = ProjectSchema.parse(
-    await (
-      await request.post("/api/cutroom/projects", {
-        data: { name: "Repeated cuts", width: 320, height: 180, duration: 6 },
-      })
-    ).json(),
-  );
+  const response = await request.post("/api/cutroom/projects", {
+    data: { name: "Repeated cuts", width: 640, height: 360, duration: 6 },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  const project = ProjectSchema.parse(await response.json());
   await promisify(execFile)("ffmpeg", [
     "-v",
     "error",
@@ -246,7 +244,7 @@ test("the preview polls a pending scrub proxy once per source across repeated cu
   ).join("\n");
   await writeFile(
     join(project.path, "index.html"),
-    `<main id="main" data-composition-id="main" data-width="320" data-height="180" data-duration="6" data-fps="30">${cuts}</main>`,
+    `<main id="main" data-composition-id="main" data-width="640" data-height="360" data-duration="6" data-fps="30">${cuts}</main>`,
   );
 
   const lastPoll = new Map<string, number>();
@@ -259,7 +257,11 @@ test("the preview polls a pending scrub proxy once per source across repeated cu
       const previous = lastPoll.get(url);
       if (previous !== undefined) intervals.push(now - previous);
       lastPoll.set(url, now);
-      return route.fulfill({ status: 202, json: { status: "running" } });
+      return route.fulfill({
+        status: 202,
+        headers: { "access-control-allow-origin": "*" },
+        json: { status: "running" },
+      });
     },
   );
   await page.goto(`/#project/${project.id}`);
