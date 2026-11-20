@@ -17,6 +17,7 @@ import { encoderJobOptions } from "@hyperframes/studio-server/encoder-options";
 import type { StudioApiAdapter } from "@hyperframes/studio-server";
 import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
+import { renderFailure } from "./renderFailure";
 import { planCaptureBrowsers } from "./exportMemory";
 import { planDirectExport } from "./directPlan";
 import { useFreezeExportSources } from "./freezeSources";
@@ -84,6 +85,7 @@ const WorkerEvent = z.discriminatedUnion("type", [
     type: z.literal("error"),
     cancelled: z.boolean(),
     message: z.string(),
+    stage: ExportStageSchema.shape.code.optional(),
   }),
 ]);
 
@@ -566,8 +568,12 @@ export function createRenderWorkers(configuration: {
             }
             // A worker stopped for a startup stall reports the abort; keep the stall as the cause.
             if (event.type === "error" && !failure) {
-              failure = event.message;
               if (event.cancelled) void cancel().catch(() => {});
+              else
+                failure = renderFailure(
+                  event.stage ?? state.stageProgress?.code ?? "compile",
+                  event.message,
+                );
             }
             if (event.type === "complete") {
               completed = true;
@@ -584,8 +590,10 @@ export function createRenderWorkers(configuration: {
           throw new Error(
             failure ||
               // Startup failures cannot send a structured event. Keep the bounded stderr tail's cause.
-              stderr.trim() ||
-              `Renderer exited with code ${exitCode}.`,
+              renderFailure(
+                state.stageProgress?.code ?? "compile",
+                stderr.trim() || `Renderer exited with code ${exitCode}.`,
+              ),
           );
         publishing = true;
         await link(rendered, outputPath).catch((error: unknown) => {
