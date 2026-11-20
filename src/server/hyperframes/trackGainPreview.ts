@@ -4,7 +4,10 @@ import type { DefaultTreeAdapterTypes } from "parse5";
 import { fileContentVersion } from "@hyperframes/studio-server";
 import { TrackGainPreviewSchema } from "../../shared/preview";
 
-/** Compare rendered content, excluding only managed faders and the compiler's routing identities. */
+/**
+ * Compare rendered content, excluding only faders and the compiler's routing identities. A fader
+ * is a Cutroom track bus or a bus with no automation, whose static gain the live preview can set.
+ */
 export function trackGainPreview(html: string, composition = "index.html") {
   const document = parse(html);
   const elements: DefaultTreeAdapterTypes.Element[] = [];
@@ -28,10 +31,13 @@ export function trackGainPreview(html: string, composition = "index.html") {
     }
   };
   visit(document);
+  const has = (element: DefaultTreeAdapterTypes.Element, name: string) =>
+    element.attrs.some((attr) => attr.name === name);
   const groups = elements.filter(
     (element) =>
       element.tagName === "hf-audio-group" &&
-      element.attrs.some((attr) => attr.name === "data-cutroom-track"),
+      has(element, "id") &&
+      (has(element, "data-cutroom-track") || !has(element, "data-automation")),
   );
   const gains = groups.map((element) => {
     const attrs = new Map(element.attrs.map((attr) => [attr.name, attr.value]));

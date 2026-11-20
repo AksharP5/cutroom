@@ -1,7 +1,9 @@
 import type { z } from "zod";
 import type { PreviewLevelsSchema } from "../../shared/preview";
 
-type Level = Pick<z.infer<typeof PreviewLevelsSchema>, "l" | "r" | "playing">;
+type Levels = z.infer<typeof PreviewLevelsSchema>;
+type Level = Pick<Levels, "l" | "r" | "playing"> &
+  Partial<Pick<Levels, "strips" | "faders">>;
 
 /** Meter samples never enter React. Only the promoted preview may publish them. */
 const listeners = new Set<(level: Level) => void>();

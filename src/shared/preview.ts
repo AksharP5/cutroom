@@ -168,7 +168,20 @@ export const PreviewLevelsSchema = z.object({
   playing: z.boolean(),
   l: z.number().nonnegative().finite(),
   r: z.number().nonnegative().finite(),
+  /** Post-fader peaks by mixer strip: `track:<index>` or `bus:<id>`. */
+  strips: z
+    .record(
+      z.string(),
+      z.object({
+        l: z.number().nonnegative().finite(),
+        r: z.number().nonnegative().finite(),
+      }),
+    )
+    .default({}),
+  /** Linear gain an automation lane gives each automated bus now. */
+  faders: z.record(z.string(), z.number().nonnegative().finite()).default({}),
 });
+export type PreviewLevels = z.infer<typeof PreviewLevelsSchema>;
 
 export const PositionWarningSchema = z.object({
   source: z.literal("cutroom-preview"),

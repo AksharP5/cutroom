@@ -43,7 +43,16 @@ interface PreviewWindow extends DiagnosticWindow {
     audioMeter?: {
       start(): void;
       stop(): void;
-      read(): { master: { l: number; r: number } };
+      read(): {
+        master: { l: number; r: number };
+        groups: Record<string, { l: number; r: number }>;
+      };
+      /** Cutroom's adapter: a group's fader, or Main's trim when the id is null. */
+      fade(id: string | null, gain: number): void;
+      /** Where automation holds each of these groups' faders now. */
+      faders(ids: string[]): Record<string, number>;
+      /** Peaks of clips entering a bus, by their track index. */
+      pre(): Record<string, { l: number; r: number }>;
     };
     /** HyperFrames' colour grading: graded pictures, and a compare that shows their source. */
     colorGrading?: {
@@ -301,6 +310,9 @@ function installPreviewBridge(
       }
     }
   };
+  /** Faders a saved gain sets in place: Cutroom's track buses and buses without automation. */
+  const FADERS =
+    "hf-audio-group[id]:is([data-cutroom-track], :not([data-automation]))";
   /** The copy of a live element in a clone of the document, found by its path from the root. */
   const cloneOf = (root: Element, element: Element) => {
     const path: number[] = [];
@@ -369,9 +381,7 @@ function installPreviewBridge(
     for (const media of root.querySelectorAll("video, audio"))
       media.setAttribute("preload", "none");
     // Gain checks and timing updates both set these faders in place.
-    for (const group of root.querySelectorAll(
-      "hf-audio-group[data-cutroom-track]",
-    ))
+    for (const group of root.querySelectorAll(FADERS))
       group.removeAttribute("data-volume");
     for (const element of [root, ...root.querySelectorAll("*")]) {
       const attributes = [...element.attributes].sort((a, b) =>
@@ -412,7 +422,7 @@ function installPreviewBridge(
   };
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
-  /** Resolves every Cutroom track fader in this document, or null when the set differs. */
+  /** Resolves every fader in this document, or null when the set differs. */
   const trackGains = (gains: unknown) => {
     if (!Array.isArray(gains)) return null;
     const changes: { element: Element; volume: string }[] = [];
@@ -429,15 +439,11 @@ function installPreviewBridge(
       )
         return null;
       const element = document.getElementById(gain.id);
-      if (
-        element?.tagName.toLowerCase() !== "hf-audio-group" ||
-        !element.hasAttribute("data-cutroom-track")
-      )
-        return null;
+      if (!element?.matches(FADERS)) return null;
       changes.push({ element, volume: String(gain.volume) });
     }
     return new Set(changes.map(({ element }) => element)).size ===
-      document.querySelectorAll("hf-audio-group[data-cutroom-track]").length
+      document.querySelectorAll(FADERS).length
       ? changes
       : null;
   };
@@ -1441,11 +1447,40 @@ function installPreviewBridge(
   };
   let metering = false;
   let animation = 0;
+  /** A group's mixer strip: `track:<index>` for a Cutroom track bus, `bus:<id>` for a bus. */
+  const stripOf = (id: string) => {
+    const group = document.getElementById(id);
+    if (group?.tagName.toLowerCase() !== "hf-audio-group") return null;
+    const track = group.getAttribute("data-cutroom-track");
+    return track === null ? `bus:${id}` : `track:${track}`;
+  };
   const levels = () => {
     if (!metering) return;
     const meter = win.__hf?.audioMeter;
     meter?.start();
-    const level = win.__player?.isPlaying() ? meter?.read().master : null;
+    const read = win.__player?.isPlaying() ? meter?.read() : null;
+    const level = read?.master;
+    const strips: Record<string, { l: number; r: number }> = {};
+    for (const [id, group] of Object.entries(read?.groups ?? {})) {
+      const strip = stripOf(id);
+      if (strip) strips[strip] = group;
+    }
+    // A track's clips that play through buses still show on the track's strip.
+    for (const [track, level] of Object.entries(
+      read ? (meter?.pre() ?? {}) : {},
+    )) {
+      const shown = strips[`track:${track}`];
+      strips[`track:${track}`] = shown
+        ? { l: Math.max(shown.l, level.l), r: Math.max(shown.r, level.r) }
+        : level;
+    }
+    const automated = read
+      ? [
+          ...document.querySelectorAll(
+            "hf-audio-group[data-automation]:not([data-cutroom-track])",
+          ),
+        ].map((group) => group.id)
+      : [];
     if (win.__player?.isPlaying())
       parent.postMessage(
         {
@@ -1463,6 +1498,8 @@ function installPreviewBridge(
         playing: Boolean(win.__player?.isPlaying()),
         l: level?.l ?? 0,
         r: level?.r ?? 0,
+        strips,
+        faders: automated.length ? (meter?.faders(automated) ?? {}) : {},
       },
       "*",
     );
@@ -2967,6 +3004,30 @@ function installPreviewBridge(
     )
       return;
     const id = data.id;
+    // A mixer fader on its way: heard now, saved on release. It never moves the playhead.
+    if (data.action === "mix-draft") {
+      if (
+        !("volume" in data) ||
+        typeof data.volume !== "number" ||
+        !Number.isFinite(data.volume) ||
+        data.volume < 0 ||
+        !("strip" in data) ||
+        typeof data.strip !== "string"
+      )
+        return;
+      const [kind, key] = data.strip.split(/:(.*)/s);
+      const group =
+        kind === "track"
+          ? document.querySelector(
+              `hf-audio-group[data-cutroom-track="${CSS.escape(key ?? "")}"]`,
+            )?.id
+          : kind === "bus"
+            ? key
+            : null;
+      if (kind === "main" || group)
+        win.__hf?.audioMeter?.fade(group ?? null, data.volume);
+      return;
+    }
     const scrub =
       data.action === "seek" && "scrub" in data && data.scrub === true;
     // Every other command starts from the playhead's true time.

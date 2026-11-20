@@ -13,7 +13,8 @@
  * timeline script, uses the vendored GSAP URL and omits the videos' CSS class so the pipeline
  * can classify them. The footage, cuts, titles and scenes are the same.
  * --footage-only runs just opens, ruler drag, playback and memory. --slider also measures
- * the time from a Colour Exposure slider drag to the composited viewer picture.
+ * the time from a Colour Exposure slider drag to the composited viewer picture. --bus plays the
+ * music bed through a bus with a compressor, and --mixer opens Cutroom's mixer before measuring.
  *
  * Runs under Node, not Bun: Playwright's library loses its browser under Bun. Each invocation
  * starts the editor's own server on a private port, copies the project for it, launches one
@@ -62,6 +63,8 @@ const { values: options, positionals } = parseArgs({
     "ripple-only": { type: "boolean", default: false },
     grade: { type: "boolean", default: false },
     slider: { type: "boolean", default: false },
+    bus: { type: "boolean", default: false },
+    mixer: { type: "boolean", default: false },
   },
 });
 
@@ -334,6 +337,7 @@ async function measure(editor: Editor) {
       "master",
       options.grade && "graded",
       options["pipeline-compatible"] && "pipeline",
+      options.bus && "bus",
     ]
       .filter(Boolean)
       .join("-"),
@@ -341,6 +345,17 @@ async function measure(editor: Editor) {
   if (!existsSync(join(master, "index.html"))) {
     console.log("Making the project…");
     await makeProject(master, options.grade, options["pipeline-compatible"]);
+    if (options.bus) {
+      const index = join(master, "index.html");
+      const html = await readFile(index, "utf8");
+      await writeFile(
+        index,
+        html.replace(
+          '<audio id="music" class="clip"',
+          `<hf-audio-group id="bed" data-label="Bed" data-volume="0.8" data-fx-chain='{"version":1,"nodes":[{"id":"n1","type":"compressor","params":{}}]}'></hf-audio-group>\n<audio id="music" data-audio-group="bed" class="clip"`,
+        ),
+      );
+    }
   }
   const results = [];
   for (let run = 0; run < runs; run++) {
@@ -437,6 +452,12 @@ async function session(
       await context.addInitScript(() => {
         if (window === window.top)
           localStorage.setItem("cutroom.footagePipeline", "true");
+      });
+    }
+    if (options.mixer) {
+      await context.addInitScript(() => {
+        if (window === window.top)
+          sessionStorage.setItem("cutroom.mixer", "true");
       });
     }
     const decoder = await context.newPage();

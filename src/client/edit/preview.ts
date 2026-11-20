@@ -282,6 +282,14 @@ export async function commitGradePreview(commit: () => Promise<boolean>) {
   updateGradeDraft(null);
 }
 
+/** A mixer strip's gain while its fader moves, by strip key; Main's is a trim on its saved gain. */
+type MixDraft = { strip: string; volume: number };
+const mixTargets = new Set<(draft: MixDraft) => void>();
+/** Heard at once in every preview document, before anything is saved. */
+export function previewMix(strip: string, volume: number) {
+  for (const target of mixTargets) target({ strip, volume });
+}
+
 /** Shift+D shows every clip ungraded in the viewer, as Resolve's bypass does, until pressed again. */
 export const useGradeBypass = create<{ bypass: boolean }>(() => ({
   bypass: false,
@@ -622,6 +630,8 @@ export function connectPreview(
   const bypass = ({ bypass }: { bypass: boolean }) => {
     send("grade-bypass", { bypass });
   };
+  const mixDraft = (draft: MixDraft) => send("mix-draft", draft);
+  mixTargets.add(mixDraft);
   let unfollowBypass = () => {};
   const observe = (clipId: string | null) =>
     send("observe-position", {
@@ -669,6 +679,7 @@ export function connectPreview(
     if (keyframeTargets.delete(keyframe) && !keyframeTargets.size)
       keyframeDraft = null;
     regionTargets.delete(region);
+    mixTargets.delete(mixDraft);
     if (gradeTargets.delete(grade) && !gradeTargets.size)
       updateGradeDraft(null);
     unfollowBypass();

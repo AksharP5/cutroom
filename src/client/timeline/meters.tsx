@@ -1,8 +1,10 @@
 import { useEffect, useRef } from "react";
+import { Faders } from "@phosphor-icons/react";
 import { audioLevels } from "../edit/levels";
 
 const FLOOR_DB = -60;
-const height = (level: number) =>
+/** A peak's height on the meter: 0 dBFS at the top, -60 dBFS and below empty. */
+export const meterHeight = (level: number) =>
   Math.max(
     0,
     Math.min(
@@ -26,7 +28,7 @@ export function meterSample(
   playing: boolean,
   now: number,
 ) {
-  const current = height(value);
+  const current = meterHeight(value);
   const elapsed = Math.min(100, now - state.at);
   const fall = now > state.held ? elapsed / 2500 : 0;
   return {
@@ -43,10 +45,13 @@ export function AudioMeters({
   source = audioLevels,
   compact = false,
   label = "Stereo output levels, dBFS",
+  onMixer,
 }: {
   source?: Pick<typeof audioLevels, "subscribe">;
   compact?: boolean;
   label?: string;
+  /** Opens the mixer from the column's head. */
+  onMixer?(): void;
 } = {}) {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -76,7 +81,7 @@ export function AudioMeters({
       channels.forEach((item, index) => {
         const { channel, level: bar, peak, clip } = item;
         const value = index === 0 ? level.l : level.r;
-        const current = height(value);
+        const current = meterHeight(value);
         item.state = meterSample(item.state, value, level.playing, now);
         // Clipping the lit segments keeps each LED its size; the peak line moves on the compositor.
         bar.style.clipPath = compact
@@ -105,6 +110,18 @@ export function AudioMeters({
       aria-valuemax={compact ? 100 : undefined}
       aria-valuenow={compact ? 0 : undefined}
     >
+      {onMixer && (
+        <button
+          type="button"
+          className="icon-button mixer-toggle"
+          aria-label="Mixer"
+          aria-pressed="false"
+          title="Mixer"
+          onClick={onMixer}
+        >
+          <Faders size={16} />
+        </button>
+      )}
       {!compact && (
         <div className="tl-meter-scale">
           {[0, -6, -12, -24, -48].map((db) => (

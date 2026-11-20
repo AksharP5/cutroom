@@ -33,6 +33,8 @@ import {
   useViewSettings,
 } from "./viewSettings";
 import { TrackGainDialog } from "./TrackGain";
+import { Mixer } from "./Mixer";
+import { trackRows } from "./math";
 import { FxRack } from "../edit/inspector/FxRack";
 import { Modal } from "../components/Modal";
 import { clipName } from "../../shared/timeline/labels";
@@ -118,6 +120,14 @@ export function ProjectTimeline({
   useEffect(() => {
     if (composition) return openViewSettings(projectId, composition);
   }, [projectId, composition]);
+  // Open or closed per window, as the left column's width is.
+  const [mixerOpen, setMixerOpen] = useState(
+    () => sessionStorage.getItem("cutroom.mixer") === "true",
+  );
+  const showMixer = (open: boolean) => {
+    sessionStorage.setItem("cutroom.mixer", String(open));
+    setMixerOpen(open);
+  };
   const selection = useTimeline((state) => state.selection);
   const snapping = useTimeline((state) => state.snapping);
   const setSelection = (next: Selection) =>
@@ -572,6 +582,35 @@ export function ProjectTimeline({
         </Modal>
       )}
       <Timeline
+        onMixer={() => showMixer(true)}
+        mixer={
+          mixerOpen ? (
+            <Mixer
+              projectId={projectId}
+              composition={view.composition}
+              timeline={view.timeline}
+              rows={
+                trackRows(view.timeline.tracks, {
+                  video: 0,
+                  audio: 0,
+                  seam: 0,
+                  divider: 0,
+                }).rows
+              }
+              onTrackMenu={(event, anchor, row) =>
+                openContextMenu(
+                  event,
+                  `Track ${row.id}`,
+                  trackMenu(row),
+                  anchor,
+                )
+              }
+              onToggleTrack={toggleTrack}
+              onTrackGain={setTrackGain}
+              onClose={() => showMixer(false)}
+            />
+          ) : undefined
+        }
         onTrackFx={(track) => setFxTrack(track.index)}
         recording={
           recording ? { track: recording.track, start: recording.start } : null

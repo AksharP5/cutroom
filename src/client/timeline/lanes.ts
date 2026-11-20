@@ -125,6 +125,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
   /** The offsets a committed drag left its clips at, for `useClipMotion`. */
   const held = useRef<ReadonlyMap<string, Offset> | null>(null);
   const hoveredMix = useRef<HTMLElement | null>(null);
+  /** A mixer bus strip a clip move would route to on release. */
+  const busDrop = useRef<HTMLElement | null>(null);
   const hovered = useRef<string | null>(null);
   const hoverTransform = useRef("");
   const hoverBox = useRef<HTMLElement>(null);
@@ -691,6 +693,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
   function finish(outcome: Outcome) {
     const { lanes, selection, timeline, rows, onSelect } = latest.current;
     const active = drag.current;
+    const bus = busDrop.current?.dataset.busDrop;
+    busDrop.current?.removeAttribute("data-drop");
+    busDrop.current = null;
     const alone = kept.current;
     const edit = pointClick.current;
     drag.current = null;
@@ -727,6 +732,26 @@ export function useLaneGestures(options: LaneGestureOptions) {
             { toggle: false, range: false, alone: false },
           ),
         );
+      return;
+    }
+    if (outcome === "commit" && bus && active.intent.kind === "move") {
+      // Dropped on a bus strip: the clips with sound join it, and nothing moves.
+      settle(null);
+      const sounding = active.named.filter((clip) => clip.hasAudio);
+      latest.current.onEdit(
+        "Route audio",
+        [
+          {
+            type: "routeAudioGroup",
+            clipIds: (sounding.length ? sounding : active.named).map(
+              ({ id }) => id,
+            ),
+            group: bus,
+          },
+        ],
+        active.timeline,
+      );
+      latest.current.onTrackDrag(false);
       return;
     }
     // Release always uses the modifiers held now, even without a final pointer move.
@@ -1003,7 +1028,22 @@ export function useLaneGestures(options: LaneGestureOptions) {
       type: "move",
       point: local(event.clientX, event.clientY),
     }).gesture;
+    aimBus(event.clientX, event.clientY);
     update();
+  }
+
+  /** A clip move over a mixer bus strip offers to route its clips there instead. */
+  function aimBus(x: number, y: number) {
+    const target =
+      drag.current?.intent.kind === "move"
+        ? (document
+            .elementFromPoint(x, y)
+            ?.closest<HTMLElement>("[data-bus-drop]") ?? null)
+        : null;
+    if (target === busDrop.current) return;
+    busDrop.current?.removeAttribute("data-drop");
+    busDrop.current = target;
+    target?.setAttribute("data-drop", "");
   }
 
   function movePointer(event: PointerEvent<HTMLDivElement>) {
