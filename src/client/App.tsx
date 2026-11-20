@@ -990,10 +990,7 @@ export function App() {
                 />
                 GPU footage playback
               </label>
-              <p>
-                Experimental. Decodes and draws video clips in Cutroom's own
-                pipeline, with titles and graphics from HyperFrames on top.
-              </p>
+              <p>Draws supported footage on the GPU for smoother editing.</p>
             </section>
             <section>
               <h3>Keyboard</h3>

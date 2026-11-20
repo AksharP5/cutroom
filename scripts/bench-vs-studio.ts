@@ -433,11 +433,11 @@ async function session(
         `--class=${marker}`,
       ],
     });
-    if (options.pipeline) {
-      await context.addInitScript(() => {
+    if (editor === "cutroom") {
+      await context.addInitScript((enabled) => {
         if (window === window.top)
-          localStorage.setItem("cutroom.footagePipeline", "true");
-      });
+          localStorage.setItem("cutroom.footagePipeline", String(enabled));
+      }, options.pipeline === true);
     }
     const decoder = await context.newPage();
     await decoder.goto("about:blank");

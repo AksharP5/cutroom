@@ -139,7 +139,7 @@ The footage pipeline now shares the demuxed index and up to 12 MiB of compressed
 
 The 60 fps layered chart check selected the correct source frame in all 12 positions. Using the source matrix in preview and export cut its mean RGB error from 9.35 to 2.46 levels out of 255. The graded swatches and luma ramp measured 0.75 and 0.67 levels on average, both with a maximum error of 2. A 12-frame MP4 around the cut at 1:03 of the full authored benchmark, with the title and scene visible, averaged 2.14 levels before and after the colour fix. The largest per-channel error was 166 and the worst frame's 99th-percentile error was 24.
 
-**Recommendation.** Keep the setting opt-in. The composed benchmark still exceeds the grading-only colour bound. GPU playback still uses more browser memory after repeated edits on the graded fixture. Confirm playback holds and browser memory on a moving recording in Electron before revisiting the default. Sources above the 1080p pixel budget, HDR and alpha stay in HyperFrames. Unproven root scripts, authored styles or adjustment effects can still require native compositing. A title or native clip below GPU footage uses HyperFrames for the overlap, with the pipeline resuming after it.
+The composed benchmark exceeded the grading-only colour bound, and GPU playback used more browser memory after repeated edits on the graded fixture. The [desktop measurements](#desktop-playback) cover playback holds and memory in Electron. Sources above the 1080p pixel budget, HDR and alpha stay in HyperFrames. Unproven root scripts, authored styles or adjustment effects can still require native compositing. A title or native clip below GPU footage uses HyperFrames for the overlap, with the pipeline resuming after it.
 
 #### Desktop playback
 
@@ -204,16 +204,16 @@ one pair per display path and give a reference for the desktop runs.
 | Chromium XWayland |                1 | 29.9 → 30.0 |         157 → 140 |         76 → 77 | 2134 → 2300 |     3899 → 3878 |
 | Chromium Wayland  |                1 | 29.9 → 29.8 |         146 → 130 |         77 → 84 | 1186 → 1270 |     3440 → 3380 |
 
-**Decision.** Keep the setting opt-in. At 1080p the corrected pipeline improved playback,
+**Decision.** Enable GPU footage playback by default for users without a saved choice. At 1080p the corrected pipeline improved playback,
 scrub, first picture, ripple and undo in both Electron modes and in the Chromium control.
 The output capture measured 30.0 pictures/s in Electron Wayland with GPU playback,
 replacing the earlier screencast estimate of 23.6. Browser PSS at 1080p increased by 145 MiB on Electron XWayland and
 235 MiB on Electron Wayland.
 
-The 4K XWayland playback rates were even to a tenth of a picture per second, but the three
+The 4K XWayland playback rates were even to a tenth of a picture per second. The three
 hold comparisons were 133 → 117, 31 → 37, and 38 → 102. Both settings used the same native
-path, and the direction changed between runs. These measurements leave 4K cadence parity
-unresolved. The Chromium Wayland reference also showed more 1080p holds than the XWayland
+path, and the direction changed between runs. 4K sources still use HyperFrames under the
+default. The Chromium Wayland reference also showed more 1080p holds than the XWayland
 reference with either setting. Cadence varied with display path and background load. The
 stale preview was the reproducible fault.
 
@@ -819,7 +819,7 @@ CPU was measured with the screencast off. The 300-clip timeline uses more CPU be
 
 ## Footage pipeline
 
-The [footage pipeline](architecture.md#footage-pipeline) is a setting, off by default. On November 15, 2026 both settings ran on the same production build of this change, alternating, on a private server: installed Chromium 155 at 1720x1050 on the RTX 5060 (ANGLE Vulkan), muted, with the machine shared with other work and DaVinci Resolve holding 4.5 of the GPU's 8 GB. Every source frame carries its number in 16 blocks along the top, and a picture counts only when a screencast frame shows a new number. The interview is `interviewWorkload` with a 60 s 1080p30 file at 8 Mbit/s and a 1 s GOP: ten cuts that each jump back a second in one file, four b-roll clips from a 720p file over them, music and four titles. The 400-clip timeline is `timelineWorkload(400)` over a 720p30 copy with a 1 s GOP: 190 linked 2.5 s cuts and 20 titles. Playback was measured headed (headless halves the clock with this much media), with `requestVideoFrameCallback` in the preview for HyperFrames and the pipeline canvas's draws for the pipeline; HyperFrames' count includes both pictures where b-roll overlaps the interview. Its gaps are the callbacks' times, which can land a display frame early or late of the picture itself (see [Cutroom vs HyperFrames Studio](#cutroom-vs-hyperframes-studio)), so they can overstate HyperFrames' gap p95.
+On November 15, 2026, both [footage pipeline](architecture.md#footage-pipeline) settings ran on the same production build of this change, alternating, on a private server: installed Chromium 155 at 1720x1050 on the RTX 5060 (ANGLE Vulkan), muted, with the machine shared with other work and DaVinci Resolve holding 4.5 of the GPU's 8 GB. Every source frame carries its number in 16 blocks along the top, and a picture counts only when a screencast frame shows a new number. The interview is `interviewWorkload` with a 60 s 1080p30 file at 8 Mbit/s and a 1 s GOP: ten cuts that each jump back a second in one file, four b-roll clips from a 720p file over them, music and four titles. The 400-clip timeline is `timelineWorkload(400)` over a 720p30 copy with a 1 s GOP: 190 linked 2.5 s cuts and 20 titles. Playback was measured headed (headless halves the clock with this much media), with `requestVideoFrameCallback` in the preview for HyperFrames and the pipeline canvas's draws for the pipeline; HyperFrames' count includes both pictures where b-roll overlaps the interview. Its gaps are the callbacks' times, which can land a display frame early or late of the picture itself (see [Cutroom vs HyperFrames Studio](#cutroom-vs-hyperframes-studio)), so they can overstate HyperFrames' gap p95.
 
 | Ranges over 2 runs                                   |     Interview, off |      Interview, on |       400 clips, off |      400 clips, on |
 | ---------------------------------------------------- | -----------------: | -----------------: | -------------------: | -----------------: |
@@ -979,7 +979,7 @@ Temporary `performance.measure` calls included query setup and result constructi
 
 The CPU reduction did not establish a general picture-latency improvement. Median first-picture latency in the three 400-clip runs ranged 37.7 to 42.7 ms before and 36.5 to 42.4 ms after; at 500 clips it ranged 40.2 to 43.9 ms before and 41.0 to 42.6 ms after. Pictures were read from composited screencasts after measurement, using the burned-in frame numbers rather than the canvas's requested-frame attribute. Every one of the 384 steps showed the expected source picture before the next input. Two additional matched 500-clip runs in each build crossed a cut in both directions from timeline frame 3070; all 128 pictures also matched. No long tasks occurred in these runs. Cold project opening was 1.4 to 2.0 seconds across both builds; that fixture warms filmstrips and peaks first, so it is not a cold-media benchmark.
 
-This improves synchronous lookahead work when the experimental footage pipeline is on. It does not establish a playback-rate or memory improvement, and does not change the setting's default, classification, decoders, clock or HyperFrames confirmation. To reproduce the interaction manually, enable the footage pipeline, open the same generated workload, type `00:01:40:00`, and alternate 16 Right and 16 Left inputs at eight inputs per second. The cut-crossing variant starts at `00:01:42:10`.
+This improves synchronous lookahead work when the footage pipeline is on. It does not establish a playback-rate or memory improvement, and does not change the setting's default, classification, decoders, clock or HyperFrames confirmation. To reproduce the interaction manually, enable the footage pipeline, open the same generated workload, type `00:01:40:00`, and alternate 16 Right and 16 Left inputs at eight inputs per second. The cut-crossing variant starts at `00:01:42:10`.
 
 ## Clip versions
 

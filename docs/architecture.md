@@ -139,7 +139,7 @@ The note overlay lives in the trusted viewer stage outside the sandboxed iframe.
 
 ## Footage pipeline
 
-**GPU footage playback** in Settings (off by default, `cutroom.footagePipeline` in local storage) draws video clips in Cutroom's own pipeline instead of one `<video>` element per clip. HyperFrames still draws everything else in the same isolated preview, on top, on the same clock. It is an experiment: the measurements and the plan for making it the default are in `docs/performance.md`, Footage pipeline.
+**GPU footage playback** is on by default. Settings preserves a user's choice in `cutroom.footagePipeline` in local storage. Cutroom's pipeline draws eligible video beneath the same isolated HyperFrames preview, on the same clock. HyperFrames draws titles, graphics, and footage that needs native playback. It also draws the preview when WebGL2 is unavailable. See the [desktop measurements](performance.md#desktop-playback).
 
 `GET /api/cutroom/projects/:id/pipeline` classifies the entry composition with `planPreviewPipeline` (`src/server/hyperframes/pipelinePlan.ts`). The classifier shares the direct export's placement rules for muted video, `object-fit`, Position, Scale, Rotation, whole-pixel Crop, Opacity and colour-only grades. A video can also have HyperFrames' standard `clip` class if the stylesheets leave its picture to the compositor. HyperFrames draws titles, captions and sub-compositions in the isolated preview on the same clock. The entry can load the pinned GSAP bytes from `gsap.min.js` or `assets/vendor/gsap.min.js` and register an empty paused timeline. Saving that library triggers a new plan.
 

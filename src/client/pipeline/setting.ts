@@ -3,11 +3,11 @@ import { create } from "zustand";
 const SETTING = "cutroom.footagePipeline";
 
 /**
- * The viewer's footage pipeline. Off by default: Settings turns it on. While `active`, the
+ * The viewer's footage pipeline. Settings can turn it off. While `active`, the
  * pipeline draws the video clips in `drawn` beneath the preview, and the preview draws the rest.
  */
 export const usePipeline = create(() => ({
-  enabled: localStorage.getItem(SETTING) === "true",
+  enabled: localStorage.getItem(SETTING) !== "false",
   active: false,
   drawn: [] as readonly string[],
   native: [] as readonly string[],

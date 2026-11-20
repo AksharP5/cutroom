@@ -352,6 +352,41 @@ async function cutsProject(
   return created;
 }
 
+test("the default viewer shows footage when WebGL2 is unavailable", async ({
+  page,
+  request,
+}) => {
+  const created = await cutsProject(request, { num: 30, den: 1 });
+  await page.addInitScript(() => {
+    if (window !== window.top) return;
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      value(this: HTMLCanvasElement, kind: string, attributes?: object) {
+        if (kind === "webgl2") return null;
+        return Reflect.apply(getContext, this, [kind, attributes]);
+      },
+    });
+  });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const refused = page.waitForEvent("console", {
+    predicate: (message) =>
+      message.type() === "warning" &&
+      message.text().includes("GPU footage playback is unavailable"),
+  });
+  await page.goto(`/#project/${created.id}`);
+  await refused;
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-pipeline", "off");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  await typeFrame(page, 31, 30);
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  const shot = await settledShot(page);
+  const [picture] = await compare(page, [shot], [shot]);
+  expect(picture?.numbers[0]).toBe(48);
+  expect(errors).toEqual([]);
+});
+
 test("the footage pipeline places, crops, fades and dissolves clips as HyperFrames does, under a title", async ({
   browser,
   request,
