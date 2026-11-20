@@ -94,6 +94,7 @@ export function Viewer({
   const copies = usePreparing((state) => state.copies);
   const pipelineActive = usePipeline((state) => state.active);
   const pipelineDrawn = usePipeline((state) => state.drawn);
+  const pipelineNative = usePipeline((state) => state.native);
   useEffect(() => {
     const canvas = pipelineCanvas.current;
     if (!pipelineEnabled || !canvas) return;
@@ -115,8 +116,8 @@ export function Viewer({
   }, [revision, change.path]);
   useEffect(() => {
     for (const connection of connections.current.values())
-      connection.pipeline(pipelineActive, pipelineDrawn);
-  }, [pipelineActive, pipelineDrawn]);
+      connection.pipeline(pipelineActive, pipelineDrawn, pipelineNative);
+  }, [pipelineActive, pipelineDrawn, pipelineNative]);
   const draftId = useProjectNotes(
     (state) => state.projects[projectId]?.draft?.id,
   );
@@ -743,8 +744,8 @@ export function Viewer({
               console.debug("Ramp audio could not be prepared:", error);
           });
       }
-      const { active, drawn } = usePipeline.getState();
-      if (active) preview.pipeline(true, drawn);
+      const { active, drawn, native } = usePipeline.getState();
+      if (active) preview.pipeline(true, drawn, native);
       const resume = () => {
         settled.current?.();
         settled.current = null;

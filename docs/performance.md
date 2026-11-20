@@ -141,6 +141,74 @@ The 60 fps layered chart check selected the correct source frame in all 12 posit
 
 **Recommendation.** Keep the setting opt-in. The composed benchmark still exceeds the grading-only colour bound. GPU playback still uses more browser memory after repeated edits on the graded fixture. Confirm playback holds and browser memory on a moving recording in Electron before revisiting the default. Sources above the 1080p pixel budget, HDR and alpha stay in HyperFrames. Unproven root scripts, authored styles or adjustment effects can still require native compositing. A title or native clip below GPU footage uses HyperFrames for the overlap, with the pipeline resuming after it.
 
+#### Desktop playback
+
+The browser's screencast is unsuitable for counting Electron playback holds on this machine.
+Its frame stream can drop samples while the viewer continues updating. The desktop benchmark
+reads the same source frame numbers directly from the Hyprland output via Wayland screencopy.
+It copies one pixel row in the viewer for each sample and retains the compositor timestamp and
+decoded number. A red block distinguishes a valid frame zero from a blank picture. Hyprland
+timestamps the copy after it commits to the display backend. The capture asks the compositor
+for output frames even when the picture is held, so both settings run with the same readback.
+The X11 runs use this capture path too, because XWayland windows appear on the same Wayland
+output.
+
+To check the reader, a Chromium app window showed 30 fps numbers with five consecutive frames
+held back once a second, for six seconds. At 143.981 Hz, the compositor captured 864 samples
+and read 151 pictures, including the picture at the window boundary. Chromium's screencast
+captured 360 samples and read 150 pictures. Both found the six programmed holds. The longest
+was 202 ms from the compositor and 201 ms from the screencast. The largest compositor sampling
+gap was 10.56 ms, below the 33.33 ms period of a source frame.
+
+The exact-frame check also caught a ripple delete that showed the right footage and then
+showed the deleted shot again. On main `3fbbcb36`, Electron Wayland, Electron XWayland and
+Chromium XWayland all showed source frame 1005 after deleting shot 22, then returned to 3405
+while the old preview was retained. The new plan had removed the clip's ID from the GPU list,
+so the old document loaded its copy above the canvas. The bridge now keeps that clip parked
+in the old document. An explicit assignment to native playback still releases the clip.
+
+The 1080p fixture keeps the 100 graded cuts, music, titles and scenes from the earlier benchmark.
+Each run opens a fresh project and browser profile, times the first frame zero after navigation,
+and waits for the scrub proxy before the playback and drag samples. Playback runs for ten
+seconds at 1x after a half-second lead-in. Scrub is a three-second horizontal ruler drag. The
+ripple and undo samples are from shots 22, 24 and 27, timed to the expected source picture.
+PSS is the browser process tree after these operations, excluding Electron's Bun server. The
+4K fixture plays 30 seconds at 1x from a 3840 × 2160, 30 fps, 32 Mbit/s H.264 source with a
+one-second GOP. It has 30 cuts, six titles and a music bed. With the setting enabled, the 4K
+source still uses HyperFrames because it exceeds the pipeline's source-pixel budget.
+
+To run locally on Hyprland, use an unrotated display at scale 1 and leave the benchmark window
+in front. The tool uses Node with TypeScript stripping, Bun, FFmpeg, a C compiler, the Wayland
+client headers and `wayland-scanner`. It launches a full-screen window at the display resolution
+with private data and project directories. `--electron` and `--chromium` select alternate executables if needed. The code
+generator below uses the
+[pinned wlr-screencopy protocol](https://github.com/swaywm/wlr-protocols/blob/b010a03648b88d143236de193bddbfea0c08bc84/unstable/wlr-screencopy-unstable-v1.xml).
+
+```sh
+bench_dir=$(mktemp -d /var/tmp/cutroom-electron.XXXXXX)
+bun run build
+bun scripts/desktop.ts --build-only
+curl -fsSL https://raw.githubusercontent.com/swaywm/wlr-protocols/b010a03648b88d143236de193bddbfea0c08bc84/unstable/wlr-screencopy-unstable-v1.xml -o "$bench_dir/screencopy.xml"
+wayland-scanner client-header "$bench_dir/screencopy.xml" "$bench_dir/screencopy.h"
+wayland-scanner private-code "$bench_dir/screencopy.xml" "$bench_dir/screencopy.c"
+cc -O2 -I "$bench_dir" scripts/desktop-playback/screen.c "$bench_dir/screencopy.c" -lwayland-client -o "$bench_dir/screen"
+node --input-type=module -e '
+  import { makeProject } from "./scripts/bench-vs-studio-project.ts";
+  await makeProject(process.argv[1] + "/master-1080p", true, false, "1080p");
+  await makeProject(process.argv[1] + "/master-4k", false, false, "4k");
+' "$bench_dir"
+flock /tmp/cutroom-e2e.lock node scripts/bench-desktop-playback.ts --dir "$bench_dir" --host chromium --setting off --validate
+flock /tmp/cutroom-e2e.lock node scripts/bench-desktop-playback.ts --dir "$bench_dir" --host wayland --setting on --size 1080p
+```
+
+Use `--host x11` for Electron on XWayland and `--host chromium` for the Chromium app window.
+Use `--setting off` for the control and `--size 4k` for the sustained run. `--out` saves the JSON
+summary. Run paired settings in both orders. On a 144 Hz display, a long hold is a picture
+gap over 38.2 ms, half a display interval longer than the maximum five refreshes needed to
+show a regular 30 fps picture. The runner counts source pictures that could fit into gaps
+between capture samples. It rejects a window if more than 1 out of 300 pictures or more than
+4 out of 900 could go unseen. Focus changes invalidate a run.
+
 ## Timeline engine
 
 `bun run bench:timeline` measures the timeline engine on a transcript-cut composition: 240 linked picture and sound pieces plus 20 titles, 500 clips in 75 KB of HTML. It reports median milliseconds over 31 runs and exits with an error when a step exceeds its budget. The batch is a ripple delete near the start, a razor across every track, and a ripple trim, so most clips move. A second case lifts 1,000 of 2,000 clips in one batch, as select all and delete would; each removal first checks that the clip owns its bytes.
