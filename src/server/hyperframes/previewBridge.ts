@@ -2418,9 +2418,12 @@ function installPreviewBridge(
       try {
         for (let pending = true; pending && !retired;) {
           pending = false;
+          // Cuts from the same file share one pending job and one poll per pass.
+          const checked = new Set<string>();
           for (const video of document.querySelectorAll("video")) {
             const path = scrubPath(video);
-            if (!path) continue;
+            if (!path || checked.has(path)) continue;
+            checked.add(path);
             const source = scrubSources.get(path) ?? { used: 0 };
             scrubSources.set(path, source);
             if (source.key || source.failed) continue;

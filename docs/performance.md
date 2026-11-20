@@ -876,6 +876,17 @@ A ruler drag asks for a new frame on every pointer move. [Scrub proxies](archite
 
 CPU was measured with the screencast off. The 300-clip timeline uses more CPU because it now loads and draws each clip it passes; it is bounded by those loads, not by decoding. A single move shows the exact frame later than before, since the source decodes only after 60 ms of rest; the proxy frame at Fit is close to the viewer's own resolution.
 
+### Polling while a scrub proxy is made
+
+On November 20, 2026, private Electron 45.2.3 profiles played 30 seconds at 1× on a 60 Hz Wayland display. Each timeline cut the same 1080p60 OBS HEVC recording. The 1080p H.264 editing proxy was ready before open. Filmstrips and the 540p scrub proxy were made on demand. The preview used to poll separately for every cut while the scrub proxy was pending. It now polls once per source in each pass. The footage pipeline also stops its range probe as soon as the server says the proxy is pending.
+
+| Cold timeline | Pending requests from the preview, before → after | Canvas updates/s, before → after | Longest canvas hold, before → after | Machine load, before → after |
+| ------------- | ------------------------------------------------: | -------------------------------: | ----------------------------------: | ---------------------------: |
+| 30 cuts       |                                          300 → 19 |                      60.0 → 55.9 |                         18 → 483 ms |                     4.6 → 27 |
+| 1,000 clips   |                                        4,521 → 18 |                      41.0 → 39.0 |                        495 → 433 ms |                      42 → 33 |
+
+Requests were counted through the end of the playback sample. Each row is one run per build. The 1,000-clip comparison used the same renderer bundle to isolate the preview request change. Machine load varied substantially, and the renderer itself ran at 41.9 and 43.3 animation callbacks/s in the 1,000-clip runs. These runs establish the request reduction. The 60 Hz cadence target is still open at this scale.
+
 ## Footage pipeline
 
 The [footage pipeline](architecture.md#footage-pipeline) is a setting, off by default. On November 15, 2026 both settings ran on the same production build of this change, alternating, on a private server: installed Chromium 155 at 1720x1050 on the RTX 5060 (ANGLE Vulkan), muted, with the machine shared with other work and DaVinci Resolve holding 4.5 of the GPU's 8 GB. Every source frame carries its number in 16 blocks along the top, and a picture counts only when a screencast frame shows a new number. The interview is `interviewWorkload` with a 60 s 1080p30 file at 8 Mbit/s and a 1 s GOP: ten cuts that each jump back a second in one file, four b-roll clips from a 720p file over them, music and four titles. The 400-clip timeline is `timelineWorkload(400)` over a 720p30 copy with a 1 s GOP: 190 linked 2.5 s cuts and 20 titles. Playback was measured headed (headless halves the clock with this much media), with `requestVideoFrameCallback` in the preview for HyperFrames and the pipeline canvas's draws for the pipeline; HyperFrames' count includes both pictures where b-roll overlaps the interview. Its gaps are the callbacks' times, which can land a display frame early or late of the picture itself (see [Cutroom vs HyperFrames Studio](#cutroom-vs-hyperframes-studio)), so they can overstate HyperFrames' gap p95.
