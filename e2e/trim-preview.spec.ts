@@ -48,6 +48,7 @@ async function openEditFrameProject(
   request: APIRequestContext,
   operation: string,
   size = { width: 640, height: 360 },
+  gpu = false,
 ) {
   const project = ProjectSchema.parse(
     await (
@@ -96,14 +97,17 @@ async function openEditFrameProject(
   const sound = operation.endsWith("audio")
     ? `<audio id="sound" ${link} src="Frames.mp4" data-track-index="1" data-start="0" data-duration="4" data-media-start="2"></audio>`
     : "";
+  const placement = gpu
+    ? 'style="position:absolute;inset:0;width:100%;height:100%"'
+    : "";
   await writeFile(
     join(project.path, "index.html"),
     `<!doctype html><html><head><style>
     body{margin:0;background:black}main{position:relative;width:${size.width}px;height:${size.height}px}
-    video{position:absolute;inset:0;width:100%;height:100%}
-    </style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="${size.width}" data-height="${size.height}" data-duration="8" data-fps="30">
-    <video id="outgoing" ${link} muted src="Frames.mp4" data-track-index="0" data-start="0" data-duration="4" data-media-start="2"></video>
-    <video id="incoming" muted src="Frames.mp4" data-track-index="0" data-start="4" data-duration="4" data-media-start="10"></video>
+    ${gpu ? "" : "video{position:absolute;inset:0;width:100%;height:100%}"}
+    </style></head><body><main id="main" data-composition-id="main"${gpu ? "" : " data-no-timeline"} data-width="${size.width}" data-height="${size.height}" data-duration="8" data-fps="30">
+    <video id="outgoing" ${placement} ${link} muted src="Frames.mp4" data-track-index="0" data-start="0" data-duration="4" data-media-start="2"></video>
+    <video id="incoming" ${placement} muted src="Frames.mp4" data-track-index="0" data-start="4" data-duration="4" data-media-start="10"></video>
     ${sound}</main></body></html>`,
   );
   await page.goto(`/#project/${project.id}`);
@@ -113,10 +117,50 @@ async function openEditFrameProject(
   await page.getByRole("button", { name: /^Current time/ }).click();
   await page.getByLabel("Go to time").pressSequentially("100");
   await page.keyboard.press("Enter");
-  await expect.poll(() => pictureFrames(page)).toEqual([90]);
+  if (gpu) {
+    await expect(page.locator(".edit-stage")).toHaveAttribute(
+      "data-pipeline",
+      "on",
+    );
+    await expect(page.locator(".edit-pipeline")).toHaveAttribute(
+      "data-frame",
+      "30",
+    );
+  } else await expect.poll(() => pictureFrames(page)).toEqual([90]);
   await page.getByRole("button", { name: /^Snapping/ }).click();
   return project;
 }
+
+test("GPU footage shows both roll frames and returns to the parked picture", async ({
+  page,
+  request,
+}) => {
+  await openEditFrameProject(page, request, "roll", undefined, true);
+  await page.keyboard.press("t");
+  const grid = page.locator(".tl-grid");
+  await expect(grid).toHaveAttribute("data-refit", "settled");
+  const pixelsPerFrame = await grid.evaluate((element) =>
+    Number(element.style.getPropertyValue("--ppf")),
+  );
+  const box = (await page.locator('[data-clip="outgoing"]').boundingBox())!;
+  const x = box.x + box.width - 1;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 6 * pixelsPerFrame, y, { steps: 3 });
+  await expect.poll(() => pictureFrames(page)).toEqual([185, 306]);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect.poll(() => pictureFrames(page)).toEqual([]);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-pipeline",
+    "on",
+  );
+  await expect(page.locator(".edit-pipeline")).toHaveAttribute(
+    "data-frame",
+    "30",
+  );
+});
 
 for (const operation of [
   "in",

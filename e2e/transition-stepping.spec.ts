@@ -55,7 +55,7 @@ async function resting(page: Page, frame: number) {
   };
 }
 
-test("stepping through a dissolve and a dip on a busy machine draws each transition once, as a fresh seek does", async ({
+test("stepping through a HyperFrames dissolve and dip on a busy machine matches a fresh seek", async ({
   browser,
   page,
   request,
@@ -127,7 +127,10 @@ ${clip("c", "2.666667", "1", 3.5)}
   // With the CPU four times slower, a step often lands while a video is still seeking, and the
   // runtime holds that video. Count the holds of the clips with transitions.
   await page.addInitScript(() => {
-    if (window === window.top) return;
+    if (window === window.top) {
+      localStorage.setItem("cutroom.footagePipeline", "false");
+      return;
+    }
     const count = window as { __holds?: number };
     count.__holds = 0;
     new MutationObserver((records) => {
@@ -175,6 +178,10 @@ ${clip("c", "2.666667", "1", 3.5)}
   });
   try {
     const reference = await fresh.newPage();
+    await reference.addInitScript(() => {
+      if (window === window.top)
+        localStorage.setItem("cutroom.footagePipeline", "false");
+    });
     await reference.goto(`/#project/${project.id}`);
     await expect(
       reference.locator(".edit-stage[data-preview-ready]"),

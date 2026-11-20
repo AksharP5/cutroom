@@ -1580,6 +1580,7 @@ function installPreviewBridge(
     for (const [video, preload] of editPreloads) {
       if (preload === null) video.removeAttribute("preload");
       else video.setAttribute("preload", preload);
+      if (pipelineActive && drawnByPipeline(video)) park(video);
     }
     editPreloads.clear();
   };
@@ -1603,6 +1604,8 @@ function installPreviewBridge(
           element.pause();
           if (!editPreloads.has(element))
             editPreloads.set(element, element.getAttribute("preload"));
+          // The edit canvas needs real source pixels even when GPU playback owns the clip.
+          unpark(element, false);
           element.preload = "auto";
           if (!element.readyState) element.load();
           while (!element.readyState) {
@@ -1753,11 +1756,12 @@ function installPreviewBridge(
     ]);
     // A frame whose document's colour scheme differs from the dark editor's gets an opaque white
     // backdrop. The scheme only picks system colours, so the default text colour stays black.
+    // Mask the video without changing its authored opacity, which still controls picture hits.
     pipelineSheet.replaceSync(
       ":root { color-scheme: dark !important; } :where(:root) { color: #000; }" +
         `html, body, ${ROOT_COMPOSITION} { background: transparent !important; }` +
         (drawn.length
-          ? `${ROOT_COMPOSITION} > video:is(${drawn.join(", ")}) { opacity: 0 !important; }`
+          ? `${ROOT_COMPOSITION} > video:is(${drawn.join(", ")}) { filter: opacity(0) !important; }`
           : ""),
     );
   };
@@ -1915,8 +1919,8 @@ function installPreviewBridge(
     }
     if (rampFiles.size) watchRamp(media);
   };
-  const rootMedia = (kind: "video" | "audio") =>
-    document.querySelectorAll<HTMLMediaElement>(
+  const rootMedia = <Kind extends "video" | "audio">(kind: Kind) =>
+    document.querySelectorAll<HTMLElementTagNameMap[Kind]>(
       `${ROOT_COMPOSITION} > ${kind}`,
     );
   /** Sound near the playhead stays loaded; the rest waits until the playhead comes near. */
@@ -1957,7 +1961,7 @@ function installPreviewBridge(
     if (!pipelineActive) return false;
     let released = false;
     for (const video of rootMedia("video"))
-      if (drawnByPipeline(video)) park(video);
+      if (drawnByPipeline(video) && !editPreloads.has(video)) park(video);
       else if (parked.has(video)) {
         unpark(video, false);
         released = true;
@@ -2185,10 +2189,12 @@ function installPreviewBridge(
     for (const video of hidden) video.removeAttribute("data-cutroom-held");
     const videos = Array.from(document.querySelectorAll("video")).filter(
       (video) =>
+        (!pipelineActive || !drawnByPipeline(video)) &&
         video.checkVisibility({
           checkOpacity: true,
           checkVisibilityCSS: true,
-        }) && !awaitingProxy(video),
+        }) &&
+        !awaitingProxy(video),
     );
     for (const video of hidden) video.setAttribute("data-cutroom-held", "");
     return videos;
