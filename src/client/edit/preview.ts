@@ -282,12 +282,14 @@ export async function commitGradePreview(commit: () => Promise<boolean>) {
   updateGradeDraft(null);
 }
 
-/** A mixer strip's gain while its fader moves, by strip key; Main's is a trim on its saved gain. */
-type MixDraft = { strip: string; volume: number };
+export type MixScope = { projectId: string; composition: string };
+/** Main drafts trim its saved gain. Track and bus drafts use absolute gain. */
+type MixDraft = MixScope & { strip: string; volume: number };
 const mixTargets = new Set<(draft: MixDraft) => void>();
-/** Heard at once in every preview document, before anything is saved. */
-export function previewMix(strip: string, volume: number) {
-  for (const target of mixTargets) target({ strip, volume });
+/** Heard in the playing and incoming previews of the composition being edited. */
+export function previewMix(scope: MixScope, strip: string, volume: number) {
+  const draft = { ...scope, strip, volume };
+  for (const target of mixTargets) target(draft);
 }
 
 /** Shift+D shows every clip ungraded in the viewer, as Resolve's bypass does, until pressed again. */
@@ -298,7 +300,11 @@ export const useGradeBypass = create<{ bypass: boolean }>(() => ({
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
 export function connectPreview(
   frame: HTMLIFrameElement,
-  { onUnload, onRampFailure }: { onUnload(): void; onRampFailure(): void },
+  {
+    onUnload,
+    onRampFailure,
+    mixScope,
+  }: { onUnload(): void; onRampFailure(): void; mixScope: MixScope },
 ) {
   let state: PreviewState = {
     ready: false,
@@ -630,8 +636,15 @@ export function connectPreview(
   const bypass = ({ bypass }: { bypass: boolean }) => {
     send("grade-bypass", { bypass });
   };
-  const mixDraft = (draft: MixDraft) => send("mix-draft", draft);
+  const mixDraft = ({ projectId, composition, strip, volume }: MixDraft) => {
+    if (
+      projectId === mixScope.projectId &&
+      composition === mixScope.composition
+    )
+      send("mix-draft", { strip, volume });
+  };
   mixTargets.add(mixDraft);
+  let unwatchStripMetering = () => {};
   let unfollowBypass = () => {};
   const observe = (clipId: string | null) =>
     send("observe-position", {
@@ -696,6 +709,7 @@ export function connectPreview(
       preparingSource = null;
       usePreparing.setState({ copies: null });
     }
+    unwatchStripMetering();
     send("meter", { enabled: false });
     closing.abort();
     if (active) audioLevels.publish({ l: 0, r: 0, playing: false });
@@ -811,7 +825,10 @@ export function connectPreview(
       pictureTarget = picture;
       observers.add(observe);
       observe(observedClip);
-      send("meter", { enabled: true });
+      unwatchStripMetering();
+      unwatchStripMetering = audioLevels.watchStripMetering((strips) =>
+        send("meter", { enabled: true, strips }),
+      );
     },
     get state() {
       return state;

@@ -586,6 +586,7 @@ export function ProjectTimeline({
         mixer={
           mixerOpen ? (
             <Mixer
+              key={`${projectId}:${view.composition}`}
               projectId={projectId}
               composition={view.composition}
               timeline={view.timeline}

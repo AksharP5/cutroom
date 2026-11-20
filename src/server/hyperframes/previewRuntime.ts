@@ -99,7 +99,7 @@ export function previewRuntimeScript() {
     meter,
     // `pre` meters clips that play through a bus as they enter it, by their track, so a track
     // whose clips all go to buses still shows what comes from it. Its taps live while metering.
-    "window.__hf.audioMeter=(()=>{let T=new Map;return{start:()=>M.startMetering(),stop:()=>{M.stopMetering();for(let t of T.values())t.dispose();T.clear()},read:()=>M.readLevels()," +
+    "window.__hf.audioMeter=(()=>{let T=new Map;function clear(){for(let t of T.values())t.dispose();T.clear()}return{start:()=>M.startMetering(),stop:()=>{M.stopMetering();clear()},clearPre:clear,read:()=>M.readLevels()," +
       "fade:(t,n)=>{let r=t===null?M._busOut:M._groups.get(t)?.fader;r&&M._ctx&&r.gain.setTargetAtTime(n,M._ctx.currentTime,.004)}," +
       "faders:t=>{let n={};for(let r of t){let o=M._groups.get(r);o&&(n[r]=o.fader.gain.value)}return n}," +
       'pre:()=>{let n={};for(let r of M._activeSources){let o=r.el,g=o?.getAttribute?.("data-audio-group"),e=g?o.ownerDocument.getElementById(g):null,k=o?.getAttribute?.("data-track-index");if(!e||e.tagName.toLowerCase()!=="hf-audio-group"||e.hasAttribute("data-cutroom-track")||k==null||!r.gainNode||!M._ctx)continue;let p=T.get(r);p||(p=Ph(M._ctx,r.gainNode),T.set(r,p));let v=p.read(),c=n[k];n[k]=c?{l:Math.max(c.l,v.l),r:Math.max(c.r,v.r)}:v}for(let[r,p]of T)M._activeSources.includes(r)||(p.dispose(),T.delete(r));return n}}})()',

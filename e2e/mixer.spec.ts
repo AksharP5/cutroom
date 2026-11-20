@@ -176,6 +176,86 @@ test("bus solo and Main gain are saved, named in the export notice and heard in 
   expect(db).toBeCloseTo(-6, 0);
 });
 
+test("switching compositions discards a pending keyboard fader change", async ({
+  page,
+  request,
+}) => {
+  const { project, source } = await bench(request, "Mixer composition switch");
+  const index = join(project.path, "index.html");
+  const child = join(project.path, "child.html");
+  const rootSource = source.replace(
+    "</main>",
+    '<div id="child-host" class="clip" data-composition-id="child" data-composition-src="child.html" data-start="0" data-duration="2" data-track-index="0"></div></main>',
+  );
+  const childSource =
+    '<template><main data-composition-id="child" data-no-timeline data-width="320" data-height="240" data-duration="2"></main></template>';
+  await writeFile(index, rootSource);
+  await writeFile(child, childSource);
+  const mixer = await openMixer(page, project.id);
+  await page.locator('[data-clip="child-host"]').dblclick();
+  const path = page.getByRole("navigation", { name: "Composition" });
+  await expect(path).toHaveText(/child/);
+  const main = mixer.getByRole("group", { name: "Main" });
+  await expect(main.getByRole("slider")).toBeVisible();
+
+  // Issue the key and switch in the same browser task so even a slow runner beats the debounce.
+  const drafted = await page.evaluate(() => {
+    const strip = document.querySelector('[data-strip="main"]')!;
+    const cap = strip.querySelector('[role="slider"]')!;
+    cap.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    const value = strip.querySelector(".mixer-value")?.textContent;
+    document.querySelector<HTMLButtonElement>(".edit-path-step")!.click();
+    return value;
+  });
+  expect(drafted).toBe("-1.0");
+  await expect(path).toBeHidden();
+  // The old debounce would have fired by now, saving the gain onto the new composition.
+  await page.waitForTimeout(450);
+  await expect(main.locator(".mixer-value")).toHaveText("0.0");
+  expect(await readFile(index, "utf8")).toBe(rootSource);
+  expect(await readFile(child, "utf8")).toBe(childSource);
+});
+
+test("closing the mixer keeps the Main meter while strip samples stop", async ({
+  page,
+  request,
+}) => {
+  const { project } = await bench(request, "Mixer meter subscription");
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-preview-ready",
+  );
+  const html = page.locator("html");
+  await page.evaluate(() => {
+    window.addEventListener("message", ({ data }) => {
+      if (data?.source !== "cutroom-preview" || data.type !== "levels") return;
+      if (!data.playing || data.r <= 0) return;
+      document.documentElement.dataset.mixerLevels =
+        data.strips?.["bus:voices"]?.r > 0 ? "strips" : "main";
+    });
+  });
+  await seekFrame(page, 60);
+  await page.getByRole("button", { name: "Play forward", exact: true }).click();
+  await expect(html).toHaveAttribute("data-mixer-levels", "main");
+
+  const toggle = page.getByRole("button", { name: "Mixer", exact: true });
+  await toggle.click();
+  await expect(html).toHaveAttribute("data-mixer-levels", "strips");
+  await toggle.click();
+  await expect(html).toHaveAttribute("data-mixer-levels", "main");
+
+  await toggle.click();
+  const mixer = page.getByRole("region", { name: "Mixer" });
+  const solo = mixer.getByRole("button", { name: "Solo A2" });
+  await solo.click();
+  await expect(solo).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    mixer.getByRole("group", { name: "Voices" }),
+  ).not.toHaveAttribute("data-quiet");
+});
+
 test("New bus routes the selection, a clip dropped on a strip joins it, and Delete bus returns them", async ({
   page,
   request,

@@ -28,6 +28,7 @@ import { parseGain } from "../edit/inspector/fields";
 import { FxRack } from "../edit/inspector/FxRack";
 import { audioLevels } from "../edit/levels";
 import { previewMix } from "../edit/preview";
+import type { MixScope } from "../edit/preview";
 import { editTimeline, useTimeline } from "../edit/timeline";
 import { openFile } from "../edit/code/code";
 import { showToast, useWorkspace } from "../workspace";
@@ -154,13 +155,15 @@ export function Mixer({
     open?: string;
   } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  useEffect(() => {
+    audioLevels.setStripMetering(true);
+    return () => audioLevels.setStripMetering(false);
+  }, []);
   const selection = useTimeline((state) => state.selection);
   const edit = (label: string, commands: CommandInput[]) =>
     void editTimeline(projectId, label, () => commands);
 
   const mix = trackMix(timeline);
-  const anySolo =
-    mix.soloGroups.size > 0 || timeline.tracks.some((t) => t.solo);
   const groups = timeline.authoredAudioGroups ?? [];
   const lockedTrack = new Set(
     timeline.tracks.filter((track) => track.locked).map(({ index }) => index),
@@ -197,7 +200,7 @@ export function Mixer({
         !track.muted &&
         (sounds.length
           ? sounds.every((clip) => mixSilences(mix, clip))
-          : anySolo && !track.solo),
+          : mix.solo && !track.solo),
       volume: track.volume,
       floor: 0,
       faderOff: routed.length
@@ -307,7 +310,11 @@ export function Mixer({
       ),
       muted: group.muted,
       solo: group.solo,
-      quiet: anySolo && !group.solo && !group.muted,
+      quiet:
+        mix.solo &&
+        !group.solo &&
+        !group.muted &&
+        !members.some((clip) => clip.enabled && !mixSilences(mix, clip)),
       volume: group.volume,
       floor: 0,
       automated: group.automated,
@@ -342,6 +349,7 @@ export function Mixer({
     quiet: false,
     volume: main.volume,
     floor: MIN_MAIN_VOLUME,
+    faderOff: timeline.main?.sourceRestriction,
     onVolume: (volume) => edit(`Main gain`, [{ type: "setMaster", volume }]),
     onFx: (label, fx) => edit(label, [{ type: "setMaster", fx }]),
   };
@@ -377,10 +385,12 @@ export function Mixer({
   };
 
   const open = rack && strips.find(({ key }) => key === rack.key);
+  const scope = { projectId, composition };
   const strip = (model: StripModel) => (
     <Strip
       key={model.key}
       model={model}
+      scope={scope}
       renaming={model.bus !== undefined && renaming === model.bus.id}
       onRenaming={(active) => setRenaming(active ? model.bus!.id : null)}
       onRack={(open) => setRack({ key: model.key, open })}
@@ -440,6 +450,7 @@ function outline(root: HTMLElement | null, ids: readonly string[]) {
 
 function Strip({
   model,
+  scope,
   renaming,
   onRenaming,
   onRack,
@@ -447,6 +458,7 @@ function Strip({
   rootRef,
 }: {
   model: StripModel;
+  scope: MixScope;
   renaming: boolean;
   onRenaming(active: boolean): void;
   onRack(open?: string): void;
@@ -579,7 +591,7 @@ function Strip({
           </button>
         )}
       </div>
-      <Fader model={model} />
+      <Fader model={model} scope={scope} />
     </div>
   );
 }
@@ -588,7 +600,7 @@ function Strip({
  * The fader, its scale, the strip's meter and its value. A drag moves the cap and the value in
  * the same frame, transform only, and sets the gain the preview plays on every pointer event.
  */
-function Fader({ model }: { model: StripModel }) {
+function Fader({ model, scope }: { model: StripModel; scope: MixScope }) {
   const travel = useRef<HTMLDivElement>(null);
   const cap = useRef<HTMLDivElement>(null);
   const value = useRef<HTMLSpanElement>(null);
@@ -614,7 +626,8 @@ function Fader({ model }: { model: StripModel }) {
   useLayoutEffect(() => {
     if (cap.current) cap.current.style.transform = "";
     if (value.current) value.current.textContent = valueText(volume);
-    if (drafted.current && model.kind !== "main") previewMix(model.key, volume);
+    if (drafted.current && model.kind !== "main")
+      previewMix(scope, model.key, volume);
     drafted.current = false;
   }, [volume, model.key, model.kind]);
 
@@ -625,7 +638,7 @@ function Fader({ model }: { model: StripModel }) {
       cap.current.style.transform = `translateY(${(faderAt(next) - faderAt(volume)) * height}px)`;
     }
     if (value.current) value.current.textContent = valueText(next);
-    previewMix(model.key, model.kind === "main" ? next / volume : next);
+    previewMix(scope, model.key, model.kind === "main" ? next / volume : next);
     drafted.current = true;
   };
   const reset = () => {
@@ -633,7 +646,13 @@ function Fader({ model }: { model: StripModel }) {
     drafted.current = false;
   };
   const commit = (next: number) => {
-    if (next === volume) return reset();
+    const open = useTimeline.getState();
+    if (
+      next === volume ||
+      scope.projectId !== open.projectId ||
+      scope.composition !== open.composition
+    )
+      return reset();
     model.onVolume(next);
     // The editor shows an edit it takes at once; one it refused leaves the saved gain.
     requestAnimationFrame(() => {
@@ -647,7 +666,21 @@ function Fader({ model }: { model: StripModel }) {
     held?.release();
     return held;
   };
-  useEffect(() => () => void end(), []);
+  useEffect(
+    () => () => {
+      end();
+      window.clearTimeout(keys.current?.timer);
+      keys.current = null;
+      if (drafted.current)
+        previewMix(
+          scope,
+          model.key,
+          model.kind === "main" ? 1 : shownVolume.current,
+        );
+      drafted.current = false;
+    },
+    [],
+  );
   useAutomatedFader(model, cap, value, travel);
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {

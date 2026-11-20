@@ -53,6 +53,8 @@ interface PreviewWindow extends DiagnosticWindow {
       faders(ids: string[]): Record<string, number>;
       /** Peaks of clips entering a bus, by their track index. */
       pre(): Record<string, { l: number; r: number }>;
+      /** Disconnect those taps while the mixer is closed. */
+      clearPre(): void;
     };
     /** HyperFrames' colour grading: graded pictures, and a compare that shows their source. */
     colorGrading?: {
@@ -1454,6 +1456,7 @@ function installPreviewBridge(
     }
   };
   let metering = false;
+  let stripMetering = false;
   let animation = 0;
   /** A group's mixer strip: `track:<index>` for a Cutroom track bus, `bus:<id>` for a bus. */
   const stripOf = (id: string) => {
@@ -1468,27 +1471,30 @@ function installPreviewBridge(
     meter?.start();
     const read = win.__player?.isPlaying() ? meter?.read() : null;
     const level = read?.master;
-    const strips: Record<string, { l: number; r: number }> = {};
-    for (const [id, group] of Object.entries(read?.groups ?? {})) {
-      const strip = stripOf(id);
-      if (strip) strips[strip] = group;
+    let details;
+    if (stripMetering && meter && read) {
+      const strips: Record<string, { l: number; r: number }> = {};
+      for (const [id, group] of Object.entries(read.groups)) {
+        const strip = stripOf(id);
+        if (strip) strips[strip] = group;
+      }
+      // A track's clips that play through buses still show on the track's strip.
+      for (const [track, level] of Object.entries(meter.pre())) {
+        const shown = strips[`track:${track}`];
+        strips[`track:${track}`] = shown
+          ? { l: Math.max(shown.l, level.l), r: Math.max(shown.r, level.r) }
+          : level;
+      }
+      const automated = [
+        ...document.querySelectorAll(
+          "hf-audio-group[data-automation]:not([data-cutroom-track])",
+        ),
+      ].map((group) => group.id);
+      details = {
+        strips,
+        ...(automated.length && { faders: meter.faders(automated) }),
+      };
     }
-    // A track's clips that play through buses still show on the track's strip.
-    for (const [track, level] of Object.entries(
-      read ? (meter?.pre() ?? {}) : {},
-    )) {
-      const shown = strips[`track:${track}`];
-      strips[`track:${track}`] = shown
-        ? { l: Math.max(shown.l, level.l), r: Math.max(shown.r, level.r) }
-        : level;
-    }
-    const automated = read
-      ? [
-          ...document.querySelectorAll(
-            "hf-audio-group[data-automation]:not([data-cutroom-track])",
-          ),
-        ].map((group) => group.id)
-      : [];
     if (win.__player?.isPlaying())
       parent.postMessage(
         {
@@ -1506,8 +1512,7 @@ function installPreviewBridge(
         playing: Boolean(win.__player?.isPlaying()),
         l: level?.l ?? 0,
         r: level?.r ?? 0,
-        strips,
-        faders: automated.length ? (meter?.faders(automated) ?? {}) : {},
+        ...details,
       },
       "*",
     );
@@ -3930,14 +3935,20 @@ function installPreviewBridge(
           // playhead seek then restores the picture, even when the source is still loading.
           pictureVersion += 1;
           return;
-        case "meter":
+        case "meter": {
           if (!("enabled" in data) || typeof data.enabled !== "boolean") return;
           metering = data.enabled;
+          const showStrips =
+            metering && "strips" in data && data.strips === true;
+          if (metering && stripMetering && !showStrips)
+            win.__hf?.audioMeter?.clearPre();
+          stripMetering = showStrips;
           cancelAnimationFrame(animation);
           animation = 0;
           if (metering) levels();
           else win.__hf?.audioMeter?.stop();
           break;
+        }
         case "play":
           clearEditPicture();
           pictureVersion += 1;
