@@ -746,6 +746,123 @@ for (const mode of playbackModes)
     }
   });
 
+test("a GPU hover draws the take's source frame before the original index arrives", async ({
+  page,
+  request,
+}, testInfo) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Cold take", width: 640, height: 360, duration: 4 },
+      })
+    ).json(),
+  );
+  const bits = Array.from(
+    { length: 8 },
+    (_, bit) =>
+      `drawbox=x=${bit * 80}:y=90:w=80:h=180:color=white:t=fill:enable='eq(mod(floor(n/${2 ** bit})\\,2)\\,1)'`,
+  );
+  for (const [file, source, rate] of [
+    ["first.mp4", "red", 30],
+    ["alternate.mp4", "black", 24],
+  ] as const) {
+    await run("ffmpeg", [
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      `color=${source}:s=640x360:r=${rate}:d=4`,
+      ...(file === "alternate.mp4" ? ["-vf", bits.join(",")] : []),
+      "-c:v",
+      "libx264",
+      "-threads",
+      "2",
+      "-preset",
+      "ultrafast",
+      "-movflags",
+      "+faststart",
+      join(project.path, file),
+    ]);
+  }
+  const versions = JSON.stringify([
+    { name: "First", src: "first.mp4", sourceIn: 0 },
+    { name: "Alternate", src: "alternate.mp4", sourceIn: 24, sourceFps: 24 },
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><head></head><body><main data-composition-id="main" data-width="640" data-height="360" data-duration="4" data-fps="30"><video id="shot" src="first.mp4" muted data-start="1" data-duration="2" data-track-index="0" data-cutroom-versions='${versions}' data-cutroom-version-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video></main></body></html>`,
+  );
+  // Have the existing proxy on disk while holding the original's browser range requests.
+  await expect
+    .poll(async () => {
+      const response = await request.get(
+        `/api/cutroom/projects/${project.id}/media/scrub?path=alternate.mp4`,
+      );
+      return response.status();
+    })
+    .toBe(200);
+  const original = Promise.withResolvers<void>();
+  let originalRequested = false;
+  await page.route("**/media/source?path=alternate.mp4", async (route) => {
+    originalRequested = true;
+    await original.promise;
+    await route.continue();
+  });
+  try {
+    await page.addInitScript(() => {
+      if (window === window.top)
+        localStorage.setItem("cutroom.footagePipeline", "true");
+    });
+    await page.goto(`/#project/${project.id}`);
+    await seekFrame(page, 50);
+    const stage = page.locator(".edit-stage");
+    const canvas = stage.locator(".edit-pipeline");
+    await expect(stage).toHaveAttribute("data-pipeline", "on");
+    await page.locator(".tl-versions").click();
+    const rows = page.getByRole("menuitemradio");
+    await expect(rows).toHaveText([/First/, /Alternate/]);
+    await rows.nth(1).hover();
+    await expect.poll(() => originalRequested).toBe(true);
+    await expect(canvas).toHaveAttribute("data-standin", "true");
+    await expect(canvas).toHaveAttribute("data-frame", "30");
+    const png = await canvas.screenshot({
+      path: testInfo.outputPath("source-frame-24.png"),
+    });
+    const sourceFrame = await page.evaluate(async (base64) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${base64}`;
+      await image.decode();
+      const ctx = new OffscreenCanvas(8, 1).getContext("2d")!;
+      for (let bit = 0; bit < 8; bit++)
+        ctx.drawImage(
+          image,
+          Math.floor(((bit + 0.5) * image.width) / 8),
+          Math.floor(image.height / 2),
+          1,
+          1,
+          bit,
+          0,
+          1,
+          1,
+        );
+      const pixels = ctx.getImageData(0, 0, 8, 1).data;
+      let frame = 0;
+      for (let bit = 0; bit < 8; bit++)
+        if (pixels[bit * 4]! > 128) frame |= 1 << bit;
+      return frame;
+    }, png.toString("base64"));
+    expect(sourceFrame).toBe(24);
+    original.resolve();
+    await expect(canvas).toHaveAttribute("data-standin", "false");
+    await page.keyboard.press("Escape");
+    await expect(canvas).toHaveAttribute("data-frame", "50");
+    await expect.poll(() => stageColour(page, stage)).toBe("red");
+  } finally {
+    original.resolve();
+  }
+});
+
 test("a 4K alternate stays on native playback while a smaller take uses the GPU", async ({
   page,
   request,

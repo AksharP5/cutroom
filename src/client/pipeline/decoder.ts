@@ -233,6 +233,11 @@ export class SourceDecoder {
     return this.#track.shown.length;
   }
 
+  get firstTime() {
+    const { shown, samples } = this.#track;
+    return samples[shown[0]!]!.time;
+  }
+
   /** The presentation index shown at a media time, as a paused `<video>` shows it. */
   indexAt(time: number) {
     const { shown, samples } = this.#track;
