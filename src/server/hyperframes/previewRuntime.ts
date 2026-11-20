@@ -45,8 +45,8 @@ export function previewRuntimeScript() {
     // flush style across the composition, even when the element is far from the playhead.
     // Take one animation snapshot for both adapters, then look up effects by their target.
     [
-      'dt=(u=!1)=>{let p=0;for(let h of e.deterministicAdapters){let b=u?h.getAnimationCycleEndSeconds:h.getInferredDurationSeconds;if(typeof b!=="function")continue;let v=null;try{v=b()}',
-      'dt=(u=!1)=>{let p=0,animations=a3();for(let h of e.deterministicAdapters){let b=u?h.getAnimationCycleEndSeconds:h.getInferredDurationSeconds;if(typeof b!=="function")continue;let v=null;try{v=b(animations)}',
+      'dt=(u=!1)=>{let p=0;for(let h of e.deterministicAdapters){let b=u?h.getAnimationCycleEndSeconds:h.getInferredDurationSeconds;if(typeof b!="function")continue;let v=null;try{v=b()}',
+      'dt=(u=!1)=>{let p=0,animations=a3();for(let h of e.deterministicAdapters){let b=u?h.getAnimationCycleEndSeconds:h.getInferredDurationSeconds;if(typeof b!="function")continue;let v=null;try{v=b(animations)}',
     ],
     [
       "getInferredDurationSeconds:()=>{let m=0;for(let g of t){if(!g.el.isConnected)continue;let x=i(g.el);for(let y of n(g.el)){let E=l(y,x);E.endSeconds!=null&&(m=Math.max(m,E.endSeconds))}}return m>0?m:null}",
@@ -124,7 +124,7 @@ export function previewRuntimeScript() {
   for (const [before] of runtimeChanges)
     if (source.split(before).length !== 2)
       throw new Error(
-        "Cutroom's media preview adapters no longer match HyperFrames 0.9.26.",
+        `Cutroom's media preview adapter no longer matches HyperFrames 0.9.26 near ${before.slice(0, 64)}.`,
       );
   script = source
     // A standalone preview fetches its children. Use the same template and default order as the compiler.
