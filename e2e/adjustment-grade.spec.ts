@@ -8,7 +8,7 @@ import { ExportJobSchema } from "../src/shared/export";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { test, expect } from "./fixtures";
-import { afterPaint, seekFrame } from "./position-helpers";
+import { seekFrame } from "./position-helpers";
 import { waitForPreview } from "./preview-ready";
 
 const ffmpeg = promisify(execFile);
@@ -153,8 +153,11 @@ test("grades the dissolve and lower title in native preview and MP4", async ({
     if (self === top) localStorage.setItem("cutroom.footagePipeline", "false");
   });
   await page.goto("/#project/" + project.id);
-  await waitForPreview(page);
-  await afterPaint(page, () => seekFrame(page, at));
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, at);
+  await expect
+    .poll(async () => (await viewerPixels(page))[1])
+    .toEqual([72, 104, 24]);
   const graded = await viewerPixels(page);
   expect(graded[0]![0]).toBeGreaterThan(35);
   expect(graded[0]![2]).toBeGreaterThan(35);
@@ -215,8 +218,8 @@ test("explains the unavailable preview and still opens the layer's Colour contro
   const project = await projectWithAdjustment(request);
   await page.addInitScript(disableNativeAdjustment);
   await page.goto("/#project/" + project.id);
-  await waitForPreview(page);
-  await afterPaint(page, () => seekFrame(page, at));
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, at);
   await expect(
     page.getByText(
       "This adjustment layer's grade appears in export and in the desktop app.",
@@ -237,8 +240,8 @@ test("grades lower footage in the GPU pipeline without HTML-in-Canvas", async ({
   const project = await projectWithAdjustment(request, false);
   await page.addInitScript(disableNativeAdjustment);
   await page.goto("/#project/" + project.id);
-  await waitForPreview(page);
-  await afterPaint(page, () => seekFrame(page, 60));
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, 60);
   await expect(page.locator(".edit-stage")).toHaveAttribute(
     "data-pipeline",
     "on",
@@ -246,8 +249,8 @@ test("grades lower footage in the GPU pipeline without HTML-in-Canvas", async ({
   const graded = await viewerPixels(page);
   await page.keyboard.press("Shift+d");
   await expect
-    .poll(async () => (await viewerPixels(page))[0]![0])
-    .toBeGreaterThan(graded[0]![0]! + 30);
+    .poll(async () => (await viewerPixels(page))[0]![2])
+    .toBeGreaterThan(graded[0]![2]! + 60);
   const bypassed = await viewerPixels(page);
   const error = graded[0]!.map((value, i) =>
     Math.abs(value - bypassed[0]![i]! * 0.5),
