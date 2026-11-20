@@ -540,12 +540,12 @@ export function registerRenderIsolation(
             "    log: c.log,\n    ...cutroomStage\n  })).catch((error) => { throw new ExportStageError('process_audio', error); });\n}\nasync function extractPlanVideos",
             url,
           );
-          // Cutroom writes the range's audio itself. Chunks muxing the plan mix
-          // would cut it at composition times it no longer starts at.
+          // The range has its own audio. Scoped media and adjustment grades need
+          // video frames only for the capture runs.
           source = replaceOnce(
             source,
             "      { chunksCarryAudio: true }\n    );",
-            `      { chunksCarryAudio: false${range.scopedMedia ? ", deferVideoExtraction: true" : ""} }\n    );`,
+            `      { chunksCarryAudio: false${adjustment || range.scopedMedia ? ", deferVideoExtraction: true" : ""} }\n    );`,
             url,
           );
           source = replaceOnce(
