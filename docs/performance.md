@@ -700,7 +700,20 @@ Fader to sound, headed: a press on the Voices cap and one move from -30 dB to 0 
 
 A 60-step drag at one move per animation frame moved the cap on all 60 frames, with a 17.5 ms frame p95 and no frame over 25 ms.
 
-Meters, headed: 12 tracks playing tones, three of them through three buses, and Main, so 16 strips, for 5 s of 1x playback. Editor script time was 0.28 ms a frame with the mixer open and 0.29 ms with it closed; total main-thread task time was 3.63 ms against 1.94 ms. The bars move whole 3 px segments with transforms on their own layers, and a bar that did not change is not written. The first version clipped the lit segments with `clip-path`, which repainted them: 4.56 ms of task time a frame. Nothing runs while stopped.
+The original 16-strip tone run took 3.63 ms per frame of editor main-thread task time with the mixer open and 1.94 ms closed. Script accounted for 0.28 ms open and 0.29 ms closed. The extra 1.69 ms exceeded the 1 ms budget. The earlier `clip-path` version had taken 4.56 ms open.
+
+The retest used the same i5-14400F, headed Chromium 155.0.8059.84 on a 60 Hz XWayland display, and all 16 meters in view at 2760 × 1451 CSS pixels and 0.625 device scale. Twelve tracks played stereo tones, three through separate buses, plus Main. The moving-level fixture modulated the stereo tones and ran a volume lane on one bus. Each table row averages two five-second windows per state at 1×, after playback had settled. All windows delivered 300 editor animation-frame intervals, with a 16.8 ms p95. The values are Chromium DevTools `TaskDuration` and `ScriptDuration` in editor-renderer CPU milliseconds per interval, using `threadTicks`. Task time includes script.
+
+| Fixture and build                            | Open task | Closed task | Added task | Open script | Closed script |
+| -------------------------------------------- | --------: | ----------: | ---------: | ----------: | ------------: |
+| Steady tones, `f0197b27`                     |     4.568 |       2.527 |      2.040 |       0.272 |         0.266 |
+| Steady tones, grouped layers                 |     2.021 |       2.267 |     -0.246 |       0.256 |         0.230 |
+| Moving levels and automation, `f0197b27`     |     8.826 |       2.580 |      6.246 |       0.313 |         0.232 |
+| Moving levels and automation, grouped layers |     3.482 |       2.604 |      0.878 |       0.285 |         0.236 |
+
+The baseline trace for moving levels put 5.71 ms per frame into Chromium's layer building with the mixer open, and 0.78 ms closed. The scrolling strips and pinned Main now each have a shared compositing layer. The meter bars still move in 3 px segments, the peak lines in 1 px steps, and the 16 meters still use one sample subscription. Idle fader caps release their layer hints, and the automated cap reads its range on resize. Stopped and closed states were checked in the running editor.
+
+These figures cover the editor main thread. The sandboxed preview renderer, compositor, GPU, and time preempted by other processes are outside the measurement. A separate run with moving levels and fixed bus gains during heavier host load measured 6.468 ms open and 4.582 ms closed, with script at 0.561 ms and 0.433 ms respectively. That run exceeded the budget and had up to 38 editor intervals over 25 ms in five seconds. Some exploratory windows fell to about 1 Hz, consistent with Chromium's background throttling. The steady and automated runs in the table held display cadence throughout.
 
 ## Range exports
 

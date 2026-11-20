@@ -869,19 +869,28 @@ function useAutomatedFader(
   const id = model.automated && model.bus ? model.bus.id : null;
   const { volume } = model;
   useEffect(() => {
-    if (id === null) return;
-    return audioLevels.subscribe((level) => {
-      const gain = level.faders?.[id];
-      if (!cap.current || !travel.current || !value.current) return;
-      if (!level.playing || gain === undefined) {
-        cap.current.style.transform = "";
-        value.current.textContent = valueText(volume);
-        return;
-      }
-      const height = travel.current.clientHeight;
-      cap.current.style.transform = `translateY(${(faderAt(gain) - faderAt(volume)) * height}px)`;
-      value.current.textContent = valueText(gain);
+    const range = travel.current;
+    if (id === null || !range) return;
+    // A playback sample can update the cap without reading layout.
+    let height = range.clientHeight;
+    const resized = new ResizeObserver(() => {
+      height = range.clientHeight;
     });
+    resized.observe(range);
+    const unsubscribe = audioLevels.subscribe((level) => {
+      const gain = level.faders?.[id];
+      if (!cap.current || !value.current) return;
+      cap.current.style.transform =
+        level.playing && gain !== undefined
+          ? `translateY(${(faderAt(gain) - faderAt(volume)) * height}px)`
+          : "";
+      const text = valueText(level.playing ? (gain ?? volume) : volume);
+      if (value.current.textContent !== text) value.current.textContent = text;
+    });
+    return () => {
+      unsubscribe();
+      resized.disconnect();
+    };
   }, [id, volume, cap, value, travel]);
 }
 

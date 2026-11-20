@@ -41,6 +41,11 @@
   border-right: 0;
   border-left: var(--stroke-hair) solid var(--line);
 }
+/* Keep meter updates on the scrolling bank and pinned Main layers. */
+.mixer-scroll,
+.mixer-strip.main {
+  transform: translateZ(0);
+}
 .mixer-seam {
   flex: none;
   width: var(--stroke-hair);
@@ -179,7 +184,7 @@ input.mixer-rename {
 .mixer-scale span {
   position: absolute;
   right: 0;
-  translate: 0 -50%;
+  margin-top: -0.5em;
 }
 .mixer-track {
   position: absolute;
@@ -196,6 +201,8 @@ input.mixer-rename {
   border-radius: 2px;
   outline-offset: 2px;
   background: var(--text-secondary);
+}
+.mixer-fader:active .mixer-cap {
   will-change: transform;
 }
 .mixer-cap::after {
@@ -225,7 +232,7 @@ input.mixer-rename {
 .mixer-meter i {
   position: relative;
   width: 4px;
-  overflow: hidden;
+  overflow: clip;
   background: repeating-linear-gradient(
     to top,
     var(--meter-off) 0 2px,
@@ -235,7 +242,7 @@ input.mixer-rename {
 .main .mixer-meter i {
   width: 6px;
 }
-/* The lit segments slide in whole segments and the peak line moves: both on the compositor. */
+/* Slide the gradient by whole segments so the LEDs keep their height. */
 .mixer-meter span {
   position: absolute;
   inset: 0;
@@ -245,14 +252,12 @@ input.mixer-rename {
     var(--meter-on) 0 2px,
     transparent 2px 3px
   );
-  will-change: transform;
 }
 .mixer-meter b {
   position: absolute;
   inset: 0;
   transform: translateY(100%);
   background: linear-gradient(var(--meter-peak) 0 1px, transparent 1px);
-  will-change: transform;
 }
 .mixer-strip:is([data-muted], [data-quiet]) .mixer-meter span {
   background: repeating-linear-gradient(
