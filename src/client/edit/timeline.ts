@@ -10,6 +10,7 @@ import {
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
   AnimationFeedbackSchema,
+  EDIT_HISTORY_HEADER,
   TAB_ORIGIN_HEADER,
   CommandSchema,
   ClipboardSchema,
@@ -545,6 +546,7 @@ async function send(edit: Edit) {
     // user saw them; an agent may have moved them since, whether or not the revision is stale.
     if (anchorsChanged(edit.anchors, base.timeline)) throw changed;
     try {
+      let historyId: string | undefined;
       const result = await api(
         `${project(edit.projectId)}/commands`,
         TimelineViewSchema,
@@ -557,12 +559,15 @@ async function send(edit: Edit) {
           }),
           headers: { [TAB_ORIGIN_HEADER]: tabOrigin },
         },
+        (headers) => {
+          historyId = headers.get(EDIT_HISTORY_HEADER) ?? undefined;
+        },
       );
       if (useTimeline.getState().projectId === edit.projectId)
         answers.set(result.composition, result);
       if (isOpen(edit.projectId, result.composition))
         confirmed = { projectId: edit.projectId, view: result };
-      return result;
+      return { ...result, historyId };
     } catch (error) {
       if (!(error instanceof ApiError)) throw error;
       if (error.status === 409 && !retry) continue;

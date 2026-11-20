@@ -59,6 +59,7 @@ export async function api<T>(
   path: string,
   schema: z.ZodType<T>,
   init?: RequestInit,
+  onHeaders?: (headers: Headers) => void,
 ): Promise<T> {
   const response = await fetch(`/api/cutroom${path}`, {
     ...init,
@@ -82,7 +83,9 @@ export async function api<T>(
       value,
     );
   }
-  return schema.parse(value);
+  const data = schema.parse(value);
+  onHeaders?.(response.headers);
+  return data;
 }
 
 export function json(

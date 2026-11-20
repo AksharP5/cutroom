@@ -43,6 +43,7 @@ import {
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
   AnimationFeedbackSchema,
+  EDIT_HISTORY_HEADER,
   EDIT_SUMMARY_HEADER,
   TAB_ORIGIN_HEADER,
   TabOriginSchema,
@@ -1046,10 +1047,10 @@ export function createTimelineRoutes(
       const response = {
         ...result,
         ...(await reviews.changeSummary(project, batch.composition)),
-        historyId,
       };
-      // The committed history ID lets Undo target this edit's ripple feedback.
+      // Keep command metadata beside the timeline so a saved view matches a subsequent read.
       c.header(EDIT_SUMMARY_HEADER, encodedSummary);
+      if (historyId) c.header(EDIT_HISTORY_HEADER, historyId);
       const followup = async () => {
         // Give the committed edit's response a turn to flush before running source inspection.
         await Bun.sleep(0);
