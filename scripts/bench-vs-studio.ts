@@ -616,7 +616,7 @@ async function openToPicture(
   return { picture: picture - start, timeline: timeline - start };
 }
 
-/** Seeks by clicking the ruler over a shot, then waits for its picture. */
+/** Seeks into a shot, then waits for its source picture. */
 async function seekToShot(
   page: Page,
   ui: Adapter,
@@ -625,14 +625,60 @@ async function seekToShot(
   shot: number,
   fraction = 0.5,
 ) {
-  const box = (await ui.clip(page, `shot-${shot}`).boundingBox())!;
   const cast = await screencast(cdp);
-  await page.mouse.click(box.x + box.width * fraction, await ui.rulerY(page));
   const first = sourceFrame(shot);
   const end = first + shotFrames(shot);
-  const inShot = (n: number | null) => n !== null && n >= first && n < end;
-  const picture = await waitPicture(page, ui, cast, decoder, inShot, 10_000);
+  const layout = shots && shots[shot];
+  const offset = Math.floor(shotFrames(shot) * fraction);
+  let pressed = 0;
+  if (layout) {
+    // At Fit a shot can be narrower than two pixels. Enter the exact frame so the
+    // click position or current ruler zoom cannot land on a different shot.
+    const frame = layout.start + offset;
+    const seconds = Math.floor(frame / fps);
+    const digits = [0, Math.floor(seconds / 60), seconds % 60, frame % fps]
+      .map((part) => String(part).padStart(2, "0"))
+      .join("");
+    await page.getByRole("button", { name: /^Current time/ }).click();
+    await page
+      .getByRole("textbox", { name: "Go to time" })
+      .pressSequentially(digits);
+    pressed = Date.now();
+    await page.keyboard.press("Enter");
+  } else {
+    const box = (await ui.clip(page, `shot-${shot}`).boundingBox())!;
+    await page.mouse.click(box.x + box.width * fraction, await ui.rulerY(page));
+  }
+  const inShot = (number: number | null) =>
+    layout
+      ? number === first + offset
+      : number !== null && number >= first && number < end;
+  let picture = await waitPicture(
+    page,
+    ui,
+    cast,
+    decoder,
+    inShot,
+    10_000,
+    pressed,
+  );
   await cast.stop();
+  if (!picture && layout) {
+    // JPEG screencasts can lose a marker bit. Confirm the parked picture with a
+    // full-size PNG before treating an exact seek as a missed frame.
+    const pixels = (await page.screenshot()).toString("base64");
+    const [parked] = await decode(
+      decoder,
+      [{ time: Date.now(), data: pixels, deviceWidth: viewport.width }],
+      await ui.pictureBox(page),
+    );
+    if (parked && inShot(parked.number)) {
+      console.warn(
+        `Shot ${shot}: confirmed the parked picture in a full-size PNG.`,
+      );
+      picture = parked;
+    }
+  }
   if (!picture) {
     const shown = await decode(
       decoder,
@@ -644,7 +690,7 @@ async function seekToShot(
       .getAttribute("data-frame", { timeout: 300 })
       .catch(() => null);
     throw new Error(
-      `Seeking into shot ${shot} (media frames ${first} to ${first + clipSeconds * fps - 1}) saw ${shown.map((frame) => frame.number).join(", ")}; playhead ${await ui.playhead(page)}, pipeline frame ${drawn}.`,
+      `Seeking into shot ${shot} (media frames ${first} to ${end - 1}) saw ${shown.map((frame) => frame.number).join(", ")}; playhead ${await ui.playhead(page)}, pipeline frame ${drawn}.`,
     );
   }
   await sleep(400);
@@ -677,18 +723,26 @@ async function waitPicture(
 
 /** A 3 s ruler drag across cuts, about 60 pointer moves a second. */
 async function scrub(page: Page, ui: Adapter, cdp: CDPSession, decoder: Page) {
-  // At Fit seven cuts can be only a dozen pixels at 1,000 clips. Match the drag
-  // distance at both sizes so input quantization does not limit the picture count.
-  if (scale) await zoomTo(page, ui, ui.clip(page, "shot-10"), 80);
-  else {
-    await ui.fit(page);
-    await sleep(800);
+  await ui.fit(page);
+  await sleep(800);
+  const first = ui.clip(page, scale ? "shot-6" : "shot-10");
+  await seekToShot(page, ui, cdp, decoder, scale ? 6 : 10, 0.1);
+  if (scale) {
+    // At Fit seven cuts can be only a dozen pixels at 1,000 clips. Match the drag
+    // distance at both sizes, using the playhead as the zoom anchor.
+    for (let step = 0; step < 40; step++) {
+      if (((await first.boundingBox())?.width ?? 0) >= 80) break;
+      await page.keyboard.press("Control+=");
+      await sleep(60);
+    }
+    await sleep(450);
   }
-  await seekToShot(page, ui, cdp, decoder, 10, 0.1);
-  const from = (await ui.clip(page, "shot-10").boundingBox())!;
+  const from = (await first.boundingBox())!;
   const to = (await ui
-    .clip(page, scale ? "shot-17" : "shot-40")
+    .clip(page, scale ? "shot-13" : "shot-40")
     .boundingBox())!;
+  if (scale && (from.width < 75 || to.x >= viewport.width))
+    throw new Error("The ruler drag does not fit at the requested zoom.");
   const y = await ui.rulerY(page);
   const cast = await screencast(cdp);
   await page.mouse.move(from.x + from.width * 0.1, y);
@@ -739,7 +793,14 @@ async function playback(
   shot: number,
 ) {
   if (scale) await ui.fit(page);
-  await seekToShot(page, ui, cdp, decoder, shot, 0.1);
+  await seekToShot(
+    page,
+    ui,
+    cdp,
+    decoder,
+    shot,
+    scale && shot === 259 ? 12.5 / shotFrames(shot) : 0.1,
+  );
   const initial = await ui.playhead(page);
   const editorFrames = page.evaluate(async () => {
     const times: number[] = [];
@@ -1087,13 +1148,13 @@ async function selectorOf(ui: Adapter, page: Page, id: string) {
     );
 }
 
-/** Ctrl+wheel over the clip until it is wide enough for the gesture. */
-async function zoomTo(page: Page, ui: Adapter, clip: Locator, width = 160) {
+/** Ctrl+wheel over the clip until it is at least 160 px wide. */
+async function zoomTo(page: Page, ui: Adapter, clip: Locator) {
   await ui.fit(page);
   await sleep(800);
   for (let step = 0; step < 60; step++) {
     const box = await clip.boundingBox();
-    if (box && box.width >= width) break;
+    if (box && box.width >= 160) break;
     if (box)
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.keyboard.down("Control");
@@ -1103,7 +1164,7 @@ async function zoomTo(page: Page, ui: Adapter, clip: Locator, width = 160) {
   }
   await sleep(800);
   const box = await clip.boundingBox();
-  if (!box || box.width < width)
+  if (!box || box.width < 160)
     throw new Error("Could not zoom in on the clip.");
 }
 
