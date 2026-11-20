@@ -244,7 +244,7 @@ export type SourceMap = { c: number; tau: number; zero: number };
 /** The stored in-point and optional ramp offset, both in whole microseconds. */
 export type StoredSource = { mediaStart: number; offset?: number };
 
-function decimalFraction(value: string | number): ExactTime {
+export function decimalFraction(value: string | number): ExactTime {
   const [decimal = "", exponent] = String(value)
     .trim()
     .toLowerCase()
