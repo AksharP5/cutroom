@@ -997,7 +997,7 @@ Only one clip's versions are loaded at a time, and a clip holds at most 12, so t
 
 ### Footage and audio versions
 
-The open list warms the shown take and the next playable row. Native preview parks the other media elements and drops their sources. GPU playback shares the footage pipeline’s sample indices, frame grids and compressed-byte caches. It keeps a short decoder window for each of the two takes, borrowing the main decoder for the take that was already shown. Closing the list releases the audition decoders and any alternate source cache the timeline no longer uses. Sound stays in the preview's existing audio graph, with a 10 ms gain ramp between takes. Media versions do not warm just because a clip is selected.
+The open list warms the shown take and the next playable row. Native preview parks the other media elements and drops their sources. GPU playback shares the footage pipeline's sample indices, frame grids and compressed-byte caches. It keeps a short decoder window for each of the two takes, borrowing the main decoder for the take that was already shown. An existing scrub proxy can show a frame while a cold take decodes. Closing the list releases the audition decoders and the alternate source caches the timeline no longer uses. Sound stays in the preview's existing audio graph, with a 10 ms gain ramp between takes. Media versions do not warm just because a clip is selected.
 
 Nine localhost `setVersion` requests over the timeline command endpoint took 34.1 to 89.6 ms, with a 43.2 ms median. Each request saved the picture and its linked sound in one history step. This measurement ends at the server response.
 
@@ -1008,4 +1008,13 @@ The first browser pass used headless Chromium 155 at 1720 × 1050 and four playa
 | Native   |      53.9 ms |   33.9–71.1 ms |            747 MiB |          1,124 MiB |
 | GPU      |     128.1 ms | 111.3–310.4 ms |            793 MiB |          1,506 MiB |
 
-Both headless results exceeded the design's headed one-frame target. The GPU run exposed a gap in warm-up. It stopped fetching frames when a decoder could reach the requested frame, even if it had no pictures ready at that position. The decoder now advances its short window as the playhead moves, and uses low latency mode for alternate takes.
+The headed retest after limiting residency used the same single-slot fixture at 1720 × 1050. Each mode exercised nine hovers and three clicks without first hovering the target. Memory is Chromium PSS in MiB before opening the list, while comparing a take, and 300 ms after the version preview was replaced.
+
+| Playback | Hover median (range) | Click median (range) | PSS before / open / closed |
+| -------- | -------------------: | -------------------: | -------------------------: |
+| Native   | 33.4 ms (31.6–128.1) |  24.8 ms (22.0–32.2) |            692 / 799 / 787 |
+| GPU      |  22.5 ms (16.5–62.7) | 39.3 ms (27.6–127.9) |            788 / 998 / 950 |
+
+The headed results exceed the 15–20 ms hover target. Jumping past the next playable row can require opening and seeking a new decoder. A click at a paused position outside the warmed frames can require decoding from a keyframe. A stand-in depends on the scrub proxy already being available, and the measurement includes Chromium compositing the resulting picture.
+
+Set `CUTROOM_VERSION_EVIDENCE` to a scratch directory to record timings from `e2e/media-versions.spec.ts`. With `CUTROOM_VERSION_SCALE=100`, the fixture has 100 cuts, ten with four 1080p versions each. The test explicitly exercises native and GPU footage playback and records the first displayed frame of each alternate.

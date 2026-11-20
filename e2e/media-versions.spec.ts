@@ -124,66 +124,13 @@ async function timePicture(
     action === "hover" ? "pointerover" : "click",
   );
   const cdp = await page.context().newCDPSession(page);
+  const samples: { time: number; data: string }[] = [];
+  cdp.on("Page.screencastFrame", ({ data, metadata, sessionId }) => {
+    void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+    if (metadata.timestamp)
+      samples.push({ time: metadata.timestamp * 1000, data });
+  });
   try {
-    const latency = new Promise<number>((resolve, reject) => {
-      const timeout = setTimeout(
-        () => reject(new Error("The captured screen never showed " + color)),
-        3000,
-      );
-      cdp.on("Page.screencastFrame", ({ data, metadata, sessionId }) => {
-        void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
-        const at = (metadata.timestamp ?? 0) * 1000;
-        void page
-          .evaluate(
-            async ({ data, at, x, y, color }) => {
-              const start = Number(
-                document.documentElement.getAttribute("data-measure-pointer"),
-              );
-              if (!start || at < start) return null;
-              const image = new Image();
-              image.src = `data:image/jpeg;base64,${data}`;
-              await image.decode();
-              const canvas = document.createElement("canvas");
-              canvas.width = canvas.height = 1;
-              const ctx = canvas.getContext("2d")!;
-              ctx.drawImage(
-                image,
-                Math.floor(x * image.width),
-                Math.floor(y * image.height),
-                1,
-                1,
-                0,
-                0,
-                1,
-                1,
-              );
-              const pixel = ctx.getImageData(0, 0, 1, 1).data;
-              const index = { red: 0, lime: 1, blue: 2 }[color];
-              return pixel[index]! > 170 &&
-                [...pixel.slice(0, 3)].every(
-                  (value, channel) => channel === index || value < 80,
-                )
-                ? at - start
-                : null;
-            },
-            {
-              data,
-              at,
-              x: (stage.x + stage.width / 2) / viewport.width,
-              y: (stage.y + stage.height / 2) / viewport.height,
-              color,
-            },
-          )
-          .then(
-            (time) => {
-              if (time === null) return;
-              clearTimeout(timeout);
-              resolve(time);
-            },
-            () => {},
-          );
-      });
-    });
     await cdp.send("Page.startScreencast", {
       format: "jpeg",
       maxWidth: 640,
@@ -191,11 +138,61 @@ async function timePicture(
     });
     if (action === "hover") await target.hover();
     else await target.dispatchEvent("click");
-    return Math.round((await latency) * 10) / 10;
-  } finally {
+    await page.waitForTimeout(600);
     await cdp.send("Page.stopScreencast");
+  } finally {
     await cdp.detach();
   }
+  // Inspect the frames after capture so JPEG decoding cannot hold up the preview under test.
+  const latency = await page.evaluate(
+    async ({ samples, x, y, color }) => {
+      const start = Number(
+        document.documentElement.getAttribute("data-measure-pointer"),
+      );
+      const canvas = new OffscreenCanvas(1, 1);
+      const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+      const index = { red: 0, lime: 1, blue: 2 }[color];
+      for (const { data, time } of samples) {
+        if (!start || time < start) continue;
+        const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+        const image = await createImageBitmap(
+          new Blob([bytes], { type: "image/jpeg" }),
+        );
+        ctx.drawImage(
+          image,
+          Math.floor(x * image.width),
+          Math.floor(y * image.height),
+          1,
+          1,
+          0,
+          0,
+          1,
+          1,
+        );
+        image.close();
+        const pixel = ctx.getImageData(0, 0, 1, 1).data;
+        if (
+          pixel[index]! > 170 &&
+          [...pixel.slice(0, 3)].every(
+            (value, channel) => channel === index || value < 80,
+          )
+        )
+          return time - start;
+      }
+      return null;
+    },
+    {
+      samples,
+      x: (stage.x + stage.width / 2) / viewport.width,
+      y: (stage.y + stage.height / 2) / viewport.height,
+      color,
+    },
+  );
+  if (latency === null)
+    throw new Error(
+      `The captured screen never showed ${color} after ${action}`,
+    );
+  return Math.round(latency * 10) / 10;
 }
 
 const longProject = process.env.CUTROOM_VERSION_SCALE === "100";
@@ -237,6 +234,7 @@ for (const mode of playbackModes)
       });
       const projectId = project.id;
       for (const [index, take] of takes.entries()) {
+        if (longProject && index === 3) continue;
         const duration = index === 3 ? 1 : 6;
         await run("ffmpeg", [
           "-v",
@@ -327,6 +325,7 @@ for (const mode of playbackModes)
         ...more,
       ]);
       const measure =
+        longProject ||
         Boolean(comparison && mode !== "record") ||
         process.env.CUTROOM_VERSION_MEASURE === "1";
       const evidence = mode === "record" ? comparison : undefined;
@@ -353,28 +352,32 @@ for (const mode of playbackModes)
           projectId,
           clipId: "interview",
           versions: [
-            ...takes.map(({ name, src }, i) => ({
-              name,
-              src,
-              sourceIn: i === 1 ? 70 : 0,
-            })),
+            ...takes
+              .slice(0, longProject ? 3 : takes.length)
+              .map(({ name, src }, i) => ({
+                name,
+                src,
+                sourceIn: i === 1 ? 70 : 0,
+              })),
             ...(measure
               ? [{ name: "Closer", src: "interview.mp4", sourceIn: 24 }]
               : []),
           ],
         },
       );
-      expect(configured.warnings[0]?.warning).toContain(
-        "Short cue is 2:00 shorter",
-      );
-      const refused = await call("clip_version_show", {
-        projectId,
-        clipId: "interview",
-        version: "Short cue",
-      });
-      expect(refused.isError).toBe(true);
-      expect(JSON.stringify(refused.content)).toContain("2:00 shorter");
-      const count = measure ? "5" : "4";
+      if (!longProject) {
+        expect(configured.warnings[0]?.warning).toContain(
+          "Short cue is 2:00 shorter",
+        );
+        const refused = await call("clip_version_show", {
+          projectId,
+          clipId: "interview",
+          version: "Short cue",
+        });
+        expect(refused.isError).toBe(true);
+        expect(JSON.stringify(refused.content)).toContain("2:00 shorter");
+      }
+      const count = measure && !longProject ? "5" : "4";
       if (longProject)
         for (let i = 0; i < 12 && !(await badge.isVisible()); i++)
           await page
@@ -390,9 +393,10 @@ for (const mode of playbackModes)
       const wide = menu.getByRole("menuitemradio", { name: /Wide/ });
       const preview = page.frameLocator("iframe[data-live]");
       await expect(second).toContainText("+2:10");
-      await expect(
-        menu.getByRole("menuitemradio", { name: /Short cue/ }),
-      ).toBeDisabled();
+      if (!longProject)
+        await expect(
+          menu.getByRole("menuitemradio", { name: /Short cue/ }),
+        ).toBeDisabled();
       await expect(preview.locator("video[data-cutroom-version]")).toHaveCount(
         measure ? 4 : 3,
       );
