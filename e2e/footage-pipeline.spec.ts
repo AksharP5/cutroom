@@ -352,6 +352,38 @@ async function cutsProject(
   return created;
 }
 
+test("a click on GPU footage selects the clip the viewer draws", async ({
+  page,
+  request,
+}) => {
+  const created = await project(request, { num: 30, den: 1 }, () =>
+    [
+      `<video id="picture" src="a.mp4" muted data-start="0" data-duration="3" data-track-index="0" style="${fill}"></video>`,
+      `<video id="transparent" src="a.mp4" muted data-start="0" data-duration="3" data-track-index="1" style="${fill};opacity:0"></video>`,
+    ].join("\n"),
+  );
+  await numbered(join(created.path, "a.mp4"), "30/1");
+  await page.goto(`/#project/${created.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-pipeline", "on");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  // The visible frame belongs to the parent canvas once the isolated preview has
+  // given up the element's media. The fully transparent clip cannot take the hit.
+  await expect
+    .poll(() =>
+      page
+        .frameLocator("iframe[data-live]")
+        .locator("#picture")
+        .evaluate((video: HTMLVideoElement) => video.preload),
+    )
+    .toBe("none");
+  await page.locator(".edit-picture").click({ position: { x: 60, y: 60 } });
+  await expect(page.locator(".edit-select-outline")).toHaveAttribute(
+    "data-outlined",
+    "picture",
+  );
+});
+
 test("the default viewer shows footage when WebGL2 is unavailable", async ({
   page,
   request,

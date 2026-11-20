@@ -1753,11 +1753,12 @@ function installPreviewBridge(
     ]);
     // A frame whose document's colour scheme differs from the dark editor's gets an opaque white
     // backdrop. The scheme only picks system colours, so the default text colour stays black.
+    // Mask the video without changing its authored opacity, which still controls picture hits.
     pipelineSheet.replaceSync(
       ":root { color-scheme: dark !important; } :where(:root) { color: #000; }" +
         `html, body, ${ROOT_COMPOSITION} { background: transparent !important; }` +
         (drawn.length
-          ? `${ROOT_COMPOSITION} > video:is(${drawn.join(", ")}) { opacity: 0 !important; }`
+          ? `${ROOT_COMPOSITION} > video:is(${drawn.join(", ")}) { filter: opacity(0) !important; }`
           : ""),
     );
   };
@@ -2185,10 +2186,12 @@ function installPreviewBridge(
     for (const video of hidden) video.removeAttribute("data-cutroom-held");
     const videos = Array.from(document.querySelectorAll("video")).filter(
       (video) =>
+        !parked.has(video) &&
         video.checkVisibility({
           checkOpacity: true,
           checkVisibilityCSS: true,
-        }) && !awaitingProxy(video),
+        }) &&
+        !awaitingProxy(video),
     );
     for (const video of hidden) video.setAttribute("data-cutroom-held", "");
     return videos;
