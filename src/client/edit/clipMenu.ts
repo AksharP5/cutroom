@@ -2,9 +2,11 @@ import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
 import type { MenuItem } from "../components/menu";
 import { isAudioKind } from "../../shared/timeline/schema";
-import { addClipVersion, canAddVersion } from "./versions";
-import { useTimeline } from "./timeline";
-import { mediaVersions, versionOwner } from "../../shared/timeline/versions";
+import {
+  canAddVersion,
+  mediaVersions,
+  versionOwner,
+} from "../../shared/timeline/versions";
 import { isTitle } from "../../shared/timeline/title";
 import { takesGrade } from "../../shared/timeline/grade";
 
@@ -29,6 +31,7 @@ export function clipMenuItems({
   onDuck,
   onNormalize,
   onFreeze,
+  onAddVersion,
   clicked,
 }: {
   timeline: Timeline;
@@ -54,6 +57,7 @@ export function clipMenuItems({
   /** Sets each clip's gain so it measures -16 LUFS. */
   onNormalize(clips: Clip[]): void;
   onFreeze(clip: Clip, frame: number): void;
+  onAddVersion(clip: Clip): void;
   /** The clip a right-click landed on, which Duck under voice lowers. */
   clicked?: Clip;
 }): MenuItem[] {
@@ -79,7 +83,6 @@ export function clipMenuItems({
           : undefined;
   const versioned = clicked ?? (clips.length === 1 ? clips[0] : undefined);
   const versionClip = versioned && versionOwner(timeline.clips, versioned);
-  const view = useTimeline.getState().view;
   const bed = sound.find((clip) => clip.id === clicked?.id) ?? sound[0];
   const voices = sound.filter((clip) => clip !== bed);
   return [
@@ -112,8 +115,8 @@ export function clipMenuItems({
       ? [
           {
             label: "Add version",
-            run: () => addClipVersion(versionClip),
-            disabled: !view || !canAddVersion(versionClip, view),
+            run: () => onAddVersion(versionClip),
+            disabled: !canAddVersion(versionClip, timeline),
           },
         ]
       : []),

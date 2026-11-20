@@ -1,3 +1,4 @@
+import { canAddVersion } from "../../shared/timeline/versions";
 import { useEffect, useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
 import { mediaSettings, peakLevels } from "../../shared/media";
@@ -18,7 +19,7 @@ import {
   sourceRange,
   useSource,
 } from "./source";
-import { addClipVersion, canAddVersion, versionMediaTarget } from "./versions";
+import { addClipVersion, versionMediaTarget } from "./versions";
 import { useTimeline } from "./timeline";
 import { ScrubMarks, ScrubTrack } from "./TransportBar";
 import type { RuntimePlayer } from "./transport";
@@ -340,7 +341,9 @@ export function SourceViewer({ projectId }: { projectId: string }) {
   const shown = useSource((state) => state.shown);
   const versionClip = useTimeline((state) => {
     const clip = file && versionMediaTarget(state, file.kind);
-    return clip && state.view && canAddVersion(clip, state.view) ? clip : null;
+    return clip && state.view && canAddVersion(clip, state.view.timeline)
+      ? clip
+      : null;
   });
   const version = useWorkspace((state) =>
     file ? state.fileChanges[file.path] : undefined,

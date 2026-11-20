@@ -1,10 +1,10 @@
 import { create } from "zustand";
 import { mediaKind, sourceUrl } from "../../shared/media";
 import { clipName } from "../../shared/timeline/labels";
-import { MAX_VERSIONS } from "../../shared/timeline/schema";
 import type { Clip } from "../../shared/timeline/schema";
 import {
   activeVersion,
+  canAddVersion,
   mediaVersions,
   versionOwner,
   versionPartners,
@@ -16,26 +16,6 @@ import { api } from "../api";
 import { SourceViewSchema } from "../../shared/timeline/view";
 import { showToast } from "../workspace";
 import type { MediaDrag } from "../timeline/mediaDrag";
-
-export function canAddVersion(
-  clip: Clip,
-  view: NonNullable<ReturnType<typeof useTimeline.getState>["view"]>,
-) {
-  const { clips, tracks } = view.timeline;
-  return Boolean(
-    clip.src &&
-    mediaVersions(clip.kind) &&
-    versionOwner(clips, clip) === clip &&
-    (clip.versions?.length ?? 0) < MAX_VERSIONS &&
-    !tracks.some(
-      (track) =>
-        track.locked &&
-        [clip, ...versionPartners(clips, clip)].some(
-          ({ track: index }) => index === track.index,
-        ),
-    ),
-  );
-}
 
 export function versionMediaTarget(
   state: ReturnType<typeof useTimeline.getState>,
@@ -66,7 +46,7 @@ export function addClipVersion(
   file?: Pick<MediaDrag, "path" | "start">,
 ) {
   const { projectId, view } = useTimeline.getState();
-  if (!projectId || !view || !canAddVersion(clip, view)) return;
+  if (!projectId || !view || !canAddVersion(clip, view.timeline)) return;
   const leaf = file?.path.split("/").at(-1);
   const name = leaf
     ?.slice(0, leaf.lastIndexOf("."))

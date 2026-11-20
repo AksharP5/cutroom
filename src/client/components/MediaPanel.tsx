@@ -1,3 +1,4 @@
+import { canAddVersion } from "../../shared/timeline/versions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { MagnifyingGlass, Plus, Waveform } from "@phosphor-icons/react";
@@ -13,11 +14,7 @@ import type { TimelineView } from "../../shared/timeline/schema";
 import { api, frameTimecode, json, mediaUrl } from "../api";
 import { useOfflineMedia } from "../edit/offlineMedia";
 import { placeAtPlayhead } from "../edit/placeMedia";
-import {
-  addMediaVersion,
-  canAddVersion,
-  versionMediaTarget,
-} from "../edit/versions";
+import { addMediaVersion, versionMediaTarget } from "../edit/versions";
 import { clipName } from "../../shared/timeline/labels";
 import { closeSource, openSource, useSource } from "../edit/source";
 import { stepHistory, useTimeline } from "../edit/timeline";
@@ -331,7 +328,8 @@ function MediaRow({
               ? [
                   {
                     label: `Add as version of ${clipName(target)}`,
-                    disabled: gone || !canAddVersion(target, state.view),
+                    disabled:
+                      gone || !canAddVersion(target, state.view.timeline),
                     run: () => void addMediaVersion(projectId, target, path),
                   },
                 ]

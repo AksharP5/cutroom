@@ -6,6 +6,7 @@ import { VersionNameSchema } from "../../shared/timeline/schema";
 import type { Clip, Fps } from "../../shared/timeline/schema";
 import {
   activeVersion,
+  canAddVersion,
   mediaVersions,
   sourceRate,
   versionPartners,
@@ -17,7 +18,6 @@ import { restoreMenuFocus } from "../keymap";
 import { editTimeline, useTimeline } from "../edit/timeline";
 import {
   addClipVersion,
-  canAddVersion,
   closeVersions,
   hoverVersion,
   openVersions,
@@ -297,7 +297,7 @@ function VersionsMenu({
           type="button"
           role="menuitem"
           tabIndex={-1}
-          disabled={!view || !canAddVersion(clip, view)}
+          disabled={!view || !canAddVersion(clip, view.timeline)}
           onPointerEnter={() => hoverVersion(clip, null)}
           onFocus={() => hoverVersion(clip, null)}
           onClick={() => addClipVersion(clip)}

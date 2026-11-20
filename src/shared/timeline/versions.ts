@@ -4,7 +4,7 @@ import {
   timeAtSourceTime,
 } from "@hyperframes/core/speed-ramp";
 import { mediaKind } from "../media";
-import { isAudioKind } from "./schema";
+import { isAudioKind, MAX_VERSIONS } from "./schema";
 import type { Clip, Fps, Timeline, Version } from "./schema";
 import { frameTime } from "./time";
 import { framesAfter, framesBefore } from "./transition";
@@ -67,6 +67,22 @@ export function versionOwner(clips: readonly Clip[], clip: Clip): Clip {
         picture.link === clip.link &&
         picture.src === clip.src,
     ) ?? clip
+  );
+}
+
+/** Whether the clip can take another version, including a picture's audio track lock. */
+export function canAddVersion(clip: Clip, { clips, tracks }: Timeline) {
+  if (
+    !clip.src ||
+    !mediaVersions(clip.kind) ||
+    versionOwner(clips, clip) !== clip
+  )
+    return false;
+  if ((clip.versions?.length ?? 0) >= MAX_VERSIONS) return false;
+  const affected = [clip, ...versionPartners(clips, clip)];
+  return !tracks.some(
+    (track) =>
+      track.locked && affected.some((member) => member.track === track.index),
   );
 }
 
