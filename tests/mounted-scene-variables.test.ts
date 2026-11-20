@@ -296,6 +296,7 @@ test("Media Remove checks for uses after a queued image save", async () => {
       async () => {
         inQueue.resolve();
         await allowProgress.promise;
+        return { value: undefined, entry: null };
       },
     );
     await inQueue.promise;

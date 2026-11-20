@@ -365,7 +365,15 @@ test("undo hides owner and agent rows; redo restores the same pending edit witho
       const edited = await read();
       const row = edited.clipEdits!.at(-1)!;
       expect(row.historyId).toBeTruthy();
-      await fixture.request(`${path}/history/undo`, "POST");
+      const undo = async () =>
+        fixture.request(
+          `${path}/history/undo`,
+          "POST",
+          agent ? { entryId: row.historyId } : undefined,
+        );
+      const committed = await undo();
+      expect(committed.status).toBe(200);
+      const { entry } = await committed.json();
       const undone = await read();
       expect(undone.clipEdits?.some((edit) => edit.id === row.id)).toBe(false);
       expect(
@@ -379,7 +387,15 @@ test("undo hides owner and agent rows; redo restores the same pending edit witho
             })
           ).status,
         ).toBe(409);
-      await fixture.request(`${path}/history/redo`, "POST");
+      expect(
+        (
+          await fixture.request(
+            `${path}/history/redo`,
+            "POST",
+            agent ? { entryId: entry.id } : undefined,
+          )
+        ).status,
+      ).toBe(200);
       expect((await read()).clipEdits!.at(-1)).toEqual(row);
       if (agent) {
         expect(row.accepted).toBe(false);
@@ -391,7 +407,7 @@ test("undo hides owner and agent rows; redo restores the same pending edit witho
         expect((await read()).clipEdits!.at(-1)?.accepted).toBe(true);
         expect((await read()).agentChanges).toEqual([]);
       }
-      await fixture.request(`${path}/history/undo`, "POST");
+      expect((await undo()).status).toBe(200);
     }
   } finally {
     await fixture.close();

@@ -274,7 +274,7 @@ export async function renameMedia(
       `Keep the ${extname(file.name)} extension. Renaming does not convert the file.`,
     );
   const path = posix.join(posix.dirname(file.path), input.name);
-  if (path === file.path) return { path, sources: [] };
+  if (path === file.path) return { path, sources: [], historyId: undefined };
   const absolute = await projectWritePath(project, path, {
     allowMissing: true,
     sourceOnly: false,
@@ -291,7 +291,8 @@ export async function renameMedia(
       409,
       `${input.name} already exists in this folder. Choose another name.`,
     );
-  return store.mutate(
+  const historyPaths = new Set([file.canonical, path]);
+  const { value, entry } = await store.mutateWithEntry(
     project,
     `Rename ${file.name} to ${input.name}`,
     async () => {
@@ -301,6 +302,8 @@ export async function renameMedia(
       const moves = [{ absolute: file.absolute, destination: absolute }];
       if (file.companion && exportPath && exportAbsolute) {
         names.set(file.companion.path, exportPath);
+        historyPaths.add(file.companion.path);
+        historyPaths.add(exportPath);
         moves.push({
           absolute: file.companion.absolute,
           destination: exportAbsolute,
@@ -316,7 +319,9 @@ export async function renameMedia(
       return { path, sources: edits.map((edit) => edit.sourceFile) };
     },
     who,
+    { moves: historyPaths, category: "media" },
   );
+  return { ...value, ...(entry && { historyId: entry.id }) };
 }
 
 /**
@@ -329,7 +334,8 @@ export async function removeMedia(
   who?: HistoryWho,
 ) {
   const file = await mediaFile(project, input.path);
-  return store.mutate(
+  const historyPaths = new Set([file.canonical]);
+  const { value, entry } = await store.mutateWithEntry(
     project,
     mediaRemoveLabel(file.path),
     async () => {
@@ -355,10 +361,17 @@ export async function removeMedia(
         }
         for (const { destination } of moves)
           await mkdir(dirname(destination), { recursive: true });
+        historyPaths.add(trash);
+        if (file.companion) {
+          historyPaths.add(file.companion.path);
+          historyPaths.add(mediaTrashPath(file.companion.path, copy));
+        }
         moveFiles(moves);
         return { path: file.path, trash };
       }
     },
     who,
+    { moves: historyPaths, category: "media" },
   );
+  return { ...value, ...(entry && { historyId: entry.id }) };
 }

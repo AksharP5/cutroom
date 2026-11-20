@@ -173,9 +173,16 @@ test("first lifts persist inferred tracks on disk, with history and MCP targetin
     ).structuredContent.result;
     expect(removed.timeline.tracks.map((track) => track.index)).toEqual([0, 2]);
     expect((await read()).timeline).toEqual(removed.timeline);
-    await fixture.request(`${base}/history/undo`, "POST");
-    expect((await read()).timeline).toEqual(placed.timeline);
-    await fixture.request(`${base}/history/redo`, "POST");
+    for (const action of ["undo", "redo"] as const) {
+      const replay = await client.callTool({
+        name: `history_${action}`,
+        arguments: { projectId: project.id },
+      });
+      expect(replay.isError, JSON.stringify(replay.content)).not.toBe(true);
+      expect((await read()).timeline).toEqual(
+        action === "undo" ? placed.timeline : removed.timeline,
+      );
+    }
     expect((await read()).timeline).toEqual(removed.timeline);
   } finally {
     await client.close();

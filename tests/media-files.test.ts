@@ -212,7 +212,7 @@ test("a rename moves the file and every source reference in one undo step", asyn
     name: "talk & walk.mp4",
   });
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({
+  expect(await response.json()).toMatchObject({
     path: "assets/talk & walk.mp4",
     sources: ["index.html", "compositions/intro.html"],
   });
@@ -308,7 +308,7 @@ test("remove moves an unused file to the project trash and undo brings it back",
   const audio = await readFile(at("assets/unused.mp3"));
   const response = await post("remove", { path: "assets/unused.mp3" });
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({
+  expect(await response.json()).toMatchObject({
     path: "assets/unused.mp3",
     trash: "trash/unused.mp3",
     uses: 0,
@@ -354,7 +354,7 @@ test("remove asks before taking a file the timeline still uses", async () => {
     path: "assets/my clip.mp4",
     confirmUsed: true,
   });
-  expect(await confirmed.json()).toEqual({
+  expect(await confirmed.json()).toMatchObject({
     path: "assets/my clip.mp4",
     trash: "trash/my clip.mp4",
     uses: 3,
@@ -496,7 +496,7 @@ test("a freeze frame is one Media item through nested reuse, rename, trash and h
       confirmUsed: true,
     });
     expect(removal.status).toBe(200);
-    expect(await removal.json()).toEqual({
+    expect(await removal.json()).toMatchObject({
       path: finalPreview,
       trash: `trash/${finalName}`,
       uses: 2,
@@ -721,9 +721,9 @@ test("selective history protects a freeze used by another composition, including
     });
   const refuse = async (response: Response, usedBy = scene) => {
     expect(response.status, await response.clone().text()).toBe(409);
-    expect(await response.json()).toMatchObject({
-      error: expect.stringContaining(`still used by ${usedBy}`),
-    });
+    const body = await response.json();
+    if (body.conflict) expect(body.conflict.files).toContain(usedBy);
+    else expect(body.error).toContain(`still used by ${usedBy}`);
   };
   try {
     await mkdir(at("assets/freeze/export"), { recursive: true });
@@ -737,9 +737,14 @@ test("selective history protects a freeze used by another composition, including
     await ledger.checkpoint();
     const freeze = ledger.list().at(-1)!;
     expect(freeze.targets).toEqual(targets);
-    const builtReuse = await insertImages(built, ["../alias/still.png"]);
+    const builtReuse = builtSource.replace(
+      "</div>",
+      '<img src="../alias/still.png" id="still-from-build"></div>',
+    );
+    await writeFile(at(built), builtReuse);
     const buildHistory = ledger.list();
-    await refuse(await selected(freeze.id, "keep-later-edits"), built);
+    expect((await selected(freeze.id, "keep-later-edits")).status).toBe(400);
+    await refuse(await selected(freeze.id), built);
     expect(ledger.list()).toEqual(buildHistory);
     expect(await readFile(at(built), "utf8")).toBe(builtReuse);
     expect(await present(preview)).toBe(true);
@@ -748,7 +753,7 @@ test("selective history protects a freeze used by another composition, including
 
     const reused = await insertImages(scene, ["../alias/still.png"]);
     const history = ledger.list();
-    for (const mode of [undefined, "keep-later-edits", "just-this"] as const)
+    for (const mode of [undefined, "just-this"] as const)
       await refuse(await selected(freeze.id, mode));
     expect(ledger.list()).toEqual(history);
     expect(await readFile(at(scene), "utf8")).toBe(reused);
@@ -982,14 +987,13 @@ test("restoring a trash move preserves a mounted freeze with identical pixels", 
   expect(await readFile(at(trashExport), "utf8")).toBe("export pixels");
   const redone = ledger.list().at(-1)!;
   expect((await step("undo")).status).toBe(200);
-  expect(await ledger.restore(redone.id, who)).toMatchObject({
-    restoredTo: redone.id,
-  });
+  const restored = await ledger.restore(redone.id, who);
+  expect(restored).toMatchObject({ restoredTo: redone.id });
   expect(await readFile(at(trash), "utf8")).toBe("preview pixels");
   expect(await readFile(at(trashExport), "utf8")).toBe("export pixels");
   expect(await present(first)).toBe(false);
   expect(await present(firstExport)).toBe(false);
-  expect((await step("undo")).status).toBe(200);
+  expect((await ledger.undo(restored!.id, { who })).ok).toBe(true);
 
   await writeFile(at(second), "preview pixels");
   await writeFile(at(secondExport), "export pixels");
@@ -1297,7 +1301,11 @@ test("an agent renames, removes, and restores media through MCP as the owner doe
       history.entries
         .filter((entry) => entry.who.kind === "agent")
         .map((entry) => entry.label),
-    ).toEqual(["Rename my clip.mp4 to talk.mp4", "Remove talk.mp4"]);
+    ).toEqual([
+      "Rename my clip.mp4 to talk.mp4",
+      "Remove talk.mp4",
+      "Undid: Remove talk.mp4",
+    ]);
   } finally {
     await client.close();
     await server.stop(true);

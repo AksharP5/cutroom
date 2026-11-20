@@ -108,7 +108,7 @@ export function createLayerTextRoutes(
       composition,
       c.req.header(AGENT_HEADER),
       () =>
-        store.mutate(
+        store.mutateWithEntry(
           project,
           label,
           async () => {

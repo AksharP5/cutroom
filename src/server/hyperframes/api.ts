@@ -24,6 +24,13 @@ import {
   StillRequestSchema,
 } from "../../shared/export";
 import { projectMutationGuard } from "../projects/authorization";
+import { historyActor } from "../projects/historyActor";
+import {
+  HistoryRequestSchema,
+  historySummary,
+  replayHistory,
+} from "../projects/history";
+import { parseInput } from "../projects/routes";
 import { sourceWriteGuard } from "./source-guard";
 import { projectStatePath, unavailableProjectFile } from "../projects/path";
 import { checkProjectVariableValues } from "../projects/variables";
@@ -203,7 +210,9 @@ export function createHyperframesApi(
       return next();
     const project = await store.get(c.req.param("id") ?? "");
     await resolveProject(project.id);
-    await reviews.editAssets(project, c.req.header(AGENT_HEADER), next);
+    await reviews.editAssets(project, c.req.header(AGENT_HEADER), () =>
+      store.serializeMutation(project, next),
+    );
   });
   api.use("/render/*", async (c, next) => {
     if (
@@ -966,14 +975,7 @@ export function createHyperframesApi(
       }));
     },
     resolveProject,
-    // The editor's undo, redo, and restore are the owner's, and can remove sent review notes.
-    history: async (project) => {
-      const history = await store.historyForDir(project.dir);
-      return (
-        history &&
-        reviews.history(await store.get(project.id), history, { kind: "human" })
-      );
-    },
+    history: (project) => store.historyForDir(project.dir),
     async bundle(dir, options) {
       const policy = previewTimingPolicy(dir);
       const html = await bundleToSingleHtml(dir, {
@@ -1720,6 +1722,69 @@ export function createHyperframesApi(
       }
     });
   });
+  api.get("/projects/:id/history", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const history = await store.history(project);
+    const {
+      nextUndo: back,
+      nextRedo: forward,
+      entries,
+    } = historySummary(history.list(), historyActor(reviews, c, project).who);
+    return c.json({ entries, back, forward });
+  });
+  api.post("/projects/:id/history/checkpoint", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    await store.serializeMutation(project, async () => {
+      await (await store.history(project)).checkpoint();
+    });
+    return c.json({ ok: true });
+  });
+  const studioHistoryBody = HistoryRequestSchema.extend({
+    direction: z.enum(["back", "forward"]).optional(),
+    mode: z.literal("just-this").optional(),
+  });
+  for (const action of ["step", "undo"] as const) {
+    api.post(`/projects/:id/history/${action}`, async (c) => {
+      if (!c.req.header("content-type")?.includes("application/json"))
+        throw new HttpError(400, "Send a JSON history action.");
+      const { direction, mode, ...input } = parseInput(
+        studioHistoryBody,
+        await c.req.json(),
+      );
+      if (
+        (action === "undo" && !input.entryId) ||
+        (action === "step" && (input.entryId || mode))
+      )
+        throw new HttpError(400, "Choose a history step or an exact edit.");
+      const project = await store.get(c.req.param("id"));
+      const exactUndo =
+        input.entryId &&
+        (await store.history(project))
+          .list()
+          .find(({ id }) => id === input.entryId)?.undoes;
+      const result = await replayHistory(
+        reviews,
+        project,
+        historyActor(reviews, c, project),
+        direction === "forward" || exactUndo ? "redo" : "undo",
+        input,
+      );
+      return c.json(result, result.ok ? 200 : 409);
+    });
+  }
+  for (const action of [
+    "restore",
+    "claim",
+    "window",
+    "window/:windowId/close",
+  ] as const) {
+    api.post(`/projects/:id/history/${action}`, () => {
+      throw new HttpError(
+        409,
+        "This Studio history action is unavailable in Cutroom.",
+      );
+    });
+  }
   api.route("/", createStudioApi(adapter));
   return Object.assign(api, {
     subscribeExports(

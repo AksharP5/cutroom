@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
 import { parseComposition } from "../src/server/timeline/composition";
 import { readSource } from "../src/server/projects/store";
 import { projectFixture } from "./project-fixture";
@@ -245,10 +244,18 @@ test("composition reads wait for an admitted edit and return its source with its
     "index.html",
     undefined,
     () =>
-      fixture.store.mutate(project, "Owner source save", async () => {
+      fixture.store.mutateWithEntry(project, "Owner source save", async () => {
         entered.resolve();
         await release.promise;
-        await writeFile(`${project.path}/index.html`, changed);
+        fixture.store.writeFiles(project, [
+          {
+            sourceFile: "index.html",
+            absPath: `${project.path}/index.html`,
+            before: original.content,
+            after: changed,
+            expectedVersion: original.version,
+          },
+        ]);
       }),
   );
   try {

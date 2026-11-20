@@ -139,7 +139,11 @@ test("MCP lists scoped text layers and edits exactly one element's source throug
     expect(
       history.entries.filter(({ label }) => label === "Edit layer text"),
     ).toEqual([{ label: "Edit layer text", who: { kind: "agent" } }]);
-    expect((await f.request(`${f.base}/history/undo`, "POST")).ok).toBe(true);
+    const undo = await client.callTool({
+      name: "history_undo",
+      arguments: { projectId: f.project.id },
+    });
+    expect(undo.isError, JSON.stringify(undo.content)).not.toBe(true);
     expect(await readFile(f.file, "utf8")).toBe(authored);
   } finally {
     await client.close();

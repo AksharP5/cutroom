@@ -187,7 +187,11 @@ test("recorded takes use the engine, preserve occupied audio, and undo leaves th
             edit.clipId === take.id && edit.label.includes("1 track down"),
         ),
       ).toBe(true);
-      await fixture.request(`${base}/history/undo`, "POST", {});
+      const undo = await client.callTool({
+        name: "history_undo",
+        arguments: { projectId: project.id },
+      });
+      expect(undo.isError, JSON.stringify(undo.content)).not.toBe(true);
       expect((await read()).timeline).toEqual(after.timeline);
     } finally {
       await client.close();
