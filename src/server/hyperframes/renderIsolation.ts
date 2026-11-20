@@ -590,12 +590,35 @@ export function registerRenderIsolation(
             url,
           );
           if (range.scopedMedia) {
-            // Short and variable-rate clips can still be extracted eagerly. Keep their native
-            // video elements idle too when no captured frame can show them.
+            // FFmpeg has already mixed the audio. Browser audio requests can occupy every
+            // connection to the capture server before the first frame arrives.
+            const chunkServer = `    const fileServer = await createFileServer({
+      projectDir: compiledDir,
+      compiledDir,
+      port: 0,`;
             source = replaceOnce(
               source,
-              "      ).map((video) => video.videoId),\n      videoMetadataHints:",
-              "      ).map((video) => video.videoId).concat(planVideos?.videos.filter((video) => !shownFrames.get(video.id)?.size).map((video) => video.id) ?? []),\n      videoMetadataHints:",
+              chunkServer,
+              `${chunkServer}\n      cutroomFramesOnly: true,`,
+              url,
+            );
+            // The decoder supplies every visible frame, as in a whole export. Leave the native
+            // video elements idle and give visible ones the decoder's intrinsic size.
+            source = replaceOnce(
+              source,
+              `      skipReadinessVideoIds: deferredVideos.filter(
+        (video) => !shownFrames.get(video.videoId)?.size || remoteVideoIds.has(video.videoId)
+      ).map((video) => video.videoId),
+      videoMetadataHints: collectVideoMetadataHints(
+        deferredVideos.filter((video) => remoteVideoIds.has(video.videoId))
+      )`,
+              `      skipReadinessVideoIds: collectVideoReadinessSkipIds(
+        planVideos?.videos.filter((video) => !shownFrames.get(video.id)?.size).map((video) => video.id) ?? [],
+        planVideos?.extracted ?? []
+      ),
+      videoMetadataHints: collectVideoMetadataHints(
+        planVideos?.extracted.filter((video) => shownFrames.get(video.videoId)?.size) ?? []
+      )`,
               url,
             );
             // Seeking each frame just to size its extraction can time out on a long edit.
@@ -684,7 +707,9 @@ export function registerRenderIsolation(
     c.header("Access-Control-Allow-Origin", "null");
     c.header("X-Content-Type-Options", "nosniff");
   });
-  app.get("/*", async (c) => {`,
+  app.get("/*", async (c) => {
+    if (options.cutroomFramesOnly && c.req.header("sec-fetch-dest") === "audio")
+      return c.body(null, 204);`,
           url,
         );
         source = replaceOnce(
