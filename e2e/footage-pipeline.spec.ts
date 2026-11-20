@@ -1124,6 +1124,51 @@ test("a 4K60 source stays native while overlapping HD footage and after a cut", 
   expect(result.map(({ numbers }) => numbers[1])).toEqual([24, 61, 112, 26]);
 });
 
+test("a 4K HEVC source draws through its finished 1080p editing proxy", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const created = await project(
+    request,
+    { num: 60, den: 1 },
+    (seconds) =>
+      `<video id="uhd" src="large.mkv" muted data-start="0" data-duration="${seconds(30)}" data-track-index="0" style="${fill}"></video>`,
+  );
+  await numbered(
+    join(created.path, "large.mkv"),
+    "60",
+    "3840x2160",
+    undefined,
+    [
+      "-c:v",
+      "libx265",
+      "-preset",
+      "ultrafast",
+      "-x265-params",
+      "pools=2:frame-threads=2:log-level=error",
+      "-t",
+      "0.75",
+    ],
+  );
+  await expect
+    .poll(
+      async () =>
+        (
+          await request.get(
+            `/api/cutroom/projects/${created.id}/media/proxy?path=large.mkv`,
+            { headers: { range: "bytes=0-0" } },
+          )
+        ).status(),
+      { timeout: 60_000 },
+    )
+    .toBe(206);
+  const frames = [0, 15, 29];
+  const shots = await pictures(page, created, 60, frames, true, true);
+  const result = await compare(page, shots, shots);
+  expect(result.map(({ numbers }) => numbers[1])).toEqual(frames);
+});
+
 test("a title under footage switches only the intersecting range to HyperFrames", async ({
   page,
   request,
