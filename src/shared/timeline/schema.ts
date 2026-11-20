@@ -1098,7 +1098,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       mediaStart: z.number().nonnegative().optional(),
     })
     .describe(
-      "Set media speed or source in on a clip and its linked partners, keeping timeline duration. Source in is seconds. Refuses speed ramps, non-media clips, or insufficient source media.",
+      "Set the constant speed or source in (seconds) of a clip and its linked partners. Speed preserves the source span to the nearest timeline frame, resizes the clips, and ripples following time on unlocked auto-select tracks. A source in edit alone keeps duration. Edit a speed ramp in the composition source. Refuses non-media clips or insufficient source media.",
     ),
   z
     .object({

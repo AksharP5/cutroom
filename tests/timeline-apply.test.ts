@@ -2544,3 +2544,36 @@ test("setTiming preserves the in-point offset of a separately aligned linked sou
   });
   expect(edited.clips.map(({ mediaStart }) => mediaStart)).toEqual([1.5, 2.5]);
 });
+
+test("constant speed resizes an exact half-frame tie and ripples the following cut", () => {
+  const before = timeline([
+    clip("shot", 0, 0, 1, { playbackRate: 2.4 }),
+    clip("next", 0, 1, 30),
+  ]);
+  const after = run(before, {
+    type: "setTiming",
+    clipId: "shot",
+    playbackRate: 1.6,
+  });
+  expect(positions(after)).toEqual({ shot: [0, 0, 2], next: [0, 2, 30] });
+});
+
+test("speeding up a J-cut clears the sound tail and keeps the next pair in sync", () => {
+  const before = timeline([
+    clip("shot", 0, 30, 120, { link: "first", mediaStart: 1 }),
+    clip("sound", 1, 0, 120, { kind: "audio", link: "first" }),
+    clip("next-shot", 0, 150, 60, { link: "second", mediaStart: 1 }),
+    clip("next-sound", 1, 120, 60, { kind: "audio", link: "second" }),
+  ]);
+  const after = run(before, {
+    type: "setTiming",
+    clipId: "shot",
+    playbackRate: 2,
+  });
+  expect(positions(after)).toEqual({
+    shot: [0, 30, 60],
+    sound: [1, 15, 60],
+    "next-shot": [0, 105, 60],
+    "next-sound": [1, 75, 60],
+  });
+});

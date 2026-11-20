@@ -271,6 +271,15 @@ function sourcePeriodFloor(curve: Curve, fps: Fps) {
   return Number(period);
 }
 
+/** Rescale a frame offset for a constant speed edit, rounding exact half frames up. */
+export function retimedFrames(offset: number, before: number, after: number) {
+  const oldRate = decimalFraction(before);
+  const newRate = decimalFraction(after);
+  return Number(
+    halfUp(BigInt(offset) * oldRate.n * newRate.d, oldRate.d * newRate.n),
+  );
+}
+
 function microsOf(time: ExactTime) {
   const numerator = time.n * MICROS;
   return (

@@ -14,6 +14,7 @@ import {
   frames,
   micros,
   positionAtSource,
+  retimedFrames,
   secondsOf,
 } from "./piece";
 import { activeVersion, fitsVersion } from "./versions";
@@ -1238,70 +1239,103 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             "unsupported",
             `Clip ${clip.id} has no source timing.`,
           );
-        if (readClipSource(clip).lane)
+        if (command.playbackRate !== undefined && readClipSource(clip).lane)
           throw new TimelineError(
             "unsupported",
             `Clip ${clip.id} has a speed ramp. Change its rate lane in the composition source.`,
           );
       }
+      const ids = new Set(targets.map(({ id }) => id));
       const selected = readClipSource(target);
       const anchor = frames(target.start, fps);
-      const previousMap = decode(
-        selected.stored,
-        target.playbackRate,
-        anchor,
-        fps,
-      );
       const rate = command.playbackRate ?? target.playbackRate;
-      const editedMap = decode(
+      const editedInPoint =
         command.mediaStart === undefined
           ? selected.stored
-          : { mediaStart: Number(attrMicros(command.mediaStart)) },
-        rate,
-        anchor,
-        fps,
-      );
-      return {
-        ...timeline,
-        clips: clips.map((clip) => {
-          if (!targets.includes(clip)) return clip;
-          const playbackRate = command.playbackRate ?? clip.playbackRate;
-          const source = readClipSource(clip);
-          const start = frames(clip.start, fps);
-          if (clip.playbackRate === target.playbackRate) {
-            const current =
-              clip === target
-                ? previousMap
-                : decode(source.stored, clip.playbackRate, start, fps);
-            if (
-              current.c === previousMap.c &&
-              current.zero === previousMap.zero
-            )
-              return {
-                ...clip,
-                playbackRate,
-                ...writeClipSource(source, encode(editedMap, rate, start, fps)),
-              };
-          }
-          // Manually linked sources with different maps keep their existing sync offset.
-          const mediaStart =
-            clip.mediaStart! +
-            (command.mediaStart === undefined
-              ? 0
-              : command.mediaStart - target.mediaStart!) +
-            frameTime(clip.start - target.start, fps) *
-              (playbackRate - clip.playbackRate);
-          return {
-            ...clip,
-            playbackRate,
-            ...retimeClipSource(
-              { ...clip, mediaStart, playbackRate },
-              clip.start,
-              fps,
-            ),
+          : { mediaStart: Number(attrMicros(command.mediaStart)) };
+      const sourceMaps = selected.lane
+        ? null
+        : {
+            previous: decode(selected.stored, target.playbackRate, anchor, fps),
+            edited: decode(editedInPoint, rate, anchor, fps),
           };
+      const sourceShift =
+        command.mediaStart === undefined
+          ? 0
+          : command.mediaStart - target.mediaStart!;
+      const changed = new Map(
+        targets.map((clip) => {
+          const playbackRate = command.playbackRate ?? clip.playbackRate;
+          // Scale both edges around the selected in-point so a linked J/L cut follows the content.
+          const edge = (at: number) =>
+            target.start +
+            retimedFrames(at - target.start, clip.playbackRate, playbackRate);
+          const start = edge(clip.start);
+          const duration = Math.max(1, edge(clipEnd(clip)) - start);
+          const source = readClipSource(clip);
+          const current =
+            sourceMaps &&
+            !source.lane &&
+            clip.playbackRate === target.playbackRate
+              ? clip === target
+                ? sourceMaps.previous
+                : decode(
+                    source.stored,
+                    clip.playbackRate,
+                    frames(clip.start, fps),
+                    fps,
+                  )
+              : null;
+          const timing =
+            sourceMaps &&
+            current &&
+            current.c === sourceMaps.previous.c &&
+            current.zero === sourceMaps.previous.zero
+              ? writeClipSource(
+                  source,
+                  encode(sourceMaps.edited, rate, frames(start, fps), fps),
+                )
+              : retimeClipSource(
+                  {
+                    ...clip,
+                    mediaStart: clip.mediaStart! + sourceShift,
+                    playbackRate,
+                  },
+                  start,
+                  fps,
+                );
+          return [
+            clip.id,
+            { ...clip, start, duration, playbackRate, ...timing },
+          ] as const;
         }),
-      };
+      );
+      const retimed = clips.map((clip) => changed.get(clip.id) ?? clip);
+      // Move following clips together by enough to clear every retimed partner's tail.
+      const change = Math.max(
+        ...targets.map(
+          (clip) => clipEnd(changed.get(clip.id)!) - clipEnd(clip),
+        ),
+      );
+      if (!change) return { ...timeline, clips: retimed };
+
+      const edges = new Map(targets.map((clip) => [clip.track, clipEnd(clip)]));
+      const editPoint = (track: number) => edges.get(track) ?? clipEnd(target);
+      const tracks = rippleTracks(timeline, [...edges.keys()]);
+      const next =
+        change < 0
+          ? removeTime(
+              retimed,
+              tracks,
+              (track) => editPoint(track) + change,
+              -change,
+              timeline,
+              mint,
+              ids,
+            )
+          : insertTime(retimed, tracks, editPoint, change, timeline, mint, ids);
+      assertRippleSync(timeline, next, tracks, copies);
+      return { ...timeline, clips: next };
     }
     case "setClip": {
       const target = find(command.clipId);

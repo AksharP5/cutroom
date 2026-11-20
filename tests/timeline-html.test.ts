@@ -1208,3 +1208,21 @@ test("legacy windows can recover the original intercept and are dropped on a tim
   expect(mixEdit).toContain('data-media-start="1.442795"');
   expect(mixEdit).not.toContain("audioWindow");
 });
+
+test("a ramp source-in edit moves the source while keeping the curve phase and duration", () => {
+  const html = composition(
+    `<video id="ramp" src="ramp.mp4" muted data-start="2" data-duration="3" data-media-start="1.442795" data-automation='${rampAttribute(rampPoints, 2)}'></video>`,
+  );
+  const sourceIn = {
+    type: "setTiming",
+    clipId: "ramp",
+    mediaStart: 4.5,
+  } satisfies CommandInput;
+  const output = edit(html, [sourceIn]);
+  expect(output).toBe(
+    html.replace('data-media-start="1.442795"', 'data-media-start="4.5"'),
+  );
+  expect(() =>
+    edit(html, [{ type: "setTiming", clipId: "ramp", playbackRate: 2 }]),
+  ).toThrow("has a speed ramp");
+});
