@@ -18,6 +18,9 @@ import type { StudioApiAdapter } from "@hyperframes/studio-server";
 import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
 import { planCaptureBrowsers } from "./exportMemory";
+import { countCaptureMedia } from "./captureWorkload";
+import type { CaptureWorkload } from "./captureWorkload";
+import { frameTime } from "../../shared/timeline/time";
 import { planDirectExport } from "./directPlan";
 import { useFreezeExportSources } from "./freezeSources";
 import { placeStills } from "./directStill";
@@ -206,7 +209,8 @@ export function createRenderWorkers(configuration: {
   workload?: (
     projectId: string,
     composition: string,
-  ) => Promise<{ mediaClips: number; durationFrames: number }>;
+    sourceOverride?: string,
+  ) => Promise<CaptureWorkload>;
   stopTimeoutMs?: number;
   startupTimeoutMs?: number;
   removeScratch?: (path: string) => Promise<void>;
@@ -388,37 +392,54 @@ export function createRenderWorkers(configuration: {
           direct && configuration.gpu && output?.gpu !== false
             ? (gpu ??= configuration.gpu())
             : undefined;
+        const entry = options.composition ?? "index.html";
         const workload = await configuration.workload?.(
           options.project.id,
-          options.composition ?? "index.html",
+          entry,
+          sources?.[join(options.project.dir, entry)],
         );
         // One set of browsers captures every run the browser draws, sized to those frames.
-        const captured = direct?.plan.segments.reduce(
-          (frames, segment) =>
-            segment.kind === "capture"
-              ? frames + segment.end - segment.start
-              : frames,
-          0,
-        );
-        const plan =
-          workload &&
-          planCaptureBrowsers({
-            available: freemem(),
-            mediaClips: workload.mediaClips,
-            frames:
-              captured ||
-              (output?.range
-                ? output.range.end - output.range.start
-                : workload.durationFrames),
-            sourcePixels:
-              captured && direct
-                ? direct.plan.width * direct.plan.height
-                : undefined,
-            outputPixels: output?.size
-              ? output.size.width * output.size.height
-              : undefined,
+        const runs =
+          direct?.plan.segments.filter(({ kind }) => kind === "capture") ?? [];
+        const available = freemem();
+        const browserPlan = (
+          ranges?: readonly NonNullable<ExportOptions["range"]>[],
+          sourcePixels?: number,
+        ) => {
+          if (!workload) return;
+          const { num, den } = options.fps;
+          const frames = ranges
+            ? ranges.reduce((total, { start, end }) => total + end - start, 0)
+            : Math.ceil(
+                (frameTime(
+                  workload.durationFrames,
+                  workload.fps ?? options.fps,
+                ) *
+                  num) /
+                  den,
+              );
+          const mediaClips = countCaptureMedia(workload, options.fps, ranges);
+          return planCaptureBrowsers({
+            available,
+            mediaClips,
+            mediaClipsOutsideRange:
+              ranges && workload.timedMedia
+                ? workload.timedMedia.length - mediaClips
+                : 0,
+            frames,
+            sourcePixels,
+            outputPixels:
+              output?.size && output.size.width * output.size.height,
             prores: options.format === "mov" || options.format === "gif",
           });
+        };
+        const fallback = browserPlan(
+          output?.range ? [output.range] : undefined,
+        );
+        const plan =
+          runs.length && direct
+            ? browserPlan(runs, direct.plan.width * direct.plan.height)
+            : fallback;
         // An export drawn wholly from its sources needs no browser. If a source turns out to need
         // one, the worker fails with this refusal rather than starting browsers that would not fit.
         const browserFree = direct?.plan.segments.every(
@@ -426,6 +447,15 @@ export function createRenderWorkers(configuration: {
         );
         if (plan && "refusal" in plan && !browserFree)
           throw new Error(plan.refusal);
+        const browsers =
+          plan && "browsers" in plan
+            ? Math.min(
+                plan.browsers,
+                fallback && "browsers" in fallback
+                  ? fallback.browsers
+                  : plan.browsers,
+              )
+            : undefined;
         for (const path of leftovers)
           await remove(path).then(
             () => leftovers.delete(path),
@@ -493,9 +523,9 @@ export function createRenderWorkers(configuration: {
                     ),
                   }
                 : {}),
-              ...(plan && "browsers" in plan
+              ...(browsers
                 ? {
-                    PRODUCER_MAX_WORKERS: String(plan.browsers),
+                    PRODUCER_MAX_WORKERS: String(browsers),
                     // HyperFrames otherwise starts two browsers for 120 frames or more, whatever the limit.
                     PRODUCER_MIN_PARALLEL_FRAMES: String(
                       Number.MAX_SAFE_INTEGER,
@@ -518,7 +548,9 @@ export function createRenderWorkers(configuration: {
             direct: direct && {
               ...direct,
               captureRefusal:
-                plan && "refusal" in plan ? plan.refusal : undefined,
+                fallback && "refusal" in fallback
+                  ? fallback.refusal
+                  : undefined,
             },
           }),
         );

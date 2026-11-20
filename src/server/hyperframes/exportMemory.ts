@@ -13,11 +13,13 @@ export const PARALLEL_ENCODES = Math.max(
 const sourceEncoderBytes = (pixels: number) =>
   0.8 * GiB * Math.max(1, pixels / (1920 * 1080));
 /**
- * One capture browser. Every capture page loads every media element, so measured Chromium PSS
- * was 0.72 GiB plus about 11 MB per video or audio clip: 0.90, 2.08 and 3.82 GiB at 16, 120
- * and 280 clips. Rounded up.
+ * One capture browser. Chromium PSS was 0.72 GiB plus about 11 MB per loaded video or audio clip:
+ * 0.90, 2.08 and 3.82 GiB at 16, 120 and 280 clips. A marked render defers unused videos but
+ * still loads the full document. On 1,038 clips, four initializing browsers plus source encoders
+ * reached 11.35 GiB with only 60 clips in the capture runs. Allow for the rest of the document.
  */
-const browserBytes = (mediaClips: number) => (0.75 + 0.012 * mediaClips) * GiB;
+const browserBytes = (mediaClips: number, outsideRange: number) =>
+  (0.75 + 0.012 * mediaClips + 0.0025 * outsideRange) * GiB;
 /**
  * Each further browser counts double: two browsers on 280 clips had passed 2.2 times one
  * browser's memory, and were still climbing, when they were stopped.
@@ -44,6 +46,7 @@ const framesPerBrowser = 75;
 export function planCaptureBrowsers({
   available,
   mediaClips,
+  mediaClipsOutsideRange = 0,
   frames,
   sourcePixels = 0,
   outputPixels = 0,
@@ -51,6 +54,7 @@ export function planCaptureBrowsers({
 }: {
   available: number;
   mediaClips: number;
+  mediaClipsOutsideRange?: number;
   frames: number;
   /** The frame size, when FFmpeg encodes source parts while the browsers capture. */
   sourcePixels?: number;
@@ -59,7 +63,7 @@ export function planCaptureBrowsers({
   /** The captured frames encode as ProRes 4444: a MOV, or the MOV a GIF is made from. */
   prores?: boolean;
 }): { browsers: number } | { refusal: string } {
-  const first = browserBytes(mediaClips);
+  const first = browserBytes(mediaClips, mediaClipsOutsideRange);
   const needed =
     reserveBytes +
     encoderBytes(outputPixels, prores) +
