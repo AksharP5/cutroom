@@ -5,6 +5,7 @@ import {
   activeVersion,
   consumedSource,
   nextAudition,
+  versionOwner,
   versionStart,
 } from "../../shared/timeline/versions";
 import { framesBefore } from "../../shared/timeline/transition";
@@ -97,7 +98,7 @@ async function openSource(
   signal: AbortSignal,
   colour?: FootageColour,
 ) {
-  const { read, size } = await openRanges(url, signal);
+  const { read, size, head } = await openRanges(url, signal);
   const track = await readVideoTrack(read, size);
   if (!(await SourceDecoder.supported(track)))
     throw new Error(`This browser cannot decode ${track.codec}.`);
@@ -108,6 +109,7 @@ async function openSource(
       read,
       size,
       colourOf(track, colour),
+      head,
     ),
     intrinsic: {
       width: turned ? track.height : track.width,
@@ -183,6 +185,29 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       )
       .catch(() => null),
   );
+  const primeSelectedGrids = () => {
+    const { view, selection } = useTimeline.getState();
+    if (
+      !plan ||
+      view?.composition !== "index.html" ||
+      !selection.anchor ||
+      !selection.ids.has(selection.anchor)
+    )
+      return;
+    const { clips } = view.timeline;
+    const anchor = clips.find(({ id }) => id === selection.anchor);
+    if (!anchor) return;
+    const clip = versionOwner(clips, anchor);
+    if (clip.kind !== "video" || !clip.versions || !plan.drawable[clip.id])
+      return;
+    // Known positions can show a scrub proxy before the original finishes opening. A
+    // selection only reads the grids, leaving proxy generation and decoding to the menu.
+    for (const { src, offline, fits } of clip.versions) {
+      if (offline || fits === false || sourceRefusals[src]) continue;
+      const path = localMediaPath(view.composition, src);
+      if (path !== null) void grids.get(path);
+    }
+  };
   const media = sourceCache(async (src) => {
     const path = localMediaPath("index.html", src);
     if (path === null)
@@ -452,7 +477,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const { createDecoder, intrinsic } = await scrubs.get(path);
     if (closing.signal.aborted || audition !== warming || !needed())
       throw new Error("The audition frame was superseded.");
-    const proxy = createDecoder("scrub");
+    const proxy = createDecoder("audition-scrub");
     warming.scrub?.close();
     warming.scrub = proxy;
     try {
@@ -473,6 +498,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
 
   let drawing = false;
   let wanted = false;
+  let auditionChanged = new AbortController();
   /** Draws the playhead's frame; a newer request while drawing replaces the one waiting. */
   const draw = async () => {
     wanted = true;
@@ -526,6 +552,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     if (!view || view.composition !== "index.html") return;
     const auditionAtDraw = useVersions.getState();
     const alternate = prepareAudition(view, frame, state.kind === "playing");
+    const auditionSignal = alternate ? auditionChanged.signal : null;
     const shown = visibleAt(view.timeline, drawingPlan, frame);
     if (!shown) {
       stop("the layers at the playhead need to be composited together");
@@ -614,6 +641,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       const standIn = async (): Promise<Picture> => {
         const needed = () =>
           !arrived &&
+          !auditionSignal?.aborted &&
           auditionAtDraw.open === useVersions.getState().open &&
           auditionAtDraw.hovered === useVersions.getState().hovered;
         if (path && selected?.changed) {
@@ -666,6 +694,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       if ("error" in baked) throw baked.error;
       const currentAudition = useVersions.getState();
       if (
+        auditionSignal?.aborted ||
         auditionAtDraw.open !== currentAudition.open ||
         auditionAtDraw.hovered !== currentAudition.hovered
       )
@@ -720,7 +749,31 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         () => {},
       );
     }
-    const frames = await exact;
+    let frames: Awaited<typeof exact> | undefined;
+    if (auditionSignal) {
+      const superseded = Promise.withResolvers<undefined>();
+      const abandon = () => superseded.resolve(undefined);
+      auditionSignal.addEventListener("abort", abandon, { once: true });
+      try {
+        frames = await Promise.race([exact, superseded.promise]);
+      } finally {
+        auditionSignal.removeEventListener("abort", abandon);
+      }
+    } else {
+      frames = await exact;
+    }
+    // A new row can start decoding while the old row's frame is still on its way. Let an
+    // upload that already started finish before the next draw uses the same compositor.
+    if (!frames) {
+      void exact.then(
+        (unused) => {
+          for (const { frame } of unused) frame.close();
+        },
+        () => {},
+      );
+      if (provisional) await provisional;
+      return;
+    }
     try {
       if (provisional) await provisional;
       if (hasStandIn && !alternate && wanted) return;
@@ -856,14 +909,18 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     for (const clip of view.timeline.clips)
       if (clip.src && next.drawable[clip.id])
         void media.get(clip.src).catch(() => {});
+    primeSelectedGrids();
     void draw();
   };
   void refresh();
 
   const unsubscribe = [
     useVersions.subscribe((state, previous) => {
-      if (state.open !== previous.open || state.hovered !== previous.hovered)
+      if (state.open !== previous.open || state.hovered !== previous.hovered) {
+        auditionChanged.abort();
+        auditionChanged = new AbortController();
         queueMicrotask(() => void draw());
+      }
     }),
     usePreviewGrade.subscribe(() => void draw()),
     useGradeBypass.subscribe(() => void draw()),
@@ -872,6 +929,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         void draw();
     }),
     useTimeline.subscribe((state, previous) => {
+      if (state.selection !== previous.selection) primeSelectedGrids();
       if (state.view === previous.view) return;
       // The shown view already holds the edit: draw it now, and let the server's plan follow.
       void draw();

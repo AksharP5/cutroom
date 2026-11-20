@@ -425,5 +425,5 @@ export async function openRanges(url: string, signal: AbortSignal) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     return response.status === 200 ? bytes.subarray(start, end) : bytes;
   };
-  return { read, size };
+  return { read, size, head };
 }

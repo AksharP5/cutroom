@@ -853,6 +853,13 @@ test("a GPU hover draws the take's source frame before the original index arrive
       return frame;
     }, png.toString("base64"));
     expect(sourceFrame).toBe(24);
+
+    // The next row must draw even while the previous row's original is still in flight.
+    await rows.nth(0).hover();
+    await expect(canvas).toHaveAttribute("data-standin", "false");
+    await expect.poll(() => stageColour(page, stage)).toBe("red");
+    await rows.nth(1).hover();
+    await expect(canvas).toHaveAttribute("data-standin", "true");
     original.resolve();
     await expect(canvas).toHaveAttribute("data-standin", "false");
     await page.keyboard.press("Escape");

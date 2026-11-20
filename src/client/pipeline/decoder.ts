@@ -72,6 +72,7 @@ const PAST = 32;
 const KEPT = 24;
 /** Gamuts and transfers that need Chrome's tone mapping, which a bitstream may name with no `colr`. */
 const WIDE = new Set<string | null>(["bt2020", "smpte432", "pq", "hlg"]);
+type DecoderWindow = "scrub" | "audition" | "audition-scrub" | false;
 
 /**
  * One WebCodecs decoder for one file, however many clips play it. Frames are found by their
@@ -123,12 +124,11 @@ export class SourceDecoder {
     sample: ReturnType<typeof blockReader>,
     indexOf: ReadonlyMap<number, number>,
     colour: VideoColorSpaceInit,
-    shortWindow: "scrub" | "audition" | false,
+    shortWindow: DecoderWindow,
   ) {
     this.#track = track;
     // Scrubbing can decode its keyframes again. A warmed take follows only the current window.
-    this.#keep =
-      shortWindow === "scrub" ? 4 : shortWindow === "audition" ? 8 : KEPT;
+    this.#keep = shortWindow === "audition" ? 8 : shortWindow ? 4 : KEPT;
     this.#sample = sample;
     this.#indexOf = indexOf;
     this.#config = {
@@ -151,13 +151,27 @@ export class SourceDecoder {
     read: ReadRange,
     size: number,
     colour: VideoColorSpaceInit,
+    head: Uint8Array | null,
   ) {
     const sample = blockReader(read, size);
+    // At a take's In point, the index fetch can already hold the first compressed pictures.
+    const auditionSample = async (offset: number, length: number) =>
+      head && offset + length <= head.byteLength
+        ? head.subarray(offset, offset + length)
+        : sample(offset, length);
     const indexOf = new Map<number, number>();
     for (const [index, sampleIndex] of track.shown.entries())
       indexOf.set(Math.round(track.samples[sampleIndex]!.time * 1e6), index);
-    return (window: "scrub" | "audition" | false = false) =>
-      new SourceDecoder(track, sample, indexOf, colour, window);
+    return (window: DecoderWindow = false) =>
+      new SourceDecoder(
+        track,
+        window === "audition" || window === "audition-scrub"
+          ? auditionSample
+          : sample,
+        indexOf,
+        colour,
+        window,
+      );
   }
 
   static supported(track: VideoTrack) {
