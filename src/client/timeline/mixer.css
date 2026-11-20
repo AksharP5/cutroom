@@ -278,7 +278,6 @@ input.mixer-rename {
   margin-top: 2px;
   color: var(--text-tertiary);
   font: var(--weight-regular) var(--type-micro) / 1 var(--font-sans);
-  text-align: center;
 }
 .mixer-value input {
   width: calc(100% - var(--space-2));

@@ -247,8 +247,9 @@ async function encodedPeak(path: string, time: number) {
       "1",
       "-map",
       "0:a:0",
-      "-ac",
-      "1",
+      // The left channel alone: a downmix would sum both sides of mono sound.
+      "-af",
+      "pan=mono|c0=c0",
       "-f",
       "f32le",
       "-",
