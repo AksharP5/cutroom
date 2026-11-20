@@ -98,6 +98,20 @@ export function createMcpServer(options: McpOptions = {}) {
       return tool;
     },
   };
+  const requestLocal = async (path: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    headers.set("origin", baseUrl);
+    headers.set(AGENT_HEADER, options.agentToken ?? "external");
+    headers.set(
+      AGENT_NAME_HEADER,
+      encodeURIComponent(
+        AgentNameSchema.parse(
+          server.server.getClientVersion()?.name ?? "Agent",
+        ),
+      ),
+    );
+    return fetchLocal(`${baseUrl}${path}`, { ...init, headers });
+  };
   const requestApi = async (
     path: string,
     method = "GET",
@@ -105,17 +119,10 @@ export function createMcpServer(options: McpOptions = {}) {
     { followup, reply = (result) => result }: RequestOptions = {},
   ) => {
     try {
-      const response = await fetchLocal(`${baseUrl}/api${path}`, {
+      const response = await requestLocal(`/api${path}`, {
         method,
         headers: {
           ...(followup && { accept: "text/event-stream" }),
-          origin: baseUrl,
-          [AGENT_HEADER]: options.agentToken ?? "external",
-          [AGENT_NAME_HEADER]: encodeURIComponent(
-            AgentNameSchema.parse(
-              server.server.getClientVersion()?.name ?? "Agent",
-            ),
-          ),
           ...(body !== undefined && { "content-type": "application/json" }),
         },
         ...(body !== undefined && { body: JSON.stringify(body) }),
@@ -514,19 +521,14 @@ export function createMcpServer(options: McpOptions = {}) {
   );
   registerReviewTools(registry, request);
   registerExportTools(registry, requestApi);
-  registerTimelineTools(
-    registry,
-    request,
-    async (path, init) => fetchLocal(`${baseUrl}${path}`, init),
-    async (data) => {
-      if (!server.isConnected()) return;
-      await server.server.sendLoggingMessage({
-        level: "warning",
-        logger: "cutroom.animation",
-        data,
-      });
-    },
-  );
+  registerTimelineTools(registry, request, requestLocal, async (data) => {
+    if (!server.isConnected()) return;
+    await server.server.sendLoggingMessage({
+      level: "warning",
+      logger: "cutroom.animation",
+      data,
+    });
+  });
   return Object.assign(server, { toolRegistry });
 }
 
