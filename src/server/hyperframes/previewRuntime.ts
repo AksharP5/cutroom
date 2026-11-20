@@ -57,7 +57,7 @@ export function previewRuntimeScript() {
     // sources intact. Runtime changes and pipeline ownership still refresh the whole set.
     [
       'S=()=>{if(s)return 0;let F=new Set;r.clear(),document.querySelectorAll(Yw).forEach(L=>{if(!br(L))return;F.add(L);let V=Ka(L);Qo(L,V)?Bp(L)?E(L,V,"attribute"):(w(L),r.add(L)):w(L)});',
-      `cutroomGradeAttributes=new WeakMap,S=target=>{
+      `cutroomGradeAttributes=null,S=target=>{
         if(s)return 0;
         let F=new Set;
         const syncGrade=element=>{
@@ -70,21 +70,23 @@ export function previewRuntimeScript() {
           r.add(element);
         };
         if(target){
-          cutroomGradeAttributes.set(target,target.getAttribute(No));
+          (cutroomGradeAttributes??=new WeakMap).set(target,target.getAttribute(No));
           syncGrade(target);
           return n.size;
         }
         r.clear();
         document.querySelectorAll(Yw).forEach(syncGrade);`,
     ],
-    // The bridge redraws synchronously after changing a draft attribute. The observer still
-    // handles authored changes, but skips the attributes that the bridge has already drawn.
+    // Skip the draft changes the bridge already drew in this observer delivery. A later
+    // authored change can restore the same value and must still redraw the clip.
     [
       "i=new MutationObserver(N=>{F(N)&&S()})",
       `i=new MutationObserver(changes=>{
-        const remaining=changes.filter(change=>
+        const drawn=cutroomGradeAttributes;
+        cutroomGradeAttributes=null;
+        const remaining=drawn?changes.filter(change=>
           change.type!=="attributes"||change.attributeName!==No||
-          cutroomGradeAttributes.get(change.target)!==change.target.getAttribute(No));
+          drawn.get(change.target)!==change.target.getAttribute(No)):changes;
         if(F(remaining))S();
       })`,
     ],
