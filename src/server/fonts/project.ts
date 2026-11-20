@@ -79,7 +79,7 @@ export async function addFontFaces(
 ): Promise<FontsAdded> {
   const families = [...new Set(faces.map((face) => face.family))];
   return reviews.editComposition(project, "index.html", token, () =>
-    store.mutate(
+    store.mutateWithEntry(
       project,
       `Add ${families.length === 1 ? "font" : "fonts"} ${families.join(", ")}`,
       async () => {
@@ -121,6 +121,7 @@ export async function addFontFaces(
                 },
               );
               if (!created) continue;
+              store.captureHistoryCreation(absolute, face.bytes);
               written.push(absolute);
               files.push(path);
               rules.push(fontFaceRule(face, path));

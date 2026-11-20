@@ -186,6 +186,7 @@ export async function saveFrozenFrames<T>(
   project: Project,
   frames: readonly FrozenFrame[],
   save: () => Promise<T>,
+  capture: (absolute: string, content: Uint8Array) => void,
 ) {
   const created: string[] = [];
   try {
@@ -195,6 +196,7 @@ export async function saveFrozenFrames<T>(
         await mkdir(dirname(asset), { recursive: true });
         try {
           createFileAtomically(asset, png);
+          capture(asset, png);
         } catch (error) {
           if (
             error instanceof Error &&

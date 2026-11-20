@@ -633,20 +633,14 @@ export function MediaPanel({
         );
       if (useSource.getState().file?.path === path) closeSource();
       if (keyboard) focusNext.current = neighbour ?? null;
-      const { entries } = await api(
-        `${cutroomUrl}/history`,
-        z.object({
-          entries: z.array(z.object({ id: z.string(), undone: z.boolean() })),
-        }),
-      );
-      const removal = entries.findLast((entry) => !entry.undone)?.id;
+      const { historyId } = z.object({ historyId: z.string() }).parse(body);
       const dismiss = showToast(
         `Moved ${fileName(path)} to the project's ${MEDIA_TRASH} folder.`,
         {
           label: "Undo",
           run: () => {
             dismiss();
-            void stepHistory(projectId, "undo", removal).catch(
+            void stepHistory(projectId, "undo", historyId).catch(
               (error: unknown) =>
                 showToast(
                   error instanceof Error ? error.message : String(error),

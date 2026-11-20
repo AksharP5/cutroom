@@ -1,53 +1,324 @@
 diff --git a/dist/chunk-LVEVVTIB.js b/dist/chunk-LVEVVTIB.js
-index 9975d9e29049763ff9b752f3fa00f4a12db79541..82198ba4b7b632cf23a5426e02c9ee270e244bff 100644
+index 9975d9e29049763ff9b752f3fa00f4a12db79541..7315b5617364c69f380ca5b4e612407a33540c96 100644
 --- a/dist/chunk-LVEVVTIB.js
 +++ b/dist/chunk-LVEVVTIB.js
-@@ -2625,10 +2625,39 @@ var Engine = class {
+@@ -1751,6 +1751,7 @@ function readLog(file, onUnreadable) {
+     const record = line ? parseRecord(line) : null;
+     if (record) applyRecord(log, record);
+     else if (line && index < lines.length - 1) onUnreadable(index + 1);
++    if (line && index === lines.length - 1) log.unterminated = true;
+   });
+   return log;
+ }
+@@ -1912,7 +1913,7 @@ function withoutHiddenPaths(log) {
+ }
+ var historyFiles = (dir) => listProjectFiles(dir).filter((file) => isHistoryPath(file.path));
+ var COPY_LATER_ABOVE_BYTES = 1024 ** 2;
+-var sameWho = (a, b) => a.kind === b.kind && a.name === b.name;
++var sameWho = (a, b) => a.kind === b.kind && (a.key || b.key ? a.key === b.key : a.name === b.name);
+ function splitAt(change, at, kept) {
+   if (at === change.after) return [change, null];
+   if (!at || at === change.before || !kept) return [null, change];
+@@ -2081,6 +2082,7 @@ var Engine = class {
+     );
+     if (!log) return this.firstOpen();
+     this.log = withoutHiddenPaths(log);
++    if (log.unterminated) this.persistLog();
+     await this.reclaimUncopied();
+     if (!this.log.keepsLedger) await this.takeInUnnamedLedger();
+     const cache = this.readStatCache();
+@@ -2089,6 +2091,7 @@ var Engine = class {
+       const cached = cache.get(path);
+       this.tracked.set(path, { hash, stat: cached?.hash === hash ? cached.stat : "" });
+     }
++    await this.recoverReplay();
+     const left = this.readAdopting();
+     const unadopted = (file) => left.has(file.path) && !this.tracked.has(file.path);
+     this.adoptMediaInBackground(historyFiles(this.dir).filter(unadopted), this.now());
+@@ -2299,7 +2302,7 @@ var Engine = class {
+     const endedBeforeThisWrite = this.windows.filter((open2) => !takesWrite(open2, at));
+     if (endedBeforeThisWrite.length) await this.commitOutside();
+     for (const window2 of endedBeforeThisWrite) await this.endWindow(window2);
+-    const window = this.windows.at(-1);
++    const window = this.windows.findLast((open2) => !open2.accepts || open2.accepts(path, before, after));
+     if (window) this.touch(window, at);
+     addChange(window ?? this.outsideGroup(), path, before, after);
+   }
+@@ -2404,7 +2407,7 @@ var Engine = class {
+   /** Commits the window's cut `paths` as their own entry, other files staying: a window holds one change per file,
+    * so the writer's next write to a cut file would otherwise span the claimer's edit. */
+   async commitCut(window, paths) {
+-    const part = { ...this.newGroup(window.who, window.label), startedAt: window.startedAt };
++    const part = { ...this.newGroup(window.who, window.label), startedAt: window.startedAt, category: window.category, incomplete: window.incomplete };
+     for (const path of paths) {
+       part.changes.set(path, window.changes.get(path));
+       window.changes.delete(path);
+@@ -2455,8 +2458,8 @@ var Engine = class {
+   }
+   async commit(group, extra = {}) {
+     const undoesEmptied = this.log.entries.find((entry2) => entry2.id === extra.undoes)?.files.length === 0;
+-    if (!group.changes.size && !undoesEmptied) return null;
+     const pending = this.pendingEntry(group);
++    if (!group.changes.size && !undoesEmptied && !pending.incomplete) return null;
+     const endedAt = Math.max(pending.endedAt, this.log.entries.at(-1)?.endedAt ?? 0);
+     const entry = keepTargetsOfItsFiles({ ...pending, endedAt, ...extra });
+     this.log.entries.push(entry);
+@@ -2527,7 +2530,7 @@ var Engine = class {
+       if (!(error instanceof HistoryClosedError)) this.options.onError?.(error);
+     });
+   }
+-  beginWindow(who, label, idleMs, exclusive = false) {
++  beginWindow(who, label, idleMs, exclusive = false, accepts, category, incomplete) {
+     return this.queue(async () => {
+       await this.settle();
+       const at = this.now();
+@@ -2540,7 +2543,7 @@ var Engine = class {
+         for (const open2 of [...this.windows])
+           if (!takesWrite(open2, at) || sameWho(open2.who, who)) await this.endWindow(open2);
+       }
+-      const window = { ...this.newGroup(who, label), idleMs };
++      const window = { ...this.newGroup(who, label), idleMs, accepts, category, incomplete };
+       this.windows.push(window);
+       this.touch(window, this.now());
+       const close = () => this.queue(() => this.sweepAndEnd(window));
+@@ -2608,6 +2611,36 @@ var Engine = class {
+     if (standing.at !== path) return deleted.has(at) ? void 0 : at;
+     return fileLeftIn(real, at, deleted);
+   }
++  get pendingReplay() {
++    return join8(this.home, "pending-replay.json");
++  }
++  async recoverReplay() {
++    if (!existsSync3(this.pendingReplay)) return;
++    const pending = JSON.parse(readFileSync10(this.pendingReplay, "utf-8"));
++    if (!this.log.entries.some(({ id }) => id === pending.id)) {
++      // A replay interrupted before the log append rolls back. Keep outside writes intact.
++      for (const { path, before, after } of pending.files) {
++        if (typeof path !== "string" || !path || path === "." ||
++            path.includes("\0") || path.split("/").includes("..") ||
++            !isSafePath(this.dir, join8(this.dir, path)) || !isHistoryPath(path) ||
++            ![before, after].every((hash) => hash === null || BLOB_HASH.test(hash)))
++          throw new HistoryRefusedError("The interrupted history operation could not be read.");
++        const current = await this.projectFileHash(path);
++        if (current === before) continue;
++        if (current !== after)
++          throw new HistoryRefusedError(`Cannot recover interrupted history: ${path} changed outside Cutroom.`);
++        await this.writeProjectFile(path, before, after);
++      }
++    }
++    rmSync3(this.pendingReplay, { force: true });
++  }
++  async projectFileHash(path) {
++    const standing = this.standingAt(path);
++    if (!standing || standing.at === path && standing.stat.isDirectory()) return null;
++    if (standing.at !== path || !standing.stat.isFile())
++      throw new HistoryRefusedError(`${path} is blocked during history replay.`);
++    return hashFile(join8(this.dir, path));
++  }
+   /** Writes `target` (path to hash, null deletes) as one entry of `who`'s. */
+   async writeAs(who, label, target, extra) {
+     this.assertWritable();
+@@ -2619,43 +2652,105 @@ var Engine = class {
+       ([, hash]) => hash !== null && !this.blobs.has(hash) && !setAsideByDeletesFirst.has(hash)
+     );
+     if (gone)
+-      throw new Error(
++      throw new HistoryRefusedError(
+         `An earlier version of ${gone[0]} is not kept, so this cannot be brought back.`
+       );
      const deleted = new Set(changes.filter(([, hash]) => hash === null).map(([path]) => path));
      const blocked = changes.filter(([, hash]) => hash !== null).map(([path]) => this.inTheWay(path, deleted)).find(Boolean);
-     if (blocked) throw new Error(`${blocked} is in the way; move or delete it, then try again.`);
+-    if (blocked) throw new Error(`${blocked} is in the way; move or delete it, then try again.`);
++    if (blocked) throw new HistoryRefusedError(`${blocked} is in the way; move or delete it, then try again.`);
 +    if (this.options.beforeReplay)
 +      await this.options.beforeReplay(
 +        changes.map(([path, after]) => ({ path, before: this.tracked.get(path)?.hash ?? null, after })),
 +        (hash) => this.blobs.read(hash),
 +        { ...extra, entries: this.log.entries }
 +      );
++    const expected = new Map(changes.map(([path]) => [path, this.tracked.get(path)?.hash ?? null]));
      const group = this.newGroup(who, label);
++    group.accepts = (path, before, after) => expected.get(path) === before && target.get(path) === after;
++    const attempted = [];
++    const journal = extra.replay && this.pendingReplay;
++    if (journal) replaceFileAtomically6(journal, JSON.stringify({
++      id: group.id,
++      files: [...changes].reverse().map(([path, after]) => ({ path, before: expected.get(path), after }))
++    }), 384);
      this.windows.push(group);
      try {
 -      for (const [path, hash] of changes) await this.writeProjectFile(path, hash);
-+      const attempted = [];
++      let entry;
 +      try {
 +        for (const [path, hash] of changes) {
-+          const before = this.tracked.get(path)?.hash ?? null;
-+          attempted.push([path, before]);
-+          await this.writeProjectFile(path, hash);
++          const before = expected.get(path);
++          await this.writeProjectFile(path, hash, before, () => attempted.push([path, before, hash]));
 +        }
++        await this.sweep();
++        if (changes.some(([path, hash]) => group.changes.get(path)?.after !== hash)
++            || extra.replay && this.outside?.changes.size)
++          throw new HistoryRefusedError("Project files changed during history replay. Try again after the outside write settles.");
++        entry = await this.commit(group, extra);
 +      } catch (error) {
++        if (this.log.entries.some((committed) => committed.id === group.id)) throw error;
 +        // The history queue excludes its watcher while we restore the original files.
 +        const failures = [];
-+        for (const [path, before] of attempted.reverse()) {
++        for (const [path, before, after] of attempted.reverse()) {
 +          try {
-+            const standing = this.standingAt(path);
-+            const present = standing?.at === path && standing.stat.isFile();
-+            const current = present ? await hashFile(join8(this.dir, path)) : null;
-+            if (current !== before) await this.writeProjectFile(path, before);
++            const current = await this.projectFileHash(path);
++            if (current === after && current !== before) await this.writeProjectFile(path, before, after);
 +          } catch (failure) {
 +            failures.push(failure);
 +          }
 +        }
++        group.changes.clear();
++        for (const [path, before] of attempted) {
++          if (before === null) this.tracked.delete(path);
++          else this.tracked.set(path, { hash: before, stat: "" });
++        }
++        await this.sweep();
 +        if (failures.length)
 +          throw new AggregateError([error, ...failures], "Could not roll back the history write.");
++        if (journal) rmSync3(journal, { force: true });
 +        throw error;
 +      }
++      if (journal) rmSync3(journal, { force: true });
        await this.blobs.release(
          changes.flatMap(([path, hash]) => hash ? [[hash, path]] : [])
        );
+-      await this.sweep();
++      return entry;
+     } finally {
+       this.windows = this.windows.filter((open2) => open2 !== group);
+     }
+-    return this.commit(group, extra);
+   }
+   /** Writes one project file (null deletes it), first leaving the running operation's receipt for its echo. */
+-  async writeProjectFile(path, hash) {
++  async writeProjectFile(path, hash, expected, publishing) {
+     this.assertWritable();
+     const absPath = join8(this.dir, path);
+-    const { writeToken } = this;
+-    if (writeToken) {
+-      const version = hash === null ? DELETED_VERSION : hashVersion(hash);
+-      recordFileWriteReceipt(absPath, { path, version, writeToken });
+-    }
+-    const standing = lstatSync4(absPath, { throwIfNoEntry: false });
+-    if (standing?.isFile() && isUncopied(path, standing.size))
+-      await this.blobs.keep(path, absPath, hash === null);
+-    if (hash === null) {
++    const stale = () => new HistoryRefusedError(`${path} changed during history replay.`);
++    const standing = this.standingAt(path);
++    const sameFile = () => {
++      const current = this.standingAt(path);
++      const a = standing?.stat, b = current?.stat;
++      return expected === null
++        ? !current || (current.at === path && b.isDirectory())
++        : standing?.at === path && current?.at === path && b.isFile() &&
++          a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.ctimeMs === b.ctimeMs && a.mtimeMs === b.mtimeMs;
++    };
++    if (!sameFile() || expected !== null && await hashFile(absPath) !== expected) throw stale();
++    if (standing?.stat.isFile() && isUncopied(path, standing.stat.size))
++      await this.blobs.keep(path, absPath, false);
++    const publish = () => {
+       this.assertWritable();
++      if (!sameFile()) throw stale();
++      publishing?.();
++      const { writeToken } = this;
++      if (writeToken) {
++        const version = hash === null ? DELETED_VERSION : hashVersion(hash);
++        recordFileWriteReceipt(absPath, { path, version, writeToken });
++      }
++    };
++    if (hash === null) {
++      publish();
+       rmSync3(absPath, { force: true });
+     } else {
+       await removeEmptyFolders(absPath);
+-      await this.blobs.writeTo(hash, absPath, () => this.assertWritable());
++      await this.blobs.writeTo(hash, absPath, publish);
+     }
+   }
+   entry(id) {
+@@ -2668,7 +2763,7 @@ var Engine = class {
+     const original = this.log.entries.find((candidate) => candidate.id === entry.undoes);
+     return `Redid: ${original?.label ?? entry.label}`;
+   }
+-  async undoNow(id, who, mode) {
++  async undoNow(id, who, mode, replay = {}) {
+     const entry = this.entry(id);
+     const changed = this.movedOn(entry);
+     if (changed.length && !mode) return { ok: false, conflict: this.conflict(entry, changed) };
+@@ -2687,6 +2782,7 @@ var Engine = class {
+       ok: true,
+       entry: await this.writeAs(who, this.undoLabel(entry), target, {
+         undoes: id,
++        ...replay,
+         ...entry.targets && { targets: entry.targets }
+       })
+     };
+@@ -2719,6 +2815,8 @@ var Engine = class {
+       startedAt,
+       endedAt: lastWriteAt ?? this.now(),
+       files,
++      ...group.category && { category: group.category },
++      ...group.incomplete?.(group.changes) && { incomplete: true },
+       ...group.targets?.length && { targets: group.targets }
+     };
+   }
+@@ -2771,7 +2869,10 @@ var Engine = class {
+         who,
+         label,
+         options.idleMs ?? this.options.maxGroupMs ?? 3e4,
+-        options.exclusive === true
++        options.exclusive === true,
++        options.accepts,
++        options.category,
++        options.incomplete
+       ),
+       claim: async (who, label, paths, options = {}) => {
+         await Promise.all(paths.map((path) => this.adopting.get(this.logPath(path))));
+@@ -2789,6 +2890,15 @@ var Engine = class {
+         return target ? this.undoNow(target.id, who) : { ok: true, entry: null };
+       }),
+       undo: (id, { who, mode, writeToken }) => this.operation(writeToken, () => this.undoNow(id, who, mode)),
++      revert: (who, select, { writeToken, requestId }) => this.operation(writeToken, async () => {
++        if (existsSync3(this.pendingReplay))
++          throw new HistoryRefusedError("Reopen this project to recover an interrupted history operation.");
++        const key = who.key;
++        const committed = requestId && key && this.log.entries.find((entry) => entry.requestId === requestId && entry.who.key === key);
++        if (committed) return { ok: true, entry: committed, repeated: true };
++        const selected = await select(listOf(this.log));
++        return selected ? this.undoNow(selected.id, who, void 0, { replay: selected.replay, requestId }) : { ok: true, entry: null };
++      }),
+       restore: (point, who, { writeToken } = {}) => this.operation(
+         writeToken,
+         () => this.restoreNow(point, who, `Restored: ${this.pointLabel(point)}`)
 diff --git a/dist/projectHistory-C18HDvac.d.ts b/dist/projectHistory-C18HDvac.d.ts
-index 16528dc8076fa204b5c95ba83a0aad2990ecfbf6..f805de2db0fd6365e1ff6f2f1303ca4004cbd496 100644
+index 16528dc8076fa204b5c95ba83a0aad2990ecfbf6..3e7ecd50202196cd7076a94a8eb7c8d75397e197 100644
 --- a/dist/projectHistory-C18HDvac.d.ts
 +++ b/dist/projectHistory-C18HDvac.d.ts
-@@ -55,6 +55,12 @@ interface ProjectHistoryOptions {
+@@ -2,6 +2,8 @@ interface HistoryWho {
+     kind: "person" | "agent" | "outside";
+     /** Shown in the History list: "You", the agent's name, "Outside". */
+     name: string;
++    /** Opaque workspace author key, independent of the display name. */
++    key?: string;
+ }
+ /** A file's sha256 before and after; null is "did not exist", so a create or delete undoes like any edit. */
+ interface HistoryFileChange {
+@@ -27,6 +29,10 @@ interface HistoryEntry {
+     files: HistoryFileChange[];
+     /** Set on an undo: the entry it reverted. Redo is undoing the undo. */
+     undoes?: string;
++    replay?: "ordinary" | "explicit";
++    category?: "marker" | "media" | "text";
++    requestId?: string;
++    incomplete?: true;
+     /** Set on a restore: the point (an entry id, or START) the files were made equal to. */
+     restoredTo?: string;
+ }
+@@ -55,6 +61,12 @@ interface ProjectHistoryOptions {
      closedWindow?: ClosedWindow;
      closedWindowAfterOwnership?: () => ClosedWindow | undefined;
      undoScope?: "own" | "everyone";
@@ -55,8 +326,37 @@ index 16528dc8076fa204b5c95ba83a0aad2990ecfbf6..f805de2db0fd6365e1ff6f2f1303ca40
 +    beforeReplay?: (
 +        changes: readonly HistoryFileChange[],
 +        readBlob: (hash: string) => Promise<Buffer>,
-+        context: Pick<HistoryEntry, "undoes" | "restoredTo"> & { entries: readonly HistoryEntry[] }
++        context: Pick<HistoryEntry, "undoes" | "restoredTo" | "replay"> & { entries: readonly HistoryEntry[] }
 +    ) => Promise<void>;
      pruneGoneProjectsBudgetMs?: number;
  }
  interface ClaimOptions {
+@@ -85,6 +97,7 @@ interface HistoryListItem extends HistoryEntry {
+ type HistoryResult = {
+     ok: true;
+     entry: HistoryEntry | null;
++    repeated?: true;
+ } | {
+     ok: false;
+     conflict: {
+@@ -106,6 +119,9 @@ interface ProjectHistory {
+     beginWindow(who: HistoryWho, label: string, options?: {
+         idleMs?: number;
+         exclusive?: boolean;
++        category?: HistoryEntry["category"];
++        incomplete?: (changes: ReadonlyMap<string, HistoryFileChange>) => boolean;
++        accepts?: (path: string, before: string | null, after: string | null) => boolean;
+     }): Promise<HistoryWindow>;
+     /**
+      * For a writer that records after writing (Studio): moves the uncommitted changes to `paths` into one entry of
+@@ -127,6 +143,10 @@ interface ProjectHistory {
+         who: HistoryWho;
+         mode?: UndoMode;
+     } & Writing): Promise<HistoryResult>;
++    /** Select an exact inverse after pending writes settle, under the same lock as replay. */
++    revert(who: HistoryWho, select: (entries: readonly HistoryListItem[]) => Promise<{ id: string; replay: NonNullable<HistoryEntry["replay"]> } | undefined>, options: Writing & {
++        requestId?: string;
++    }): Promise<HistoryResult>;
+     /** Makes the files equal what they were right after `point` (an entry id, or START). */
+     restore(point: string, who: HistoryWho, options?: Writing): Promise<HistoryEntry | null>;
+     /** The files at `point` without writing anything: path to hash, read through readBlob. */

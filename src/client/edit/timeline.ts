@@ -52,11 +52,26 @@ const clipboards = new Map<string, readonly Clip[]>();
 const clipboardIds = new Map<string, string>();
 let clipboardTask = Promise.resolve();
 
+const HistoryTargetSchema = z.object({ id: z.string(), label: z.string() });
 const HistorySchema = z.object({
   canUndo: z.boolean(),
   canRedo: z.boolean(),
-  entries: z.array(z.object({ id: z.string(), undone: z.boolean() })),
+  nextUndo: HistoryTargetSchema.nullable(),
+  nextRedo: HistoryTargetSchema.nullable(),
+  entries: z.array(
+    z.object({
+      id: z.string(),
+      undone: z.boolean(),
+      undoes: z.string().optional(),
+    }),
+  ),
 });
+const emptyHistory: Omit<z.infer<typeof HistorySchema>, "entries"> = {
+  canUndo: false,
+  canRedo: false,
+  nextUndo: null,
+  nextRedo: null,
+};
 const TimelineEditsSchema = TimelineViewSchema.pick({ clipEdits: true });
 
 /** The engine's timeline for the open composition, shared by the viewer, transport, and timeline. */
@@ -71,7 +86,7 @@ export const useTimeline = create(() => ({
   view: null as TimelineView | null,
   /** Review can still show pending edits when authored source cannot produce a timeline. */
   failedRead: null as ApiError | null,
-  history: { canUndo: false, canRedo: false },
+  history: emptyHistory,
   /** Selected clip ids. A clip id names one clip for good, so an id is that clip or gone. */
   selection: emptySelection as Selection,
   /** Dragged edges snap to clip edges, the playhead, markers, and in and out. Session state. */
@@ -171,7 +186,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
     parents: [],
     view: null,
     failedRead: null,
-    history: { canUndo: false, canRedo: false },
+    history: emptyHistory,
     selection: emptySelection,
   });
   signal?.addEventListener(
@@ -185,7 +200,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
         projectId: null,
         view: null,
         failedRead: null,
-        history: { canUndo: false, canRedo: false },
+        history: emptyHistory,
         selection: emptySelection,
       });
     },
@@ -415,18 +430,27 @@ async function read(
     confirmed.view.revision !== view.revision &&
     notify
   ) {
-    const before = confirmed.view;
-    const known = new Set(before.reviewEntries);
-    const entries =
-      view.reviewEntries?.filter((entry) => !known.has(entry)) ?? [];
-    const details = entries.length
-      ? await api(`${project(projectId)}/review/changes`, TimelineEditsSchema, {
-          ...json("POST", { composition, entries }),
-          signal,
-        }).catch(() => null)
-      : null;
-    if (signal?.aborted || !isOpen(projectId, composition)) return view;
-    noticeOutside(before, { ...view, clipEdits: details?.clipEdits });
+    const head = history.entries.findIndex(({ id }) => id === historyHead);
+    const newer = history.entries.slice(head + 1);
+    const replayOnly =
+      head >= 0 && newer.length && newer.every(({ undoes }) => undoes);
+    if (!replayOnly) {
+      const before = confirmed.view;
+      const known = new Set(before.reviewEntries);
+      const entries = view.reviewEntries?.filter((entry) => !known.has(entry));
+      const details = entries?.length
+        ? await api(
+            `${project(projectId)}/review/changes`,
+            TimelineEditsSchema,
+            {
+              ...json("POST", { composition, entries }),
+              signal,
+            },
+          ).catch(() => null)
+        : null;
+      if (signal?.aborted || !isOpen(projectId, composition)) return view;
+      noticeOutside(before, { ...view, clipEdits: details?.clipEdits });
+    }
   }
   confirmed = { projectId, view };
   settle(projectId, view, history);
@@ -795,6 +819,7 @@ export async function editTimeline(
         showToast(report, null, { tone: "info" });
       } else if (
         feedback &&
+        historyId &&
         revision === confirmed?.view.revision &&
         !pending.length &&
         historyId === historyHead
@@ -854,14 +879,6 @@ export const stepHistory = (
   queueNoteChange(projectId, () =>
     clipboardTask.then(() =>
       enqueue(async () => {
-        if (expectedHistoryId) {
-          const history = await readHistory(projectId);
-          if (
-            history.entries.findLast((entry) => !entry.undone)?.id !==
-            expectedHistoryId
-          )
-            throw new Error("The history changed. Use Undo in the toolbar.");
-        }
         dismissRipple();
         rippleRevision = null;
         // React's notebook may still predate the save, even while its pin is visible.
@@ -877,11 +894,18 @@ export const stepHistory = (
                 throw error;
               })
             : null;
-        await api(
+        const { entry } = await api(
           `${project(projectId)}/history/${step}`,
-          z.unknown(),
-          json("POST"),
+          z.object({ entry: z.object({ id: z.string() }).nullable() }),
+          json("POST", {
+            entryId: expectedHistoryId,
+            requestId: crypto.randomUUID(),
+          }),
         );
+        if (!entry) {
+          showToast(`Nothing of yours to ${step}`);
+          return;
+        }
         await refreshOpenTimeline(projectId, undefined, false);
         if (!before?.items.length) return;
         const after = await api(
@@ -905,8 +929,8 @@ export const stepHistory = (
               label: "Redo",
               run: () => {
                 showToast("");
-                void stepHistory(projectId, "redo").catch((error: unknown) =>
-                  reportEditorError("timeline", error),
+                void stepHistory(projectId, "redo", entry.id).catch(
+                  (error: unknown) => reportEditorError("timeline", error),
                 );
               },
             },
