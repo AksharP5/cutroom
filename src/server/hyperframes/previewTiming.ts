@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { parse, serialize, serializeOuter } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
-import { parseFpsWithDefault } from "@hyperframes/core";
+import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
 import { canonicalText } from "../../shared/timeline/schema";
 import {
   declaredFonts,
@@ -128,7 +128,14 @@ function titleContract(
  * its markup travel with the snapshot so a loaded document can add or remove it exactly.
  */
 export function previewTiming(html: string, dependencies = ""): PreviewTiming {
-  const document = parse(html);
+  return timingOf(parse(html), html, dependencies);
+}
+
+function timingOf(
+  document: DefaultTreeAdapterTypes.Document,
+  html: string,
+  dependencies: string,
+): PreviewTiming {
   const clips: PreviewTiming["clips"] = [];
   const { titleData, expectedStyle, styles, elements } = titleContract(
     document,
@@ -345,6 +352,115 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
     clips,
     titleStyle: sheet,
     duration,
+  };
+}
+
+/**
+ * An optional faster read for a single authored root with explicit clip IDs. Use the
+ * same structural comparison as compiled timing, but mask only the clips the compiler
+ * identified in the already approved preview.
+ */
+export function previewSourceTiming(
+  html: string,
+  clipIds: ReadonlySet<string>,
+) {
+  if (/\bdata-hf-id\s*=/i.test(html)) return null;
+  const document = parse(html);
+  const attribute = (node: DefaultTreeAdapterTypes.Element, name: string) =>
+    node.attrs.find((entry) => entry.name === name);
+  const children = (node: DefaultTreeAdapterTypes.ParentNode) =>
+    node.childNodes.filter(
+      (child): child is DefaultTreeAdapterTypes.Element => "tagName" in child,
+    );
+  const page = children(document).find((node) => node.tagName === "html");
+  const body = page && children(page).find((node) => node.tagName === "body");
+  const roots = body && children(body);
+  const root = roots?.[0];
+  if (!root || roots.length !== 1 || !attribute(root, "data-composition-id"))
+    return null;
+  const rate = parseFpsWithDefault(attribute(root, "data-fps")?.value);
+  if (!rate.ok) return null;
+  const fps = rate.value.num / rate.value.den;
+  for (const node of children(root)) {
+    const id = attribute(node, "id")?.value;
+    if (
+      attribute(node, "data-composition-src") ||
+      attribute(node, "data-composition-id")
+    )
+      return null;
+    if (!id || !clipIds.has(id)) continue;
+    // Relative starts and inferred spans can change when a neighbour moves.
+    const start = attribute(node, "data-start");
+    const duration = attribute(node, "data-duration");
+    if (
+      !start ||
+      !duration ||
+      !start.value.trim() ||
+      !duration.value.trim() ||
+      !Number.isFinite(Number(start.value)) ||
+      Number(start.value) < 0 ||
+      !Number.isFinite(Number(duration.value)) ||
+      Number(duration.value) <= 0 ||
+      attribute(node, "data-hf-cutroom-clip-id")
+    )
+      return null;
+    const time = Number(start.value);
+    const end = time + Number(duration.value);
+    const snapped = exportClipWindow(time, end, fps);
+    const authoredEnd = attribute(node, "data-end");
+    // HyperFrames fills the end of a media window when it compiles a known duration.
+    if (!authoredEnd && (node.tagName === "video" || node.tagName === "audio"))
+      node.attrs.push({ name: "data-end", value: String(snapped.end) });
+    if (snapped.start !== time || snapped.end !== end) {
+      start.value = String(snapped.start);
+      duration.value = String(snapped.end - snapped.start);
+      if (authoredEnd) authoredEnd.value = String(snapped.end);
+    }
+    node.attrs.push({ name: "data-hf-cutroom-clip-id", value: id });
+  }
+  return timingOf(document, html, "");
+}
+
+export function updatePreviewSourceTiming(
+  before: PreviewTiming,
+  after: PreviewTiming,
+  compiled: PreviewTiming,
+): PreviewTiming | null {
+  if (
+    before.structure !== after.structure ||
+    before.titleStyle !== after.titleStyle ||
+    before.duration !== compiled.duration ||
+    before.clips.length !== compiled.clips.length
+  )
+    return null;
+  const clips: PreviewTiming["clips"] = [];
+  for (const [index, old] of before.clips.entries()) {
+    const next = after.clips[clips.length];
+    if (!next || old.id !== next.id) continue;
+    const served = compiled.clips[index];
+    if (
+      !served ||
+      old.id !== served.id ||
+      old.body !== next.body ||
+      old.slot !== next.slot ||
+      old.space !== next.space ||
+      JSON.stringify(old.title) !== JSON.stringify(next.title) ||
+      !timingAttributes.every(
+        (name) => old.values[name] === served.values[name],
+      )
+    )
+      return null;
+    clips.push({ ...served, values: next.values });
+  }
+  if (clips.length !== after.clips.length) return null;
+  if (before.revision === after.revision) return compiled;
+  return {
+    ...compiled,
+    duration: after.duration,
+    clips,
+    revision: createHash("sha256")
+      .update(compiled.structure + after.revision)
+      .digest("hex"),
   };
 }
 

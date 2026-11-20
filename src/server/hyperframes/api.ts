@@ -99,7 +99,12 @@ import { exportResolve } from "../resolve/export";
 import { layerHtml, layerSources } from "../resolve/layers";
 import { previewPolicy } from "./isolation";
 import { APP_STATE_DIR, previewTimingPolicy } from "./previewTimingPolicy";
-import { previewDependencies } from "./previewTiming";
+import {
+  previewDependencies,
+  previewSourceTiming,
+  updatePreviewSourceTiming,
+} from "./previewTiming";
+import type { PreviewTiming, TrackGainPreview } from "../../shared/preview";
 import { previewDocument, withPreviewClipIdentities } from "./previewBridge";
 import { readTrackMix, trackMixStamp } from "../timeline/mix";
 import {
@@ -226,6 +231,17 @@ export function createHyperframesApi(
         NonNullable<Awaited<ReturnType<typeof prepareRampPreview>>>,
         "assets" | "pending"
       >;
+    }
+  >();
+  const sourceTimings = new Map<
+    string,
+    {
+      ids: ReadonlySet<string>;
+      dependencies: string;
+      mixStamp: string;
+      authored: PreviewTiming;
+      compiled: PreviewTiming;
+      mix: TrackGainPreview;
     }
   >();
   // Keep the compiler's decision outside authored HTML. The upstream cache's write
@@ -1274,12 +1290,78 @@ export function createHyperframesApi(
     if (timingOnly && (loaded?.projectId !== projectId || !loaded.allowed))
       return c.json({ error: "This document requires a reload." }, 409);
     const project = await store.get(projectId);
-    const sourceBefore = timingOnly
-      ? await readSource(project, "index.html")
-      : null;
-    const dependenciesBefore = timingOnly
-      ? await previewDependencies(project.path, "index.html")
-      : null;
+    const navigation =
+      !!documentId &&
+      documentId.length <= 100 &&
+      c.req.header("sec-fetch-dest") === "iframe" &&
+      c.req.header("sec-fetch-site") === "same-origin" &&
+      !timingDocuments.has(documentId);
+    // Preview variants still use the compiler, which applies their requested values.
+    const sourceTimingNavigation =
+      navigation &&
+      path === "preview" &&
+      !url.searchParams.has("variables") &&
+      !url.searchParams.has(AUDITION_PARAM) &&
+      !url.searchParams.has("hf-capture");
+    const prior = !url.searchParams.has("variables")
+      ? sourceTimings.get(documentId ?? "")
+      : undefined;
+    const readEntry = () =>
+      readSource(project, "index.html").catch((error: unknown) => {
+        if (
+          isMissing(error) ||
+          (error instanceof HttpError && error.status === 404)
+        )
+          return null;
+        throw error;
+      });
+    const readMixStamp = () =>
+      store.document(project).then(trackMixStamp, (error: unknown) => {
+        if (error instanceof ProjectDocumentError) return null;
+        throw error;
+      });
+    const [sourceBefore, dependenciesBefore, mixStampBefore] =
+      await Promise.all([
+        timingOnly || sourceTimingNavigation ? readEntry() : null,
+        timingOnly ? previewDependencies(project.path, "index.html") : null,
+        sourceTimingNavigation || (timingOnly && prior) ? readMixStamp() : null,
+      ]);
+    if (
+      timingOnly &&
+      prior &&
+      sourceBefore &&
+      dependenciesBefore === prior.dependencies &&
+      mixStampBefore === prior.mixStamp
+    ) {
+      const authored = previewSourceTiming(sourceBefore.content, prior.ids);
+      const timing =
+        authored &&
+        updatePreviewSourceTiming(prior.authored, authored, prior.compiled);
+      if (timing) {
+        const [source, dependencies, mixStamp] = await Promise.all([
+          readEntry(),
+          previewDependencies(project.path, "index.html"),
+          readMixStamp(),
+        ]);
+        if (
+          source?.version === sourceBefore.version &&
+          dependencies === dependenciesBefore &&
+          mixStamp === mixStampBefore
+        ) {
+          c.header("Cache-Control", "no-store");
+          const mix =
+            timing === prior.compiled
+              ? prior.mix
+              : { ...prior.mix, signature: timing.revision };
+          return c.json({
+            version: sourceBefore.version,
+            timing,
+            mix,
+            live: true,
+          });
+        }
+      }
+    }
     // A disk write can beat its watch event. Do not label a cached compiled document
     // with the newer source version merely because the watcher has not invalidated it yet.
     if (timingOnly) signatures.delete(project.path);
@@ -1421,21 +1503,25 @@ export function createHyperframesApi(
     );
     if (timingOnly) {
       c.header("Cache-Control", "no-store");
-      const sourceAfter = await readSource(project, "index.html");
-      if (!response.ok || sourceBefore?.version !== sourceAfter.version)
+      const sourceAfter = await readEntry();
+      if (
+        !response.ok ||
+        !sourceBefore ||
+        sourceBefore.version !== sourceAfter?.version
+      )
         return c.json(
           { error: "The preview changed while reading timing." },
           409,
         );
       if (!document.timing)
         return c.json({
-          version: sourceAfter.version,
+          version: sourceBefore.version,
           timing: null,
           mix,
           live: true,
         });
       if (
-        dependenciesBefore === null ||
+        !dependenciesBefore ||
         dependencies === null ||
         dependenciesBefore !== dependencies
       )
@@ -1444,7 +1530,7 @@ export function createHyperframesApi(
           409,
         );
       return c.json({
-        version: sourceAfter.version,
+        version: sourceBefore.version,
         timing: document.timing,
         mix,
         live:
@@ -1452,20 +1538,51 @@ export function createHyperframesApi(
           timingDocuments.get(documentId ?? "")?.allowed === true,
       });
     }
-    if (
-      documentId &&
-      documentId.length <= 100 &&
-      c.req.header("sec-fetch-dest") === "iframe" &&
-      c.req.header("sec-fetch-site") === "same-origin" &&
-      !timingDocuments.has(documentId)
-    ) {
-      timingDocuments.set(documentId, {
-        projectId,
-        allowed: document.timing !== null,
-        ramp: ramp ? { assets: ramp.assets, pending: ramp.pending } : undefined,
-      });
-      if (timingDocuments.size > 64)
-        timingDocuments.delete(timingDocuments.keys().next().value!);
+    if (navigation && documentId && !timingDocuments.has(documentId)) {
+      const compiled = document.timing;
+      const ids = new Set(compiled?.clips.map(({ id }) => id));
+      const authored =
+        sourceTimingNavigation &&
+        compiled &&
+        sourceBefore &&
+        dependencies &&
+        response.ok &&
+        response.headers.has("ETag") &&
+        sourceBefore.version === (await readEntry())?.version &&
+        mixStampBefore === (await readMixStamp())
+          ? previewSourceTiming(sourceBefore.content, ids)
+          : null;
+      if (!timingDocuments.has(documentId)) {
+        timingDocuments.set(documentId, {
+          projectId,
+          allowed: compiled !== null,
+          ramp: ramp
+            ? { assets: ramp.assets, pending: ramp.pending }
+            : undefined,
+        });
+        if (timingDocuments.size > 64) {
+          const oldest = timingDocuments.keys().next().value!;
+          timingDocuments.delete(oldest);
+          sourceTimings.delete(oldest);
+        }
+        if (
+          authored?.clips.length === ids.size &&
+          compiled &&
+          dependencies &&
+          mixStampBefore !== null
+        ) {
+          sourceTimings.set(documentId, {
+            ids,
+            dependencies,
+            mixStamp: mixStampBefore,
+            authored,
+            compiled,
+            mix,
+          });
+          if (sourceTimings.size > 8)
+            sourceTimings.delete(sourceTimings.keys().next().value!);
+        }
+      }
     }
     return new Response(document.html, {
       status: response.status,
