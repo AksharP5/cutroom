@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { z } from "zod";
 import {
   InspectorChangeSchema,
@@ -7,15 +7,19 @@ import {
 import { api } from "../api";
 import { useTimeline } from "./timeline";
 
-const InspectorChangesSchema = z.object({
-  rows: z.array(InspectorChangeSchema),
-});
+const InspectorChangesSchema = z
+  .object({ rows: z.array(InspectorChangeSchema) })
+  .transform(({ rows }) => (rows.length ? rows : undefined));
+
+const ProjectReviewChangesSchema = ReviewChangesSchema.transform((value) =>
+  value.hasChanges ? value : undefined,
+);
 
 function useDetails<T>(
   projectId: string,
   visible: boolean,
   input: string,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T | undefined>,
 ) {
   const composition = useTimeline((state) => state.composition);
   // Optimistic timeline updates retain this reference. A settled refresh replaces it,
@@ -25,6 +29,10 @@ function useDetails<T>(
   const owner = useTimeline((state) => state.projectId);
   const [answer, setAnswer] = useState<{ key: string; value: T }>();
   const key = JSON.stringify([projectId, composition, input]);
+  const receive = useEffectEvent((requestKey: string, value: T | undefined) => {
+    if (value !== undefined) setAnswer({ key: requestKey, value });
+    else if (answer?.key === requestKey) setAnswer(undefined);
+  });
 
   useEffect(() => {
     if (!visible || owner !== projectId || (!entries && !failure)) return;
@@ -39,10 +47,10 @@ function useDetails<T>(
       },
     )
       .then((value) => {
-        if (!controller.signal.aborted) setAnswer({ key, value });
+        if (!controller.signal.aborted) receive(key, value);
       })
       .catch(() => {
-        if (!controller.signal.aborted) setAnswer(undefined);
+        if (!controller.signal.aborted) receive(key, undefined);
       });
     return () => controller.abort();
   }, [
@@ -71,7 +79,7 @@ export function useInspectorChanges(
     visible && !failed,
     JSON.stringify({ view: "inspector", clipIds }),
     InspectorChangesSchema,
-  )?.rows;
+  );
 }
 
 export function useProjectReviewChanges(projectId: string, visible: boolean) {
@@ -80,6 +88,6 @@ export function useProjectReviewChanges(projectId: string, visible: boolean) {
     projectId,
     visible,
     JSON.stringify({ view: "review", includeClips: failed }),
-    ReviewChangesSchema,
+    ProjectReviewChangesSchema,
   );
 }
