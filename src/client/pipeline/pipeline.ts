@@ -97,7 +97,7 @@ async function openSource(
 ) {
   const { read, size } = await openRanges(url, signal);
   const track = await readVideoTrack(read, size);
-  if (track.width * track.height > FOOTAGE_PIXEL_LIMIT)
+  if (!scrubProxy && track.width * track.height > FOOTAGE_PIXEL_LIMIT)
     throw new Error(
       `The playing file is ${track.width} × ${track.height}, above the pipeline's 1080p limit.`,
     );
