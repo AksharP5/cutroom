@@ -96,8 +96,9 @@ export class SourceDecoder {
   #drawn = -1;
   /** The frame the running request decodes towards, in a sequential run, or -1. */
   #heading = -1;
-  /** The range a queued prefetch will decode, which later prefetches widen instead of queueing. */
-  #ahead: { from: number; to: number } | null = null;
+  /** Newer lookahead replaces the remaining frames in this range. */
+  #ahead: { from: number; next: number; to: number } | null = null;
+  #prefetching = false;
   /** Frames the current run has put out, so a sent frame is known to be in flight or gone. */
   readonly #produced = new Set<number>();
   readonly #frames = new Map<number, VideoFrame>();
@@ -408,6 +409,9 @@ export class SourceDecoder {
     if (sequential) {
       // Playback: frame threading holds a few frames, so keep feeding until it lands, on into
       // the next GOP, which starts with its own keyframe. Only the file's end needs a flush.
+      // A frame the preceding request already sent often arrives without more input.
+      // Feeding more for each of those frames builds a backlog and can force a flush.
+      if (this.#next > target) await Promise.race([arrived, this.#drained()]);
       while (!landed() && !this.#frames.has(index) && !this.#error) {
         // Long past the frame without it: it was dropped, so decode it again from its keyframe.
         if (this.#next >= samples.length || this.#next > target + PAST) {
@@ -439,7 +443,7 @@ export class SourceDecoder {
     return this.#decode(index, false, true);
   }
 
-  /** Resolves once every sample sent has decoded and its output had a moment to arrive. */
+  /** Lets WebCodecs take its queued input and gives the media thread time to post output. */
   async #drained() {
     const decoder = this.#decoder;
     while (decoder.decodeQueueSize > 0 && decoder.state === "configured")
@@ -457,19 +461,33 @@ export class SourceDecoder {
     from = Math.max(0, from);
     to = Math.min(to, this.frameCount - 1);
     if (from > to) return;
-    if (this.#ahead) {
-      this.#ahead = { from, to };
-      return;
+    this.#ahead = { from, next: from, to };
+    if (this.#prefetching) return;
+    this.#prefetching = true;
+    void this.#prefetch().catch(() => {});
+  }
+
+  async #prefetch() {
+    try {
+      while (this.#ahead && !this.#closed) {
+        // Queue one picture at a time. A draw requested while this picture is decoding
+        // gets the decoder before the remainder of the lookahead.
+        const run = this.#queue.then(async () => {
+          const range = this.#ahead;
+          if (!range || this.#closed) return;
+          const { from, to } = range;
+          this.#asked = from;
+          while (range.next <= to && this.#frames.has(range.next)) range.next++;
+          const index = range.next++;
+          if (range.next > to) this.#ahead = null;
+          if (index <= to) (await this.#decode(index, true)).close();
+        });
+        this.#queue = run.catch(() => {});
+        await run;
+      }
+    } finally {
+      this.#prefetching = false;
     }
-    this.#ahead = { from, to };
-    const run = this.#queue.then(async () => {
-      const { from, to } = this.#ahead!;
-      this.#ahead = null;
-      this.#asked = from;
-      for (let index = from; index <= to && !this.#closed; index++)
-        if (!this.#frames.has(index)) (await this.#decode(index, true)).close();
-    });
-    this.#queue = run.catch(() => {});
   }
 
   /**
