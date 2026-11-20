@@ -327,6 +327,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       expect(script).toContain("imported.GetItemListInTrack(kind, track)");
       expect(script).toContain("graph.SetLUT(1, installed[lut])");
       expect(script).toContain('comp.AddTool("FileLUT")');
+      expect(script).toContain("item.LoadFusionCompByName");
       const assignments = [
         ...script.matchAll(
           /\[1,(\d+),(\d+),"Cutroom Grades\/([a-f\d]+\.cube)"\]/g,
@@ -346,7 +347,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       expect(summary).toContain("Use local version for new clips in timeline");
       expect(summary).toContain("Open LUT Folder");
       expect(summary).toContain("cutroom_lut_root");
-      expect(summary).toContain("CutroomGrade node in Fusion");
+      expect(summary).toContain("File LUT node in Fusion");
       expect(summary).toContain("Workspace > Console");
       expect(summary).toContain(
         `runpy.run_path(${JSON.stringify(result.gradeScript)}`,

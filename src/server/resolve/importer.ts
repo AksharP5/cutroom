@@ -152,23 +152,20 @@ def apply_fusion_grade(item, lut_path):
     comp = item.AddFusionComp()
     if not comp:
         return False
-    comp.Lock()
-    try:
-        media_in = comp.FindTool("MediaIn1")
-        media_out = comp.FindTool("MediaOut1")
-        grade = comp.AddTool("FileLUT")
-        if not media_in or not media_out or not grade:
-            return False
-        grade.SetAttrs({"TOOLS_Name": "CutroomGrade"})
-        grade.SetInput("LUTFile", str(lut_path))
-        grade.SetInput("ProcessAlpha", 0)
-        return (
-            grade.GetInput("LUTFile") == str(lut_path)
-            and grade.ConnectInput("Input", media_in)
-            and media_out.ConnectInput("Input", grade)
-        )
-    finally:
-        comp.Unlock()
+    media_in = comp.FindTool("MediaIn1")
+    media_out = comp.FindTool("MediaOut1")
+    grade = comp.AddTool("FileLUT")
+    if not media_in or not media_out or not grade:
+        return False
+    grade.SetInput("LUTFile", str(lut_path))
+    grade.SetInput("ProcessAlpha", 0)
+    # A connected graph can be present in the editor and still be skipped in the render.
+    return (
+        grade.GetInput("LUTFile") == str(lut_path)
+        and grade.ConnectInput("Input", media_in)
+        and media_out.ConnectInput("Input", grade)
+        and item.LoadFusionCompByName(item.GetFusionCompNameList()[-1]) is not None
+    )
 
 def clip_lookup(imported):
     origin = imported.GetStartFrame()
@@ -258,16 +255,6 @@ def import_cutroom_timeline():
             if abs(item.GetSourceStartTime() - source_in) > 0.001:
                 raise RuntimeError(f"Resolve changed the source in-point while retiming {label!r}.")
         clip_at = clip_lookup(imported)
-        for track, start, end, lut in locations:
-            item = clip_at("video", track, start, end)
-            if fusion_grades:
-                lut_path = (path.parent / "LUTs" / lut).resolve(strict=True)
-                if not apply_fusion_grade(item, lut_path):
-                    raise RuntimeError(f"V{track}, frames {start}-{end}: Resolve could not apply {lut} in Fusion")
-            else:
-                graph = item.GetNodeGraph()
-                if not graph or graph.GetNumNodes() < 1 or not graph.SetLUT(1, installed[lut]):
-                    raise RuntimeError(f"V{track}, frames {start}-{end}: Resolve could not apply {lut} to node 01")
         for track, start, end, label, name, alignment, duration in transitions:
             item = clip_at("video", track, start, end)
             transition = item.AddTransition({
@@ -283,6 +270,16 @@ def import_cutroom_timeline():
         for frame, color, name, note, duration in markers:
             if not imported.AddMarker(frame, color, name, note, duration):
                 raise RuntimeError(f"Could not add marker {name!r} at frame {frame}.")
+        for track, start, end, lut in locations:
+            item = clip_at("video", track, start, end)
+            if fusion_grades:
+                lut_path = (path.parent / "LUTs" / lut).resolve(strict=True)
+                if not apply_fusion_grade(item, lut_path):
+                    raise RuntimeError(f"V{track}, frames {start}-{end}: Resolve could not apply {lut} in Fusion")
+            else:
+                graph = item.GetNodeGraph()
+                if not graph or graph.GetNumNodes() < 1 or not graph.SetLUT(1, installed[lut]):
+                    raise RuntimeError(f"V{track}, frames {start}-{end}: Resolve could not apply {lut} to node 01")
         for kind, index, empty, name, locked in tracks:
             if locked and not imported.SetTrackLock(kind, index, True):
                 raise RuntimeError(f"Could not lock {kind} track {index}.")
@@ -312,7 +309,7 @@ import_cutroom_timeline()
       ...(grades.length
         ? [
             "Open a DaVinci YRGB destination project with a Rec.709 timeline.",
-            "On Linux, the command reads the exported LUTs in each graded clip’s CutroomGrade node in Fusion. Keep the LUTs folder at its imported location.",
+            "On Linux, the command reads the exported LUTs in each graded clip’s File LUT node in Fusion. Keep the LUTs folder at its imported location.",
             "On macOS and Windows, enable Use local version for new clips in timeline. The command applies the grades on Color node 01.",
           ]
         : ["Open the destination project in Resolve."]),

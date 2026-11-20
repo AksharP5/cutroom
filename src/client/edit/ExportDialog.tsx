@@ -561,7 +561,7 @@ function ExportDialog({
             <p className="export-path">{resolved.outputPath}</p>
             <div role="status" className="export-result">
               {(resolved.importScript ?? resolved.gradeScript)
-                ? "Ready for Resolve. Run the console command in Summary.txt to import the complete timeline."
+                ? "Ready for Resolve. Run the console command in Summary.txt to import the timeline."
                 : `Ready for Resolve. Import ${resolved.timeline.split(/[\\/]/).at(-1)} with File > Import > Timeline${resolved.markers ? ", then its markers with Timeline > Import > Timeline Markers from EDL" : ""}.`}
             </div>
             {resolved.notes.map((note) => (
