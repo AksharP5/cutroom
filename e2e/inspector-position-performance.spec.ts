@@ -432,7 +432,11 @@ test(
     }
     const deadline = 100;
     const maxLateRate = 0.05;
+    // The worst individual CI sample was 114.4 ms. A 300 ms ceiling is about 2.6x
+    // that delay and still catches a stall even if it happens just once.
+    const moveCeiling = 300;
     const moves = runs.flatMap((run) => run.samples);
+    const maxMove = Math.max(...moves);
     const lateMoves = moves.filter((delay) => delay > deadline).length;
     const lateRate = lateMoves / moves.length;
     const medianFirst = median(runs.map((run) => run.samples[0]!));
@@ -440,11 +444,12 @@ test(
     const evidence = JSON.stringify(
       {
         browser: page.context().browser()?.version(),
-        budget: { median: 67, deadline, lateRate: maxLateRate },
+        budget: { median: 67, deadline, lateRate: maxLateRate, moveCeiling },
         medianMedian,
         medianFirst,
         lateMoves,
         lateRate,
+        maxMove,
         runs,
       },
       null,
@@ -465,6 +470,7 @@ test(
           medianFirst,
           lateMoves,
           lateRate,
+          maxMove,
           boxes: runs.map((run) => run.boxDurations),
         },
       }),
@@ -486,5 +492,8 @@ test(
       lateRate,
       `${lateMoves}/${moves.length} pointer moves took more than ${deadline} ms to paint`,
     ).toBeLessThanOrEqual(maxLateRate);
+    expect(maxMove, "slowest pointer move to paint").toBeLessThanOrEqual(
+      moveCeiling,
+    );
   },
 );
