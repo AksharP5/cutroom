@@ -29,7 +29,10 @@ import {
   mediaSearch,
   sourceUrl,
 } from "../../shared/media";
-import { EDIT_SUMMARY_HEADER } from "../../shared/timeline/schema";
+import {
+  EDIT_HISTORY_HEADER,
+  EDIT_SUMMARY_HEADER,
+} from "../../shared/timeline/schema";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
 import type { MediaFileDetails } from "../../shared/media";
 import { animationEvents } from "./animationFollowup";
@@ -43,6 +46,7 @@ import { registerFontTools } from "./fontTools";
 import { registerGradeTools } from "./gradeTools";
 import { compactLint } from "../../shared/lint";
 import { canonicalProjectPath } from "../projects/path";
+import { externalHistoryCredential } from "../projects/historyActor";
 
 type LocalFetch = (
   url: string,
@@ -53,11 +57,12 @@ export interface RequestOptions {
   followup?: (data: AnimationFeedback) => Promise<void>;
   /** Shapes the parsed answer before it becomes the tool's result; it may read more from the server. */
   reply?: (result: unknown) => unknown;
+  historyConflict?: boolean;
 }
 interface McpOptions {
   baseUrl?: string;
   fetch?: LocalFetch;
-  /** Set only in the bridge Cutroom gives its native agents; other clients act as `external`. */
+  /** Set only in the bridge Cutroom gives its native agents; other clients receive a session credential. */
   agentToken?: string;
   importMedia?: (
     projectId: string,
@@ -90,6 +95,7 @@ export function localApiBase(raw = "http://127.0.0.1:4317"): string {
 export function createMcpServer(options: McpOptions = {}) {
   const baseUrl = localApiBase(options.baseUrl);
   const fetchLocal = options.fetch ?? fetch;
+  const credential = options.agentToken ?? externalHistoryCredential();
   const server = new McpServer(
     { name: "cutroom", version },
     {
@@ -111,7 +117,7 @@ export function createMcpServer(options: McpOptions = {}) {
   const requestLocal = async (path: string, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
     headers.set("origin", baseUrl);
-    headers.set(AGENT_HEADER, options.agentToken ?? "external");
+    headers.set(AGENT_HEADER, credential);
     headers.set(
       AGENT_NAME_HEADER,
       encodeURIComponent(
@@ -126,7 +132,11 @@ export function createMcpServer(options: McpOptions = {}) {
     path: string,
     method = "GET",
     body?: unknown,
-    { followup, reply = (result) => result }: RequestOptions = {},
+    {
+      followup,
+      reply = (result) => result,
+      historyConflict,
+    }: RequestOptions = {},
   ) => {
     try {
       const response = await requestLocal(`/api${path}`, {
@@ -137,6 +147,8 @@ export function createMcpServer(options: McpOptions = {}) {
         },
         ...(body !== undefined && { body: JSON.stringify(body) }),
       });
+      const historyId = response.headers.get(EDIT_HISTORY_HEADER);
+      const commit = historyId ? { historyId } : {};
       if (response.ok && followup) {
         const events = animationEvents(response);
         const first = await events.next();
@@ -173,7 +185,7 @@ export function createMcpServer(options: McpOptions = {}) {
                 ]
               : []),
           ],
-          structuredContent: { result },
+          structuredContent: { result, ...commit },
         };
       }
       const text = await response.text();
@@ -185,12 +197,16 @@ export function createMcpServer(options: McpOptions = {}) {
               text: `Cutroom returned ${response.status}: ${text}`,
             },
           ],
+          ...(historyConflict &&
+            response.status === 409 && {
+              structuredContent: { result: JSON.parse(text) },
+            }),
           isError: true,
         };
       const result = await reply(text ? JSON.parse(text) : null);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result) }],
-        structuredContent: { result },
+        structuredContent: { result, ...commit },
       };
     } catch (error) {
       return {
@@ -576,31 +592,34 @@ export function createMcpServer(options: McpOptions = {}) {
   registry.registerTool(
     "history_list",
     {
-      description: "Read the project's shared undo history.",
+      description:
+        "Read the project's shared history and this session's next undo and redo.",
       inputSchema: project,
       annotations: readOnly,
     },
     (input) => request(`/projects/${id(input.projectId)}/history`),
   );
-  registry.registerTool(
-    "history_undo",
-    {
-      description:
-        "Undo the most recent project edit through the same history used by the editor.",
-      inputSchema: project,
-      annotations: edit,
-    },
-    (input) => request(`/projects/${id(input.projectId)}/history/undo`, "POST"),
-  );
-  registry.registerTool(
-    "history_redo",
-    {
-      description: "Redo the project's most recently undone edit.",
-      inputSchema: project,
-      annotations: edit,
-    },
-    (input) => request(`/projects/${id(input.projectId)}/history/redo`, "POST"),
-  );
+  for (const action of ["undo", "redo"] as const) {
+    registry.registerTool(
+      `history_${action}`,
+      {
+        description:
+          action === "undo"
+            ? "Undo this session's most recent applied edit, or select one of its edits by entryId."
+            : "Redo this session's most recently undone edit, or pass the exact undo entryId.",
+        inputSchema: {
+          ...project,
+          entryId: z.string().optional(),
+          requestId: z.uuid().optional(),
+        },
+        annotations: edit,
+      },
+      ({ projectId, ...input }) =>
+        request(`/projects/${id(projectId)}/history/${action}`, "POST", input, {
+          historyConflict: true,
+        }),
+    );
+  }
   registerReviewTools(registry, request);
   registerExportTools(registry, requestApi);
   registerTimelineTools(registry, request, requestLocal, async (data) => {

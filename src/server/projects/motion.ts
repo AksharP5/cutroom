@@ -9,10 +9,7 @@ import {
   addAnimationToScript,
   updateAnimationInScript,
 } from "@hyperframes/parsers/gsap-writer-acorn";
-import {
-  applyFileMutations,
-  fileContentVersion,
-} from "@hyperframes/studio-server";
+import { fileContentVersion } from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
 import { AGENT_HEADER } from "../../shared/review";
 import { MotionReadSchema, MotionWriteSchema } from "../../shared/motion";
@@ -838,7 +835,7 @@ export function createMotionRoutes(
       composition,
       c.req.header(AGENT_HEADER),
       () =>
-        store.mutate(
+        store.mutateWithEntry(
           project,
           addingFade
             ? `Add fade-in to ${input.clipId}`
@@ -880,7 +877,7 @@ export function createMotionRoutes(
                 409,
                 "The scene file changed. Inspect motion again.",
               );
-            applyFileMutations(project.path, [
+            store.writeFiles(project, [
               {
                 sourceFile: composition,
                 absPath: absolute,

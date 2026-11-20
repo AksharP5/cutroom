@@ -2,10 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { stat } from "node:fs/promises";
 import { posix } from "node:path";
-import {
-  applyFileMutations,
-  fileContentVersion,
-} from "@hyperframes/studio-server";
+import { fileContentVersion } from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
 import { AGENT_HEADER } from "../../shared/review";
 import { TimelineError } from "../../shared/timeline/errors";
@@ -308,7 +305,7 @@ export function createVariableRoutes(
       composition,
       c.req.header(AGENT_HEADER),
       () =>
-        store.mutate(
+        store.mutateWithEntry(
           project,
           label,
           async () => {
@@ -320,7 +317,7 @@ export function createVariableRoutes(
               return refusal(error);
             }
             if (after === source.content) return;
-            applyFileMutations(project.path, [
+            store.writeFiles(project, [
               {
                 sourceFile: composition,
                 absPath: await projectWritePath(project, composition),

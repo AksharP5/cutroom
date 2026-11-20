@@ -32,7 +32,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `variables_instance_read`, `variables_instance_set`             | Read or save variable overrides on one mounted scene clip.                  |
 | `fonts_list`, `fonts_add`                                       | List the project's and Google's fonts; download a Google font into it.      |
 | `luts_list`, `lut_import`, `grade_save_lut`                     | List the project's LUTs, import a `.cube`, or bake a clip's grade into one. |
-| `history_list`, `history_undo`, `history_redo`                  | Use the editor's shared history.                                            |
+| `history_list`, `history_undo`, `history_redo`                  | Read project history and undo or redo this MCP session's edits.             |
 | `timeline_read`, `timeline_edit`                                | Read the timeline in frames and apply a batch of commands.                  |
 | `timeline_format_preview`                                       | Check a proposed project format and report clip edge movement.              |
 | `timeline_add_transitions`                                      | Add transitions between selected clips.                                     |
@@ -57,6 +57,8 @@ Start with `projects_list` and retain the returned project ID. Before saving an 
 Run it through the local stdio bridge using the MCP command shown in Cutroom. The bridge opens each source under its own filesystem permissions before Cutroom imports it. Source symlinks, directories, and special files are refused. The HTTP MCP endpoint accepts other tools from local clients and directs `media_import` calls to stdio.
 
 `media_rename` takes a media file's project path and its new name with the same extension. The file stays in its folder, every reference in the project's sources follows it, and the rename is one undo step. `media_remove` moves a file to the project's `trash` folder and `history_undo` moves it back. A file used by clips, CSS backgrounds or composition scripts is refused with 409 and its use count; pass `confirmUsed: true` to remove it anyway, which leaves those clips in place playing nothing. Files already in `trash` are not media: neither tool takes them. [Details](editing.md#media-files).
+
+`history_list` includes the caller's next undo and redo in the shared history. `history_undo` and `history_redo` take `projectId` and act on that session's edits. Two connections with the same client name have separate candidates. For explicit replay, pass the original `entryId` to `history_undo` or the exact undo ID to `history_redo`. Timeline edits return their ID in MCP structured content as `historyId`. Media Rename and Remove return the ID with the operation result. A refused replay returns the conflict and leaves the files in place. Use the same optional `requestId` to retry a committed undo or redo after a lost reply.
 
 `timeline_view` takes `frame` for one frame or `frames` for up to eight, and returns one JPEG per frame, each followed by a line such as `Frame 30 (1.000s)`. `width` scales each image down to that many pixels wide, keeping the aspect ratio, and never past the composition's size; without it, images are full size. A 480 px frame is about 4 KB against about 27 KB at 1920 px, and is enough to check layout, text and timing. Scaling uses FFmpeg, which exports already need.
 

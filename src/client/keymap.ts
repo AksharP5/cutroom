@@ -804,8 +804,8 @@ export function actionFor(event: KeyboardEvent): Action | null {
 }
 
 /** `Label (L, 4)` for a button's tooltip. */
-export const hint = (action: Action) =>
-  `${keymap[action].label} (${keymap[action].keys.join(", ")})`;
+export const hint = (action: Action, label = keymap[action].label) =>
+  `${label} (${keymap[action].keys.join(", ")})`;
 
 /** The shortcut sheet's content: each area with its actions, in keymap order. */
 export const keymapAreas = () =>

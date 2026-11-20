@@ -5,7 +5,9 @@ import {
 } from "../history/projectHistory";
 import { fpsToFfmpegArg } from "@hyperframes/core";
 import { projectEditedAt } from "./edited";
-import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash, randomUUID } from "node:crypto";
+import { ownerWho } from "./historyActor";
 import {
   copyFile,
   mkdir,
@@ -15,13 +17,13 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   applyFileMutations,
   fileContentVersion,
 } from "@hyperframes/studio-server";
 import type { FileMutationInput } from "@hyperframes/studio-server";
-import type { HistoryWho } from "../history/historyLog";
+import type { HistoryEntry, HistoryWho } from "../history/historyLog";
 import { z } from "zod";
 import {
   CreateProjectSchema,
@@ -38,6 +40,7 @@ import type {
 import { HttpError } from "../../shared/errors";
 import { guardFreezeHistory } from "./freezeHistory";
 import { rememberTimelineWrite } from "../timeline/watch";
+import { guardSceneRemoval } from "./historyDependencies";
 import { isMissing, projectPath, projectWritePath } from "./path";
 
 export { isMissing, projectPath } from "./path";
@@ -56,7 +59,6 @@ export class ProjectDocumentError extends HttpError {
     );
   }
 }
-const PERSON: HistoryWho = { kind: "person", name: "You" };
 
 export async function readSource(
   project: Pick<Project, "path">,
@@ -184,8 +186,16 @@ export async function createProjectStore(options: {
       projectDir,
       historyRoot: join(dataDir, "history"),
       undoScope: "everyone",
-      beforeReplay: (changes, readBlob, context) =>
-        guardFreezeHistory({ path: projectDir }, changes, readBlob, context),
+      beforeReplay: async (changes, readBlob, context) => {
+        await guardFreezeHistory(
+          { path: projectDir },
+          changes,
+          readBlob,
+          context,
+        );
+        if (context.replay)
+          await guardSceneRemoval({ path: projectDir }, changes, readBlob);
+      },
       // A moved folder or a deleted .hyperframes/history-id looks like a gone project.
       // Undo history is only removed by the owner, never on a timer.
       pruneGoneProjectsBudgetMs: 0,
@@ -229,35 +239,105 @@ export async function createProjectStore(options: {
     if (!opened) throw new HttpError(503, "Project history is unavailable.");
     return opened;
   };
+  const serializeMutation = <T>(project: Project, change: () => Promise<T>) =>
+    track(async () => {
+      const previous = queues.get(project.path) ?? Promise.resolve();
+      const pending = previous.catch(() => undefined).then(change);
+      queues.set(project.path, pending);
+      try {
+        return await pending;
+      } finally {
+        if (queues.get(project.path) === pending) queues.delete(project.path);
+      }
+    });
+  const ownWrites = new AsyncLocalStorage<{
+    root: string;
+    changes: Map<string, { before: string | null; after: string }[]>;
+  }>();
+  const recordedHash = (content: string | Uint8Array) =>
+    createHash("sha256").update(content).digest("hex");
+  const captureWrite = (
+    absolute: string,
+    before: string | null,
+    after: string,
+  ) => {
+    const scope = ownWrites.getStore();
+    if (!scope) return;
+    const path = relative(scope.root, absolute).split(sep).join("/");
+    const changes = scope.changes.get(path) ?? [];
+    changes.push({ before, after });
+    scope.changes.set(path, changes);
+  };
+  const captureHistoryCreation = (
+    absolute: string,
+    content: string | Uint8Array,
+  ) => captureWrite(absolute, null, recordedHash(content));
+  const mutateWithEntry = <T>(
+    project: Project,
+    label: string,
+    change: () => Promise<T>,
+    who: HistoryWho = ownerWho,
+    options?: {
+      moves?: ReadonlySet<string>;
+      category?: HistoryEntry["category"];
+    },
+  ) =>
+    serializeMutation(project, async () => {
+      const ledger = await history(project);
+      const scope: NonNullable<ReturnType<typeof ownWrites.getStore>> = {
+        root: await realpath(project.path),
+        changes: new Map(),
+      };
+      let finished = false;
+      const window = await ledger.beginWindow(who, label, {
+        idleMs: Infinity,
+        accepts: (path, before, after) => {
+          if (options?.moves?.has(path)) return true;
+          const changes = scope.changes.get(path);
+          if (!changes) return false;
+          for (let index = changes.length - 1; index >= 0; index--) {
+            const written = changes[index]!;
+            if (written.after !== after) continue;
+            if (written.before === before) return true;
+            after = written.before;
+          }
+          return false;
+        },
+        category: options?.category,
+        incomplete: (recorded) => {
+          if (!finished && !recorded.size) return false;
+          for (const [path, changes] of scope.changes) {
+            const before = changes[0]?.before;
+            const after = changes.at(-1)?.after;
+            if (before === after) continue;
+            const file = recorded.get(path);
+            if (!file || file.before !== before || file.after !== after)
+              return true;
+          }
+          return (
+            !!options?.moves &&
+            [...options.moves].some((path) => !recorded.has(path))
+          );
+        },
+      });
+      let value: T;
+      let entry: HistoryEntry | null;
+      try {
+        value = await ownWrites.run(scope, change);
+        finished = true;
+        project.updatedAt = new Date().toISOString();
+        await saveRegistry();
+      } finally {
+        entry = await window.close();
+      }
+      return { value, entry };
+    });
   const mutate = <T>(
     project: Project,
     label: string,
     change: () => Promise<T>,
-    who: HistoryWho = PERSON,
-  ): Promise<T> =>
-    track(async () => {
-      const previous = queues.get(project.id) ?? Promise.resolve();
-      const pending = previous
-        .catch(() => undefined)
-        .then(async () => {
-          const ledger = await history(project);
-          const window = await ledger.beginWindow(who, label);
-          try {
-            const result = await change();
-            project.updatedAt = new Date().toISOString();
-            await saveRegistry();
-            return result;
-          } finally {
-            await window.close();
-          }
-        });
-      queues.set(project.id, pending);
-      try {
-        return await pending;
-      } finally {
-        if (queues.get(project.id) === pending) queues.delete(project.id);
-      }
-    });
+    who?: HistoryWho,
+  ) => mutateWithEntry(project, label, change, who).then(({ value }) => value);
   const document = async (project: Project): Promise<ProjectDocument> => {
     const raw = await readFile(
       await projectWritePath(project, PROJECT_DOCUMENT_PATH, {
@@ -325,14 +405,15 @@ export async function createProjectStore(options: {
     origin?: string,
   ) => {
     try {
-      const saved = applyFileMutations(project.path, mutations);
-      for (const [index, file] of saved.entries())
-        if (file.changed)
-          rememberTimelineWrite(
-            mutations[index]!.absPath,
-            () => file.version,
-            origin,
-          );
+      const applied = applyFileMutations(project.path, mutations);
+      const capture = ownWrites.getStore();
+      for (const [index, file] of applied.entries()) {
+        if (!file.changed) continue;
+        const { absPath } = mutations[index]!;
+        rememberTimelineWrite(absPath, () => file.version, origin);
+        if (capture)
+          captureWrite(absPath, recordedHash(file.before), recordedHash(file.after));
+      }
     } catch (error) {
       if (
         error instanceof Error &&
@@ -377,6 +458,9 @@ export async function createProjectStore(options: {
       }),
     historyForDir: (dir: string) => histories.get(dir),
     mutate,
+    mutateWithEntry,
+    captureHistoryCreation,
+    serializeMutation,
     document,
     writeDocument,
     writeFiles,
