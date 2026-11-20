@@ -10,6 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { ResolveExportSchema } from "../src/shared/export";
 import { voiceoverWav } from "../src/shared/voiceover";
@@ -76,7 +77,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
         join(project.path, "index.html"),
         `<main data-composition-id="main" data-width="320" data-height="240" data-fps="24" data-duration="2">
           <audio id="mic" src="mic.wav" data-start="0" data-duration="1" data-track-index="0" data-volume="0.5" data-fade-in="0.25"></audio>
-          <audio id="music" src="music.wav" data-start="1" data-duration="1" data-track-index="0"></audio>
+          <audio id="music" src="music.wav" data-start="1" data-duration="1" data-track-index="1"></audio>
         </main>`,
       );
       const response = await f.app.request(
@@ -127,6 +128,15 @@ test.skipIf(!Bun.which("ffmpeg"))(
       expect(source.length).toBe(960);
       expect(copied.filter((_, index) => index % 2 === 0)).toEqual(source);
       expect(copied.filter((_, index) => index % 2 === 1)).toEqual(source);
+      if (Bun.which("python3"))
+        await run([
+          "python3",
+          fileURLToPath(
+            new URL("./fixtures/resolve-stereo-placement.py", import.meta.url),
+          ),
+          exported.importScript!,
+          stereo,
+        ]);
     } finally {
       await f.close();
     }

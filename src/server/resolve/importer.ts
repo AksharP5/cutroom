@@ -22,6 +22,7 @@ export async function writeResolveImporter(
     transitions,
     retimes,
     fades,
+    stereo,
     links,
     tracks,
     timelineMarkers,
@@ -90,6 +91,7 @@ export async function writeResolveImporter(
     })),
     retimes,
     fades,
+    stereo,
     links,
     tracks,
   };

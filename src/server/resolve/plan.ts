@@ -93,6 +93,10 @@ interface FadeTarget extends ClipTarget {
   fadeOut: number;
 }
 
+interface StereoTarget extends ClipTarget {
+  source: string;
+}
+
 interface TrackTarget {
   kind: ClipTarget["kind"];
   index: number;
@@ -106,6 +110,7 @@ export interface Plan {
   transitions: TransitionTarget[];
   retimes: RetimeTarget[];
   fades: FadeTarget[];
+  stereo: StereoTarget[];
   links: ClipTarget[][];
   tracks: TrackTarget[];
   timelineMarkers: Marker[];
@@ -1329,6 +1334,12 @@ export function planResolveTimeline(input: PlanInput): Plan {
           ]
         : [],
     ),
+    stereo: audible.flatMap((clip) => {
+      const sound = soundOf(media(clip) as FileMedia).facts;
+      return sound.audio?.channels === 2
+        ? [{ ...soundTarget(clip), source: fileUrl(sound.path) }]
+        : [];
+    }),
     links,
     tracks: targetTracks,
     notes: context.notes,

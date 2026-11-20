@@ -38,7 +38,7 @@ def read_timeline(root, plan):
             path = Path(name)
             if not path.is_absolute() or not path.is_file() or path.resolve() != path:
                 raise RuntimeError(f"The original media is missing or has moved: {name}")
-        media[entry["url"]] = path.as_uri()
+        media[entry["url"]] = path
 
     # Re-serialize only the XML tree. Resolve receives absolute file URLs and a fixed doctype.
     tree = ET.parse(timeline)
@@ -50,10 +50,10 @@ def read_timeline(root, plan):
         if node.tag != "media-rep" or url not in media:
             raise RuntimeError("The FCPXML references media outside the Cutroom import plan. Export it again.")
         seen.add(url)
-        node.set("src", media[url])
+        node.set("src", media[url].as_uri())
     if seen != set(media):
         raise RuntimeError("The FCPXML is missing media from the Cutroom import plan. Export it again.")
-    return tree
+    return tree, media
 
 
 def lut_root(configured):
@@ -145,6 +145,65 @@ def clip_lookup(imported):
         return found[0]
     return clip_at
 
+def source_path(item):
+    media = item.GetMediaPoolItem()
+    path = media and media.GetClipProperty("File Path")
+    return Path(path).resolve() if path else None
+
+
+def restore_stereo_tracks(timeline, placements, tracks, media):
+    if not placements:
+        return
+    origin = timeline.GetStartFrame()
+    count = timeline.GetTrackCount("audio")
+    by_cut = {}
+    for track in range(1, count + 1):
+        for item in timeline.GetItemListInTrack("audio", track) or []:
+            if item.GetType() != "transition":
+                key = (item.GetStart() - origin, source_path(item))
+                by_cut.setdefault(key, []).append((track, item))
+
+    moves = []
+    for clip in placements:
+        track, start, end, label = (clip[k] for k in ("track", "start", "end", "label"))
+        matches = by_cut.get((start, media[clip["source"]]), [])
+        if not matches:
+            raise RuntimeError(f"Resolve did not link {label!r} on A{track}, frame {start}. See Summary.txt.")
+        # The same source can appear on several tracks at the same frame.
+        match = min(
+            matches, key=lambda pair: (pair[1].GetEnd() - origin != end, pair[0] != track),
+        )
+        matches.remove(match)
+        current, item = match
+        if current != track:
+            moves.append((item, current, track, start))
+
+    target_count = max(
+        count, max(clip["track"] for clip in placements),
+        max((track["index"] for track in tracks if track["kind"] == "audio"), default=0),
+    )
+    for track in range(count + 1, target_count + 1):
+        if not timeline.AddTrack("audio", {"audioType": "stereo"}):
+            raise RuntimeError(f"Could not restore audio track A{track}. See Summary.txt.")
+
+    # Move through empty tracks so cuts swapping lanes never overwrite each other.
+    temporary = {}
+    for item, current, _, _ in moves:
+        if current not in temporary:
+            if not timeline.AddTrack("audio", {"audioType": "stereo"}):
+                raise RuntimeError("Could not make room to restore the audio tracks. See Summary.txt.")
+            temporary[current] = target_count + len(temporary) + 1
+        if not item.SetPosition({"trackIndex": temporary[current]}, False, False):
+            raise RuntimeError(f"Could not move {item.GetName()!r} from A{current}. See Summary.txt.")
+    for item, _, track, start in moves:
+        if (not item.SetPosition({"trackIndex": track}, False, False)
+                or item.GetStart() - origin != start):
+            raise RuntimeError(f"Could not restore {item.GetName()!r} on A{track}, frame {start}. See Summary.txt.")
+    for track in reversed(temporary.values()):
+        if not timeline.DeleteTrack("audio", track):
+            raise RuntimeError("Could not remove a temporary audio track. See Summary.txt.")
+
+
 def import_cutroom_timeline(resolve, plan, root, configured=None):
     if tuple(int(part) for part in resolve.GetVersion()[:3]) < MINIMUM_VERSION:
         raise RuntimeError(
@@ -155,7 +214,7 @@ def import_cutroom_timeline(resolve, plan, root, configured=None):
     if not project:
         raise RuntimeError("Open the destination Resolve project first.")
     root = root.resolve(strict=True)
-    tree = read_timeline(root, plan)
+    tree, media = read_timeline(root, plan)
     grades = plan["grades"]
     luts = {
         name: package_file(root, name, root / "LUTs" / LUT_FOLDER)
@@ -177,12 +236,12 @@ def import_cutroom_timeline(resolve, plan, root, configured=None):
         path.write_bytes(b'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n' +
                          ET.tostring(tree.getroot(), encoding="utf-8"))
         installed = install_grades(project, luts, configured) if grades and not fusion_grades else {}
-        imported = import_into_project(project, plan, path, luts, installed, fusion_grades)
+        imported = import_into_project(project, plan, path, media, luts, installed, fusion_grades)
     print(f"Imported {imported.GetName()} with {len(grades)} grades, {len(plan['retimes'])} speed changes, "
           f"{len(plan['transitions'])} transitions and {len(plan['markers'])} markers.")
 
 
-def import_into_project(project, plan, path, luts, installed, fusion_grades):
+def import_into_project(project, plan, path, media, luts, installed, fusion_grades):
     pool = project.GetMediaPool()
     previous_folder = pool.GetCurrentFolder()
     previous_timeline = project.GetCurrentTimeline()
@@ -203,9 +262,12 @@ def import_into_project(project, plan, path, luts, installed, fusion_grades):
         if not imported or not project.SetCurrentTimeline(imported):
             raise RuntimeError("Resolve could not open " + path.name)
         for track in plan["tracks"]:
-            kind, index, name = (track[k] for k in ("kind", "index", "name"))
+            kind, index = (track[k] for k in ("kind", "index"))
             if track["empty"] and not imported.AddTrack(kind, {"index": index, "audioType": "stereo"}):
                 raise RuntimeError(f"Could not restore empty {kind} track {index}.")
+        restore_stereo_tracks(imported, plan["stereo"], plan["tracks"], media)
+        for track in plan["tracks"]:
+            kind, index, name = (track[k] for k in ("kind", "index", "name"))
             if name and not imported.SetTrackName(kind, index, name):
                 raise RuntimeError(f"Could not name {kind} track {index} {name!r}.")
         origin = imported.GetStartFrame()
