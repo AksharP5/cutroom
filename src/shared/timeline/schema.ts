@@ -5,7 +5,12 @@ import {
 import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { MAX_AUTOMATION_POINTS } from "@hyperframes/core/audio-automation";
 // The export worker loads this file in Node, which needs the extension.
-import { FxChainInputSchema, FxNodeSchema, MAX_FX_NODES } from "./fx.ts";
+import {
+  canonicalMainVolume,
+  FxChainInputSchema,
+  FxNodeSchema,
+  MAX_FX_NODES,
+} from "./fx.ts";
 import { GradeEditSchema, GradeSchema } from "./grade.ts";
 import {
   ElementStyleEditSchema,
@@ -567,8 +572,7 @@ const mainVolume = z
   .number()
   .min(MIN_MAIN_VOLUME, "Main gain goes down to -60 dB.")
   .max(MAX_AUDIO_GAIN, "Gain goes up to +12 dB per stage.")
-  // Main gain is written in dB; six places survive that round trip exactly.
-  .overwrite((value) => Math.round(value * 1e6) / 1e6);
+  .overwrite(canonicalMainVolume);
 
 export const MainSchema = z.object({
   volume: mainVolume
@@ -583,6 +587,7 @@ export const MainSchema = z.object({
     .describe(
       "Effects on the whole mix, in order, before its gain. audio_loudness keeps the mix's loudness gain here",
     ),
+  sourceRestriction: z.string().optional(),
 });
 
 export const TimelineSchema = z.object({

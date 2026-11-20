@@ -1067,7 +1067,10 @@ export function parseComposition(
 
   const rootDuration = parseNumeric(root.attrs["data-duration"]);
   const rootDurationAuthored = rootDuration !== null && rootDuration > 0;
-  const main = readMain(readableFx(root.attrs["data-fx-chain"]));
+  const main = readMain(
+    root.attrs["data-fx-chain"],
+    root.attrs[MAIN_GAIN_ATTRIBUTE],
+  );
   const soloGroups = new Set(settings.soloAudioGroups);
   const authoredAudioGroups = readAuthoredAudioGroups(
     groupDeclarations,
@@ -1320,6 +1323,7 @@ function applyEdits(source: string, edits: Edit[]): string {
 const isManagedAudioGroup = (element: SourceElement) =>
   element.attrs["data-cutroom-track"] !== undefined;
 const ROUTED_AUDIO_GROUP = "data-cutroom-audio-group";
+const MAIN_GAIN_ATTRIBUTE = "data-cutroom-main-gain";
 
 function audioGroupElements(elements: SourceElement[]) {
   const mountedTemplates = new Set<string>();
@@ -3032,18 +3036,20 @@ export function patchComposition(
     ...(parsed.rootDurationAuthored && after.duration !== before.duration
       ? [["data-duration", String(toSeconds(after.duration, fps))] as const]
       : []),
-    ...(!Bun.deepEquals(mainChain(before.main), mainChain(after.main))
-      ? [
-          [
-            "data-fx-chain",
-            writeFxChain(
-              mainChain(after.main),
-              parsed.root.attrs["data-fx-chain"],
-            ),
-          ] as const,
-        ]
-      : []),
   ];
+  if (!Bun.deepEquals(before.main, after.main)) {
+    const chain = mainChain(after.main);
+    rootChanges.push(
+      [
+        "data-fx-chain",
+        writeFxChain(chain, parsed.root.attrs["data-fx-chain"]),
+      ],
+      [
+        MAIN_GAIN_ATTRIBUTE,
+        after.main && after.main.volume !== 1 ? chain.at(-1)!.id : null,
+      ],
+    );
+  }
   if (rootChanges.length)
     edits.push(
       ...attributeEdits(
