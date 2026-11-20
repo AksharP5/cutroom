@@ -2,6 +2,7 @@ import { posix } from "node:path";
 import { parse, serialize } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { fileContentVersion } from "@hyperframes/studio-server";
+import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { TrackGainPreviewSchema } from "../../shared/preview";
 
 /**
@@ -33,17 +34,25 @@ export function trackGainPreview(html: string, composition = "index.html") {
   visit(document);
   const has = (element: DefaultTreeAdapterTypes.Element, name: string) =>
     element.attrs.some((attr) => attr.name === name);
+  const level = (element: DefaultTreeAdapterTypes.Element) =>
+    Number(
+      element.attrs.find((attr) => attr.name === "data-volume")?.value ?? 1,
+    );
+  // An authored level outside a stage's range is left to a reload, as before.
   const groups = elements.filter(
     (element) =>
       element.tagName === "hf-audio-group" &&
       has(element, "id") &&
-      (has(element, "data-cutroom-track") || !has(element, "data-automation")),
+      (has(element, "data-cutroom-track") ||
+        (!has(element, "data-automation") &&
+          level(element) >= 0 &&
+          level(element) <= MAX_AUDIO_GAIN)),
   );
   const gains = groups.map((element) => {
     const attrs = new Map(element.attrs.map((attr) => [attr.name, attr.value]));
     return {
       id: attrs.get("id") ?? "",
-      volume: Number(attrs.get("data-volume") ?? 1),
+      volume: level(element),
     };
   });
   const ids = new Set(gains.map((gain) => gain.id));

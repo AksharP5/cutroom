@@ -29,6 +29,8 @@ test("only faders and compiler routing metadata may reuse a playing preview", ()
   for (const changed of [
     html.replace('data-volume="0.4"', 'data-volume="0.2"'),
     html.replace('data-volume="0.6"', 'data-volume="0.2"'),
+    // Above one stage's +12 dB, an authored level reloads rather than set in place.
+    html.replace('data-volume="0.7"', 'data-volume="7.9"'),
     html.replace("clip-identity", "authored-new-identity"),
     html.replace("const level = 1", "const level = 2"),
     html.replace('data-audio-group="track"', 'data-audio-group="authored"'),

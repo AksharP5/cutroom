@@ -313,6 +313,15 @@ function installPreviewBridge(
   /** Faders a saved gain sets in place: Cutroom's track buses and buses without automation. */
   const FADERS =
     "hf-audio-group[id]:is([data-cutroom-track], :not([data-automation]))";
+  /** Matches the server's choice: a bus's level must be within one gain stage, +12 dB. */
+  const isFader = (element: Element) => {
+    if (!element.matches(FADERS)) return false;
+    if (element.hasAttribute("data-cutroom-track")) return true;
+    const level = Number(element.getAttribute("data-volume") ?? 1);
+    return level >= 0 && level <= 3.9810717055349722;
+  };
+  const faders = (root: ParentNode) =>
+    [...root.querySelectorAll(FADERS)].filter(isFader);
   /** The copy of a live element in a clone of the document, found by its path from the root. */
   const cloneOf = (root: Element, element: Element) => {
     const path: number[] = [];
@@ -381,8 +390,7 @@ function installPreviewBridge(
     for (const media of root.querySelectorAll("video, audio"))
       media.setAttribute("preload", "none");
     // Gain checks and timing updates both set these faders in place.
-    for (const group of root.querySelectorAll(FADERS))
-      group.removeAttribute("data-volume");
+    for (const group of faders(root)) group.removeAttribute("data-volume");
     for (const element of [root, ...root.querySelectorAll("*")]) {
       const attributes = [...element.attributes].sort((a, b) =>
         a.name.localeCompare(b.name),
@@ -439,11 +447,11 @@ function installPreviewBridge(
       )
         return null;
       const element = document.getElementById(gain.id);
-      if (!element?.matches(FADERS)) return null;
+      if (!element || !isFader(element)) return null;
       changes.push({ element, volume: String(gain.volume) });
     }
     return new Set(changes.map(({ element }) => element)).size ===
-      document.querySelectorAll(FADERS).length
+      faders(document).length
       ? changes
       : null;
   };
