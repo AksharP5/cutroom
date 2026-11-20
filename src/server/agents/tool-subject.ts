@@ -131,7 +131,9 @@ async function editedClips(input: unknown, names?: ToolNames) {
                 (command.clip.kind === "title"
                   ? firstTextLine(command.clip.text)
                   : command.clip.kind === "adjustment"
-                    ? `${command.clip.region.effect} layer`
+                    ? command.clip.region
+                      ? `${command.clip.region.effect} layer`
+                      : "adjustment layer"
                     : fileName(command.clip.src)),
             ]
           : [],

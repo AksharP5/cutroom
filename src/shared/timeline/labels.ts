@@ -200,7 +200,9 @@ export function editLabel(
             ? `title "${firstTextLine(command.clip.text)}"`
             : command.clip.kind === "adjustment"
               ? (command.clip.label ??
-                `${REGION_NAMES[command.clip.region.effect].toLowerCase()} layer`)
+                (command.clip.region
+                  ? `${REGION_NAMES[command.clip.region.effect].toLowerCase()} layer`
+                  : "adjustment layer"))
               : (command.clip.label ??
                 sourceName(command.clip.src) ??
                 command.clip.kind);

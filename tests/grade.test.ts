@@ -115,6 +115,35 @@ test("a grade is written as HyperFrames' data-color-grading, edited field by fie
   expect(clip(neutral, "shot").grade).toBeNull();
 });
 
+test("a region-free adjustment layer keeps a grade without changing its source shots", () => {
+  const graded = edit(page(shot), [
+    { type: "setTrack", index: 1, kind: "video" },
+    {
+      type: "insert",
+      at: 30,
+      track: 1,
+      clip: { kind: "adjustment", id: "look", duration: 90 },
+    },
+    { type: "setClip", clipId: "look", grade: look },
+  ]);
+  expect(clip(graded, "look")).toMatchObject({
+    adjustment: true,
+    grade: look,
+    region: null,
+    start: 30,
+    duration: 90,
+  });
+  expect(clip(graded, "shot").grade).toBeNull();
+  const cleared = edit(graded, [
+    { type: "setClip", clipId: "look", grade: null },
+  ]);
+  expect(clip(cleared, "look")).toMatchObject({
+    adjustment: true,
+    grade: null,
+    region: null,
+  });
+});
+
 test("a razor cut and a freeze frame keep the grade", () => {
   const graded = edit(page(shot), [
     { type: "setClip", clipId: "shot", grade: { adjust: { saturation: -1 } } },

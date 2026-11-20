@@ -438,7 +438,13 @@ export const LutInfoSchema = z.object({
 });
 export type LutInfo = z.infer<typeof LutInfoSchema>;
 
-/** Video and image clips take a grade, unless their authored grade is one Cutroom cannot edit. */
+/** Pictures own a grade. An adjustment grades the composited tracks beneath it. */
+export function canHaveGrade({
+  kind,
+  adjustment,
+}: Pick<Clip, "kind" | "adjustment">) {
+  return adjustment || kind === "video" || kind === "image";
+}
+
 export const takesGrade = (clip: Clip) =>
-  (clip.kind === "video" || clip.kind === "image") &&
-  !clip.sourceRestrictions?.grade;
+  canHaveGrade(clip) && !clip.sourceRestrictions?.grade;

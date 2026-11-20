@@ -41,6 +41,7 @@ import { LayerTextFields } from "./LayerTextFields";
 import { TitleSection } from "./TitleSection";
 import { isTitle } from "../../../shared/timeline/title";
 import { StyleSection } from "./StyleSection";
+import { canHaveGrade } from "../../../shared/timeline/grade";
 import { ColorSection } from "./ColorSection";
 import {
   BindImageVariable,
@@ -822,7 +823,7 @@ export function Inspector({
               />
             </details>
           )}
-          {(clip.kind === "video" || clip.kind === "image") && (
+          {canHaveGrade(clip) && (
             <ColorSection
               projectId={projectId}
               composition={view!.composition}

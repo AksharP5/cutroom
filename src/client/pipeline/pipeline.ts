@@ -11,7 +11,7 @@ import { createCompositor } from "./compositor";
 import type { Layer } from "./compositor";
 import { SourceDecoder } from "./decoder";
 import { openRanges, readVideoTrack } from "./mp4";
-import { appearances, visibleAt } from "./layers";
+import { appearances, coversFrame, frameLayersAt } from "./layers";
 import type { Appearance, Shown } from "./layers";
 import { sourceCache } from "./sources";
 import { usePipeline } from "./setting";
@@ -283,7 +283,14 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const view = useTimeline.getState().view;
     const { frame, state } = useTransport.getState();
     if (!view || view.composition !== "index.html") return;
-    const shown = visibleAt(view.timeline, drawingPlan, frame);
+    const { draft } = usePreviewGrade.getState();
+    const { bypass } = useGradeBypass.getState();
+    const shown = frameLayersAt(
+      view.timeline,
+      drawingPlan,
+      frame,
+      draft?.clipId,
+    );
     if (!shown) {
       stop("the layers at the playhead need to be composited together");
       if (state.kind === "playing") prepare(view, frame, LOOKAHEAD, OPENING);
@@ -291,25 +298,33 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     }
     const moving = state.kind === "scrubbing" || state.kind === "shuttle";
     const playing = state.kind === "playing";
-    const { draft } = usePreviewGrade.getState();
-    const { bypass } = useGradeBypass.getState();
     const { fileChanges } = useWorkspace.getState();
-    const textures = Promise.all(
-      shown.map(({ clip }) => {
-        const editing = draft?.clipId === clip.id;
-        const grade = editing ? draft.grade : clip.grade;
-        const key =
-          grade && !bypass
-            ? grades.identify(grade, view.composition, fileChanges, editing)
-            : null;
-        return key ? grades.get(key) : null;
+    const textureOf = ({ clip }: Pick<Shown, "clip">) => {
+      const editing = draft?.clipId === clip.id;
+      const grade = editing ? draft.grade : clip.grade;
+      const key =
+        grade && !bypass
+          ? grades.identify(grade, view.composition, fileChanges, editing)
+          : null;
+      return key ? grades.get(key) : null;
+    };
+    const textures = Promise.all([
+      Promise.all(shown.pictures.map(textureOf)),
+      Promise.all(
+        shown.adjustments.map(async (adjustment) => {
+          const grade = await textureOf(adjustment);
+          return grade ? { after: adjustment.after, grade } : null;
+        }),
+      ),
+    ]).then(
+      ([textures, adjustments]) => ({
+        textures,
+        adjustments: adjustments.filter((item) => item !== null),
       }),
-    ).then(
-      (textures) => ({ textures }),
       (error: unknown) => ({ error }),
     );
     const pictures = await Promise.all(
-      shown.map(async (layer) => {
+      shown.pictures.map(async (layer) => {
         const found = await source(layer.clip.src!);
         if (!found.proxy) void found.askProxy();
         const index = indexAt(found, layer.time);
@@ -345,6 +360,14 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       const baked = await textures;
       if (!canPaint()) return;
       if ("error" in baked) throw baked.error;
+      // An opaque full-frame shot without its own grade needs no intermediate copy.
+      const single = baked.adjustments[0];
+      const fused =
+        pictures.length === 1 &&
+        single?.after === 1 &&
+        baked.adjustments.length === 1 &&
+        !baked.textures[0] &&
+        coversFrame(pictures[0]!.layer);
       await target.draw(
         pictures.map(({ layer, found }, at) =>
           // The proxy is stored upright; a phone's file may be stored turned.
@@ -353,12 +376,13 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
             frames[at]!,
             from[at]!.rotation,
             found.intrinsic,
-            baked.textures[at]!,
+            fused ? single.grade : baked.textures[at]!,
           ),
         ),
         drawingPlan.background ?? "#ffffff",
         drawingPlan.width,
         drawingPlan.height,
+        fused ? [] : baked.adjustments,
       );
       // HyperFrames keeps the picture if this upload lost its drawing context.
       if (!canPaint()) return;

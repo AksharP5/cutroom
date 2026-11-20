@@ -11,7 +11,12 @@ import {
   patchComposition,
 } from "../src/server/timeline/composition";
 import { planPreviewPipeline } from "../src/server/hyperframes/pipelinePlan";
-import { appearances, shownAt, visibleAt } from "../src/client/pipeline/layers";
+import {
+  appearances,
+  frameLayersAt,
+  shownAt,
+  visibleAt,
+} from "../src/client/pipeline/layers";
 import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
 import { defaultTitle } from "../src/shared/timeline/title";
 import { countingIds } from "./clip-ids";
@@ -304,6 +309,26 @@ test("frames show the right media time, stacking and transition opacity", () => 
     ],
   };
   expect(shownAt(other, plan, 120)).toBeNull();
+});
+
+test("the adjustment is drawn after the lower footage and only across its interval", () => {
+  const html = page(
+    '<div id="look" class="clip" data-start="1" data-duration="1.5" data-track-index="2" data-cutroom-adjustment data-color-grading=\'{"adjust":{"saturation":-1}}\'></div>',
+  )
+    .replace('data-track-index="2"></audio>', 'data-track-index="6"></audio>')
+    .replace(
+      'id="broll" src="broll.mp4" muted data-start="1" data-duration="1" data-media-start="2" data-track-index="1" style="',
+      'id="broll" src="broll.mp4" muted data-start="1" data-duration="1" data-media-start="2" data-track-index="1" style="opacity:.5;',
+    );
+  const plan = drawable(html);
+  const { timeline } = parseComposition(html, emptyTimelineSettings());
+  const frame = frameLayersAt(timeline, plan, 45)!;
+  expect(frame.pictures.map(({ clip }) => clip.id)).toEqual(["a", "broll"]);
+  expect(frame.adjustments.map(({ clip, after }) => [clip.id, after])).toEqual([
+    ["look", 2],
+  ]);
+  expect(frameLayersAt(timeline, plan, 29)?.adjustments).toEqual([]);
+  expect(frameLayersAt(timeline, plan, 75)?.adjustments).toEqual([]);
 });
 
 test("playback prepares clips that come back into view, not only clips that start", () => {
