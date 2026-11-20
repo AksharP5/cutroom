@@ -51,7 +51,11 @@ export async function makeProject(
   graded = false,
   compatible = false,
   desktop?: "1080p" | "4k",
+  format: "h264-30" | "h264-60" | "hevc-60" = "h264-30",
 ) {
+  const frameRate = format === "h264-30" ? fps : 60;
+  const hevc = format === "hevc-60";
+  const footage = hevc ? "footage.mkv" : "footage.mp4";
   const width = desktop === "4k" ? 3840 : 1920;
   const height = desktop === "4k" ? 2160 : 1080;
   const seconds = desktop === "4k" ? desktop4kSourceSeconds : sourceSeconds;
@@ -67,25 +71,49 @@ export async function makeProject(
     "-f",
     "lavfi",
     "-i",
-    `testsrc2=size=${width}x${height}:rate=${fps}:duration=${seconds}`,
+    `testsrc2=size=${width}x${height}:rate=${frameRate}:duration=${seconds}`,
     "-f",
     "lavfi",
     "-i",
-    `nullsrc=size=16x1:rate=${fps}:duration=${seconds}`,
+    `nullsrc=size=16x1:rate=${frameRate}:duration=${seconds}`,
     "-filter_complex",
     `[1:v]format=gray,geq=lum='255*mod(floor(N/pow(2\\,X))\\,2)',scale=${width}:${height / 20}:flags=neighbor[bar];[0:v][bar]overlay=0:0${marker},format=yuv420p`,
     "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
+    ...(hevc
+      ? [
+          "hevc_nvenc",
+          "-preset",
+          "p4",
+          "-profile:v",
+          "main10",
+          "-pix_fmt",
+          "p010le",
+          "-bf",
+          "2",
+        ]
+      : [
+          "libx264",
+          "-preset",
+          "veryfast",
+          ...(desktop === "4k" ? ["-threads", "5"] : []),
+        ]),
+    ...(desktop === "4k"
+      ? [
+          "-colorspace",
+          "bt709",
+          "-color_primaries",
+          "bt709",
+          "-color_trc",
+          "bt709",
+        ]
+      : []),
     "-b:v",
-    desktop === "4k" ? "32M" : "8M",
+    hevc ? "12M" : desktop === "4k" ? (frameRate === 60 ? "40M" : "32M") : "8M",
     "-g",
-    String(fps),
-    "-movflags",
-    "+faststart",
+    String(hevc ? 252 : frameRate),
+    ...(hevc ? [] : ["-movflags", "+faststart"]),
     "-y",
-    join(directory, "footage.mp4"),
+    join(directory, footage),
   ]);
   await run("ffmpeg", [
     "-v",
@@ -111,7 +139,7 @@ export async function makeProject(
   const cuts = Array.from(
     { length: count },
     (_, index) =>
-      `<video id="shot-${index}"${compatible ? "" : ' class="clip"'} src="footage.mp4" muted data-start="${index * clipSeconds}" data-duration="${clipSeconds}" data-media-start="${mediaStart(index, seconds)}" data-track-index="0"${graded ? ` data-color-grading='${JSON.stringify(benchGrade)}'` : ""} style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>`,
+      `<video id="shot-${index}"${compatible ? "" : ' class="clip"'} src="${footage}" muted data-start="${index * clipSeconds}" data-duration="${clipSeconds}" data-media-start="${mediaStart(index, seconds)}" data-track-index="0"${graded ? ` data-color-grading='${JSON.stringify(benchGrade)}'` : ""} style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>`,
   );
   const music = `<audio id="music" class="clip" src="music.m4a" data-start="0" data-duration="${length}" data-track-index="1" data-volume="0.5"></audio>`;
   const titles = Array.from(
@@ -138,7 +166,7 @@ main{position:relative;width:${width}px;height:${height}px;overflow:hidden}
 </style>
 </head>
 <body>
-<main id="main" data-composition-id="main" data-width="${width}" data-height="${height}" data-duration="${length}" data-fps="${fps}">
+<main id="main" data-composition-id="main" data-width="${width}" data-height="${height}" data-duration="${length}" data-fps="${frameRate}">
 ${[...cuts, music, ...titles, ...scenes].join("\n")}
 </main>
 ${compatible ? "" : "<script>window.__timelines=window.__timelines||{};window.__timelines.main=gsap.timeline({paused:true});</script>"}
