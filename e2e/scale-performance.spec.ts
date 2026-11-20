@@ -126,9 +126,9 @@ for (const pipeline of [false, true]) {
           `/api/cutroom/projects/${project.id}/history`,
         );
         const { entries } = (await response.json()) as {
-          entries: { undone: boolean }[];
+          entries: { undone: boolean; undoes?: string }[];
         };
-        return entries.filter((entry) => !entry.undone).length;
+        return entries.filter((entry) => !entry.undone && !entry.undoes).length;
       };
       await expect.poll(historySize).toBe(1);
       const baseline = 1;
@@ -162,15 +162,18 @@ for (const pipeline of [false, true]) {
         ...Array<number>(trims - 1).fill(scaleFps),
       ];
       expect(await trimmedDurations()).toEqual(trimmed);
+      const historyMs: number[] = [];
       for (const [key, expected] of [
         ["Control+z", baseline],
         ["Control+Shift+z", baseline + trims],
       ] as const) {
+        const started = Date.now();
         for (let index = 0; index < trims; index++) {
           await page.keyboard.press(key);
           await page.waitForTimeout(100);
         }
         await expect.poll(historySize, { timeout: 18_000 }).toBe(expected);
+        historyMs.push(Date.now() - started);
       }
       expect(await trimmedDurations()).toEqual(trimmed);
       console.log(
@@ -180,6 +183,8 @@ for (const pipeline of [false, true]) {
           rippleMs,
           trimKeysMs: keysMs,
           trimSavedMs: savedMs,
+          undoMs: historyMs[0],
+          redoMs: historyMs[1],
         }),
       );
     },
