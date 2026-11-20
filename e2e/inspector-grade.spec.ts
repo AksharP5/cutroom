@@ -966,6 +966,17 @@ test("an HSL correction changes only the qualified colour and saves once", async
   const before = await picturePixels(page, [0.25, 0.75]);
   expect(before[0]!.green - before[0]!.red).toBeGreaterThan(120);
   expect(before[1]!.blue - before[1]!.red).toBeGreaterThan(120);
+  // Chromium can round decoded video and the grade canvas one RGB level apart.
+  const restoredDifference = async () =>
+    Math.max(
+      ...(await picturePixels(page, [0.25, 0.75])).flatMap(
+        ({ red, green, blue }, i) => [
+          Math.abs(red - before[i]!.red),
+          Math.abs(green - before[i]!.green),
+          Math.abs(blue - before[i]!.blue),
+        ],
+      ),
+    );
   await page.screenshot({ path: info.outputPath("before-hsl.png") });
   const history = await steps();
   const box = (await shift.boundingBox())!;
@@ -998,7 +1009,7 @@ test("an HSL correction changes only the qualified colour and saves once", async
   await page.screenshot({ path: info.outputPath("after-hsl.png") });
 
   await page.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect.poll(() => picturePixels(page, [0.25, 0.75])).toEqual(before);
+  await expect.poll(restoredDifference).toBeLessThanOrEqual(1);
   const beforeCancel = await steps();
   await scrub();
   await expect
@@ -1006,7 +1017,7 @@ test("an HSL correction changes only the qualified colour and saves once", async
     .toBeGreaterThan(before[0]!.red + 120);
   await page.keyboard.press("Escape");
   await page.mouse.up();
-  await expect.poll(() => picturePixels(page, [0.25, 0.75])).toEqual(before);
+  await expect.poll(restoredDifference).toBeLessThanOrEqual(1);
   expect(await steps()).toBe(beforeCancel);
   await expect
     .poll(async () => (await grade("a"))?.secondaries)
