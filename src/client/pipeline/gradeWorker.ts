@@ -3,14 +3,14 @@ import { parseCubeLut } from "@hyperframes/core/color-luts";
 import type { Grade } from "../../shared/timeline/grade";
 
 export type GradeRequest = {
-  key: string;
+  key: number;
   grade: Grade;
   size: number;
   lutUrl?: string;
 };
 export type GradeReply =
-  | { key: string; data: Uint8Array<ArrayBuffer> }
-  | { key: string; error: string };
+  | { key: number; data: Uint8Array<ArrayBuffer> }
+  | { key: number; error: string };
 
 // Slider steps often share one look. Keep just the last look and share its in-flight read.
 let look:

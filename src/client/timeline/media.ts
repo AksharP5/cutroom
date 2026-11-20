@@ -6,6 +6,7 @@ import {
 } from "../../shared/media";
 import { waveformPeak } from "./math";
 import { filmGrades } from "./filmGrades";
+import type { Grade } from "../../shared/timeline/grade";
 
 /** Waveform buckets fetched per request: 16 seconds at the finest level, 18 hours at the coarsest. */
 export const PEAK_CHUNK = 8192;
@@ -63,12 +64,8 @@ export function createTimelineMedia(
 ) {
   const project = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media`;
   const closing = new AbortController();
-  const grades = filmGrades(
-    projectId,
-    composition,
-    (path) => (Object.hasOwn(versions, path) ? versions[path]! : ""),
-    onLoad,
-  );
+  const grades = filmGrades(projectId, onLoad);
+  const looks = new Set<string>();
   // Every clip asks on every paint, so a source's path is resolved and encoded once.
   const paths = new Map<
     string,
@@ -262,7 +259,7 @@ export function createTimelineMedia(
   return {
     /** Only a source already used by this canvas needs its decoded media replaced. */
     updateVersions(next: Readonly<Record<string, string | null>>) {
-      const changed = [...paths.entries()].some(([src, path]) => {
+      const mediaChanged = [...paths.entries()].some(([src, path]) => {
         const file = path?.path ?? previewMediaPath(composition, src, versions);
         const nextFile = previewMediaPath(composition, src, next);
         // A file reported gone and a file the listing no longer has are the same state.
@@ -271,15 +268,23 @@ export function createTimelineMedia(
           (file !== null && (versions[file] ?? null) !== (next[file] ?? null))
         );
       });
+      const lookChanged = [...looks].some(
+        (path) => (next[path] ?? null) !== (versions[path] ?? null),
+      );
       versions = next;
-      return changed;
+      return { mediaChanged, lookChanged };
     },
     /** Call when a paint begins: what it reads from here on is what the view shows. */
-    beginPaint() {
+    beginPaint(settled: boolean) {
       drawn.clear();
-      grades.beginPaint();
+      grades.beginPaint(settled);
     },
     grades,
+    grade(grade: Grade) {
+      const key = grades.identify(grade, composition, versions);
+      if (key?.lutPath) looks.add(key.lutPath);
+      return key;
+    },
     /** A video's sprite sheets: one tile every `filmstripInterval` seconds. */
     film(src: string) {
       const url = route("filmstrip", src);

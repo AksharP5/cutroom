@@ -124,11 +124,18 @@ async function warmth(page: Page) {
   return (await centrePixel(page)).warmth;
 }
 
-test("the timeline filmstrip follows saved clip grades and undo", async ({
+test("the timeline filmstrip holds a grade through edits, undo and redo", async ({
   page,
   request,
 }, info) => {
-  const { project } = await gradeProject(request, [], true);
+  const { project } = await gradeProject(
+    request,
+    ["0x786896", "0xa85b4f", "0x48a07e"].map(
+      (colour, i) =>
+        `drawbox=x=${i * 213}:y=0:w=214:h=ih:color=${colour}:t=fill`,
+    ),
+    true,
+  );
   const cube = [0, 1].flatMap((blue) =>
     [0, 1].flatMap((green) =>
       [0, 1].map((red) => `${red * 0.98} ${green} ${blue * 0.94}`),
@@ -151,51 +158,89 @@ test("the timeline filmstrip follows saved clip grades and undo", async ({
       const y = Math.floor((clip.bottom - body.top - 9) * devicePixelRatio);
       return [...canvas.getContext("2d")!.getImageData(x, y, 1, 1).data];
     });
-  await expect.poll(async () => (await sample())[0]).toBeGreaterThan(115);
-  const before = await sample();
-  await page.screenshot({ path: info.outputPath("filmstrip-before.png") });
-  const { revision } = TimelineViewSchema.parse(
-    await (await request.get(`${api}/timeline`)).json(),
-  );
-  const response = await request.post(`${api}/commands`, {
-    data: {
-      expectedRevision: revision,
-      commands: [
-        {
-          type: "setClip",
-          clipId: "a",
-          grade: {
-            adjust: { exposure: -1, temperature: 0.6 },
-            lut: { src: "film.cube" },
-          },
-        },
-      ],
-    },
+  const distance = (a: number[], b: number[]) =>
+    Math.max(...a.slice(0, 3).map((value, i) => Math.abs(value - b[i]!)));
+  const setGrade = async (grade: GradeEdit) => {
+    const { revision } = TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+    const response = await request.post(`${api}/commands`, {
+      data: {
+        expectedRevision: revision,
+        commands: [{ type: "setClip", clipId: "a", grade }],
+      },
+    });
+    expect(response.ok()).toBe(true);
+  };
+
+  await expect.poll(async () => (await sample())[3]).toBe(255);
+  const raw = await sample();
+  expect(raw[2]!).toBeGreaterThan(raw[1]! + 20);
+
+  await setGrade({
+    adjust: { exposure: -1, temperature: 0.6 },
+    lut: { src: "film.cube" },
   });
-  expect(response.ok()).toBe(true);
-  await expect.poll(async () => (await sample())[0]).toBeLessThan(100);
-  const after = await sample();
-  expect(after[3]).toBe(255);
-  expect(after[0]!).toBeGreaterThan(after[2]! + 15);
+  await expect
+    .poll(async () => (await sample())[1]!)
+    .toBeLessThan(raw[1]! - 20);
+  const warm = await sample();
   const channelErrors = async () => {
-    const { red, green, blue } = await centrePixel(page);
-    return [red, green, blue].map((value, i) => Math.abs(value - after[i]!));
+    const { red, green, blue } = (await picturePixels(page, [0.21]))[0]!;
+    return [red, green, blue].map((value, i) => Math.abs(value - warm[i]!));
   };
   await expect
     .poll(async () => Math.max(...(await channelErrors())))
-    .toBeLessThanOrEqual(5);
+    .toBeLessThanOrEqual(2);
   await info.attach("filmstrip colours", {
     body: JSON.stringify({
-      before,
-      after,
+      raw,
+      warm,
       viewerChannelErrors: await channelErrors(),
     }),
     contentType: "application/json",
   });
-  await page.screenshot({ path: info.outputPath("filmstrip-after.png") });
+
+  // Sample every painted display frame between two grades. A screenshot after the second
+  // grade settles would miss a flash of source colour during the replacement.
+  const watcher = await shot.evaluateHandle((element) => {
+    const samples: number[][] = [];
+    const canvas = document.querySelector<HTMLCanvasElement>(".tl-bodies")!;
+    const clip = element.getBoundingClientRect();
+    const body = canvas.getBoundingClientRect();
+    const x = Math.floor((clip.left - body.left + 15) * devicePixelRatio);
+    const y = Math.floor((clip.bottom - body.top - 9) * devicePixelRatio);
+    const ctx = canvas.getContext("2d")!;
+    let raf = requestAnimationFrame(function sample() {
+      samples.push([...ctx.getImageData(x, y, 1, 1).data]);
+      raf = requestAnimationFrame(sample);
+    });
+    return { samples, stop: () => cancelAnimationFrame(raf) };
+  });
+  const aroundEdit = [];
+  try {
+    await setGrade({ adjust: { exposure: -0.45, temperature: -0.55 } });
+    await expect
+      .poll(async () => (await sample())[1]!)
+      .toBeGreaterThan(warm[1]! + 15);
+    aroundEdit.push(...(await watcher.evaluate(({ samples }) => samples)));
+  } finally {
+    await watcher.evaluate(({ stop }) => stop());
+    await watcher.dispose();
+  }
+  const cool = await sample();
+  expect(aroundEdit.length).toBeGreaterThan(0);
+  expect(aroundEdit.every((value) => distance(value, raw) > 8)).toBe(true);
+
   await shot.click();
   await page.keyboard.press("Control+z");
-  await expect.poll(sample).toEqual(before);
+  await expect
+    .poll(async () => distance(await sample(), warm))
+    .toBeLessThanOrEqual(2);
+  await page.keyboard.press("Control+Shift+z");
+  await expect
+    .poll(async () => distance(await sample(), cool))
+    .toBeLessThanOrEqual(2);
 });
 
 test("cancelling a grade restores the paused source colours", async ({

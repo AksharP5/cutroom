@@ -13,7 +13,7 @@ const fps = { num: 30, den: 1 };
 export async function timelineWorkload(
   request: APIRequestContext,
   count: 400 | 500,
-  media?: string,
+  { media, graded = false }: { media?: string; graded?: boolean } = {},
 ) {
   const project = ProjectSchema.parse(
     await (
@@ -51,9 +51,20 @@ export async function timelineWorkload(
       target,
     ]);
   const pairs = (count - 20) / 2;
+  if (graded)
+    await writeFile(
+      join(project.path, "look.cube"),
+      "LUT_3D_SIZE 2\n0 0 0\n0.85 0 0\n0 0.9 0\n0.85 0.9 0\n0 0 0.95\n0.85 0 0.95\n0 0.9 0.95\n0.85 0.9 0.95\n",
+    );
   const pieces = Array.from({ length: pairs }, (_, index) => {
     const timing = `data-start="${index * 2.5}" data-duration="2.5" data-media-start="${(index * 3) % 57}"`;
-    return `<video id="talk-${index}" src="talk.mp4" muted data-link="lk-${index}" ${timing} data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video>
+    const grade = graded
+      ? ` data-color-grading='${JSON.stringify({
+          adjust: { temperature: (index - pairs / 2) / pairs, contrast: 0.15 },
+          lut: { src: "look.cube", intensity: 0.8 },
+        })}'`
+      : "";
+    return `<video id="talk-${index}" src="talk.mp4" muted data-link="lk-${index}" ${timing} data-track-index="0"${grade} style="position:absolute;inset:0;width:100%;height:100%"></video>
 <audio id="voice-${index}" src="talk.mp4" data-link="lk-${index}" ${timing} data-track-index="1"></audio>`;
   });
   // Cutroom titles, so the budgets include their stylesheet and exit animation. No entrance, so a

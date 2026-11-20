@@ -23,6 +23,21 @@ import { planDirectExport } from "../src/server/hyperframes/directPlan";
 import { planPreviewPipeline } from "../src/server/hyperframes/pipelinePlan";
 import { readCube, saveLut } from "../src/server/grade/luts";
 import { countingIds } from "./clip-ids";
+import { applyFilmGrade } from "../src/client/timeline/filmGradeLookup";
+
+test("a filmstrip cube interpolates the eight corners and keeps alpha", () => {
+  const cube = Uint8Array.from([
+    0, 30, 5, 255, 0, 30, 5, 255, 0, 190, 5, 255, 0, 190, 5, 255, 0, 30, 245,
+    255, 0, 30, 245, 255, 0, 190, 245, 255, 255, 190, 245, 255,
+  ]);
+  const pixels = new Uint8ClampedArray([
+    51, 102, 153, 128, 255, 255, 255, 255, 0, 0, 0, 0,
+  ]);
+  applyFilmGrade(pixels, cube, 2);
+  expect([...pixels]).toEqual([
+    12, 94, 149, 128, 255, 190, 245, 255, 0, 0, 0, 0,
+  ]);
+});
 
 const page = (body: string) =>
   `<!doctype html>\n<html><head></head>\n<body><main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-duration="10" data-fps="30">\n${body}\n</main></body></html>\n`;

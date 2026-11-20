@@ -1,37 +1,50 @@
-import { writeGrade } from "../../shared/timeline/grade";
-import type { Grade } from "../../shared/timeline/grade";
+import { acquireGrades } from "../pipeline/grades";
+import type { GradeKey } from "../pipeline/grades";
 import type { FilmGradeJob, FilmGradeResult } from "./filmGradeWorker";
 
-const CACHE_BYTES = 16 * 2 ** 20;
-const BATCH = 6;
+const CACHE_BYTES = 32 * 2 ** 20;
+const BATCH = 8;
+type Rect = [number, number, number, number];
+type Pending = {
+  key: string;
+  source: ImageBitmap;
+  rect: Rect;
+  grade: GradeKey;
+};
 
-/** Recolour only the tiles a resting timeline needs, using the already decoded media. */
-export function filmGrades(
-  projectId: string,
-  composition: string,
-  version: (path: string) => string | null,
-  redraw: () => void,
-) {
+/** Bake the visible tiles first, then the rest of the canvas that will scroll into view. */
+export function filmGrades(projectId: string, redraw: () => void) {
+  const cubes = acquireGrades(projectId);
   const stamps = new WeakMap<ImageBitmap, number>();
-  const attributes = new WeakMap<Grade, string | null>();
   const recent = new Map<string, ImageBitmap>();
+  const lastByTile = new Map<string, string>();
   const drawn = new Set<string>();
-  const failed = new Set<string>();
+  const failed = new Map<number, Set<string>>();
   const active = new Set<string>();
-  const needed = new Map<
-    string,
-    Omit<FilmGradeJob, "image"> & {
-      source: ImageBitmap;
-      rect: [number, number, number, number];
-    }
-  >();
+  const visible = new Map<string, Pending>();
+  const buffered = new Map<string, Pending>();
+  const inView = new Set<string>();
   let stamp = 0;
   let bytes = 0;
   let worker: Worker | undefined;
   let busy = false;
   let closed = false;
+  let settled = false;
+  let visibleChanged = false;
+  let bufferChanged = false;
 
-  function finish(results: FilmGradeResult[]) {
+  function fail(job: Pending, reason: unknown) {
+    let tiles = failed.get(job.grade.key);
+    if (!tiles) {
+      console.warn("A timeline filmstrip grade could not be drawn.", reason);
+      if (failed.size >= 256) failed.delete(failed.keys().next().value!);
+      tiles = new Set();
+      failed.set(job.grade.key, tiles);
+    }
+    tiles.add(job.key);
+  }
+
+  function finish(batch: readonly Pending[], results: FilmGradeResult[]) {
     if (closed) {
       for (const result of results) if ("image" in result) result.image.close();
       return;
@@ -40,13 +53,15 @@ export function filmGrades(
     active.clear();
     for (const result of results) {
       if ("error" in result) {
-        if (failed.size >= 256) failed.delete(failed.keys().next().value!);
-        failed.add(result.key);
+        const job = batch.find(({ key }) => key === result.key);
+        if (job) fail(job, result.error);
         continue;
       }
       const { key, image } = result;
       recent.set(key, image);
       bytes += image.width * image.height * 4;
+      if (inView.has(key)) visibleChanged = true;
+      else bufferChanged = true;
     }
     for (const [key, image] of recent) {
       if (bytes <= CACHE_BYTES) break;
@@ -55,94 +70,137 @@ export function filmGrades(
       bytes -= image.width * image.height * 4;
       image.close();
     }
-    if (results.some((result) => "image" in result)) redraw();
-    else pump();
+    pump();
   }
 
   function pump() {
-    if (busy || closed || !needed.size) return;
-    const batch = [...needed.values()].slice(0, BATCH);
-    for (const item of batch) {
-      needed.delete(item.key);
-      active.add(item.key);
+    if (busy || closed || !settled) return;
+    // Paint a completed viewport at once. The rest of the canvas gets one paint after
+    // prewarming, so moving the viewport over it doesn't expose raw or half-graded tiles.
+    if (!visible.size && visibleChanged) {
+      visibleChanged = false;
+      redraw();
+    }
+    if (!visible.size && !buffered.size) {
+      if (bufferChanged) {
+        bufferChanged = false;
+        redraw();
+      }
+      return;
+    }
+    const queue = visible.size ? visible : buffered;
+    const batch: Pending[] = [];
+    for (const [key, item] of queue) {
+      batch.push(item);
+      queue.delete(key);
+      active.add(key);
+      if (batch.length === BATCH) break;
     }
     busy = true;
     worker ??= new Worker(new URL("./filmGradeWorker.ts", import.meta.url), {
       type: "module",
     });
     worker.onmessage = ({ data }: MessageEvent<FilmGradeResult[]>) =>
-      finish(data);
-    worker.onerror = () => {
+      finish(batch, data);
+    worker.onerror = (event) => {
+      console.warn("The timeline filmstrip worker stopped.", event.message);
       worker?.terminate();
+      worker = undefined;
       closed = true;
     };
     void Promise.allSettled(
-      batch.map(async ({ source, rect, ...job }) => ({
-        ...job,
-        image: await createImageBitmap(source, ...rect),
-      })),
+      batch.map(
+        async ({ key, source, rect, grade }) =>
+          ({
+            key,
+            cube: await cubes.get(grade, true),
+            image: await createImageBitmap(source, ...rect),
+          }) satisfies FilmGradeJob,
+      ),
     ).then((results) => {
-      const jobs = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
+      const jobs = results.flatMap((result, index) => {
+        if (result.status === "fulfilled") return [result.value];
+        if (!closed) fail(batch[index]!, result.reason);
+        return [];
+      });
       if (closed) {
         for (const { image } of jobs) image.close();
       } else if (jobs.length)
         worker!.postMessage(jobs, { transfer: jobs.map(({ image }) => image) });
-      else finish([]);
+      else finish(batch, []);
     });
   }
 
+  function useImage(key: string) {
+    const image = recent.get(key);
+    if (!image) return;
+    recent.delete(key);
+    recent.set(key, image);
+    drawn.add(key);
+    return image;
+  }
+
   return {
-    beginPaint() {
-      needed.clear();
+    identify: cubes.identify,
+    beginPaint(atRest: boolean) {
+      settled = atRest;
+      visible.clear();
+      buffered.clear();
+      inView.clear();
       drawn.clear();
     },
+    pause() {
+      settled = false;
+    },
     tile(
+      clip: string,
       source: ImageBitmap,
-      rect: [number, number, number, number],
-      grade: Grade,
-      request: boolean,
+      rect: Rect,
+      grade: GradeKey,
+      onscreen: boolean,
     ) {
-      let attribute = attributes.get(grade);
-      if (attribute === undefined) {
-        attribute = writeGrade(grade);
-        attributes.set(grade, attribute);
-      }
-      if (!attribute) return;
-      let look: string | undefined;
-      if (grade.lut) {
-        const path =
-          composition.slice(0, composition.lastIndexOf("/") + 1) +
-          grade.lut.src;
-        const current = version(path);
-        if (current === null) return;
-        look = `/api/cutroom/projects/${encodeURIComponent(projectId)}/luts/source?path=${encodeURIComponent(path)}&v=${encodeURIComponent(current)}`;
-      }
-      const gradeKey = look ? `${attribute}\n${look}` : attribute;
       let id = stamps.get(source);
       if (id === undefined) {
         id = stamp++;
         stamps.set(source, id);
       }
-      const key = `${id}:${rect.join(":")}:${gradeKey}`;
-      if (request) drawn.add(key);
-      const image = recent.get(key);
+      const tile = `${id}:${rect.join(":")}`;
+      const key = `${tile}:${grade.key}`;
+      if (onscreen) inView.add(key);
+      const lastKey = `${clip}:${tile}`;
+      const image = useImage(key);
       if (image) {
-        recent.delete(key);
-        recent.set(key, image);
+        lastByTile.delete(lastKey);
+        if (lastByTile.size >= 4096)
+          lastByTile.delete(lastByTile.keys().next().value!);
+        lastByTile.set(lastKey, key);
         return image;
       }
-      if (request && !closed && !active.has(key) && !failed.has(key))
-        needed.set(key, { key, gradeKey, grade, look, source, rect });
+      if (
+        settled &&
+        !closed &&
+        !active.has(key) &&
+        !failed.get(grade.key)?.has(key)
+      ) {
+        if (onscreen) {
+          buffered.delete(key);
+          visible.set(key, { key, grade, source, rect });
+        } else if (!visible.has(key))
+          buffered.set(key, { key, grade, source, rect });
+      }
+      const previous = lastByTile.get(lastKey);
+      return previous === undefined ? undefined : useImage(previous);
     },
     endPaint: pump,
     dispose() {
       closed = true;
       worker?.terminate();
-      needed.clear();
+      cubes.dispose();
+      visible.clear();
+      buffered.clear();
       for (const image of recent.values()) image.close();
       recent.clear();
+      lastByTile.clear();
       failed.clear();
     },
   };

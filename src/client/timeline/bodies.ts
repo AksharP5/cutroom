@@ -193,7 +193,7 @@ export function createBodies(
     const hair = Math.max(1, Math.round(dpr));
     wanted = [];
     const now = performance.now();
-    media.beginPaint();
+    media.beginPaint(settled);
     /** A row's waveform columns by colour, filled once per row. */
     let waves = paths();
 
@@ -310,6 +310,7 @@ export function createBodies(
       const start = clip.start * ppf;
       const from = left - start;
       const to = Math.min(right - start, clip.duration * ppf);
+      const grade = clip.grade && media.grade(clip.grade);
       const draw = (
         picture: ImageBitmap,
         sx: number,
@@ -318,22 +319,24 @@ export function createBodies(
         sh: number,
         x: number,
         tile: number,
+        requireGrade = false,
       ) => {
         const at = Math.round((start + x) * dpr) - originX;
         const wide = Math.round((start + x + tile) * dpr) - originX - at;
         const shown = Math.min(wide, x1 - at);
-        if (shown <= 0) return;
-        const graded = clip.grade
+        if (shown <= 0) return true;
+        const graded = grade
           ? media.grades.tile(
+              clip.id,
               picture,
               [sx, sy, sw, sh],
-              clip.grade,
-              settled &&
-                inView &&
+              grade,
+              inView &&
                 start + x < visible.x.to &&
                 start + x + tile > visible.x.from,
             )
           : undefined;
+        if (requireGrade && !graded) return false;
         ctx.drawImage(
           graded ?? picture,
           graded ? 0 : sx,
@@ -347,6 +350,7 @@ export function createBodies(
         );
         ctx.fillStyle = tokens.seam;
         ctx.fillRect(at, y0, hair, y1 - y0);
+        return true;
       };
       if (clip.kind === "image") {
         const picture = media.still(src);
@@ -379,12 +383,15 @@ export function createBodies(
         to,
       )) {
         const frame = exact ? media.frame(src, time) : undefined;
-        if (frame) {
-          draw(frame, 0, 0, frame.width, frame.height, x, tile);
+        if (
+          frame &&
+          draw(frame, 0, 0, frame.width, frame.height, x, tile, !!grade)
+        ) {
           continue;
         }
         if (
           exact &&
+          !frame &&
           inView &&
           (clip.sourceDuration === null || time < clip.sourceDuration) &&
           start + x < visible.x.to &&
@@ -399,7 +406,10 @@ export function createBodies(
         const sheet =
           strip.sheets[Math.floor(index / mediaSettings.tilesPerSheet)];
         const sprite = sheet && media.sheet(sheet.spriteUrl);
-        if (!sprite) continue;
+        if (!sprite) {
+          if (frame) draw(frame, 0, 0, frame.width, frame.height, x, tile);
+          continue;
+        }
         const cell = index - sheet.start;
         draw(
           sprite,
@@ -493,9 +503,12 @@ export function createBodies(
 
   return {
     versions(next: Readonly<Record<string, string | null>>) {
-      if (!media.updateVersions(next)) return;
-      media.dispose();
-      media = createTimelineMedia(projectId, composition, schedule, next);
+      const { mediaChanged, lookChanged } = media.updateVersions(next);
+      if (mediaChanged) {
+        media.dispose();
+        media = createTimelineMedia(projectId, composition, schedule, next);
+      }
+      if (!mediaChanged && !lookChanged) return;
       paint();
       if (settled) media.wantFrames(wanted);
     },
@@ -524,7 +537,7 @@ export function createBodies(
       const covered = covers(next, fit(next));
       view = next;
       settled = false;
-      media.grades.beginPaint();
+      media.grades.pause();
       if (!covered) paint();
       media.wantFrames([]);
       clearTimeout(resting);
