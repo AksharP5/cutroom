@@ -1,3 +1,4 @@
+import { rampRuntime } from "./rampRuntime.ts";
 import { readFileSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
 import { registerHooks } from "node:module";
@@ -227,7 +228,7 @@ function replaceOnce(
 /** Frame injection supplies the decoded pixels. The source element still owns opacity. */
 export function renderGradeRuntime(source: string) {
   const adapted = replaceOnce(
-    source,
+    rampRuntime(source),
     'i=r&&!n;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=a.opacity||"1"',
     'i=r;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=(n?window.getComputedStyle(e.element):a).opacity||"1"',
     "the colour grading runtime",
@@ -292,9 +293,6 @@ export function registerRenderIsolation(
   );
   const imageVariables = JSON.stringify(
     new URL("./imageVariables.ts", import.meta.url).href,
-  );
-  const transitions = JSON.stringify(
-    new URL("../timeline/transitionSource.ts", import.meta.url).href,
   );
   const freezeSources = JSON.stringify(
     new URL("./freezeSources.ts", import.meta.url).href,
@@ -420,7 +418,7 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
         source = replaceOnce(
           source,
           "return resolveVerifiedHyperframeRuntime().runtimeSource;",
@@ -436,7 +434,7 @@ export function registerRenderIsolation(
         source = replaceOnce(
           source,
           "rebaseDirectEntryAssetPaths(readTextFile(htmlPath), projectDir, htmlPath)",
-          "rebaseDirectEntryAssetPaths(transitionSourceTimes(useFreezeExportSources(cutroomSources[htmlPath] ?? readTextFile(htmlPath))), projectDir, htmlPath)",
+          "rebaseDirectEntryAssetPaths(useFreezeExportSources(cutroomSources[htmlPath] ?? readTextFile(htmlPath)), projectDir, htmlPath)",
           url,
         );
         source = replaceOnce(
@@ -691,7 +689,7 @@ export function registerRenderIsolation(
         source = replaceOnce(
           source,
           "const rawSubHtml = normalizeCompositionSrcs(read.text, projectDir);",
-          "const rawSubHtml = normalizeCompositionSrcs(transitionSourceTimes(useFreezeExportSources(cutroomSources[filePath] ?? read.text)), projectDir);",
+          "const rawSubHtml = normalizeCompositionSrcs(useFreezeExportSources(cutroomSources[filePath] ?? read.text), projectDir);",
           url,
         );
         source = replaceOnce(

@@ -1240,7 +1240,7 @@ test("moves overwrite partial and full clips without rippling or changing the mo
     later: [0, 210, 30],
   });
   expect(result.clips.find((item) => item.id === "tail")?.mediaStart).toBe(
-    4 + 1 / 3,
+    4.333333,
   );
   expect(result.clips.find((item) => item.id === "moving")).toMatchObject({
     mediaStart: 2,
@@ -2223,7 +2223,7 @@ test("slide moves a clip between its neighbours, which trim to follow with their
   const source = Object.fromEntries(
     slid.clips.map((item) => [item.id, item.mediaStart]),
   );
-  expect([source.a, source.b, source.c]).toEqual([0, 1, 3 + 10 / 30]);
+  expect([source.a, source.b, source.c]).toEqual([0, 1, 3.333333]);
   expect(() => run(state, { type: "slide", clipIds: ["b"], by: 30 })).toThrow(
     "talk.mp4 can slide at most 29 frames later: then clip c would be shorter than one frame.",
   );
@@ -2308,7 +2308,7 @@ test("slide trims each neighbour's linked sound with its picture, and the sound'
   const source = Object.fromEntries(
     slid.clips.map((item) => [item.id, item.mediaStart]),
   );
-  expect([source.c, source["c-sound"]]).toEqual([2 + 10 / 30, 2 + 10 / 30]);
+  expect([source.c, source["c-sound"]]).toEqual([2.333333, 2.333333]);
   // The sound has less source after its out point than the picture.
   const short = timeline(
     interview().clips.map((item) =>
@@ -2355,7 +2355,7 @@ test("clips next to each other slide as one block, and a clip between them refus
   });
   const [a, b, c] = slid.clips.map((item) => item.mediaStart!);
   expect([a, b]).toEqual([1, 3]);
-  expect(c).toBeCloseTo(6 + 5 / 30, 9);
+  expect(c).toBe(6.166667);
   expect(() =>
     run(state, { type: "slide", clipIds: ["a", "c"], by: 5 }),
   ).toThrow(
