@@ -252,6 +252,14 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   /** Each layer's plane bytes, reused from draw to draw. */
   const buffers: Uint8Array[] = [];
   let disposed = false;
+  // The canvas is hidden before its first draw. Track its parent so playback can size the
+  // backing store without forcing layout on every frame.
+  const picture = canvas.parentElement ?? canvas;
+  let size: DOMRectReadOnly = picture.getBoundingClientRect();
+  const resize = new ResizeObserver(([entry]) => {
+    if (entry) size = entry.contentRect;
+  });
+  resize.observe(picture);
 
   /** Allocates a texture only when its size or format changes; each draw replaces its pixels. */
   const upload = (
@@ -340,10 +348,8 @@ export function createCompositor(canvas: HTMLCanvasElement) {
         layers.map((layer, slot) => copy(layer.frame, slot)),
       );
       if (disposed || gl.isContextLost()) return;
-      // Sized after the copies, since resizing clears the picture still on screen. The canvas
-      // stays hidden until its first frame is drawn, so measure the picture it fills.
-      const box = (canvas.parentElement ?? canvas).getBoundingClientRect();
-      const backing = [box.width, box.height].map((side) =>
+      // Sized after the copies, since resizing clears the picture still on screen.
+      const backing = [size.width, size.height].map((side) =>
         Math.max(1, Math.round(side * devicePixelRatio)),
       );
       if (canvas.width !== backing[0] || canvas.height !== backing[1])
@@ -420,7 +426,9 @@ export function createCompositor(canvas: HTMLCanvasElement) {
     },
     lost: () => gl.isContextLost(),
     dispose() {
+      if (disposed) return;
       disposed = true;
+      resize.disconnect();
       for (const { texture } of textures) gl.deleteTexture(texture);
       for (const texture of grades.values()) gl.deleteTexture(texture);
       grades.clear();

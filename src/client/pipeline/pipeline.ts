@@ -121,6 +121,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     "webglcontextlost",
     (event) => {
       event.preventDefault();
+      compositor.dispose();
       stop("the GPU dropped its drawing context");
     },
     { signal: closing.signal },
