@@ -25,7 +25,7 @@ import { NoteLayer } from "./NoteLayer";
 import { RegionLayer } from "./RegionLayer";
 import { PictureSelect } from "./PictureSelect";
 import { ViewerGuides } from "./ViewerGuides";
-import { ROOT_COMPOSITION, useTimeline } from "./timeline";
+import { afterEditBurst, ROOT_COMPOSITION, useTimeline } from "./timeline";
 import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
@@ -362,6 +362,7 @@ export function Viewer({
     const closing = new AbortController();
     refresh.current = previewRefresh(
       async (change, isLatest) => {
+        await afterEditBurst(projectId, shownComposition.current);
         await editSaved();
         if (
           timingEligible.current &&
