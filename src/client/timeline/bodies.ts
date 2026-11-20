@@ -13,13 +13,15 @@ import { PEAK_CHUNK, createTimelineMedia } from "./media";
 import { volumeLane, waveformScale } from "./mix";
 import { clipFades } from "../../shared/timeline/mix";
 import type { ViewState } from "./view";
-import { clipVisible, trackMix } from "../../shared/timeline/tracks";
+import { clipVisible } from "../../shared/timeline/tracks";
+import type { TrackMix } from "../../shared/timeline/tracks";
 
 export interface BodyScene {
   rows: readonly Row[];
   tracks: ReadonlyMap<number, TrackClips>;
   fps: Fps;
   imageSources: ReadonlyMap<string, string>;
+  mix: TrackMix;
 }
 export type Bodies = ReturnType<typeof createBodies>;
 /** A clip's way from where it was drawn to where it is, as its box takes it. */
@@ -403,7 +405,6 @@ export function createBodies(
     }
 
     const frames = { from: left / ppf, to: right / ppf };
-    const suppressed = trackMix(scene.rows.map((row) => row.track)).hidden;
     for (const row of rowsBetween(scene.rows, top, bottom)) {
       const track = scene.tracks.get(row.track.index);
       if (!track) continue;
@@ -428,7 +429,7 @@ export function createBodies(
         if (!pictured && !placed.hasAudio) continue;
         // A clip an edit moved is drawn where its box is on its way there.
         const shift = offset(placed.id, now);
-        const enabled = clipVisible(placed, suppressed);
+        const enabled = clipVisible(placed, scene.mix);
         const clip =
           shift.x || enabled !== placed.enabled
             ? { ...placed, start: placed.start + shift.x / ppf, enabled }

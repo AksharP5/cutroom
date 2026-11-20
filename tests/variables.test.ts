@@ -782,6 +782,7 @@ test("one scene instance owns its overrides, including guarded MCP saves", async
       ],
       markers: [],
       range: { in: null, out: null },
+      soloAudioGroups: [],
     };
     await f.store.writeDocument(f.project, document);
     expect((await read("left")).locked).toBe(true);
@@ -863,6 +864,7 @@ test("binding uses the external template scope and refuses locked tracks", async
         ],
         markers: [],
         range: { in: null, out: null },
+        soloAudioGroups: [],
       },
     };
     await f.store.writeDocument(f.project, document);

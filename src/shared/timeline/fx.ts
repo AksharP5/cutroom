@@ -242,3 +242,45 @@ export function mixLoudnessFx(
     },
   ];
 }
+
+/**
+ * Main gain's effect on the root chain. HyperFrames has no master gain stage, so Main gain is the
+ * last effect of the master chain, a gain with this id, which the Main effect list leaves out.
+ */
+export const MAIN_GAIN_FX_ID = "main";
+
+const decibels = (volume: number) =>
+  Math.round(20 * Math.log10(volume) * 1e6) / 1e6;
+
+/** The master chain HyperFrames plays: Main's effects, then its gain when it is not unity. */
+export function mainChain(
+  main: { volume: number; fx: readonly FxNode[] } | undefined,
+): FxNode[] {
+  if (!main) return [];
+  if (main.volume === 1) return [...main.fx];
+  return [
+    ...main.fx,
+    {
+      id: MAIN_GAIN_FX_ID,
+      type: "gain",
+      enabled: true,
+      label: "Main",
+      preset: null,
+      params: { gain: decibels(main.volume) },
+    },
+  ];
+}
+
+/** The root chain read back as Main: its gain effect apart from the effects listed. */
+export function readMain(chain: readonly FxNode[]) {
+  const gain = chain.at(-1);
+  const own =
+    gain?.id === MAIN_GAIN_FX_ID && gain.type === "gain" && gain.enabled
+      ? gain
+      : undefined;
+  const fx = own ? chain.slice(0, -1) : [...chain];
+  const volume = own
+    ? Math.round(10 ** (Number(own.params.gain ?? 0) / 20) * 1e6) / 1e6
+    : 1;
+  return volume === 1 && !fx.length ? undefined : { volume, fx };
+}

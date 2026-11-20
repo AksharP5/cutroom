@@ -71,7 +71,12 @@ import {
   offsetAutomation,
   trackGainWarning,
 } from "../../shared/timeline/mix";
-import { readFxChain, writeFxChain } from "../../shared/timeline/fx";
+import {
+  mainChain,
+  readFxChain,
+  readMain,
+  writeFxChain,
+} from "../../shared/timeline/fx";
 import {
   readVersions,
   rebaseVersions,
@@ -111,7 +116,7 @@ import {
   toSeconds,
 } from "../../shared/timeline/apply";
 import type { ClipOrigin } from "../../shared/timeline/apply";
-import { trackMix } from "../../shared/timeline/tracks";
+import { mixHides, mixSilences, trackMix } from "../../shared/timeline/tracks";
 import type { TrackMix } from "../../shared/timeline/tracks";
 import {
   declaredFonts,
@@ -1062,12 +1067,15 @@ export function parseComposition(
 
   const rootDuration = parseNumeric(root.attrs["data-duration"]);
   const rootDurationAuthored = rootDuration !== null && rootDuration > 0;
-  const masterFx = readableFx(root.attrs["data-fx-chain"]);
+  const main = readMain(readableFx(root.attrs["data-fx-chain"]));
+  const soloGroups = new Set(settings.soloAudioGroups);
   const authoredAudioGroups = readAuthoredAudioGroups(
     groupDeclarations,
     all,
     authoredMembers,
     scope,
+  ).map((group) =>
+    soloGroups.has(group.id) ? { ...group, solo: true } : group,
   );
   const timeline = normalizeTimeline({
     fps,
@@ -1090,7 +1098,7 @@ export function parseComposition(
         settings.range.out === null ? null : toFrames(settings.range.out, fps),
     },
     ...(authoredAudioGroups.length && { authoredAudioGroups }),
-    ...(masterFx.length && { masterFx }),
+    ...(main && { main }),
   });
   const parsed: ParsedComposition = {
     html,
@@ -1161,6 +1169,9 @@ export function settingsOf(timeline: Timeline): TimelineSettings {
       duration: toSeconds(duration, timeline.fps),
     })),
     range: { in: seconds(timeline.range.in), out: seconds(timeline.range.out) },
+    soloAudioGroups: (timeline.authoredAudioGroups ?? []).flatMap(
+      ({ id, solo }) => (solo ? [id] : []),
+    ),
   };
 }
 
@@ -1401,13 +1412,19 @@ function readAuthoredAudioGroups(
         : !cutroomGroup && (scope === "sub-composition" || hasExternalScene)
           ? `External scenes can share audio group ${id}. Edit its gain in the source.`
           : undefined;
+    const fxProblem = fxRestriction(element.attrs["data-fx-chain"]);
+    const restriction = sourceRestriction ?? fxProblem;
     return {
       id,
       volume: Number.isFinite(gain) ? gain : 1,
       ...(element.attrs["data-label"] && {
         label: element.attrs["data-label"],
       }),
-      ...(sourceRestriction && { sourceRestriction }),
+      muted: element.attrs["data-hidden"] !== undefined,
+      solo: false,
+      fx: readableFx(element.attrs["data-fx-chain"]),
+      automated: Boolean(element.attrs["data-automation"]),
+      ...(restriction && { sourceRestriction: restriction }),
     };
   });
 }
@@ -1571,8 +1588,8 @@ function clipChanges(
       ),
     );
   }
-  const hidden = !after.enabled || mix.hidden.has(after.track);
-  const trackHidden = after.enabled && mix.hidden.has(after.track);
+  const hidden = !after.enabled || mixHides(mix, after);
+  const trackHidden = after.enabled && mixHides(mix, after);
   if (has("data-hidden") !== hidden)
     changes.push(["data-hidden", hidden ? "" : null]);
   if (has("data-cutroom-track-hidden") !== trackHidden)
@@ -1581,7 +1598,7 @@ function clipChanges(
   const soundOff =
     after.kind === "video" &&
     after.hasAudio &&
-    (!after.enabled || mix.muted.has(after.track));
+    (!after.enabled || mixSilences(mix, after));
   const authoredMuted = has("muted") && !has("data-cutroom-muted");
   if (has("muted") !== (authoredMuted || soundOff))
     changes.push(["muted", authoredMuted || soundOff ? "" : null]);
@@ -1877,7 +1894,7 @@ export function applyTrackMix(parsed: ParsedComposition): string {
   const spans = new Map(
     scanHtmlOpeningTags(html).map((span) => [span.start, span]),
   );
-  const mix = trackMix(timeline.tracks);
+  const mix = trackMix(timeline);
   const edits: Edit[] = [];
   const groups = managedAudioGroups(parsed.root);
   const used = new Set([
@@ -2244,7 +2261,7 @@ export const attributeMarkup = (attributes: AttributeChange[]) =>
 
 /** A new title: a plain text element whose attributes the title stylesheet reads. */
 function titleMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
-  const hidden = mix.hidden.has(clip.track);
+  const hidden = mixHides(mix, clip);
   return `<div${attributeMarkup([
     ["id", clip.id],
     ["class", "clip"],
@@ -2287,7 +2304,7 @@ function compositionSize(root: SourceElement) {
 
 /** A new adjustment layer: an empty clip the region stylesheet lays over the frame. */
 function adjustmentMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
-  const hidden = mix.hidden.has(clip.track);
+  const hidden = mixHides(mix, clip);
   return `<div${attributeMarkup([
     ["id", clip.id],
     ["class", "clip"],
@@ -2320,7 +2337,7 @@ function hostMarkup(
   fps: Fps,
   mix: TrackMix,
 ): string {
-  const hidden = mix.hidden.has(clip.track);
+  const hidden = mixHides(mix, clip);
   return `<div${attributeMarkup([
     ["id", clip.id],
     ["class", "clip"],
@@ -2404,15 +2421,15 @@ function insertMarkup(
     ["data-duration", String(toSeconds(clip.duration, fps))],
     ["data-track-index", String(clip.track)],
     ...(clip.link ? [["data-link", clip.link] as const] : []),
-    ...(!clip.enabled || mix.hidden.has(clip.track)
+    ...(!clip.enabled || mixHides(mix, clip)
       ? [["data-hidden", ""] as const]
       : []),
-    ...(clip.enabled && mix.hidden.has(clip.track)
+    ...(clip.enabled && mixHides(mix, clip)
       ? [["data-cutroom-track-hidden", ""] as const]
       : []),
     ...(clip.kind === "video" &&
     clip.hasAudio &&
-    (!clip.enabled || mix.muted.has(clip.track))
+    (!clip.enabled || mixSilences(mix, clip))
       ? [["muted", ""] as const, ["data-cutroom-muted", ""] as const]
       : []),
     ...(clip.mediaStart
@@ -2725,7 +2742,7 @@ export function patchComposition(
     scanHtmlOpeningTags(html).map((span) => [span.start, span]),
   );
   const stacking = stackingEdits(parsed, after, previous);
-  const mix = trackMix(after.tracks);
+  const mix = trackMix(after);
   const edits: Edit[] = [
     ...(stacking ?? []),
     ...managedStyleEdits(
@@ -2920,11 +2937,11 @@ export function patchComposition(
   for (const [at, texts] of inserts)
     edits.push({ start: at, end: at, text: texts.join("") });
 
-  const groupVolumes = new Map(
-    after.authoredAudioGroups?.map(({ id, volume }) => [id, volume]),
+  const previousGroups = new Map(
+    before.authoredAudioGroups?.map((group) => [group.id, group]),
   );
-  const previousGroups = new Set(
-    before.authoredAudioGroups?.map(({ id }) => id),
+  const nextGroups = new Map(
+    after.authoredAudioGroups?.map((group) => [group.id, group]),
   );
   const addedGroups = (after.authoredAudioGroups ?? []).filter(
     ({ id }) => !previousGroups.has(id),
@@ -2941,14 +2958,23 @@ export function patchComposition(
     const indent = last
       ? indentOf(html, last.start)
       : indentOf(html, parsed.root.start) + "  ";
-    const tags = addedGroups.map(({ id, label, volume }) => {
-      if (parsed.ids.has(id))
+    const tags = addedGroups.map((group) => {
+      if (parsed.ids.has(group.id))
         throw new TimelineError(
           "duplicate_id",
-          `Audio group ID ${id} is already in use.`,
+          `Audio group ID ${group.id} is already in use.`,
         );
-      const name = label ? ` data-label="${escapeAttribute(label)}"` : "";
-      return `\n${indent}<hf-audio-group id="${escapeAttribute(id)}"${name} ${ROUTED_AUDIO_GROUP} data-volume="${volume}"></hf-audio-group>`;
+      const attributes = attributeMarkup([
+        ["id", group.id],
+        ...(group.label ? [["data-label", group.label] as const] : []),
+        [ROUTED_AUDIO_GROUP, null],
+        ["data-volume", String(group.volume)],
+        ...(group.muted ? [["data-hidden", null] as const] : []),
+        ...(group.fx.length
+          ? [["data-fx-chain", writeFxChain(group.fx)] as const]
+          : []),
+      ]);
+      return `\n${indent}<hf-audio-group${attributes}></hf-audio-group>`;
     });
     edits.push({
       start: at,
@@ -2956,38 +2982,62 @@ export function patchComposition(
       text: tags.join("") + "\n",
     });
   }
-  const changedGroups = new Map(
-    before.authoredAudioGroups?.flatMap(({ id, volume, sourceRestriction }) => {
-      const next = groupVolumes.get(id);
-      return !sourceRestriction && next !== undefined && volume !== next
-        ? [[id, next] as const]
-        : [];
-    }),
-  );
-  if (changedGroups.size) {
-    for (const element of declarations) {
-      const id = element.attrs.id;
-      if (!id) continue;
-      const volume = changedGroups.get(id);
-      if (volume === undefined) continue;
-      edits.push(
-        ...attributeEdits(openingTag(spans, element, id), html, [
-          ["data-volume", String(volume)],
-        ]),
-      );
+  for (const element of declarations) {
+    const id = element.attrs.id;
+    const old = id === undefined ? undefined : previousGroups.get(id);
+    if (!id || !old || old.sourceRestriction) continue;
+    const next = nextGroups.get(id);
+    if (!next) {
+      if (element.children.length)
+        throw new TimelineError(
+          "unsupported",
+          `Audio group ${id} holds other elements. Remove it in the source.`,
+        );
+      edits.push({
+        start: leadingSpace(html, element.start),
+        end: element.end,
+        text: "",
+      });
+      continue;
     }
+    const changes: AttributeChange[] = [
+      ...(old.label !== next.label
+        ? [["data-label", next.label ?? null] as const]
+        : []),
+      ...(old.volume !== next.volume
+        ? [["data-volume", String(next.volume)] as const]
+        : []),
+      ...(old.muted !== next.muted
+        ? [["data-hidden", next.muted ? "" : null] as const]
+        : []),
+      ...(!Bun.deepEquals(old.fx, next.fx)
+        ? [
+            [
+              "data-fx-chain",
+              writeFxChain(next.fx, element.attrs["data-fx-chain"]),
+            ] as const,
+          ]
+        : []),
+      ...(old.automated && !next.automated
+        ? [["data-automation", null] as const]
+        : []),
+    ];
+    if (changes.length)
+      edits.push(
+        ...attributeEdits(openingTag(spans, element, id), html, changes),
+      );
   }
 
   const rootChanges: AttributeChange[] = [
     ...(parsed.rootDurationAuthored && after.duration !== before.duration
       ? [["data-duration", String(toSeconds(after.duration, fps))] as const]
       : []),
-    ...(!Bun.deepEquals(before.masterFx ?? [], after.masterFx ?? [])
+    ...(!Bun.deepEquals(mainChain(before.main), mainChain(after.main))
       ? [
           [
             "data-fx-chain",
             writeFxChain(
-              after.masterFx ?? [],
+              mainChain(after.main),
               parsed.root.attrs["data-fx-chain"],
             ),
           ] as const,

@@ -33,7 +33,10 @@ export function trackMixStamp(document: ProjectDocument) {
           volume,
           fx,
         ]);
-      return tracks.length ? [[composition, tracks]] : [];
+      const { soloAudioGroups: solo } = settings;
+      return tracks.length || solo.length
+        ? [[composition, tracks, ...(solo.length ? [solo] : [])]]
+        : [];
     }),
   );
 }
@@ -56,6 +59,7 @@ export async function readTrackMix(store: ProjectStore, project: Project) {
       if (!source) return null;
       if (
         !settings.tracks.some(hasTrackMix) &&
+        !settings.soloAudioGroups.length &&
         !/data-cutroom-(track(?:-hidden)?|muted)\b/.test(source.content)
       )
         return null;

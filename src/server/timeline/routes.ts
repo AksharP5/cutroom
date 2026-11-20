@@ -456,11 +456,10 @@ export function createTimelineRoutes(
         "unsupported",
         "This edit cannot be written to the composition exactly. Edit the source instead.",
       );
-    const priorGroupVolumes = new Map(
-      current.parsed.timeline.authoredAudioGroups?.map(({ id, volume }) => [
-        id,
-        volume,
-      ]),
+    const priorGroups = new Map(
+      timelineContent(current.parsed.timeline).authoredAudioGroups?.map(
+        (group) => [group.id, JSON.stringify(group)],
+      ),
     );
     const routedGroups = new Set(
       batch.commands.flatMap((command) =>
@@ -470,14 +469,13 @@ export function createTimelineRoutes(
       ),
     );
     // Placing a scene or pasting a member can affect the source scope of an edited bus.
-    for (const {
-      id,
-      volume,
-      sourceRestriction,
-    } of written.authoredAudioGroups ?? []) {
+    const writtenGroups = timelineContent(written).authoredAudioGroups ?? [];
+    for (const { id, sourceRestriction } of written.authoredAudioGroups ?? []) {
+      const content = writtenGroups.find((group) => group.id === id);
       if (
         sourceRestriction &&
-        (routedGroups.has(id) || priorGroupVolumes.get(id) !== volume)
+        (routedGroups.has(id) ||
+          priorGroups.get(id) !== JSON.stringify(content))
       )
         throw new TimelineError("unsupported", sourceRestriction);
     }
