@@ -305,7 +305,7 @@ Local transcription uses an already installed Whisper runtime and complete model
 
 Both MCP transports forward to the running server. They do not open a second project store or write files independently. The server binds to loopback and rejects foreign browser origins and rebinding hostnames. This endpoint is intended for agents on the same machine, not public network exposure.
 
-Every mutating HTTP request, including upstream editor and `/mcp` routes, requires an exact allowed Cutroom `Origin`. Missing, opaque, foreign, or wrong-port origins receive 403 before route dispatch. The stdio MCP bridge supplies the selected server origin; native HTTP clients must do the same. Development additionally permits the two explicit Vite origins. This protects isolated previews and foreign browser pages while preserving the embedded editor's own canvas mutations. It is not authentication against native processes on the same machine, which can set HTTP headers.
+Mutating editor and upstream routes require an exact allowed Cutroom `Origin`. The loopback `/mcp` endpoint also accepts native HTTP clients that omit `Origin`. If a client sends an opaque, foreign, or wrong-port origin, the server responds with 403. Both MCP transports supply the selected server origin when forwarding requests. Development additionally permits the two explicit Vite origins.
 
 ## Background jobs and timeline media cache
 
