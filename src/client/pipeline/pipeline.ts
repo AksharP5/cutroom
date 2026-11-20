@@ -1,6 +1,14 @@
 import { PipelineResponseSchema } from "../../shared/pipeline";
 import type { FootageColour, PipelinePlan } from "../../shared/pipeline";
-import type { TimelineView } from "../../shared/timeline/schema";
+import type { Clip, TimelineView, Version } from "../../shared/timeline/schema";
+import {
+  activeVersion,
+  consumedSource,
+  nextAudition,
+  versionStart,
+} from "../../shared/timeline/versions";
+import { framesBefore } from "../../shared/timeline/transition";
+import { useVersions } from "../edit/versions";
 import { localMediaPath } from "../../shared/media";
 import { useGradeBypass, usePreviewGrade } from "../edit/preview";
 import { acquireGrades } from "./grades";
@@ -87,10 +95,7 @@ function colourOf(
 async function openSource(
   url: string,
   signal: AbortSignal,
-  {
-    colour,
-    scrubProxy = false,
-  }: { colour?: FootageColour; scrubProxy?: boolean } = {},
+  colour?: FootageColour,
 ) {
   const { read, size } = await openRanges(url, signal);
   const track = await readVideoTrack(read, size);
@@ -103,7 +108,6 @@ async function openSource(
       read,
       size,
       colourOf(track, colour),
-      scrubProxy,
     ),
     intrinsic: {
       width: turned ? track.height : track.width,
@@ -136,6 +140,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   );
   let plan: Plan | null = null;
   let sourceColours: Record<string, FootageColour> = {};
+  let sourceRefusals: Record<string, string> = {};
   const explained = new Set<string>();
   let stopped: string | null = null;
   const stop = (reason: string) => {
@@ -160,31 +165,35 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         if (response.status !== 202) break;
         await new Promise((done) => setTimeout(done, 2000));
       }
+      media.forgetFailures();
       sources.forgetFailures();
       void draw();
     } finally {
       preparing.delete(path);
     }
   };
-  const sources = sourceCache(async (src): Promise<Source> => {
-    const path = localMediaPath("index.html", src);
-    if (path === null)
-      throw new Error("Choose footage from the project folder.");
-    // A file the server cannot read a grid for shows its frames at their own times.
-    const grid = fetch(
+  // A file the server cannot read a grid for shows its frames at their own times.
+  const grids = sourceCache((path) =>
+    fetch(
       `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/frames?path=${encodeURIComponent(path)}`,
       { signal: closing.signal },
     )
       .then(async (response) =>
         response.ok ? FrameGridSchema.parse(await response.json()) : null,
       )
-      .catch(() => null);
+      .catch(() => null),
+  );
+  const media = sourceCache(async (src) => {
+    const path = localMediaPath("index.html", src);
+    if (path === null)
+      throw new Error("Choose footage from the project folder.");
+    const grid = grids.get(path);
     // A file this browser cannot decode or read, such as HEVC, ProRes or Matroska, plays from
     // its editing proxy: the same frames at the same times. HyperFrames draws until it exists.
-    const { createDecoder, intrinsic } = await openSource(
+    const opened = await openSource(
       mediaUrl(projectId, path),
       closing.signal,
-      { colour: sourceColours[src] },
+      sourceColours[src],
     ).catch(async (error: unknown) => {
       const url = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/proxy?path=${encodeURIComponent(path)}`;
       const response = await fetch(url, {
@@ -199,7 +208,16 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       if (!response.ok) throw error;
       return openSource(url, closing.signal);
     });
-    const proxyUrl = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/scrub?path=${encodeURIComponent(path)}`;
+    return { ...opened, grid: await grid, path };
+  });
+  const scrubs = sourceCache((path) =>
+    openSource(
+      `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/scrub?path=${encodeURIComponent(path)}`,
+      closing.signal,
+    ),
+  );
+  const sources = sourceCache(async (src): Promise<Source> => {
+    const { createDecoder, intrinsic, grid, path } = await media.get(src);
     let askedAt = -Infinity;
     let asking: Promise<void> | null = null;
     const decoder = createDecoder();
@@ -208,26 +226,250 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       playing: decoder,
       proxy: null,
       intrinsic,
-      grid: await grid,
+      grid,
       // A proxy still being made answers 202. Moving seeks use the source until it exists, and
       // a draw that wants it asks again, at most every two seconds.
       askProxy: () => {
         if (found.proxy || asking || performance.now() - askedAt < 2000)
           return asking;
         askedAt = performance.now();
-        asking = openSource(proxyUrl, closing.signal, { scrubProxy: true })
+        scrubs.forgetFailures();
+        asking = scrubs
+          .get(path)
           .then(({ createDecoder }) => {
-            if (!closing.signal.aborted) found.proxy = createDecoder();
+            if (!closing.signal.aborted) found.proxy = createDecoder("scrub");
           })
           .catch(() => {})
           .finally(() => (asking = null));
         return asking;
       },
     };
-    await found.askProxy();
     return found;
   });
   const source = sources.get;
+
+  type Prepared = {
+    decoder: SourceDecoder;
+    intrinsic: { width: number; height: number };
+    grid: FrameGrid;
+  };
+  let audition: {
+    key: string;
+    clip: Clip;
+    takes: Map<number, Promise<Prepared>>;
+    initial: number;
+    hovered: number | null;
+    scrub: SourceDecoder | null;
+  } | null = null;
+  const disposeAudition = () => {
+    if (!audition) return;
+    audition.scrub?.close();
+    audition.scrub = null;
+    for (const take of audition.takes.values())
+      void take.then(
+        ({ decoder }) => decoder.close(),
+        () => {},
+      );
+    const view = useTimeline.getState().view;
+    const used = new Set(view?.timeline.clips.map(({ src }) => src));
+    for (const { src } of audition.clip.versions ?? []) {
+      if (used.has(src)) continue;
+      const path = localMediaPath(view?.composition ?? "index.html", src);
+      if (path !== null) {
+        scrubs.remove(path);
+        grids.remove(path);
+      }
+      media.remove(src);
+      void sources.remove(src)?.then(closeSource, () => {});
+    }
+    audition = null;
+  };
+  const auditionTime = (
+    clip: Clip,
+    version: Version,
+    frame: number,
+    view: TimelineView,
+  ) =>
+    versionStart(version, view.timeline.fps) +
+    consumedSource(clip, frame - clip.start, view.timeline.fps) +
+    1e-5;
+  function prepareAudition(
+    view: TimelineView,
+    frame: number,
+    playing: boolean,
+  ) {
+    const { open, hovered } = useVersions.getState();
+    const clip = open
+      ? view.timeline.clips.find(({ id }) => id === open)
+      : undefined;
+    if (clip?.kind !== "video" || !clip.versions || !plan?.drawable[clip.id]) {
+      disposeAudition();
+      return null;
+    }
+    const key = JSON.stringify([
+      open,
+      clip.versions.map(({ src, sourceIn, fits, offline }) => [
+        src,
+        sourceIn,
+        fits,
+        offline,
+        sourceRefusals[src],
+      ]),
+    ]);
+    if (audition?.key !== key) {
+      disposeAudition();
+      audition = {
+        key,
+        clip,
+        takes: new Map(),
+        initial: activeVersion(clip),
+        hovered: null,
+        scrub: null,
+      };
+      scrubs.forgetFailures();
+      const paths = new Set<string>();
+      for (const version of clip.versions) {
+        if (
+          version.offline ||
+          version.fits === false ||
+          sourceRefusals[version.src]
+        )
+          continue;
+        const path = localMediaPath(view.composition, version.src);
+        if (path === null || paths.has(path)) continue;
+        paths.add(path);
+        void media.get(version.src).catch(() => {});
+        void scrubs.get(path).catch(() => {});
+      }
+    }
+    const warming = audition;
+    const changed = hovered !== warming.hovered;
+    if (changed) scrubs.forgetFailures();
+    warming.hovered = hovered;
+    const selected = hovered ?? activeVersion(clip);
+    const eligible = clip.versions.flatMap((version, index) =>
+      version.fits === false || version.offline || sourceRefusals[version.src]
+        ? []
+        : [index],
+    );
+    const next = nextAudition(eligible, selected);
+    const resident = new Set([
+      eligible.includes(selected) ? selected : undefined,
+      next,
+    ]);
+    for (const [index, take] of warming.takes) {
+      if (resident.has(index)) continue;
+      warming.takes.delete(index);
+      void take.then(
+        ({ decoder }) => decoder.close(),
+        () => {},
+      );
+    }
+    for (const index of resident) {
+      if (index === undefined) continue;
+      const version = clip.versions[index];
+      if (
+        !version ||
+        version.offline ||
+        version.fits === false ||
+        index === warming.initial ||
+        warming.takes.has(index)
+      )
+        continue;
+      const prepared = media
+        .get(version.src)
+        .then(({ createDecoder, intrinsic, grid }) => ({
+          decoder: createDecoder("audition"),
+          intrinsic,
+          grid,
+        }));
+      prepared.catch(() => {});
+      warming.takes.set(index, prepared);
+    }
+    const first =
+      clip.start - (clip.transitionIn ? framesBefore(clip.transitionIn) : 0);
+    const warmAt = playing
+      ? Math.max(first, Math.min(frame, clip.start + clip.duration - 1))
+      : clip.start;
+    for (const [index, pending] of warming.takes) {
+      // The selected take's draw asks for its frame first, then prefetches the following frames.
+      if (changed && index === selected) continue;
+      const version = clip.versions[index]!;
+      void pending.then(
+        ({ decoder, grid }) => {
+          if (warming !== audition) return;
+          const seconds = auditionTime(clip, version, warmAt, view);
+          const sourceFrame = decoder.indexAt(
+            grid ? frameSeek(grid, seconds) : seconds,
+          );
+          const end = Math.min(
+            decoder.frameCount - 1,
+            sourceFrame + decoder.room(5) - 1,
+          );
+          if (!decoder.has(sourceFrame) || !decoder.has(end))
+            decoder.prefetch(sourceFrame, end);
+        },
+        () => {},
+      );
+    }
+    // The original take borrows the main pipeline's decoder when it is next.
+    if (next === warming.initial && warming.clip.src) {
+      const src = warming.clip.src;
+      const original = clip.versions[activeVersion(warming.clip)]!;
+      void source(src).then(
+        (found) => {
+          if (warming !== audition) return;
+          const index = indexAt(
+            found,
+            auditionTime(clip, original, warmAt, view),
+          );
+          const lane = laneFor(found, index);
+          const end = Math.min(lane.frameCount - 1, index + lane.room(5) - 1);
+          if (!lane.has(index) || !lane.has(end)) lane.prefetch(index, end);
+        },
+        () => {},
+      );
+    }
+    const version = clip.versions[selected];
+    return version && !version.offline && version.fits !== false
+      ? {
+          clip,
+          version,
+          decoder: warming.takes.get(selected),
+          refusal: sourceRefusals[version.src],
+          warming,
+          changed,
+        }
+      : null;
+  }
+
+  async function auditionStandIn(
+    path: string,
+    indexAt: (proxy: SourceDecoder) => number,
+    warming: NonNullable<typeof audition>,
+    needed: () => boolean,
+  ) {
+    const { createDecoder, intrinsic } = await scrubs.get(path);
+    if (closing.signal.aborted || audition !== warming || !needed())
+      throw new Error("The audition frame was superseded.");
+    const proxy = createDecoder("scrub");
+    warming.scrub?.close();
+    warming.scrub = proxy;
+    try {
+      const frame = await proxy.frame(indexAt(proxy));
+      return { frame, rotation: proxy.rotation, intrinsic };
+    } finally {
+      if (warming.scrub === proxy) {
+        proxy.close();
+        warming.scrub = null;
+      }
+    }
+  }
+
+  const closeSource = ({ lanes, proxy }: Source) => {
+    for (const lane of lanes) lane.close();
+    proxy?.close();
+  };
 
   let drawing = false;
   let wanted = false;
@@ -282,10 +524,19 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const view = useTimeline.getState().view;
     const { frame, state } = useTransport.getState();
     if (!view || view.composition !== "index.html") return;
+    const auditionAtDraw = useVersions.getState();
+    const alternate = prepareAudition(view, frame, state.kind === "playing");
     const shown = visibleAt(view.timeline, drawingPlan, frame);
     if (!shown) {
       stop("the layers at the playhead need to be composited together");
       if (state.kind === "playing") prepare(view, frame, LOOKAHEAD, OPENING);
+      return;
+    }
+    if (
+      alternate?.refusal &&
+      shown.some(({ clip }) => clip.id === alternate.clip.id)
+    ) {
+      stop(alternate.refusal);
       return;
     }
     const moving = state.kind === "scrubbing" || state.kind === "shuttle";
@@ -307,51 +558,122 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       (textures) => ({ textures }),
       (error: unknown) => ({ error }),
     );
-    const pictures = await Promise.all(
-      shown.map(async (layer) => {
-        const found = await source(layer.clip.src!);
+    type Picture = {
+      frame: VideoFrame;
+      rotation: SourceDecoder["rotation"];
+      intrinsic: Source["intrinsic"];
+    };
+    let arrived = false;
+    let hasStandIn = false;
+    const pictures = shown.map((layer) => {
+      const selected = alternate?.clip.id === layer.clip.id ? alternate : null;
+      const src = selected?.version.src ?? layer.clip.src!;
+      const seconds = selected
+        ? auditionTime(layer.clip, selected.version, frame, view)
+        : layer.time;
+      const prepare = async () => {
+        if (selected?.decoder) {
+          const { decoder, intrinsic, grid } = await selected.decoder;
+          const index = decoder.indexAt(
+            grid ? frameSeek(grid, seconds) : seconds,
+          );
+          return { intrinsic, index, lane: decoder, decoder, found: null };
+        }
+        const found = await source(src);
         if (!found.proxy) void found.askProxy();
-        const index = indexAt(found, layer.time);
+        const index = indexAt(found, seconds);
         const lane = laneFor(found, index);
         // Moving seeks draw the proxy, whose frame N is the source's frame N.
         const decoder = (moving ? found.proxy : null) ?? lane;
+        return { intrinsic: found.intrinsic, index, lane, decoder, found };
+      };
+      let original:
+        (Awaited<ReturnType<typeof prepare>> & { cached: boolean }) | undefined;
+      const requested = prepare().then((picture) => {
+        const { decoder, index } = picture;
+        original = {
+          ...picture,
+          cached: decoder.has(index) || decoder.reaches(index),
+        };
         return {
-          layer,
-          found,
-          index,
-          lane,
-          // A frame its lane must decode from a keyframe, at rest, when the proxy has it.
-          cold:
-            !moving &&
-            !playing &&
-            !!found.proxy &&
-            !lane.has(index) &&
-            !lane.reaches(index),
-          decoder,
+          ...original,
           request: decoder.frame(index, playing),
         };
-      }),
-    );
-    const paint = async (
-      frames: VideoFrame[],
-      from: SourceDecoder[],
-      standIn: boolean,
-    ) => {
+      });
+      const exact = requested.then(
+        async ({ request, decoder, ...picture }) => ({
+          ...picture,
+          rotation: decoder.rotation,
+          frame: await request,
+        }),
+      );
+      const path =
+        selected?.decoder || selected?.changed
+          ? localMediaPath(view.composition, src)
+          : null;
+      const standIn = async (): Promise<Picture> => {
+        const needed = () =>
+          !arrived &&
+          auditionAtDraw.open === useVersions.getState().open &&
+          auditionAtDraw.hovered === useVersions.getState().hovered;
+        if (path && selected?.changed) {
+          const grid = await grids.get(path);
+          // The scrub encode can rebase timestamps. Align its first frame to the export
+          // grid's start. Without a grid, keep the ordinal from the original's sample index.
+          if (grid && !original?.cached) {
+            const offset = frameSeek(grid, seconds) - grid.start;
+            const proxy = await auditionStandIn(
+              path,
+              (proxy) => proxy.indexAt(proxy.firstTime + offset),
+              selected.warming,
+              needed,
+            );
+            return {
+              ...proxy,
+              intrinsic: original?.intrinsic ?? proxy.intrinsic,
+            };
+          }
+        }
+        const { found, index, intrinsic, cached } = await requested;
+        if (path && selected && !cached) {
+          const proxy = await auditionStandIn(
+            path,
+            () => index,
+            selected.warming,
+            needed,
+          );
+          return { ...proxy, intrinsic };
+        }
+        const proxy = !moving && !playing && !cached ? found?.proxy : null;
+        if (proxy) {
+          hasStandIn = true;
+          return {
+            intrinsic,
+            rotation: proxy.rotation,
+            frame: await proxy.frame(index),
+          };
+        }
+        const picture = await exact;
+        return { ...picture, frame: picture.frame.clone() };
+      };
+      return { exact, standIn };
+    });
+    const paint = async (frames: Picture[], standIn: boolean) => {
       // A page that paints nothing shows the browser's white canvas, as frame capture does.
       if (plan !== drawingPlan || closing.signal.aborted || compositor.lost())
         return;
       const baked = await textures;
       if ("error" in baked) throw baked.error;
+      const currentAudition = useVersions.getState();
+      if (
+        auditionAtDraw.open !== currentAudition.open ||
+        auditionAtDraw.hovered !== currentAudition.hovered
+      )
+        return;
       await compositor.draw(
-        pictures.map(({ layer, found }, at) =>
+        frames.map(({ frame, rotation, intrinsic }, at) =>
           // The proxy is stored upright; a phone's file may be stored turned.
-          placed(
-            layer,
-            frames[at]!,
-            from[at]!.rotation,
-            found.intrinsic,
-            baked.textures[at]!,
-          ),
+          placed(shown[at]!, frame, rotation, intrinsic, baked.textures[at]!),
         ),
         drawingPlan.background ?? "#ffffff",
         drawingPlan.width,
@@ -365,56 +687,51 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       if (!usePipeline.getState().active)
         usePipeline.setState({ active: true });
     };
-    const settle = async (requests: Promise<VideoFrame>[]) => {
+    const settle = async <T extends Picture>(requests: Promise<T>[]) => {
       const frames = await Promise.allSettled(requests);
       const held = frames.flatMap((result) =>
         result.status === "fulfilled" ? [result.value] : [],
       );
       const failed = frames.find((result) => result.status === "rejected");
       if (failed) {
-        for (const picture of held) picture.close();
+        for (const { frame } of held) frame.close();
         throw failed.reason;
       }
       return held;
     };
-    if (pictures.some(({ cold }) => cold)) {
-      // An edit or a jump at rest: the proxy's frame now, the exact one once it has decoded.
-      // A proxy that fails only costs the stand-in; the exact frames still draw.
-      const standIns = await settle(
-        pictures.map(({ cold, found, index }, at) =>
-          cold
-            ? found.proxy!.frame(index)
-            : pictures[at]!.request.then((frame) => frame.clone()),
-        ),
-      ).catch(() => []);
-      try {
-        if (standIns.length && !wanted)
-          await paint(
-            standIns,
-            pictures.map(({ cold, found, decoder }) =>
-              cold ? found.proxy! : decoder,
-            ),
-            true,
-          );
-      } finally {
-        for (const picture of standIns) picture.close();
-      }
-    }
-    const frames = await settle(pictures.map(({ request }) => request));
-    try {
-      if (pictures.some(({ cold }) => cold) && wanted) return;
-      await paint(
-        frames,
-        pictures.map(({ decoder }) => decoder),
-        false,
+    const exact = settle(pictures.map(({ exact }) => exact)).finally(() => {
+      arrived = true;
+    });
+    let provisional: Promise<void> | undefined;
+    if (alternate?.decoder || alternate?.changed || (!moving && !playing)) {
+      // Paint a scrub-proxy picture if it arrives first. A missing or late proxy can't delay
+      // an exact frame, and either path closes the frames it owns.
+      void settle(pictures.map(({ standIn }) => standIn())).then(
+        async (ready) => {
+          try {
+            if (!arrived && (alternate || !wanted)) {
+              provisional = paint(ready, true).catch(() => {});
+              await provisional;
+            }
+          } finally {
+            for (const { frame } of ready) frame.close();
+          }
+        },
+        () => {},
       );
+    }
+    const frames = await exact;
+    try {
+      if (provisional) await provisional;
+      if (hasStandIn && !alternate && wanted) return;
+      await paint(frames, false);
     } finally {
-      for (const picture of frames) picture.close();
+      for (const { frame } of frames) frame.close();
     }
     if (plan !== drawingPlan || closing.signal.aborted) return;
-    for (const { found, lane, index } of pictures) {
+    for (const { found, lane, index } of frames) {
       if (moving) continue;
-      found.playing = lane;
+      if (found) found.playing = lane;
       if (playing) lane.prefetch(index + 1, index + lane.room(8));
     }
     if (playing) prepare(view, frame, LOOKAHEAD, OPENING);
@@ -511,7 +828,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       return stop(error instanceof Error ? error.message : String(error));
     }
     if (!isCurrent()) return;
-    const { plan: next, colours } = response;
+    const { plan: next, colours, sourceRefusals: refusals } = response;
     // Which videos HyperFrames keeps, and why, for whoever tries the setting, each said once.
     for (const reason of Object.values(next.hyperframes ?? {}))
       if (!explained.has(reason)) {
@@ -523,6 +840,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       return stop(next.reason);
     }
     sourceColours = colours;
+    sourceRefusals = refusals;
     plan = next;
     const drawn = Object.keys(next.drawable);
     const native = Object.keys(next.hyperframes);
@@ -532,16 +850,21 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       native.join("\n") !== previous.native.join("\n")
     )
       usePipeline.setState({ drawn, native });
+    media.forgetFailures();
     sources.forgetFailures();
-    // Open every file now: opening one mid-playback costs the clock a few frames.
+    // Read the index now: opening one mid-playback costs the clock a few frames.
     for (const clip of view.timeline.clips)
       if (clip.src && next.drawable[clip.id])
-        void source(clip.src).catch(() => {});
+        void media.get(clip.src).catch(() => {});
     void draw();
   };
   void refresh();
 
   const unsubscribe = [
+    useVersions.subscribe((state, previous) => {
+      if (state.open !== previous.open || state.hovered !== previous.hovered)
+        queueMicrotask(() => void draw());
+    }),
     usePreviewGrade.subscribe(() => void draw()),
     useGradeBypass.subscribe(() => void draw()),
     useTransport.subscribe((state, previous) => {
@@ -567,6 +890,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     },
     dispose() {
       closing.abort();
+      disposeAudition();
       compositor.dispose();
       grades.dispose();
       for (const stop of unsubscribe) stop();

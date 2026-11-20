@@ -1,3 +1,4 @@
+import { canAddVersion } from "../../shared/timeline/versions";
 import { useEffect, useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
 import { mediaSettings, peakLevels } from "../../shared/media";
@@ -18,6 +19,8 @@ import {
   sourceRange,
   useSource,
 } from "./source";
+import { addClipVersion, versionMediaTarget } from "./versions";
+import { useTimeline } from "./timeline";
 import { ScrubMarks, ScrubTrack } from "./TransportBar";
 import type { RuntimePlayer } from "./transport";
 
@@ -336,6 +339,12 @@ function PlacedLength() {
 export function SourceViewer({ projectId }: { projectId: string }) {
   const file = useSource((state) => state.file);
   const shown = useSource((state) => state.shown);
+  const versionClip = useTimeline((state) => {
+    const clip = file && versionMediaTarget(state, file.kind);
+    return clip && state.view && canAddVersion(clip, state.view.timeline)
+      ? clip
+      : null;
+  });
   const version = useWorkspace((state) =>
     file ? state.fileChanges[file.path] : undefined,
   );
@@ -364,6 +373,16 @@ export function SourceViewer({ projectId }: { projectId: string }) {
             <kbd>{keymap[action].keys[0]}</kbd>
           </button>
         ))}
+        <button
+          className="edit-tool"
+          disabled={!versionClip || version === null}
+          onClick={() => {
+            const range = sourceRange();
+            if (versionClip && range) addClipVersion(versionClip, range);
+          }}
+        >
+          Add version
+        </button>
         <button
           className="edit-icon"
           aria-label="Close source"

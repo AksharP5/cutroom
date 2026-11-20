@@ -394,7 +394,28 @@ export async function readVideoTrack(
 
 /** Byte ranges of one URL, the way the media routes serve them. */
 export async function openRanges(url: string, signal: AbortSignal) {
+  // Read the front once: fast-start media and every scrub proxy put the sample table here.
+  const probe = await fetch(url, {
+    headers: { range: `bytes=0-${(64 << 10) - 1}` },
+    signal,
+  });
+  if (probe.status !== 206 && probe.status !== 200) {
+    await probe.body?.cancel();
+    throw new Error(`The media route answered ${probe.status}.`);
+  }
+  const size = Number(
+    /\/(\d+)$/.exec(probe.headers.get("content-range") ?? "")?.[1] ??
+      probe.headers.get("content-length"),
+  );
+  if (!Number.isFinite(size) || size <= 0) {
+    await probe.body?.cancel();
+    throw new Error("The media route did not say how long the file is.");
+  }
+  const head =
+    probe.status === 206 ? new Uint8Array(await probe.arrayBuffer()) : null;
+  if (!head) await probe.body?.cancel();
   const read: ReadRange = async (start, end) => {
+    if (head && end <= head.byteLength) return head.subarray(start, end);
     const response = await fetch(url, {
       headers: { range: `bytes=${start}-${end - 1}` },
       signal,
@@ -404,13 +425,5 @@ export async function openRanges(url: string, signal: AbortSignal) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     return response.status === 200 ? bytes.subarray(start, end) : bytes;
   };
-  const probe = await fetch(url, { headers: { range: "bytes=0-0" }, signal });
-  await probe.body?.cancel();
-  const total = Number(
-    /\/(\d+)$/.exec(probe.headers.get("content-range") ?? "")?.[1] ??
-      probe.headers.get("content-length"),
-  );
-  if (!Number.isFinite(total) || total <= 0)
-    throw new Error("The media route did not say how long the file is.");
-  return { read, size: total };
+  return { read, size };
 }

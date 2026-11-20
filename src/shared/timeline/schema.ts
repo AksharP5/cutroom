@@ -284,7 +284,7 @@ export const TitleEditSchema = TitleSchema.omit({ in: true, out: true })
   .extend({ in: titleMotion.partial(), out: titleMotion.partial() })
   .partial();
 
-/** Most versions one clip holds; each is a whole composition or image the clip can show. */
+/** Most alternatives one clip can hold. */
 export const MAX_VERSIONS = 12;
 /** A version's name: one line of plain text, shown in the versions list. */
 export const VersionNameSchema = z
@@ -309,17 +309,29 @@ export const VersionSchema = z.object({
     .describe(
       "The version's file as this composition writes it, from its folder: compositions/fan.html in index.html",
     ),
+  sourceIn: z
+    .number()
+    .nonnegative()
+    .optional()
+    .describe("In point in source frames; defaults to zero on media"),
 });
-/** Two or more versions with distinct files and names; the clip's `src` is the active one. */
+/** Source storage adds the rate used to convert frames to exact source time. */
+export const StoredVersionSchema = VersionSchema.extend({
+  sourceIn: z.number().optional(),
+  sourceFps: z.number().positive().optional(),
+});
+export const TimelineVersionSchema = StoredVersionSchema.extend({
+  sourceDuration: z.number().positive().optional(),
+  silent: z.literal(true).optional(),
+  offline: z.literal(true).optional(),
+  fits: z.boolean().optional(),
+  shortBy: z.number().int().positive().optional(),
+});
+/** Two or more alternatives with distinct names. */
 export const VersionsSchema = z
   .array(VersionSchema)
   .min(2, "A clip holds at least two versions.")
   .max(MAX_VERSIONS, `A clip holds at most ${MAX_VERSIONS} versions.`)
-  .refine(
-    (versions) =>
-      new Set(versions.map(({ src }) => src)).size === versions.length,
-    "Each version needs its own file.",
-  )
   .refine(
     (versions) =>
       new Set(versions.map(({ name }) => name)).size === versions.length,
@@ -467,9 +479,16 @@ export const ClipSchema = z.object({
     .describe(
       "Audio effects on the clip's sound, in signal order, from HyperFrames' data-fx-chain. enabled false is bypassed. Change them with setClip.fx",
     ),
-  versions: VersionsSchema.optional().describe(
-    "Alternatives this clip can show, in order; the one whose src is the clip's src is active, and only it plays in preview and export. Absent when the clip has no versions. Change them with setVersions, setVersion and keepVersion.",
-  ),
+  versions: z
+    .array(TimelineVersionSchema)
+    .min(2)
+    .max(MAX_VERSIONS)
+    .optional()
+    .describe(
+      "Alternatives this clip can show, in order. Only the active one plays in preview and export.",
+    ),
+  versionIndex: versionIndex.optional(),
+  versionSilent: z.literal(true).optional(),
   /** False while `data-hidden` keeps the clip out of preview and render. */
   enabled: z.boolean(),
   /** Set while `data-start` names another clip and still resolves to `start`. */
@@ -1230,13 +1249,31 @@ export const CommandSchema = z.discriminatedUnion("type", [
       type: z.literal("setVersions"),
       clipId,
       versions: VersionsSchema.describe(
-        "Every version the clip holds, replacing any it had: scene clips take composition files, image clips take images",
+        "Every version the clip holds, replacing any it had: scene clips take composition files, image clips take images, footage and sound take media files with source in points",
       ),
       active: versionIndex.default(0).describe("The version to show"),
     })
     .describe(
-      "Give a scene or image clip versions to choose between: the clip keeps its place, length, look and keyframes, and shows the active version's file. One undo step.",
+      "Give a clip versions to choose between. The clip keeps its place, length, look and keyframes. Only the active version plays. One undo step.",
     ),
+  z.object({
+    type: z.literal("addVersion"),
+    clipId,
+    version: VersionSchema.optional().describe(
+      "Omit to copy the shown media version.",
+    ),
+    sourceSeconds: z
+      .number()
+      .nonnegative()
+      .optional()
+      .describe("Use a saved Source viewer In mark in seconds."),
+  }),
+  z.object({
+    type: z.literal("renameVersion"),
+    clipId,
+    version: versionIndex,
+    name: VersionNameSchema,
+  }),
   z
     .object({
       type: z.literal("setVersion"),
@@ -1357,7 +1394,7 @@ export const TimelineSettingsSchema = z.object({
 
 export type Fps = z.infer<typeof FpsSchema>;
 export type Clip = z.infer<typeof ClipSchema>;
-export type Version = z.infer<typeof VersionSchema>;
+export type Version = z.infer<typeof TimelineVersionSchema>;
 export type Keyframes = z.infer<typeof KeyframesSchema>;
 export type KeyframeProperty = (typeof KEYFRAME_PROPERTIES)[number];
 export type KeyframeEase = (typeof KEYFRAME_EASES)[number];

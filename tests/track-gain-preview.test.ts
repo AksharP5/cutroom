@@ -30,3 +30,28 @@ test("only managed faders and compiler routing metadata may reuse a playing prev
   ])
     expect(trackGainPreview(changed).signature).not.toBe(before.signature);
 });
+
+test("a prepared take can be saved without reloading the preview", () => {
+  const audition = (
+    shown: number,
+    active: string,
+    standby: string,
+    style = "",
+  ) =>
+    `<script data-hf-media-codec-map>window.__HF_MEDIA_SOURCE_FACTS__={"${active}":{}}</script>
+     <video id="shot" data-hf-id="generated-${shown}" data-cutroom-version-owner="shot"
+       data-cutroom-version="${shown}" data-cutroom-shown data-cutroom-version-index="${shown}"
+       data-cutroom-versions='[{"name":"One","src":"one.mp4"},{"name":"Two","src":"two.mp4"}]'
+       data-media-start="${shown}" src="${active}" style="${style}"></video><video
+       id="cutroom-version-shot-${1 - shown}" data-cutroom-version-owner="shot"
+       data-cutroom-version="${1 - shown}" src="${standby}"></video>`;
+  const a = audition(0, "one.mp4", "two.mp4");
+  const b = audition(1, "two.mp4", "one.mp4");
+  const signature = (page: string) =>
+    trackGainPreview(page, "index.html", true).signature;
+  expect(signature(a)).toBe(signature(b));
+  expect(trackGainPreview(a).signature).not.toBe(trackGainPreview(b).signature);
+  expect(signature(a)).not.toBe(
+    signature(audition(1, "two.mp4", "one.mp4", "opacity:0.4")),
+  );
+});

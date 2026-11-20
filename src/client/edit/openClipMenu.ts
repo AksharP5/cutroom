@@ -8,6 +8,7 @@ import { clipMenuItems } from "./clipMenu";
 import { copyGrade, hasCopiedGrade, pasteGrade } from "./copyGrade";
 import { editTimeline, hasClipboard, useTimeline } from "./timeline";
 import { copiedStyle, copyStyle, pasteStyle } from "./copyStyle";
+import { addClipVersion } from "./versions";
 import { useTransport } from "./transport";
 
 const PlanSchema = z.object({
@@ -91,6 +92,7 @@ export function openClipMenu(
           clips.map((clip) => clip.id),
         ),
       clicked,
+      onAddVersion: addClipVersion,
       onFreeze: (clip, at) =>
         void editTimeline(projectId, "Freeze frame", () => [
           { type: "freeze", clipId: clip.id, at },

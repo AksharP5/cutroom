@@ -12,7 +12,7 @@ import type {
   CommandInput,
   TimelineView,
 } from "../../shared/timeline/schema";
-import { activeVersion } from "../../shared/timeline/versions";
+import { activeVersion, mediaVersions } from "../../shared/timeline/versions";
 import type { RequestOptions } from "./server";
 import { editReply } from "./timelineReply";
 
@@ -61,11 +61,14 @@ const listing = (clip: Clip) => ({
   duration: clip.duration,
   track: clip.track,
   active: activeVersion(clip),
-  versions: (clip.versions ?? []).map(({ name, src }, index) => ({
-    index,
-    name,
-    src,
-  })),
+  versions: (clip.versions ?? []).map(
+    ({ name, src, sourceIn, fits, offline }, index) => ({
+      index,
+      name,
+      src,
+      ...(sourceIn !== undefined && { sourceIn, fits, offline }),
+    }),
+  ),
 });
 
 /**
@@ -135,11 +138,11 @@ export function registerVersionTools(
     "clip_versions_set",
     {
       description:
-        'Give one clip several versions to choose between, for "give me 5 versions of this": write each version as its own composition file first (source_write, e.g. compositions/title-orbit.html, each a full scene the clip\'s length), then call this once with all of them. The owner sees a versions badge on the clip, previews each in the viewer and keeps one; only the active version plays in preview and export. A scene clip takes composition files. A title or text clip becomes a scene clip in its place, with the same track, start, length and name; the reply names its new id. An image clip takes image files. Replaces any versions the clip had. One undo step.',
+        'Give one clip several versions to choose between, for "give me 5 versions of this": write each version as its own composition file first (source_write, e.g. compositions/title-orbit.html, each a full scene the clip\'s length), then call this once with all of them. The owner sees a versions badge on the clip, previews each in the viewer and keeps one; only the active version plays in preview and export. A scene clip takes composition files. A title or text clip becomes a scene clip in its place, with the same track, start, length and name; the reply names its new id. An image clip takes image files. Footage and audio take media of the same kind, with optional sourceIn in source frames. Send linked takes to the picture. Replaces any versions the clip had. One undo step.',
       inputSchema: {
         ...target,
         versions: VersionsSchema.describe(
-          `2 to ${MAX_VERSIONS} versions, each {name, src}: a short distinct name the owner reads (such as "Card fan"), and the file as this composition writes it, from its folder`,
+          `2 to ${MAX_VERSIONS} versions, each {name, src, sourceIn?}: a short distinct name the owner reads (such as "Card fan"), and the file as this composition writes it, from its folder`,
         ),
         active: z
           .number()
@@ -156,14 +159,10 @@ export function registerVersionTools(
       if (!found.ok) return found.failure;
       const { view, clip } = found;
       const label = `Versions of ${clip.label ?? clip.textPreview ?? clip.id}`;
-      if (clip.kind === "composition" || clip.kind === "image")
+      if (clip.kind !== "element")
         return commit(projectId, view, label, [
           { type: "setVersions", clipId, versions, active },
         ]);
-      if (clip.kind !== "element")
-        return refused(
-          "Video and audio clips do not hold versions. Place each alternative as its own clip, or render it into a scene.",
-        );
       // A text or title clip gives way to a scene that plays the versions in its place.
       const id = `${clipId}-versions`;
       return commit(
@@ -248,7 +247,10 @@ export function registerVersionTools(
           return refused(
             `Clip ${clipId} has no version ${JSON.stringify(version)}. Its versions are ${clip.versions.map(({ name }, at) => `${at} "${name}"`).join(", ")}.`,
           );
-        const label = `${type === "setVersion" ? "Show" : "Keep"} version "${clip.versions[index]!.name}"`;
+        const name = clip.versions[index]!.name;
+        const label = mediaVersions(clip.kind)
+          ? `${type === "setVersion" ? "Showed" : "Kept"} ${name} on ${clip.label ?? clip.src?.split("/").at(-1) ?? clip.id}`
+          : `${type === "setVersion" ? "Show" : "Keep"} version "${name}"`;
         return commit(projectId, view, label, [
           { type, clipId, version: index },
         ]);

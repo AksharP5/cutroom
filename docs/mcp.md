@@ -445,7 +445,11 @@ A scene clip keeps its id. A title or text clip gives way to a scene clip in its
 
 Only the active version plays in preview and export, and only its file is linted and mounted. Names are 1 to 60 characters of plain text, distinct on the clip, and a clip holds 2 to 12 versions with a file each. A version's file must be inside the project and outside hidden folders.
 
-Moves, trims, ripples, slips, transitions, keyframes, copy and paste keep the versions with the clip. A razor leaves every version on both pieces, each showing the version the clip showed, so either piece can then show another.
+Moves, trims, ripples, transitions, keyframes, copy and paste keep the versions with the clip. A razor leaves every version on both pieces, each showing the version the clip showed, so either piece can then show another.
+
+For alternatives of footage, music or voiceover, put the takes on the existing clip as versions. Use a local file of the clip’s kind and an optional `sourceIn`, in source frames, starting at zero. Video uses the file’s measured frame rate. Audio uses the composition’s frame rate. For example, `{ "name": "Wide", "src": "cam-b.mp4", "sourceIn": 12 }` starts twelve source frames into that shot. The clip keeps its timing, speed, effects and look. Send versions for linked picture and sound to the picture.
+
+`timeline_read` and `clip_versions_list` include `sourceIn` and `fits` for media versions. A version that is too short stays in the list and the edit answers with a warning. Showing that version returns the shortage. Offline versions show `offline: true` and are unavailable. When a requested initial version is too short, a fitting version is shown instead. Slipping changes only the shown version’s In. Head trims and cuts shift each version’s In in source time.
 
 ### Animated titles
 

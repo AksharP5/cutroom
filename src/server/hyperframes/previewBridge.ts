@@ -63,6 +63,15 @@ interface PreviewWindow extends DiagnosticWindow {
     };
   };
   __cutroomParkedMedia?: ReadonlyMap<HTMLMediaElement, unknown>;
+  __cutroomRefreshAudition?: () => void;
+  __cutroomAuditionResident?: (
+    media: HTMLMediaElement,
+    needed: boolean,
+  ) => boolean;
+  __cutroomShowAudition?: (
+    video: HTMLVideoElement,
+    show: () => boolean,
+  ) => void;
   __player?: {
     play(): void;
     pause(): void;
@@ -1742,7 +1751,9 @@ function installPreviewBridge(
   let pipelineDrawn = new Set<string>();
   /** A video's timeline id: its id, or HyperFrames' own when it has none. */
   const clipId = (media: HTMLMediaElement) =>
-    media.getAttribute("id") ?? media.getAttribute("data-hf-id");
+    media.getAttribute("data-cutroom-version-owner") ??
+    media.getAttribute("id") ??
+    media.getAttribute("data-hf-id");
   const drawnByPipeline = (media: HTMLMediaElement) =>
     pipelineDrawn.has(clipId(media) ?? "");
   const writePipelineSheet = () => {
@@ -1750,6 +1761,7 @@ function installPreviewBridge(
     const drawn = [...pipelineDrawn].flatMap((id) => [
       `[id="${CSS.escape(id)}"]`,
       `:not([id])[data-hf-id="${CSS.escape(id)}"]`,
+      `[data-cutroom-version-owner="${CSS.escape(id)}"]`,
     ]);
     // A frame whose document's colour scheme differs from the dark editor's gets an opaque white
     // backdrop. The scheme only picks system colours, so the default text colour stays black.
@@ -1915,6 +1927,21 @@ function installPreviewBridge(
     }
     if (rampFiles.size) watchRamp(media);
   };
+  // Inert alternates still have timing attributes. Park them so the runtime neither opens
+  // a decoder nor waits for a first picture from a file this row is not using.
+  win.__cutroomAuditionResident = (media, needed) => {
+    const resident =
+      needed &&
+      !(
+        pipelineActive &&
+        media instanceof HTMLVideoElement &&
+        drawnByPipeline(media)
+      );
+    if (resident) unpark(media, false);
+    else park(media);
+    return resident;
+  };
+
   const rootMedia = (kind: "video" | "audio") =>
     document.querySelectorAll<HTMLMediaElement>(
       `${ROOT_COMPOSITION} > ${kind}`,
@@ -1926,6 +1953,7 @@ function installPreviewBridge(
     if (!pipelineActive) return;
     const time = win.__player?.getTime() ?? 0;
     for (const audio of rootMedia("audio")) {
+      if (audio.hasAttribute("data-cutroom-version-owner")) continue;
       const clip = win.__hf?.clipWindow?.(audio);
       const near =
         !clip ||
@@ -1984,6 +2012,7 @@ function installPreviewBridge(
         if (released && gradeBypass) writeGradeBypass();
       }
       residentAudio(false);
+      win.__cutroomRefreshAudition?.();
       return released;
     }
     const released = parked.size > 0;
@@ -1992,6 +2021,7 @@ function installPreviewBridge(
       win.__hf?.colorGrading?.refresh();
       if (gradeBypass) writeGradeBypass();
     }
+    win.__cutroomRefreshAudition?.();
     return released;
   };
   const holdStyle = document.createElement("style");
@@ -2176,6 +2206,25 @@ function installPreviewBridge(
       ([media, facts]) => facts.browserHostile && path.endsWith(media),
     );
   };
+  document.addEventListener(
+    "loadedmetadata",
+    (event) => {
+      const video = event.target;
+      if (
+        !(video instanceof HTMLVideoElement) ||
+        !video.hasAttribute("data-cutroom-version-owner") ||
+        video.hasAttribute("data-cutroom-shown") ||
+        parked.has(video) ||
+        win.__player?.isPlaying()
+      )
+        return;
+      const start = Number(video.getAttribute("data-media-start") ?? 0);
+      const at = expectedMediaTime(video) ?? start;
+      if (Math.abs(video.currentTime - at) > 1e-4)
+        video.currentTime = at + 1e-5;
+    },
+    true,
+  );
   const visibleVideos = () => {
     const hidden = new Set([
       ...holds.keys(),
@@ -2397,7 +2446,10 @@ function installPreviewBridge(
   >();
   const scrubPath = (video: HTMLVideoElement) => {
     if (!capability) return null;
-    const url = new URL(video.currentSrc || video.src, location.href);
+    const url = new URL(
+      video.dataset.cutroomVersionSrc || video.currentSrc || video.src,
+      document.baseURI,
+    );
     const preview = `${capability}preview/`;
     if (url.origin !== location.origin || !url.pathname.startsWith(preview))
       return null;
@@ -2905,6 +2957,62 @@ function installPreviewBridge(
       frameStatus("The preview did not supply a playback frame in time.");
     }, FRAME_TIMEOUT);
   };
+  /**
+   * A warm decoder can show immediately. While a new decoder seeks, the first picture of
+   * the slot can come from the same all-intra proxy that scrubbing uses.
+   */
+  win.__cutroomShowAudition = (video, show) => {
+    const ready = () => video.readyState >= 2 && !video.seeking;
+    if (retired || drawAuditionWithoutHold(video)) {
+      show();
+      return;
+    }
+    if (ready()) {
+      show();
+      releasePlaying(video);
+      return;
+    }
+    let shown = false;
+    const reveal = () => {
+      if (retired || shown) return false;
+      shown = true;
+      video.removeEventListener("seeked", exact);
+      video.removeEventListener("loadeddata", exact);
+      video.removeEventListener("error", reveal);
+      return show();
+    };
+    const exact = () => {
+      if (ready()) reveal();
+    };
+    video.addEventListener("seeked", exact);
+    video.addEventListener("loadeddata", exact);
+    video.addEventListener("error", reveal, { once: true });
+    void proxyFor(video)
+      .then((proxy) => {
+        if (!proxy || retired || shown) return;
+        const start = Number(video.getAttribute("data-media-start") ?? "0");
+        const at = framePosition(video, start + 1e-5);
+        const draw = () => {
+          if (ready()) return exact();
+          if (proxy.error || retired || shown) return;
+          try {
+            if (reveal()) {
+              showHold(video, new VideoFrame(proxy), true);
+              releasePlaying(video);
+            }
+          } catch {}
+        };
+        if (Math.abs(proxy.currentTime - at) <= 1e-4) draw();
+        else {
+          proxy.addEventListener("seeked", draw, { once: true });
+          proxy.currentTime = at;
+        }
+      })
+      .catch(() => {});
+  };
+  const drawAuditionWithoutHold = (video: HTMLVideoElement) =>
+    parked.has(video) || video.hasAttribute("data-cutroom-shown");
+
   document.addEventListener(
     "play",
     (event) => {

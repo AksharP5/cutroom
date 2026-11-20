@@ -96,6 +96,8 @@ const clipsOf = (command: Command) => {
     case "slip":
     case "setClip":
     case "setTiming":
+    case "addVersion":
+    case "renameVersion":
     case "setVersions":
     case "setVersion":
     case "keepVersion":

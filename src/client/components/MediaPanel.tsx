@@ -1,3 +1,4 @@
+import { canAddVersion } from "../../shared/timeline/versions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { MagnifyingGlass, Plus, Waveform } from "@phosphor-icons/react";
@@ -13,6 +14,8 @@ import type { TimelineView } from "../../shared/timeline/schema";
 import { api, frameTimecode, json, mediaUrl } from "../api";
 import { useOfflineMedia } from "../edit/offlineMedia";
 import { placeAtPlayhead } from "../edit/placeMedia";
+import { addMediaVersion, versionMediaTarget } from "../edit/versions";
+import { clipName } from "../../shared/timeline/labels";
 import { closeSource, openSource, useSource } from "../edit/source";
 import { stepHistory, useTimeline } from "../edit/timeline";
 import { gridStep } from "../home";
@@ -128,9 +131,15 @@ function usedMediaCount(view: TimelineView, name: string) {
 
   const counts = new Map<string, number>();
   for (const clip of view.timeline.clips) {
-    if (!clip.src) continue;
-    const path = previewMediaPath(view.composition, clip.src, files);
-    if (path) counts.set(path, (counts.get(path) ?? 0) + 1);
+    const sources = new Set([
+      clip.src,
+      ...(clip.versions?.map(({ src }) => src) ?? []),
+    ]);
+    for (const source of sources) {
+      if (!source) continue;
+      const path = previewMediaPath(view.composition, source, files);
+      if (path) counts.set(path, (counts.get(path) ?? 0) + 1);
+    }
   }
   usedMediaByTimeline.set(view, { files, counts });
   return counts.get(name) ?? 0;
@@ -291,6 +300,8 @@ function MediaRow({
         // Needs the file's length and a timeline to put it on.
         const unplaceable = !placeable || !useTimeline.getState().view;
         const reveal = revealRows(`${projectPath}/${path}`);
+        const state = useTimeline.getState();
+        const target = versionMediaTarget(state, kind);
         openContextMenu(
           event,
           path,
@@ -313,6 +324,16 @@ function MediaRow({
                 void placeAtPlayhead(projectId, dragged(), "overwrite"),
             },
             "separator",
+            ...(target && state.view
+              ? [
+                  {
+                    label: `Add as version of ${clipName(target)}`,
+                    disabled:
+                      gone || !canAddVersion(target, state.view.timeline),
+                    run: () => void addMediaVersion(projectId, target, path),
+                  },
+                ]
+              : []),
             { label: "Rename", run: onRename },
             { label: "Remove", run: onRemove },
             ...(reveal.length ? ["separator" as const, ...reveal] : []),

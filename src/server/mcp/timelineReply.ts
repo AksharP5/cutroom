@@ -4,6 +4,7 @@ import {
 } from "@hyperframes/core/audio-automation";
 import { volumePoints } from "../../shared/timeline/mix";
 import { compactFxNode } from "../../shared/timeline/fx";
+import { versionShortReason } from "../../shared/timeline/versions";
 import { syncOffsets } from "../../shared/timeline/sync";
 import type { Timeline, TimelineView } from "../../shared/timeline/schema";
 
@@ -32,10 +33,17 @@ export function agentTimeline(timeline: Timeline, whole = timeline) {
       ...track,
       fx: track.fx.map(compactFxNode),
     })),
-    clips: timeline.clips.map(({ automation, ...rest }) => {
+    clips: timeline.clips.map(({ automation, versions, ...rest }) => {
       const offset = offsets.get(rest.id);
       const clip = {
         ...rest,
+        ...(versions && {
+          versions: versions.map(({ name, src, sourceIn, fits, offline }) => ({
+            name,
+            src,
+            ...(sourceIn !== undefined && { sourceIn, fits, offline }),
+          })),
+        }),
         fx: rest.fx.map(compactFxNode),
         ...(offset && { syncOffset: offset }),
       };
@@ -133,6 +141,18 @@ export function editReply(
     }),
     ...(old.duration !== timeline.duration && { duration: timeline.duration }),
   };
+  const changedClips = new Set([
+    ...(changes.clips?.added ?? []).map(({ id }) => id),
+    ...(changes.clips?.changed ?? []).map(({ id }) => id),
+  ]);
+  for (const clip of after.timeline.clips)
+    if (changedClips.has(clip.id))
+      for (const version of clip.versions ?? [])
+        if (!version.offline && version.fits === false)
+          warnings.push({
+            clipId: clip.id,
+            warning: versionShortReason(version, timeline.fps),
+          });
   return {
     revision: after.revision,
     composition: after.composition,

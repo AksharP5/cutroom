@@ -104,6 +104,34 @@ export function previewRuntimeScript() {
       throw new Error(
         "Cutroom's colour preview adapter no longer matches HyperFrames 0.9.26.",
       );
+  // Gate the takes after their effects and fades so the outgoing take's effect tails fade too.
+  const auditionChanges = [
+    [
+      "var Kh=e=>Br(e)||ve(e)&&kl(e)&&Dy(",
+      'var Kh=e=>Br(e)||ve(e)&&kl(e)&&(e.hasAttribute("data-cutroom-version-owner")||Dy(',
+    ],
+    [
+      "masterChain:lx(e.ownerDocument)}),pR=",
+      "masterChain:lx(e.ownerDocument)})),pR=",
+    ],
+    [
+      "function s3(e,t){return Ot()&&Br(e)",
+      'function s3(e,t){return !e.hasAttribute("data-cutroom-version-owner")&&Ot()&&Br(e)',
+    ],
+    [
+      "f.connect(this.resolveDestination(t,m,o,d)??this._masterGain);let y=this._ctx.createGain();",
+      'let cutroomDestination=this.resolveDestination(t,m,o,d)??this._masterGain,cutroomGain;if(t.hasAttribute("data-cutroom-version-owner")&&window.__cutroomAuditionGains){cutroomGain=this._ctx.createGain();cutroomGain.gain.value=Number(t.hasAttribute("data-cutroom-shown"));f.connect(cutroomGain);cutroomGain.connect(cutroomDestination);window.__cutroomAuditionGains.set(t,cutroomGain)}else f.connect(cutroomDestination);let y=this._ctx.createGain();',
+    ],
+    [
+      "unfollow:this.followElement(t,n,r,E,S)",
+      "unfollow:(()=>{const follow=this.followElement(t,n,r,E,S);return()=>{follow();if(cutroomGain){cutroomGain.disconnect();window.__cutroomAuditionGains?.delete(t)}}})()",
+    ],
+  ] as const;
+  for (const [before] of auditionChanges)
+    if (source.split(before).length !== 2)
+      throw new Error(
+        "Cutroom's media audition adapter no longer matches HyperFrames 0.9.26.",
+      );
   script = source
     // A standalone preview fetches its children. Use the same template and default order as the compiler.
     .replace(fetchedTemplate, 'A.querySelector("template")')
@@ -117,7 +145,7 @@ export function previewRuntimeScript() {
       seed,
       '||o.unshift({kind:"set",time:n.scheduledAt,value:(r??_h)(rn(e,n.elapsed,t))}),i?.kind==="ramp"&&e.points[0].t>n.elapsed&&o.splice(1,0,{kind:"ramp",time:n.scheduledAt+(e.points[0].t-n.elapsed)/n.rate,value:(r??_h)(e.points[0].v)}),o}',
     );
-  for (const [before, after] of gradeChanges)
+  for (const [before, after] of [...gradeChanges, ...auditionChanges])
     script = script.replace(before, after);
   return script;
 }
