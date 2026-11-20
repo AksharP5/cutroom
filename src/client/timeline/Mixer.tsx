@@ -865,6 +865,7 @@ function useMeters(
       key: strip.dataset.strip!,
       channels: [...strip.querySelectorAll<HTMLElement>(".mixer-meter i")].map(
         (bar) => ({
+          bar,
           lit: bar.querySelector<HTMLElement>("span")!,
           peak: bar.querySelector<HTMLElement>("b")!,
           state: emptyMeter,
@@ -872,25 +873,43 @@ function useMeters(
         }),
       ),
     }));
-    return audioLevels.subscribe((level) => {
+    // Bars move whole segments (2px lit, 1px gap) on the compositor, so nothing repaints.
+    let travel = 0;
+    const measure = () => {
+      travel = meters[0]?.channels[0]?.bar.clientHeight ?? 0;
+      for (const { channels } of meters)
+        for (const channel of channels) channel.shown = -1;
+    };
+    measure();
+    const resized = new ResizeObserver(measure);
+    if (root.current) resized.observe(root.current);
+    const unsubscribe = audioLevels.subscribe((level) => {
       const now = performance.now();
       for (const { key, channels } of meters) {
         const sample =
           key === "main" ? level : (level.strips?.[key] ?? { l: 0, r: 0 });
         channels.forEach((channel, index) => {
           const value = index === 0 ? sample.l : sample.r;
-          const height = meterHeight(value);
+          const segments = Math.ceil(travel / 3);
+          const lit = Math.round(meterHeight(value) * segments);
           channel.state = meterSample(channel.state, value, level.playing, now);
           // Unchanged bars cost nothing; at rest every bar is empty.
-          if (height !== channel.shown) {
-            channel.shown = height;
-            channel.lit.style.clipPath = `inset(${(1 - height) * 100}% 0 0 0)`;
+          if (lit !== channel.shown) {
+            channel.shown = lit;
+            channel.lit.style.transform = `translateY(${(segments - lit) * 3}px)`;
           }
-          channel.peak.hidden = channel.state.peak === 0;
-          channel.peak.style.transform = `translateY(${(1 - channel.state.peak) * 100}%)`;
+          const peak = channel.state.peak;
+          if (channel.peak.hidden !== (peak === 0))
+            channel.peak.hidden = peak === 0;
+          if (peak)
+            channel.peak.style.transform = `translateY(${Math.round((1 - peak) * travel)}px)`;
         });
       }
     });
+    return () => {
+      unsubscribe();
+      resized.disconnect();
+    };
   }, [root, keys]);
 }
 

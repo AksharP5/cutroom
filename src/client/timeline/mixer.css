@@ -235,23 +235,24 @@ input.mixer-rename {
 .main .mixer-meter i {
   width: 6px;
 }
-/* Clipping the lit segments keeps each one its size; the peak line moves on the compositor. */
+/* The lit segments slide in whole segments and the peak line moves: both on the compositor. */
 .mixer-meter span {
   position: absolute;
   inset: 0;
-  clip-path: inset(100% 0 0 0);
+  transform: translateY(100%);
   background: repeating-linear-gradient(
     to top,
     var(--meter-on) 0 2px,
     transparent 2px 3px
   );
-  background-attachment: local;
+  will-change: transform;
 }
 .mixer-meter b {
   position: absolute;
   inset: 0;
   transform: translateY(100%);
   background: linear-gradient(var(--meter-peak) 0 1px, transparent 1px);
+  will-change: transform;
 }
 .mixer-strip:is([data-muted], [data-quiet]) .mixer-meter span {
   background: repeating-linear-gradient(
