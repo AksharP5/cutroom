@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+from collections import Counter
 from pathlib import Path
 
 LUT_FOLDER = "Cutroom Grades"
@@ -67,7 +68,7 @@ def lut_root(configured):
         path = Path("/opt/resolve/LUT")
     return path.resolve(strict=True)
 
-def install_grades(project, luts, configured):
+def install_grades(project, luts, configured, created):
     try:
         root = lut_root(configured)
         pending = []
@@ -93,12 +94,9 @@ def install_grades(project, luts, configured):
                 if destination.read_bytes() != data:
                     raise RuntimeError("A different LUT already exists at " + str(destination))
                 continue
-            try:
-                with output:
-                    output.write(data)
-            except OSError:
-                destination.unlink()
-                raise
+            created.append(destination)
+            with output:
+                output.write(data)
     except OSError as error:
         raise RuntimeError("Could not install the Cutroom LUTs. Choose a writable LUT location already registered in Resolve. See Summary.txt. " + str(error)) from error
     if not project.RefreshLUTList():
@@ -149,6 +147,31 @@ def source_path(item):
     media = item.GetMediaPoolItem()
     path = media and media.GetClipProperty("File Path")
     return Path(path).resolve() if path else None
+
+
+def verify_clip_sources(imported, placements, media):
+    origin = imported.GetStartFrame()
+    linked = Counter()
+    for kind in ("video", "audio"):
+        for index in range(1, imported.GetTrackCount(kind) + 1):
+            for item in imported.GetItemListInTrack(kind, index) or []:
+                if item.GetType() == "transition":
+                    continue
+                path = source_path(item)
+                if path:
+                    # Resolve can split one audio lane into mono and stereo tracks.
+                    track = index if kind == "video" else None
+                    linked[kind, track, item.GetStart() - origin, item.GetEnd() - origin, path] += 1
+    for clip in placements:
+        kind, index, start, end, label = (clip[k] for k in ("kind", "track", "start", "end", "label"))
+        path = media[clip["source"]]
+        key = (kind, index if kind == "video" else None, start, end, path)
+        if not linked[key]:
+            raise RuntimeError(
+                f"Resolve did not link {label!r} from {path} on {kind} track {index}, frame {start}. "
+                "Check that Resolve can open this file and import again."
+            )
+        linked[key] -= 1
 
 
 def restore_stereo_tracks(timeline, placements, tracks, media):
@@ -235,13 +258,12 @@ def import_cutroom_timeline(resolve, plan, root, configured=None):
         path = Path(directory) / Path(plan["timeline"]).name
         path.write_bytes(b'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n' +
                          ET.tostring(tree.getroot(), encoding="utf-8"))
-        installed = install_grades(project, luts, configured) if grades and not fusion_grades else {}
-        imported = import_into_project(project, plan, path, media, luts, installed, fusion_grades)
+        imported = import_into_project(project, plan, path, media, luts, configured, fusion_grades)
     print(f"Imported {imported.GetName()} with {len(grades)} grades, {len(plan['retimes'])} speed changes, "
           f"{len(plan['transitions'])} transitions and {len(plan['markers'])} markers.")
 
 
-def import_into_project(project, plan, path, media, luts, installed, fusion_grades):
+def import_into_project(project, plan, path, media, luts, configured, fusion_grades):
     pool = project.GetMediaPool()
     previous_folder = pool.GetCurrentFolder()
     previous_timeline = project.GetCurrentTimeline()
@@ -249,6 +271,7 @@ def import_into_project(project, plan, path, media, luts, installed, fusion_grad
     if not folder:
         raise RuntimeError("Resolve could not create the import bin.")
     imported = None
+    created_luts = []
     try:
         if not pool.SetCurrentFolder(folder):
             raise RuntimeError("Resolve could not select the import bin.")
@@ -265,7 +288,8 @@ def import_into_project(project, plan, path, media, luts, installed, fusion_grad
             kind, index = (track[k] for k in ("kind", "index"))
             if track["empty"] and not imported.AddTrack(kind, {"index": index, "audioType": "stereo"}):
                 raise RuntimeError(f"Could not restore empty {kind} track {index}.")
-        restore_stereo_tracks(imported, plan["stereo"], plan["tracks"], media)
+        stereo = [clip for clip in plan["placements"] if clip.get("audioChannels") == 2]
+        restore_stereo_tracks(imported, stereo, plan["tracks"], media)
         for track in plan["tracks"]:
             kind, index, name = (track[k] for k in ("kind", "index", "name"))
             if name and not imported.SetTrackName(kind, index, name):
@@ -275,8 +299,7 @@ def import_into_project(project, plan, path, media, luts, installed, fusion_grad
         for retime in plan["retimes"]:
             start, end, label, percent = (retime[k] for k in ("start", "end", "label", "percent"))
             item = clip_at(retime, match_end=False)
-            media = item.GetMediaPoolItem()
-            if not media or not media.GetClipProperty("File Path"):
+            if source_path(item) != media[retime["source"]]:
                 raise RuntimeError(f"Resolve did not link the original media for {label!r}.")
             source_in = item.GetSourceStartTime()
             if not item.SetSpeed({"Percentage": percent, "RippleTimeline": False, "PitchCorrection": True}):
@@ -289,6 +312,7 @@ def import_into_project(project, plan, path, media, luts, installed, fusion_grad
                 raise RuntimeError(f"Resolve moved a cut while retiming {label!r}.")
             if abs(item.GetSourceStartTime() - source_in) > 0.001:
                 raise RuntimeError(f"Resolve changed the source in-point while retiming {label!r}.")
+        verify_clip_sources(imported, plan["placements"], media)
         clip_at = clip_lookup(imported)
         for fade in plan["fades"]:
             item = clip_at(fade)
@@ -318,6 +342,7 @@ def import_into_project(project, plan, path, media, luts, installed, fusion_grad
             frame, color, name, note, duration = (marker[k] for k in ("frame", "color", "name", "note", "duration"))
             if not imported.AddMarker(frame, color, name, note, duration):
                 raise RuntimeError(f"Could not add marker {name!r} at frame {frame}.")
+        installed = install_grades(project, luts, configured, created_luts) if luts and not fusion_grades else {}
         for grade in plan["grades"]:
             track, start, end, lut = (grade[k] for k in ("track", "start", "end", "lut"))
             item = clip_at(grade)
@@ -342,6 +367,13 @@ def import_into_project(project, plan, path, media, luts, installed, fusion_grad
             failed.append("restore the previous bin")
         if not pool.DeleteFolders([folder]):
             failed.append("remove the import bin")
+        for lut in created_luts:
+            try:
+                lut.unlink(missing_ok=True)
+            except OSError:
+                failed.append(f"remove {lut}")
+        if created_luts and not project.RefreshLUTList():
+            failed.append("refresh the LUT list")
         if failed:
             raise RuntimeError(str(error) + "\nResolve could not " + ", ".join(failed) + ".") from error
         raise
