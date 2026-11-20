@@ -329,6 +329,7 @@ test("the marker EDL remains available and the importer retains the full marker"
   );
   expect(notes).toEqual([
     '"Hello" at 00:00:10:00 on V3 is not carried: Resolve can\'t open it as media.',
+    "Resolve uses its own equal-power fade curve on A1 at 00:00:04:00. For Cutroom’s curve, overlap the clips on separate Fairlight tracks and use clip volume keyframes to match the original fade.",
     "Resolve may trim the empty tail after 00:00:11:00. Extend a black generator to 00:00:21:00 to restore that time.",
   ]);
   expect(timelineMarkers).toMatchObject([

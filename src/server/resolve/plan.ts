@@ -1200,6 +1200,13 @@ export function planResolveTimeline(input: PlanInput): Plan {
         `Rebuild the ${clip.transitionIn.duration}-frame audio fade before ${where(context, clip)} in Fairlight. Extend the incoming audio into the transition and fade it in.`,
       );
   }
+  const equalPowerCuts = transitions
+    .filter(({ kind, linear }) => kind === "audio" && !linear)
+    .map(({ track, end }) => `A${track} at ${formatTimecode(end, fps)}`);
+  if (equalPowerCuts.length)
+    context.notes.push(
+      `Resolve uses its own equal-power fade curve on ${equalPowerCuts.join(", ")}. For Cutroom’s curve, overlap the clips on separate Fairlight tracks and use clip volume keyframes to match the original fade.`,
+    );
 
   /** Connected clips hang off the spine slot under their first frame. */
   const attach = (clip: Clip, node: (offset: Rational) => Element) => {
