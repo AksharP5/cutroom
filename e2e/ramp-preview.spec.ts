@@ -162,6 +162,8 @@ for (const mode of [
           });
           return;
         }
+        if (new URLSearchParams(location.search).has("cutroom-native-ramp"))
+          return;
         let inspect: MessageEvent | undefined;
         let reordered = false;
         // Reply to the first inspection after the editor has sent a pipeline command,
@@ -175,7 +177,10 @@ for (const mode of [
               event.data?.source !== "cutroom-viewer"
             )
               return;
-            if (event.data.action === "inspect") {
+            if (
+              event.data.action === "inspect" &&
+              !document.querySelector('audio[src*="/ramp-audio/"]')
+            ) {
               event.stopImmediatePropagation();
               inspect = new MessageEvent("message", {
                 data: event.data,
