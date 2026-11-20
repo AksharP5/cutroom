@@ -12,7 +12,10 @@ import { oneLine, wellFormed } from "./text";
 const LUT_FOLDER = "Cutroom Grades";
 
 /** JSON strings also work as Python literals, with Unicode and path escapes preserved. */
-const quote = (text: string) => JSON.stringify(text);
+const quote = (text: string) =>
+  JSON.stringify(text).replace(/[\u2028\u2029]/g, (char) =>
+    char === "\u2028" ? "\\u2028" : "\\u2029",
+  );
 
 export async function writeResolveImporter(
   { project, composition, timeline: { fps } }: ResolveSource,
@@ -22,11 +25,11 @@ export async function writeResolveImporter(
     transitions,
     retimes,
     fades,
-    stereo,
     links,
     tracks,
     timelineMarkers,
     mediaPaths,
+    placements,
   }: Plan,
 ) {
   const folder = dirname(fcpxml);
@@ -54,6 +57,7 @@ export async function writeResolveImporter(
   }
   const importPlan = {
     timeline: basename(fcpxml),
+    placements,
     media: mediaPaths.map((path) => {
       const fromFolder = relative(folder, path);
       const packaged =
@@ -91,7 +95,6 @@ export async function writeResolveImporter(
     })),
     retimes,
     fades,
-    stereo,
     links,
     tracks,
   };

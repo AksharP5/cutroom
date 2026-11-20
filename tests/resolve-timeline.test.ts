@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { parseFps } from "@hyperframes/core";
 import { applyAll } from "../src/shared/timeline/apply";
 import { CommandSchema, TimelineSchema } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
@@ -83,9 +84,13 @@ const facts = (
 });
 
 /** A 29.97 edit: two shots and their sound with a dissolve, an animated inset, music, a title. */
-function edit(extra: readonly CommandInput[] = [], timecode = 107892) {
+function edit(
+  extra: readonly CommandInput[] = [],
+  timecode = 107892,
+  fps = NTSC,
+) {
   const empty = TimelineSchema.parse({
-    fps: NTSC,
+    fps,
     duration: 390,
     tracks: [
       newTrack(0, "video"),
@@ -265,6 +270,36 @@ test("a 200% NTSC camera clip keeps its opacity keys at hour-long timecode", () 
   expect(fcpxml).toContain('<keyframe time="2704564613/750000s" value="1"/>');
 });
 
+test("an exact cut time beyond FCPXML's range gives an actionable export error", () => {
+  const fps = parseFps("30000007/1000000");
+  if (!fps.ok) throw new Error("The editor should accept the fixture rate.");
+  expect(() =>
+    edit(
+      [
+        { type: "setTiming", clipId: "a", mediaStart: 1, playbackRate: 2 },
+        {
+          type: "setKeyframe",
+          clipId: "a",
+          property: "opacity",
+          frame: 0,
+          value: 0.5,
+        },
+        {
+          type: "setKeyframe",
+          clipId: "a",
+          property: "opacity",
+          frame: 60,
+          value: 1,
+        },
+      ],
+      108000,
+      fps.value,
+    ),
+  ).toThrow(
+    "Use a standard frame rate such as 24, 25, 29.97 or 30 fps, or export MP4 or MOV",
+  );
+});
+
 test("V1 is the storyline, upper tracks are lanes and each audio track keeps its place", () => {
   const { fcpxml } = edit();
   const spine = fcpxml.slice(
@@ -366,6 +401,7 @@ test("upper video and linked audio transitions are restored at their cuts", () =
       start: 30,
       end: 150,
       label: "a.mp4",
+      source: "file:///media/a.mp4",
       transition: { kind: "dip", duration: 24, alignment: "end" },
     },
     {
@@ -374,6 +410,7 @@ test("upper video and linked audio transitions are restored at their cuts", () =
       start: 0,
       end: 120,
       label: 'Shot "A" & <B>',
+      source: "file:///media/a.mp4",
       transition: { kind: "dissolve", duration: 30, alignment: "center" },
       linear: false,
     },
@@ -420,6 +457,7 @@ test("standalone audio keeps a 24-frame crossfade and reports a mixed fade curve
     start: 0,
     end: 60,
     label: "music.wav",
+    source: "file:///media/music.wav",
     transition: { kind: "dissolve", duration: 24, alignment: "center" },
     linear: false,
   });

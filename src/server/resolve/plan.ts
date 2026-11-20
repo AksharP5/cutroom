@@ -35,7 +35,6 @@ import {
   fileUrl,
   framesAt,
   rational,
-  times,
 } from "./fcpxml";
 import type { Element, Rational } from "./fcpxml";
 import type { MediaFacts } from "./probe";
@@ -49,6 +48,9 @@ export type ClipMedia =
   | { kind: "file"; facts: MediaFacts; sound?: MediaFacts }
   | { kind: "still"; path: string };
 type FileMedia = Extract<ClipMedia, { kind: "file" }>;
+
+const mediaPath = (media: ClipMedia) =>
+  media.kind === "file" ? media.facts.path : media.path;
 
 /** The file a clip's sound is read from. */
 const soundOf = (media: FileMedia): FileMedia => ({
@@ -82,6 +84,7 @@ interface ClipTarget {
   start: number;
   end: number;
   label: string;
+  source: string;
 }
 
 interface RetimeTarget extends ClipTarget {
@@ -93,10 +96,6 @@ interface FadeTarget extends ClipTarget {
   fadeOut: number;
 }
 
-interface StereoTarget extends ClipTarget {
-  source: string;
-}
-
 interface TrackTarget {
   kind: ClipTarget["kind"];
   index: number;
@@ -106,11 +105,11 @@ interface TrackTarget {
 }
 
 export interface Plan {
+  placements: (ClipTarget & { audioChannels?: number })[];
   grades: GradeTarget[];
   transitions: TransitionTarget[];
   retimes: RetimeTarget[];
   fades: FadeTarget[];
-  stereo: StereoTarget[];
   links: ClipTarget[][];
   tracks: TrackTarget[];
   timelineMarkers: Marker[];
@@ -283,7 +282,7 @@ function assetFor(
   media: ClipMedia,
   role: "all" | "picture" | "sound",
 ) {
-  const path = media.kind === "file" ? media.facts.path : media.path;
+  const path = mediaPath(media);
   const key = `${role} ${path}`;
   let id = context.assetIds.get(key);
   if (id) return id;
@@ -348,8 +347,8 @@ function keyOrigin(clip: Clip, media: ClipMedia): Rational {
   const start = sourceStart(clip, media);
   if (clip.playbackRate === 1) return start;
   const origin = sourceOrigin(media);
-  const seconds =
-    (start.num / start.den - origin.num / origin.den) / clip.playbackRate;
+  const elapsed = add(start, rational(-origin.num, origin.den));
+  const seconds = Number(elapsed.num) / Number(elapsed.den) / clip.playbackRate;
   return add(origin, rational(Math.round(seconds * 1e6), 1e6));
 }
 
@@ -410,7 +409,13 @@ type Key<V> = { frame: number; value: V };
  * a key exactly on an NTSC frame (226 frames is 7.540866... s) can land on the frame before.
  */
 const keyTime = (origin: Rational, frame: number, fps: Fps) =>
-  add(origin, rational(frame * 100 * fps.den + fps.den, 100 * fps.num));
+  add(
+    origin,
+    rational(
+      (BigInt(frame) * 100n + 1n) * BigInt(fps.den),
+      BigInt(fps.num) * 100n,
+    ),
+  );
 
 /**
  * One property's linear keys: the clip's own keyframes when its motion is linear or held, which
@@ -825,17 +830,24 @@ export function planResolveTimeline(input: PlanInput): Plan {
     clip: Clip,
     kind: ClipTarget["kind"],
     track: number,
+    source: ClipMedia,
   ): ClipTarget => ({
     kind,
     track,
     start: clip.start,
     end: clip.start + clip.duration,
     label: oneLine(label(clip)),
+    source: fileUrl(mediaPath(source)),
   });
   const pictureTarget = (clip: Clip) =>
-    target(clip, "video", videoTracks.indexOf(clip.track) + 1);
+    target(clip, "video", videoTracks.indexOf(clip.track) + 1, media(clip)!);
   const soundTarget = (clip: Clip) =>
-    target(clip, "audio", soundTracks.length + laneOfSound(clip) + 1);
+    target(
+      clip,
+      "audio",
+      soundTracks.length + laneOfSound(clip) + 1,
+      soundOf(media(clip) as FileMedia),
+    );
   const targetTracks: TrackTarget[] = [];
   const trackTarget = (
     kind: TrackTarget["kind"],
@@ -1322,6 +1334,13 @@ export function planResolveTimeline(input: PlanInput): Plan {
     markers: markerList(input.name, timelineMarkers, fps),
     timelineMarkers,
     mediaPaths: [...context.mediaPaths],
+    placements: [
+      ...pictures.map(pictureTarget),
+      ...audible.map((clip) => ({
+        ...soundTarget(clip),
+        audioChannels: soundOf(media(clip) as FileMedia).facts.audio?.channels,
+      })),
+    ],
     transitions,
     retimes,
     fades: audible.flatMap((clip) =>
@@ -1334,12 +1353,6 @@ export function planResolveTimeline(input: PlanInput): Plan {
           ]
         : [],
     ),
-    stereo: audible.flatMap((clip) => {
-      const sound = soundOf(media(clip) as FileMedia).facts;
-      return sound.audio?.channels === 2
-        ? [{ ...soundTarget(clip), source: fileUrl(sound.path) }]
-        : [];
-    }),
     links,
     tracks: targetTracks,
     notes: context.notes,

@@ -1,37 +1,40 @@
 import { pathToFileURL } from "node:url";
+import { HttpError } from "../../shared/errors";
 import { wellFormed } from "./text";
 
 /** A time in seconds as an exact fraction, so NTSC frames (1001/30000 s) never drift. */
 export interface Rational {
-  num: number;
-  den: number;
+  num: bigint;
+  den: bigint;
 }
 
-const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : Math.abs(a));
+const timeOutOfRange = () =>
+  new HttpError(
+    422,
+    "This timeline needs time values that Resolve’s FCPXML cannot store exactly. Use a standard frame rate such as 24, 25, 29.97 or 30 fps, or export MP4 or MOV to keep the timing.",
+  );
 
-export function rational(num: number, den = 1): Rational {
-  if (!Number.isSafeInteger(num) || !Number.isSafeInteger(den) || den <= 0)
-    throw new RangeError(`${num}/${den} is not an exact time.`);
-  const divisor = gcd(num, den) || 1;
-  return { num: num / divisor, den: den / divisor };
-}
-
-export function add(a: Rational, b: Rational): Rational {
-  const an = BigInt(a.num);
-  const ad = BigInt(a.den);
-  const bn = BigInt(b.num);
-  const bd = BigInt(b.den);
-  const num = an * bd + bn * ad;
-  const den = ad * bd;
-  // A camera timecode plus a fractional key offset can overflow before reduction.
+export function rational(
+  numerator: number | bigint,
+  denominator: number | bigint = 1,
+): Rational {
+  if (
+    (typeof numerator === "number" && !Number.isSafeInteger(numerator)) ||
+    (typeof denominator === "number" && !Number.isSafeInteger(denominator)) ||
+    denominator <= 0
+  )
+    throw timeOutOfRange();
+  const num = BigInt(numerator);
+  const den = BigInt(denominator);
   let dividend = num < 0n ? -num : num;
   let divisor = den;
   while (divisor) [dividend, divisor] = [divisor, dividend % divisor];
-  return rational(Number(num / dividend), Number(den / dividend));
+  return { num: num / dividend, den: den / dividend };
 }
 
-export const times = (a: Rational, factor: number) =>
-  rational(a.num * factor, a.den);
+export function add(a: Rational, b: Rational): Rational {
+  return rational(a.num * b.den + b.num * a.den, a.den * b.den);
+}
 
 /** A frame rate as `num/den` frames per second; its frame lasts `den/num` seconds. */
 export interface Rate {
@@ -41,11 +44,14 @@ export interface Rate {
 
 /** `frames` frames at `rate`, as seconds. */
 export const framesAt = (frames: number, rate: Rate) =>
-  rational(frames * rate.den, rate.num);
+  rational(BigInt(frames) * BigInt(rate.den), rate.num);
 
 /** FCPXML's time attribute: seconds as a reduced fraction with an `s`. */
-export const fcpTime = ({ num, den }: Rational) =>
-  num === 0 ? "0s" : den === 1 ? `${num}s` : `${num}/${den}s`;
+export function fcpTime({ num, den }: Rational) {
+  if (BigInt.asIntN(64, num) !== num || BigInt.asIntN(32, den) !== den)
+    throw timeOutOfRange();
+  return den === 1n ? `${num}s` : `${num}/${den}s`;
+}
 
 /**
  * The frame a source timecode names, counting from 00:00:00:00. Drop-frame timecode (`;`, `.` or
