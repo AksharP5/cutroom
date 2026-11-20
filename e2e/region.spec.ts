@@ -135,9 +135,27 @@ test("the inspector edits a layer's effect, ramps and ease, and a blur follows i
   await drag(page, await at(page, 0.6, 0.2), await at(page, 0.8, 0.4));
   await expect.poll(async () => (await layer())?.region?.effect).toBe("blur");
   const inspector = page.getByRole("complementary", { name: "Inspector" });
-  await inspector.getByRole("radio", { name: "Exponential out" }).click();
-  await expect.poll(async () => (await layer())?.region?.ease).toBe("expo-out");
-  await inspector.getByRole("radio", { name: "Highlight" }).click();
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(
+    "**/api/cutroom/projects/*/commands",
+    async (route) => {
+      const response = await route.fetch();
+      await held;
+      await route.fulfill({ response });
+    },
+    { times: 1 },
+  );
+  try {
+    await inspector.getByRole("radio", { name: "Exponential out" }).click();
+    await expect
+      .poll(async () => (await layer())?.region?.ease)
+      .toBe("expo-out");
+    // Change the effect while the editor is still waiting for the ease edit's answer.
+    await inspector.getByRole("radio", { name: "Highlight" }).click();
+  } finally {
+    release();
+  }
   await expect
     .poll(async () => (await layer())?.region?.effect)
     .toBe("highlight");

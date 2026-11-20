@@ -643,14 +643,29 @@ test("Curves add, move and remove points on each channel, drafting while they mo
   });
   await expect.poll(brightness).toBeGreaterThan(grey + 25);
   expect(await steps()).toBe(before);
-  await page.mouse.up();
-  await expect.poll(steps).toBe(before + 1);
-  const master = (await grade("a"))?.curves as { master: number[][] };
-  expect(master.master).toHaveLength(3);
-  expect(master.master[1]![1]).toBeGreaterThan(0.6);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(
+    "**/api/cutroom/projects/*/commands",
+    async (route) => {
+      const response = await route.fetch();
+      await held;
+      await route.fulfill({ response });
+    },
+    { times: 1 },
+  );
+  try {
+    await page.mouse.up();
+    await expect.poll(steps).toBe(before + 1);
+    const master = (await grade("a"))?.curves as { master: number[][] };
+    expect(master.master).toHaveLength(3);
+    expect(master.master[1]![1]).toBeGreaterThan(0.6);
 
-  // Double-clicking the point removes it, and the curve is straight again.
-  await inspector.getByRole("slider", { name: "Master point 2" }).dblclick();
+    // Remove the point before the editor receives the answer for adding it.
+    await inspector.getByRole("slider", { name: "Master point 2" }).dblclick();
+  } finally {
+    release();
+  }
   await expect.poll(steps).toBe(before + 2);
   await expect.poll(async () => (await grade("a"))?.curves ?? null).toBeNull();
 
