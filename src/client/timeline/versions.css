@@ -116,6 +116,7 @@
 
 .versions-menu.with-source {
   min-width: 248px;
+  font: var(--type-sm) / var(--leading-body) var(--font-sans);
 }
 .versions-menu.with-source button {
   grid-template-columns: var(--icon-sm) minmax(0, 1fr) auto;

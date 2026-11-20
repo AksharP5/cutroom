@@ -346,7 +346,9 @@ for (const mode of playbackModes)
         finishRecording = await recordComparison(page, evidence);
       }
       const configured = await result(
-        z.object({ warnings: z.array(z.object({ warning: z.string() })) }),
+        z.object({
+          warnings: z.array(z.object({ warning: z.string() })).optional(),
+        }),
         "clip_versions_set",
         {
           projectId,
@@ -366,7 +368,7 @@ for (const mode of playbackModes)
         },
       );
       if (!longProject) {
-        expect(configured.warnings[0]?.warning).toContain(
+        expect(configured.warnings?.[0]?.warning).toContain(
           "Short cue is 2:00 shorter",
         );
         const refused = await call("clip_version_show", {
@@ -378,11 +380,10 @@ for (const mode of playbackModes)
         expect(JSON.stringify(refused.content)).toContain("2:00 shorter");
       }
       const count = measure && !longProject ? "5" : "4";
-      if (longProject)
-        for (let i = 0; i < 12 && !(await badge.isVisible()); i++)
-          await page
-            .getByRole("button", { name: "Zoom in", exact: true })
-            .click();
+      if (longProject) {
+        const zoom = page.getByRole("button", { name: "Zoom in", exact: true });
+        for (let i = 0; i < 6; i++) await zoom.click();
+      }
       await expect(badge).toHaveText(count);
       const baseline = measure ? await browserMemory(browser) : 0;
       await badge.click();
