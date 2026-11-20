@@ -639,7 +639,7 @@ export function Viewer({
     const { candidate } = handoff;
     const preview = connections.current.get(candidate.gen);
     if (!preview) return;
-    // Warmup painted at 1% opacity. Confirm the fully visible document, then
+    // Warmup kept the candidate almost transparent. Confirm the fully visible document, then
     // let the parent paint before retiring the last confirmed picture.
     void (async () => {
       await preview.painted();

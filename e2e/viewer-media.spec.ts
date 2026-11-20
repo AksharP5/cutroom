@@ -344,6 +344,72 @@ async function keepPicture(
   await expect(page.locator(".status-error")).toHaveCount(0);
 }
 
+test("drawing a region with a zoom set aside keeps the composited picture steady", async ({
+  page,
+  request,
+}) => {
+  const { seek } = await openMedia(page, request, {
+    video:
+      "color=c=white:s=640x360:r=30:d=12,drawbox=x=400:y=90:w=80:h=30:color=green:t=fill",
+  });
+  await seek("00000015");
+  const stage = page.locator(".edit-stage");
+  const picture = (await page.locator(".edit-picture").boundingBox())!;
+  const at = (x: number, y: number) =>
+    [picture.x + picture.width * x, picture.y + picture.height * y] as const;
+  const depth = () =>
+    page
+      .frameLocator("iframe[data-live]")
+      .locator("#picture")
+      .evaluate((el) =>
+        Number.parseFloat(getComputedStyle(el).translate.split(" ")[2] ?? "0"),
+      );
+  await page.keyboard.press("h");
+  await page.mouse.move(...at(0.55, 0.2));
+  await page.mouse.down();
+  await page.mouse.move(...at(0.8, 0.45));
+  await page.mouse.up();
+  await seek("00000110");
+  await page.keyboard.press("Escape");
+  await expect.poll(depth).toBeCloseTo(750);
+
+  const bounds = (await stage.boundingBox())!;
+  await page.mouse.click(bounds.x + 4, bounds.y + 4);
+  await page.keyboard.press("h");
+  await expect.poll(depth).toBe(0);
+  await page
+    .getByRole("toolbar", { name: "Zoom and highlight" })
+    .getByRole("radio", { name: "Blur" })
+    .click();
+
+  // Aim keeps this white patch outside the blur and outside the saved zoom's green box.
+  const white = (colour: Color) => colour.every((channel) => channel === 255);
+  const capture = await capturePicture(page, white);
+  try {
+    const prior = await stage.getAttribute("data-preview-ready");
+    capture.reset();
+    await page.mouse.move(...at(0.15, 0.2));
+    await page.mouse.down();
+    await page.mouse.move(...at(0.35, 0.4));
+    await page.mouse.up();
+    await waitForPreview(page, { after: prior });
+    await expect(page.locator(".edit-frame")).toHaveCount(1);
+    const { samples, blank } = await capture.read();
+    await test.info().attach("aim-frames.json", {
+      body: JSON.stringify(samples),
+      contentType: "application/json",
+    });
+    if (blank)
+      await test.info().attach("aim-flash.png", {
+        body: Buffer.from(blank, "base64"),
+        contentType: "image/png",
+      });
+    expect(samples.filter(({ color }) => !white(color))).toEqual([]);
+  } finally {
+    await capture.stop();
+  }
+});
+
 test("the composited sampler catches a one-animation-frame blank", async ({
   page,
 }) => {
