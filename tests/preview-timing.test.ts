@@ -68,7 +68,7 @@ test("concurrent timing readers share approval when the compiled cache cannot fi
     });
     const path = join(project.path, "index.html");
     const html =
-      '<html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main></body></html>';
+      '<html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main><aside hidden></aside></body></html>';
     await writeFile(path, html);
     const load = async (document: string) => {
       const redirect = await app.request(
@@ -180,7 +180,7 @@ test("removing clips and changing the composition's length keep the loaded docum
     insert: [{ id: "a", after: "v", before: null }],
   });
   expect(snapshot(source).clips.find(({ id }) => id === "a")?.html).toBe(
-    '<audio crossorigin="anonymous" data-hf-cutroom-clip-id="a" id="a" data-start="0" data-duration="2.5358666666666667" data-media-start="0" src="a.mp4" data-link="pair"></audio>',
+    '<audio crossorigin="anonymous" preload="none" data-hf-cutroom-clip-id="a" id="a" data-start="0" data-duration="2.5358666666666667" data-media-start="0" src="a.mp4" data-link="pair"></audio>',
   );
 });
 
@@ -670,7 +670,7 @@ test("media cache writes during a compile keep live timing for the opening tab a
     });
     const path = join(project.path, "index.html");
     const html =
-      '<html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main></body></html>';
+      '<html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main><aside hidden></aside></body></html>';
     await writeFile(path, html);
     let frames = 0;
     const cacheFrame = async () => {
@@ -740,6 +740,61 @@ test("media cache writes during a compile keep live timing for the opening tab a
     }
   } finally {
     spy.mockRestore();
+    await editor.dispose();
+    await store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an approved root reads numeric clip edits without recompiling, then compiles CSS changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cutroom-source-timing-"));
+  const store = await createProjectStore({
+    dataDir: root,
+    projectsDir: join(root, "projects"),
+  });
+  const editor = createHyperframesApi(store, createReviewService(store));
+  const app = new Hono().route("/api", editor);
+  const signature = spyOn(hyperframes, "createProjectSignatureAsync");
+  try {
+    const project = await store.create({
+      name: "Source timing",
+      width: 320,
+      height: 240,
+      duration: 4,
+    });
+    const path = join(project.path, "index.html");
+    const html =
+      '<html><head><style>main { color:red }</style></head><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="words" class="clip" data-start="0" data-duration="2">Words</div></main></body></html>';
+    await writeFile(path, html);
+    const redirected = await app.request(
+      `/api/projects/${project.id}/isolated-preview?document=source-timing`,
+    );
+    const url = redirected.headers.get("location")!;
+    const loaded = await app.request(url, {
+      headers: { "sec-fetch-dest": "iframe", "sec-fetch-site": "same-origin" },
+    });
+    expect(loaded.status).toBe(200);
+    signature.mockClear();
+
+    const edited = html.replace('data-start="0"', 'data-start="1"');
+    await writeFile(path, edited);
+    const readTiming = async () => {
+      const response = await app.request(`${url}&cutroom-timing=1`);
+      expect(response.status).toBe(200);
+      const { timing } = z
+        .object({ timing: PreviewTimingSchema })
+        .parse(await response.json());
+      return timing;
+    };
+    const applied = await readTiming();
+    expect(applied.clips[0]?.values["data-start"]).toBe("1");
+    expect(signature).not.toHaveBeenCalled();
+
+    await writeFile(path, edited.replace("color:red", "color:blue"));
+    expect((await readTiming()).structure).not.toBe(applied.structure);
+    expect(signature).toHaveBeenCalled();
+  } finally {
+    signature.mockRestore();
     await editor.dispose();
     await store.close();
     await rm(root, { recursive: true, force: true });

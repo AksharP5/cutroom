@@ -206,6 +206,14 @@ function enqueue<T>(step: () => Promise<T>) {
   return run;
 }
 
+/** A preview of an intermediate save would compete with the remaining writes in a burst. */
+export function afterEditBurst(projectId: string, composition: string) {
+  const saves = pending.filter(
+    (edit) => edit.projectId === projectId && edit.composition === composition,
+  );
+  return saves.length > 1 ? queue : Promise.resolve();
+}
+
 /** Runs a source operation or export only after the edits shown before it have landed. */
 export function afterTimelineEdits<T>(
   projectId: string,
@@ -769,10 +777,19 @@ export async function editTimeline(
         throw error;
       }
       pending = pending.filter((item) => item !== made);
-      // The answer is the view a read would return; only the undo history is still to read.
-      // Later writes, by anyone, announce themselves as project file events.
+      // The next saved edit can already use this answer's revision. The visible timeline
+      // has the rest of the burst applied, so only its last edit needs a history read and
+      // a new projection. Read immediately if the server differed from the optimistic edit.
+      const more = () =>
+        pending.some(
+          (item) =>
+            item.projectId === projectId &&
+            item.composition === made.composition,
+        );
+      const reconcile = report || createsAudioGroup(made.commands);
+      if (more() && !reconcile) return;
       const history = await readHistory(projectId);
-      if (confirmed?.projectId === projectId)
+      if (confirmed?.projectId === projectId && (!more() || reconcile))
         settle(projectId, confirmed.view, history);
     });
     if (!made.dropped && useTimeline.getState().projectId === projectId) {

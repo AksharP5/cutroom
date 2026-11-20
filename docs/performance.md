@@ -25,6 +25,30 @@ The new editor's code panel loads CodeMirror only when it first opens: its edito
 
 `bun run bench:transcripts` measures transcript listing separately. Reusing one parsed source per request reduced the 100-clip, 5,000-word workload from about 154 ms to 7 ms warm. The request still reads current source files; this does not rely on a cross-request cache.
 
+## 15-minute dialogue edit
+
+The scale fixture is a 1080p60 edit with 1,000 clips and a 100-clip control at the same frame rate. The 15-minute timeline contains 486 linked picture and dialogue pairs, four music clips, 24 titles, punch-ins and three dissolves. A synthetic H.264 source carries its frame number along the top.
+
+After `bun run build`, run the headed comparison on X11. Run each clip count once with and once without `--pipeline`, using the same `--dir` to reuse the fixtures. `--runs 3` gives three fresh browser sessions per setting.
+
+```sh
+scratch=$(mktemp -d /var/tmp/cutroom-scale.XXXXXX)
+flock /tmp/cutroom-e2e.lock node scripts/bench-vs-studio.ts --editor cutroom --scale 1000 --pipeline --runs 1 --dir "$scratch" --port 4940 --out "$scratch/1000-gpu.json"
+```
+
+The benchmark reads the numbered pictures from Chromium's tab screencast. It reports the playback clock rate separately, measures how long a source picture holds at two points on the timeline, and times a ruler drag at comparable zoom. It also records the first correct pixels after ripple delete and undo and reads proportional browser memory after closing the screencast decoder tab. Screencast JPEG capture can miss swaps at 60 fps. Compare captured picture rates and holds under the same settings.
+
+`e2e/scale-performance.spec.ts` runs in the performance gate with GPU playback on and off. It checks a numbered picture after a seek to about eight minutes, picture and clock movement during playback, the number of native media elements holding data, the expected picture after ripple delete, and ten persisted W trims followed by ten undos and ten redos. The headless gate catches stalls and lost edits with wider timing budgets than the headed target.
+
+Five distinct duration edits to the same saved shot measured the isolated timing response after opening each project. The request included parsing the response and checking the saved duration. The GPU playback switch uses this same server path.
+
+| Clip count | Main `cdeeb359`, median (range) | Source timing, median (range) |
+| ---------- | ------------------------------- | ----------------------------- |
+| 100        | 60 ms (58 to 62)                | 6 ms (5 to 8)                 |
+| 1,000      | 637 ms (609 to 655)             | 29 ms (21 to 37)              |
+
+A CPU profile of the large preview attributed 15.8 seconds in an edit and history run to `getAnimations()`, mostly CSS duration inference. The runtime now lets both duration adapters share one document animation snapshot. Separately, the source timing check reuses the compiled layout for numeric timing changes on existing clips. A change that creates a clip, such as a W trim that splits the music bed, can still go through the compiler.
+
 ## Cutroom vs HyperFrames Studio
 
 On November 16, 2026 the same project was opened and edited in Cutroom (main `c3db508`, default settings, so the footage pipeline was off) and in HyperFrames Studio 0.9.26, run from this repository's `node_modules` with `hyperframes preview --no-open`. `node scripts/bench-vs-studio.ts` does both: it makes the project, starts the editor's own server on a private port, and drives one headed Chromium 155 window (X11, 1720x1050, muted) through every operation below. Three runs per editor, each with a fresh server, project copy and browser, unthrottled and with CPU throttled 4x (the editor page and, in Cutroom, its out-of-process preview). The machine was shared: load average about 10 to 13 from other work during the runs. The play rows were measured again the same day on main `4f506ed`, three runs per column, measured as described under 1x playback below.
