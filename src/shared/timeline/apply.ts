@@ -1,6 +1,19 @@
 import { frameTime, sourceGridFrame } from "./time";
-import { activeVersion, fitsVersion } from "./versions";
-import { firstTextLine, isAudioKind } from "./schema";
+import {
+  activeVersion,
+  consumedSource,
+  fitsVersion,
+  mediaVersions,
+  updateVersionFits,
+  versionFit,
+  versionMedia,
+  versionOffset,
+  versionOwner,
+  versionPartners,
+  versionShortReason,
+  versionStart,
+} from "./versions";
+import { firstTextLine, isAudioKind, MAX_VERSIONS } from "./schema";
 import type {
   Clip,
   Command,
@@ -13,6 +26,7 @@ import type {
   Timeline,
   Track,
   Transition,
+  Version,
 } from "./schema";
 import { cutTitle, defaultTitle, editTitle, isTitle } from "./title";
 import { cutRegion, defaultRegion, editRegion } from "./region";
@@ -46,7 +60,11 @@ import { newTrack, nextTrackIndex } from "./tracks";
 import { editTransform, hasTransformEdit } from "./transform";
 import { editStyle, takesStyleField } from "./elementStyle";
 import { FREEZE_DIR, localMediaPath, sourceUrl } from "../media";
-import { parseRateLane } from "@hyperframes/core/speed-ramp";
+import {
+  parseRateLane,
+  resolveRateSpec,
+  timeAtSourceTime,
+} from "@hyperframes/core/speed-ramp";
 import { editGrade } from "./grade";
 import {
   moveKeyframe,
@@ -104,6 +122,8 @@ interface Batch {
   mediaLengths: ReadonlyMap<string, number>;
   /** Every inserted `src` known to hold no audio stream. */
   silentMedia: ReadonlySet<string>;
+  mediaRates: ReadonlyMap<string, number>;
+  mediaFiles?: ReadonlySet<string>;
   newId: NewId;
   onSkip: (clip: Clip, reason: string) => void;
 }
@@ -121,6 +141,8 @@ interface ApplyOptions {
   onCreate?: OnCreate;
   mediaLengths?: ReadonlyMap<string, number>;
   silentMedia?: ReadonlySet<string>;
+  mediaRates?: Batch["mediaRates"];
+  mediaFiles?: Batch["mediaFiles"];
   /** Names new clips the commands leave unnamed; `randomClipId` unless a caller needs others. */
   newId?: NewId;
   /** Ids the project used before, maybe undone since. New clips never take them. */
@@ -286,6 +308,8 @@ export function apply(
     onCreate = () => {},
     mediaLengths = new Map(),
     silentMedia = new Set(),
+    mediaRates = new Map(),
+    mediaFiles,
     newId = randomClipId,
     retired = new Set(),
   }: ApplyOptions = {},
@@ -299,9 +323,11 @@ export function apply(
     onCreate,
     mediaLengths,
     silentMedia,
+    mediaRates,
+    mediaFiles,
     newId,
   });
-  return next === timeline ? timeline : fitTransitions(next);
+  return next === timeline ? timeline : updateVersionFits(fitTransitions(next));
 }
 
 /** Applies a batch atomically: the first failure throws with its command index. */
@@ -316,6 +342,8 @@ export function applyAll(
     onCreate = () => {},
     mediaLengths = new Map(),
     silentMedia = new Set(),
+    mediaRates = new Map(),
+    mediaFiles,
     newId = randomClipId,
     retired = new Set(),
   }: ApplyOptions = {},
@@ -329,6 +357,8 @@ export function applyAll(
     onSkip,
     mediaLengths,
     silentMedia,
+    mediaRates,
+    mediaFiles,
     newId,
     onCreate: (id, origin) => {
       // A copy of a clip made earlier in the batch copies that clip's own origin.
@@ -363,7 +393,7 @@ export function applyAll(
   }, observed);
   if (result === observed) return timeline;
   // A roll trims both sides of a cut in turn, so transitions are settled once the batch is done.
-  const fitted = fitTransitions(result);
+  const fitted = updateVersionFits(fitTransitions(result));
   if (!onApply) return fitted;
   return {
     ...fitted,
@@ -1221,25 +1251,25 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           );
       return {
         ...timeline,
-        clips: clips.map((clip) =>
-          targets.includes(clip)
-            ? {
-                ...clip,
-                ...(command.playbackRate !== undefined && {
-                  playbackRate: command.playbackRate,
-                }),
-                // Keep each partner's source at the selected clip's start in sync, including L-cuts.
-                mediaStart:
-                  clip.mediaStart! +
-                  (command.mediaStart === undefined
-                    ? 0
-                    : command.mediaStart - target.mediaStart!) +
-                  frameTime(clip.start - target.start, fps) *
-                    ((command.playbackRate ?? clip.playbackRate) -
-                      clip.playbackRate),
-              }
-            : clip,
-        ),
+        clips: clips.map((clip) => {
+          if (!targets.includes(clip)) return clip;
+          const playbackRate = command.playbackRate ?? clip.playbackRate;
+          // Keep each partner's source at the selected clip's start in sync, including L-cuts.
+          const shift =
+            (command.mediaStart === undefined
+              ? 0
+              : command.mediaStart - target.mediaStart!) +
+            frameTime(clip.start - target.start, fps) *
+              (playbackRate - clip.playbackRate);
+          return {
+            ...clip,
+            playbackRate,
+            mediaStart: clip.mediaStart! + shift,
+            ...(clip.versions && {
+              versions: shiftVersionStarts(clip, shift, fps, true),
+            }),
+          };
+        }),
       };
     }
     case "setClip": {
@@ -1691,50 +1721,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       };
     }
     case "setVersions":
+    case "addVersion":
+    case "renameVersion":
     case "setVersion":
-    case "keepVersion": {
-      const target = find(command.clipId);
-      const versions =
-        command.type === "setVersions" ? command.versions : target.versions;
-      if (target.kind !== "composition" && target.kind !== "image")
-        throw new TimelineError(
-          "unsupported",
-          "Only scene and image clips hold versions. Place each version as a composition file and give the scene clip its versions.",
-        );
-      if (!versions)
-        throw new TimelineError(
-          "not_found",
-          `Clip ${target.id} has no versions.`,
-        );
-      const misfit = versions.find(({ src }) => !fitsVersion(target.kind, src));
-      if (misfit)
-        throw new TimelineError(
-          "unsupported",
-          `"${misfit.src}" cannot be a version of ${target.kind === "composition" ? "a scene clip, which takes composition HTML files" : "an image clip, which takes image files"}.`,
-        );
-      const index =
-        command.type === "setVersions"
-          ? command.active
-          : command.type === "setVersion"
-            ? command.version
-            : (command.version ?? activeVersion(target));
-      const version = versions[index];
-      if (!version)
-        throw new TimelineError(
-          "not_found",
-          `Clip ${target.id} has ${versions.length} versions, numbered 0 to ${versions.length - 1}.`,
-        );
-      const { versions: _dropped, ...rest } = target;
-      const next: Clip =
-        command.type === "keepVersion"
-          ? { ...rest, src: version.src }
-          : { ...rest, src: version.src, versions };
-      if (JSON.stringify(next) === JSON.stringify(target)) return timeline;
-      return {
-        ...timeline,
-        clips: clips.map((clip) => (clip.id === target.id ? next : clip)),
-      };
-    }
+    case "keepVersion":
+      return editVersions(timeline, find(command.clipId), command, batch);
     case "setRange": {
       const range = {
         in: command.in === undefined ? timeline.range.in : command.in,
@@ -1786,10 +1777,17 @@ function settle(before: Timeline, after: Timeline): Timeline {
     if (
       clip.sourceDuration !== null &&
       clip.mediaStart !== null &&
+      !clip.versionSilent &&
       // The frames the runtime shows before the source runs out.
       clip.duration >
         toFrames(
-          (clip.sourceDuration - clip.mediaStart) / clip.playbackRate,
+          timeAtSourceTime(
+            resolveRateSpec(
+              clip.versions ? clip.automation : null,
+              clip.playbackRate,
+            ),
+            clip.sourceDuration - clip.mediaStart,
+          ),
           after.fps,
         )
     )
@@ -1844,6 +1842,244 @@ function settle(before: Timeline, after: Timeline): Timeline {
         : { ...clip, startRef: null };
     }),
   });
+}
+
+function editVersions(
+  timeline: Timeline,
+  target: Clip,
+  command: Extract<
+    Command,
+    {
+      type:
+        | "setVersions"
+        | "addVersion"
+        | "renameVersion"
+        | "setVersion"
+        | "keepVersion";
+    }
+  >,
+  batch: Batch,
+): Timeline {
+  const { clips, fps } = timeline;
+  const media = mediaVersions(target.kind);
+  if (target.kind === "element" || (!media && command.type === "addVersion"))
+    throw new TimelineError(
+      "unsupported",
+      "This clip does not hold media versions.",
+    );
+  const owner = versionOwner(clips, target);
+  if (target !== owner)
+    throw new TimelineError(
+      "unsupported",
+      `Edit versions on the linked picture, ${clipName(owner)}.`,
+    );
+  const partners = versionPartners(clips, target);
+  const active = activeVersion(target);
+  let versions = target.versions;
+  let index = active;
+  const take = (version: Version) => {
+    if (
+      !fitsVersion(target.kind, version.src) ||
+      (!media && version.sourceIn !== undefined)
+    )
+      throw new TimelineError(
+        "unsupported",
+        `"${version.src}" is not a source for a ${target.kind} version.`,
+      );
+    if (!media) return version;
+    return versionMedia(
+      {
+        ...version,
+        sourceIn: version.sourceIn ?? 0,
+        ...(batch.mediaRates.has(version.src) && {
+          sourceFps: batch.mediaRates.get(version.src),
+        }),
+      },
+      batch.mediaLengths,
+      batch.silentMedia,
+      batch.mediaFiles,
+    );
+  };
+
+  switch (command.type) {
+    case "setVersions":
+      versions = command.versions.map(take);
+      if (
+        !media &&
+        new Set(versions.map(({ src }) => src)).size !== versions.length
+      )
+        throw new TimelineError(
+          "unsupported",
+          "Each scene or image version needs its own file.",
+        );
+      index = command.active;
+      if (media && versions[index]) {
+        const requested = versionFit(target, partners, versions[index], fps);
+        if (!requested.fits || requested.offline) {
+          const available = versions.findIndex((version) => {
+            const status = versionFit(target, partners, version, fps);
+            return status.fits && !status.offline;
+          });
+          if (available >= 0) index = available;
+        }
+      }
+      break;
+    case "addVersion": {
+      if (!target.src)
+        throw new TimelineError(
+          "unsupported",
+          "This clip has no source to copy.",
+        );
+      if (versions && versions.length >= MAX_VERSIONS)
+        throw new TimelineError(
+          "unsupported",
+          `A clip holds at most ${MAX_VERSIONS} versions.`,
+        );
+      const first = take({ name: "Take 1", src: target.src });
+      first.sourceIn = versionOffset(first, target.mediaStart ?? 0, fps);
+      first.sourceDuration ??= target.sourceDuration ?? undefined;
+      const list = versions ?? [first];
+      const shown = list[active >= 0 ? active : 0]!;
+      const base = command.version?.name ?? "Take";
+      let name = command.version ? base : `Take ${list.length + 1}`;
+      for (
+        let suffix = list.length + 1;
+        list.some((version) => version.name === name);
+        suffix++
+      )
+        name = `${base.slice(0, 55)} ${suffix + 1}`;
+      const added = command.version
+        ? take({ ...command.version, name })
+        : { ...shown, name };
+      if (command.version && command.sourceSeconds !== undefined)
+        added.sourceIn = versionOffset(added, command.sourceSeconds, fps);
+      versions = [...list, added];
+      const status = versionFit(target, partners, added, fps);
+      index =
+        status.fits && !status.offline ? list.length : Math.max(0, active);
+      break;
+    }
+    case "renameVersion":
+      if (!versions?.[command.version])
+        throw new TimelineError(
+          "not_found",
+          "There is no version at that index.",
+        );
+      if (
+        versions.some(
+          ({ name }, i) => i !== command.version && name === command.name,
+        )
+      )
+        throw new TimelineError(
+          "unsupported",
+          "Each version needs its own name.",
+        );
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          clip === target
+            ? {
+                ...clip,
+                versions: versions!.map((version, i) =>
+                  i === command.version
+                    ? { ...version, name: command.name }
+                    : version,
+                ),
+              }
+            : clip,
+        ),
+      };
+    case "setVersion":
+    case "keepVersion":
+      index = command.version ?? active;
+  }
+
+  const version = versions?.[index];
+  if (!version)
+    throw new TimelineError(
+      "not_found",
+      `Clip ${target.id} has ${versions?.length ?? 0} versions. There is no version at that index.`,
+    );
+  if (
+    media &&
+    (index !== active || command.type === "setVersions") &&
+    command.type !== "addVersion"
+  ) {
+    const status = versionFit(target, partners, version, fps);
+    if (status.offline)
+      throw new TimelineError("not_found", `${status.name} is offline.`);
+    if (!status.fits)
+      throw new TimelineError("out_of_bounds", versionShortReason(status, fps));
+  }
+  const start = versionStart(version, fps);
+  const unchanged = command.type !== "setVersions" && index === active;
+  const switchSource = (clip: Clip, partner: boolean): Clip => {
+    if (unchanged || (command.type === "addVersion" && index === 0))
+      return clip;
+    const { versionSilent: _silent, ...rest } = clip;
+    const silent = Boolean(partner && version.silent);
+    return {
+      ...rest,
+      src: version.src,
+      ...(media && {
+        label: clip.label ?? clipName(clip),
+        mediaStart: partner
+          ? start + (clip.mediaStart ?? 0) - (target.mediaStart ?? 0)
+          : start,
+        sourceDuration:
+          version.sourceDuration ??
+          (version.src === clip.src ? clip.sourceDuration : null),
+        ...(partner && { hasAudio: !silent }),
+        ...(silent && { versionSilent: true }),
+      }),
+    };
+  };
+  return {
+    ...timeline,
+    clips: clips.map((clip) => {
+      if (clip !== target)
+        return partners.includes(clip) ? switchSource(clip, true) : clip;
+      const {
+        versions: _dropped,
+        versionIndex: _index,
+        ...next
+      } = switchSource(clip, false);
+      return command.type === "keepVersion"
+        ? next
+        : {
+            ...next,
+            versions,
+            ...(media && {
+              versionIndex: index,
+              label: next.label ?? clipName(target),
+            }),
+          };
+    }),
+  };
+}
+
+/** Track source in changes made through Timing or slip on just the shown take. */
+function shiftVersionStarts(
+  clip: Clip,
+  seconds: number,
+  fps: Fps,
+  activeOnly: boolean,
+) {
+  if (!seconds || !clip.versions || !mediaVersions(clip.kind))
+    return clip.versions;
+  const active = activeVersion(clip);
+  return clip.versions.map((version, i) =>
+    activeOnly && i !== active
+      ? version
+      : {
+          ...version,
+          sourceIn: versionOffset(
+            version,
+            versionStart(version, fps) + seconds,
+            fps,
+          ),
+        },
+  );
 }
 
 /** Drops and clipboard pastes replace only the overwritten picture's sound, otherwise use room. */
@@ -2110,6 +2346,7 @@ function slipEdit(timeline: Timeline, clip: Clip, linked: boolean) {
               clipEnd(member) + by,
               timeline.fps,
               "trim",
+              true,
             ),
             start: member.start,
           }
@@ -2494,12 +2731,6 @@ function keyframeValue<P extends KeyframeProperty>(
   return parsed.data;
 }
 
-function advance(clip: Clip, frames: number, fps: Fps): number | null {
-  return clip.mediaStart === null
-    ? null
-    : clip.mediaStart + ((frames * fps.den) / fps.num) * clip.playbackRate;
-}
-
 /** Source geometry is shared; edge trims and internal cuts have different fade semantics. */
 function windowClip(
   clip: ObservedClip,
@@ -2507,15 +2738,23 @@ function windowClip(
   end: number,
   fps: Fps,
   mode: "trim" | "cut" = "cut",
+  slip = false,
 ): Clip {
   const duration = end - start;
   if (duration <= 0) return { ...clip, start, duration };
+  const shift =
+    clip.versions && mediaVersions(clip.kind)
+      ? consumedSource(clip, start - clip.start, fps)
+      : frameTime(start - clip.start, fps) * clip.playbackRate;
   return {
     ...clip,
     ...windowMix(clip, start - clip.start, duration, fps, mode),
+    ...(clip.versions && {
+      versions: shiftVersionStarts(clip, shift, fps, slip),
+    }),
     start,
     duration,
-    mediaStart: advance(clip, start - clip.start, fps),
+    mediaStart: clip.mediaStart === null ? null : clip.mediaStart + shift,
     // Keyframes stay on the frames of content they animate.
     keyframes: shiftKeyframes(clip.keyframes, start - clip.start),
     // A piece cut from a clip keeps a transition only on an edge it still has.

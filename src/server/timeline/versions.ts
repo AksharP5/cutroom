@@ -1,7 +1,11 @@
+import { stat } from "node:fs/promises";
 import type { Project } from "../../shared/project";
 import { localMediaPath } from "../../shared/media";
 import { TimelineError } from "../../shared/timeline/errors";
-import { VersionsSchema } from "../../shared/timeline/schema";
+import {
+  MAX_VERSIONS,
+  StoredVersionSchema,
+} from "../../shared/timeline/schema";
 import type {
   Clip,
   ClipKind,
@@ -9,42 +13,89 @@ import type {
   Timeline,
   Version,
 } from "../../shared/timeline/schema";
-import { activeVersion } from "../../shared/timeline/versions";
+import {
+  activeVersion,
+  fitsVersion,
+  mediaVersions,
+} from "../../shared/timeline/versions";
 import { projectPath } from "../projects/path";
 import type { AttributeChange, HostedComposition } from "./composition";
 
 /** The clip's versions as JSON: the list a scene or image clip can switch between. */
 export const VERSIONS_ATTRIBUTE = "data-cutroom-versions";
 
-/**
- * A clip's versions, when its attribute holds a valid list that includes the file it shows.
- * Anything else, such as a hand-edited `src` outside the list, reads as no versions.
- */
+export const VERSION_INDEX_ATTRIBUTE = "data-cutroom-version-index";
+export const VERSION_SILENT_ATTRIBUTE = "data-cutroom-version-silent";
+
+function storedList(attribute: string | undefined) {
+  if (attribute === undefined) return undefined;
+  try {
+    const raw: unknown = JSON.parse(attribute);
+    const parsed = StoredVersionSchema.array()
+      .min(2)
+      .max(MAX_VERSIONS)
+      .safeParse(raw);
+    if (!parsed.success || JSON.stringify(parsed.data) !== JSON.stringify(raw))
+      return undefined;
+    const versions = parsed.data;
+    return new Set(versions.map(({ name }) => name)).size === versions.length
+      ? versions
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The authored list, provided it matches the mounted source. */
 export function readVersions(
   kind: ClipKind,
   src: string | null,
   attribute: string | undefined,
-): Version[] | undefined {
-  if (attribute === undefined || src === null) return undefined;
-  if (kind !== "composition" && kind !== "image") return undefined;
-  let json: unknown;
-  try {
-    json = JSON.parse(attribute);
-  } catch {
-    return undefined;
+  indexAttribute?: string,
+): { versions?: Version[]; versionIndex?: number } {
+  const versions = storedList(attribute);
+  if (
+    !versions ||
+    !src ||
+    versions.some((version) => !fitsVersion(kind, version.src))
+  )
+    return {};
+  if (mediaVersions(kind)) {
+    const versionIndex =
+      indexAttribute === undefined ? -1 : Number(indexAttribute);
+    return versions[versionIndex]?.src === src &&
+      versions.every((version) => version.sourceIn !== undefined)
+      ? { versions, versionIndex }
+      : {};
   }
-  const parsed = VersionsSchema.safeParse(json);
-  if (!parsed.success) return undefined;
-  // Names are written canonical; a list that parses differently was not written by Cutroom.
-  if (JSON.stringify(parsed.data) !== JSON.stringify(json)) return undefined;
-  return parsed.data.some((version) => version.src === src)
-    ? parsed.data
-    : undefined;
+  return versions.some((version) => version.src === src) ? { versions } : {};
 }
 
-/** A new clip's versions attribute, when it holds versions. */
-export const versionAttributes = (clip: Clip): AttributeChange[] =>
-  clip.versions ? [[VERSIONS_ATTRIBUTE, JSON.stringify(clip.versions)]] : [];
+const stored = (clip: Clip) =>
+  clip.versions
+    ? JSON.stringify(
+        clip.versions.map(({ name, src, sourceIn, sourceFps }) => ({
+          name,
+          src,
+          sourceIn,
+          sourceFps,
+        })),
+      )
+    : null;
+
+/** A new clip's version attributes. */
+export const versionAttributes = (clip: Clip): AttributeChange[] => [
+  ...(clip.versions ? [[VERSIONS_ATTRIBUTE, stored(clip)] as const] : []),
+  ...(clip.versionIndex === undefined
+    ? []
+    : [[VERSION_INDEX_ATTRIBUTE, String(clip.versionIndex)] as const]),
+  ...(clip.versionSilent
+    ? ([
+        [VERSION_SILENT_ATTRIBUTE, ""],
+        ["muted", ""],
+      ] as const)
+    : []),
+];
 
 /** Attribute changes that show `after`'s active version and keep its list. */
 export function versionChanges(
@@ -53,13 +104,27 @@ export function versionChanges(
   attrs: Readonly<Record<string, string>>,
   hosted: (src: string) => HostedComposition,
 ): AttributeChange[] {
-  const list = (clip: Clip) =>
-    clip.versions ? JSON.stringify(clip.versions) : null;
   const changes: AttributeChange[] = [];
-  if (list(before) !== list(after))
-    changes.push([VERSIONS_ATTRIBUTE, list(after)]);
+  const list = stored(after);
+  if (stored(before) !== list) changes.push([VERSIONS_ATTRIBUTE, list]);
+  if (before.versionIndex !== after.versionIndex)
+    changes.push([
+      VERSION_INDEX_ATTRIBUTE,
+      after.versionIndex === undefined ? null : String(after.versionIndex),
+    ]);
+  if (before.versionSilent !== after.versionSilent)
+    changes.push(
+      [
+        VERSION_SILENT_ATTRIBUTE,
+        after.versionSilent ? (attrs.muted === undefined ? "" : "muted") : null,
+      ],
+      ...(attrs[VERSION_SILENT_ATTRIBUTE] === "muted" ||
+      (attrs.muted !== undefined && after.versionSilent)
+        ? []
+        : [["muted", after.versionSilent ? "" : null] as const]),
+    );
   if (before.src === after.src || after.src === null) return changes;
-  if (after.kind === "image") return [...changes, ["src", after.src]];
+  if (after.kind !== "composition") return [...changes, ["src", after.src]];
   const scene = hosted(after.src);
   changes.push(["data-composition-src", after.src]);
   // The bundler finds the scene's root by this id, so a stale one would mount nothing.
@@ -79,7 +144,8 @@ export function rebaseVersions(
   rewrite: (src: string) => string,
 ): string {
   try {
-    const versions = VersionsSchema.parse(JSON.parse(attribute));
+    const versions = storedList(attribute);
+    if (!versions) return attribute;
     return JSON.stringify(
       versions.map((version) => ({ ...version, src: rewrite(version.src) })),
     );
@@ -101,14 +167,17 @@ export async function versionFiles(
   const sources = commands.flatMap((command) => {
     if (command.type === "setVersions")
       return command.versions.map(({ src }) => src);
+    if (command.type === "addVersion")
+      return command.version ? [command.version.src] : [];
     if (command.type !== "setVersion" && command.type !== "keepVersion")
       return [];
     const clip = timeline.clips.find(({ id }) => id === command.clipId);
     // A piece the same batch cuts or pastes is a copy of a clip here, so it holds their files.
     if (!clip)
-      return timeline.clips.flatMap(
-        ({ versions }) => versions?.map(({ src }) => src) ?? [],
+      return timeline.clips.flatMap(({ kind, versions }) =>
+        mediaVersions(kind) ? [] : (versions?.map(({ src }) => src) ?? []),
       );
+    if (mediaVersions(clip.kind)) return [];
     const src = clip.versions?.[command.version ?? activeVersion(clip)]?.src;
     return src === undefined ? [] : [src];
   });
@@ -124,10 +193,9 @@ export async function versionFiles(
         "unsupported",
         `Version "${src}" must be a file in this project, outside hidden folders.`,
       );
-    const found = await projectPath(project, path).then(
-      () => true,
-      () => false,
-    );
+    const found = await projectPath(project, path)
+      .then(async (absolute) => (await stat(absolute)).isFile())
+      .catch(() => false);
     if (!found)
       throw new TimelineError(
         "not_found",

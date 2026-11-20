@@ -15,6 +15,8 @@ const ProbeSchema = z.object({
       z.object({
         codec_type: z.string().optional(),
         width: z.number().optional(),
+        avg_frame_rate: z.string().optional(),
+        r_frame_rate: z.string().optional(),
         height: z.number().optional(),
         pix_fmt: z.string().optional(),
         color_primaries: z.string().optional(),
@@ -32,6 +34,7 @@ interface Probe {
   seconds: number | null;
   /** The file was read and holds no audio stream. */
   silent: boolean;
+  rate?: number;
   footageRefusal?: string;
   colour?: FootageColour;
 }
@@ -51,7 +54,7 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       "error",
       ...localMediaInputOptions,
       "-show_entries",
-      "format=duration:stream=codec_type,width,height,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode",
+      "format=duration:stream=codec_type,avg_frame_rate,r_frame_rate,width,height,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode",
       "-of",
       "json",
       path,
@@ -88,7 +91,14 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   );
   const matrix = FootageColourSchema.shape.matrix.safeParse(video?.color_space);
   const range = video?.color_range;
+  const rate = [video?.avg_frame_rate, video?.r_frame_rate]
+    .map((value) => {
+      const [num, den] = value?.split("/").map(Number) ?? [];
+      return (num ?? 0) / (den ?? 0);
+    })
+    .find((value) => Number.isFinite(value) && value > 0);
   return {
+    rate,
     colour: video && {
       primaries: primaries.data,
       transfer: transfer.data,
@@ -109,6 +119,8 @@ export interface MediaFacts {
   lengths: Map<string, number>;
   /** Every `src` that was read and holds no audio stream. */
   silent: Set<string>;
+  rates: Map<string, number>;
+  files: Set<string>;
   footageRefusals: Map<string, string>;
   footageColours: Map<string, FootageColour>;
 }
@@ -123,6 +135,8 @@ export async function mediaFacts(
   const facts: MediaFacts = {
     lengths: new Map(),
     silent: new Set(),
+    rates: new Map(),
+    files: new Set(),
     footageRefusals: new Map(),
     footageColours: new Map(),
   };
@@ -134,6 +148,7 @@ export async function mediaFacts(
       if (path === null) return;
       const info = await stat(path).catch(() => null);
       if (!info?.isFile()) return;
+      facts.files.add(src);
       const version = fileFingerprint(path, info);
       let cached = probes.get(path);
       if (cached?.version !== version) {
@@ -146,6 +161,7 @@ export async function mediaFacts(
       const result = cached.result;
       if (!result) return;
       if (result.seconds) facts.lengths.set(src, result.seconds);
+      if (result.rate) facts.rates.set(src, result.rate);
       if (result.silent) facts.silent.add(src);
       if (result.colour) facts.footageColours.set(src, result.colour);
       if (result.footageRefusal)
@@ -164,7 +180,7 @@ export function compositionMediaFacts(
   return mediaFacts(
     project,
     composition,
-    mediaSources(html, compositionScope(composition)),
+    mediaSources(html, compositionScope(composition), { versions: true }),
   );
 }
 

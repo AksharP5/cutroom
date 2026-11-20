@@ -721,6 +721,7 @@ function isPicture(
 function isSound(clip: Clip, media: ClipMedia | undefined): media is FileMedia {
   return (
     isAudioKind(clip.kind) &&
+    !clip.versionSilent &&
     media?.kind === "file" &&
     media.facts.audio !== null
   );
