@@ -139,7 +139,7 @@ The footage pipeline now shares the demuxed index and up to 12 MiB of compressed
 
 The 60 fps layered chart check selected the correct source frame in all 12 positions. Using the source matrix in preview and export cut its mean RGB error from 9.35 to 2.46 levels out of 255. The graded swatches and luma ramp measured 0.75 and 0.67 levels on average, both with a maximum error of 2. A 12-frame MP4 around the cut at 1:03 of the full authored benchmark, with the title and scene visible, averaged 2.14 levels before and after the colour fix. The largest per-channel error was 166 and the worst frame's 99th-percentile error was 24.
 
-The composed benchmark exceeded the grading-only colour bound, and GPU playback used more browser memory after repeated edits on the graded fixture. The [desktop measurements](#desktop-playback) cover playback holds and memory in Electron. Sources above the 1080p pixel budget, HDR and alpha stay in HyperFrames. Unproven root scripts, authored styles or adjustment effects can still require native compositing. A title or native clip below GPU footage uses HyperFrames for the overlap, with the pipeline resuming after it.
+The composed benchmark exceeded the grading-only colour bound, and GPU playback used more browser memory after repeated edits on the graded fixture. The [desktop measurements](#desktop-playback) cover playback holds and memory in Electron. The GPU path's decoded playback track must fit the 1080p pixel budget. HDR and alpha stay in HyperFrames. Unproven root scripts, authored styles or adjustment effects can still require native compositing. A title or native clip below GPU footage uses HyperFrames for the overlap, with the pipeline resuming after it.
 
 #### Desktop playback
 
@@ -307,7 +307,7 @@ The 4K HEVC candidate drew from the finished 1920 × 1080 editing proxy. In the 
 
 The 1080p HEVC fixture reached 52.1–56.8 pictures/s across three GPU runs, with a 1.75-second hold in the warmed run. The native on-demand runs showed 18.2 and 35.5 pictures/s. Their machine load was higher than in the corresponding GPU runs. The warmed native control failed the capture checks.
 
-Keep the current pixel budget. The tests show that allowing 4K clips can reduce cadence sharply, including a 4K HEVC source decoded from a 1080p proxy. Evaluate any proxy-specific exception with repeated sustained playback and matched machine load. The HEVC footage here was synthetic.
+Oversized raw footage stayed native after these tests. Later runs checked [finished HEVC editing proxies](#hevc-playback-proxy-size) at their actual track size. The HEVC footage here was synthetic.
 
 To reproduce, use the [desktop setup above](#desktop-playback) to build the screen helper. Give each fixture its own benchmark directory and a `screen` link to the helper. Generate a 4K fixture with the fifth argument to `makeProject` set to `"h264-30"`, `"h264-60"` or `"hevc-60"`. The HEVC fixture uses NVENC. For the 1080p HEVC comparison, copy the HEVC project and replace its `footage.mkv` with a 1920 × 1080 Main-profile version at 60 fps, encoded with `hevc_nvenc -preset p4 -g 252 -bf 2 -b:v 12M`.
 
@@ -991,7 +991,7 @@ Chromium 155 and Electron 45 on Linux decode no HEVC, in `<video>` or WebCodecs,
 
 Before the fixes measured here, rotated phone video drew sideways (mean difference 121 to 218), HDR in a MOV and HDR named only in the bitstream drew untone-mapped (bias 26 and 18), Android's full-range EBU footage drew 8/255 too little blue, a delayed edit list drew the wrong frames, and Resolve's MOVs, which write negative composition offsets in a version 0 `ctts`, showed the previous frame for one in two or three frames, then stalled on the open GOP's B-frames once their times were read right. 4K60 played at 2.3 pictures a second: low-latency decoding ran at 94 fps there against 166 with frame threading, and the two lanes fell behind each other. On the 400-clip timeline, frame threading measured the same as low latency (29.6 pictures a second, steps 31 / 54-104 ms against 29-31 / 105-107 ms, W 39 ms, undo 96-102 against 100-165 ms).
 
-In that comparison the 4K60 decoders produced about four frames for each one drawn. Cutroom now leaves sources above the 1080p pixel budget with HyperFrames, clip by clip. At an x264 open GOP's leading B-frames, a seeking `<video>` shows the keyframe after them and the pipeline shows the frame the file's timestamps name, as the export does; the e2e test checks those frames by number.
+In that comparison the 4K60 decoders produced about four frames for each one drawn. Cutroom leaves playback tracks above the 1080p pixel budget with HyperFrames, clip by clip. At an x264 open GOP's leading B-frames, a seeking `<video>` shows the keyframe after them and the pipeline shows the frame the file's timestamps name, as the export does; the e2e test checks those frames by number.
 
 ### Linux hardware decoding in Electron
 
@@ -1043,6 +1043,20 @@ Before and after, on a fresh project of one 10 s HEVC 1080p30 clip, headed in Ch
 A minute of 4K 10-bit HEVC shows "Preparing footage" 1.7 s after opening and its picture after 17 s. Before one editing proxy could run beside a filmstrip, the same clip waited 28 s for its filmstrip first.
 
 On one of the owner's OBS recordings (HEVC Main, 1080p60, 17.4 minutes, in Matroska, checked locally and deleted), NVENC made the proxy in 93 s (5.4 s a minute, 25 MB a minute) and libx264 in 140 s (19 MB a minute). All 62,509 frame times matched the recording's, and sampled frames differed from it by 0.2/255 on average. In the editor the clip played 86 pictures in 3 s through the pipeline, with 30 ms steps.
+
+### HEVC playback proxy size
+
+An SDR HEVC recording can use GPU footage playback when its finished editing proxy fits the pipeline's 2,073,600-pixel budget. The pipeline reads the actual dimensions from the MP4 track before configuring WebCodecs. Pending proxies can still play from pieces in HyperFrames, and raw 4K H.264 continues to play there.
+
+On November 20, 2026, Electron 45.2.3 played 30 seconds of a 3840 × 2160, 60 fps composition on a 60 Hz Wayland display. The synthetic source was 4K60 HEVC. The edit had 30 graded cuts and chapter titles. The pipeline server plan classified 0 video clips as drawable before the size change and 30 after. DevTools recorded a 1920 × 1080 H.264 decoder configuration in the running editor after the change. The display capture read the source's burned-in frame numbers.
+
+| Playback path                                 | Pictures/s observed on screen | Gaps over 25 ms | Longest gap | Potentially missed capture refreshes |
+| --------------------------------------------- | ----------------------------: | --------------: | ----------: | -----------------------------------: |
+| Native, warmed media and renderer             |                          58.0 |              54 |       67 ms |                                    1 |
+| GPU, warmed media and renderer                |                          59.6 |               9 |       67 ms |                                   11 |
+| GPU, fresh profile, ancillary media on demand |                          58.9 |              23 |      167 ms |                                   14 |
+
+The one-minute machine load at the end of playback was 9.3 native, 8.8 for the warmed GPU run and 12.4 for the on-demand run. The editing proxy was finished for every pass. Warmed media also included the filmstrip and scrub proxy. The capture can miss a refresh, which lowers the observed picture rate and can add a gap. Compositor feedback showed 59.7 and 58.2 picture updates/s for the warmed and on-demand GPU passes. The earlier 14.1-second hold did not recur. The separate decoder scheduling test reproduced a shorter hold while the clock advanced and reduced it from 967 ms to 33 ms. [Decoder scheduling measurements](https://github.com/AksharP5/cutroom/pull/361)
 
 ### Long recordings, piece by piece
 
