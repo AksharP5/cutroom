@@ -108,9 +108,9 @@ export async function makeProject(
         ]
       : []),
     "-b:v",
-    desktop === "4k" ? (frameRate === 60 ? "40M" : "32M") : "8M",
+    hevc ? "12M" : desktop === "4k" ? (frameRate === 60 ? "40M" : "32M") : "8M",
     "-g",
-    String(frameRate),
+    String(hevc ? 252 : frameRate),
     ...(hevc ? [] : ["-movflags", "+faststart"]),
     "-y",
     join(directory, footage),
