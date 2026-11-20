@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { getHyperframeRuntimeScript } from "@hyperframes/core/runtime-script";
 import { z } from "zod";
+import { rampRuntime } from "./rampRuntime";
 
 let script: string | undefined;
 
@@ -18,7 +19,7 @@ export function previewRuntimeScript() {
       ),
     ),
   );
-  const source = getHyperframeRuntimeScript();
+  const source = rampRuntime(getHyperframeRuntimeScript());
   const before = "a&&O.length===0&&c.some($=>$.param===a.param)&&QW(a,C)";
   // Live preview seeds a lane at the playhead, then ramps each straight segment to its end. A
   // Web Audio ramp starts at the previous event, so a first point after the playhead was ramped
@@ -33,6 +34,8 @@ export function previewRuntimeScript() {
     "let o={...e.declaredVariableDefaults??(We(t)?ma(t):{}),...IS(e.host)};";
   const fetchedTemplate =
     '(s?A.querySelector(`template#${CSS.escape(s)}-template`):null)??A.querySelector("template")';
+  const clipWindow =
+    "window.__hf.clipWindow=u=>Zi(u,{timelineRegistry:window.__timelines??{},resolver:de(!0)})";
   if (
     source.split(mountDefaults).length !== 2 ||
     source.split(fetchedTemplate).length !== 2
@@ -71,7 +74,17 @@ export function previewRuntimeScript() {
       throw new Error(
         "Cutroom's colour preview adapter no longer matches HyperFrames 0.9.26.",
       );
+  if (source.split(clipWindow).length !== 2)
+    throw new Error(
+      "Cutroom's ramp seek adapter no longer matches HyperFrames 0.9.26.",
+    );
   script = source
+    // A paused ramp may cross a source frame while moving less than the runtime's seek tolerance.
+    // Read the target from its resolved clip, including the origin of a trimmed scene mount.
+    .replace(
+      clipWindow,
+      `${clipWindow},window.__hf.cutroomRampTime=(u,p)=>{const h=yd(p).find(({el})=>el===u);return h&&!h.loop&&typeof h.rate==="object"?yt(h,p):null}`,
+    )
     // A standalone preview fetches its children. Use the same template and default order as the compiler.
     .replace(fetchedTemplate, 'A.querySelector("template")')
     .replace(

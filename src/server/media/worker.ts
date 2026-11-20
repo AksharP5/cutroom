@@ -223,17 +223,15 @@ try {
     if (!task.ramp) throw new Error("A ramp job needs its source window.");
     const { parseAutomation, RATE_TARGET } =
       await import("@hyperframes/core/audio-automation");
-    const { prepareLocalRamp } = await import("../hyperframes/rampSource");
+    const { prepareLocalRampRun } = await import("../hyperframes/rampSource");
     const lane = parseAutomation(task.ramp.rate).lanes.find(
       (lane) => lane.target === RATE_TARGET,
     );
     if (!lane?.points.length) throw new Error("A ramp job needs a rate lane.");
-    const result = await prepareLocalRamp(
+    const result = await prepareLocalRampRun(
       task.source,
       join(task.directory, "ramp.wav"),
-      task.ramp.start,
-      task.ramp.duration,
-      lane,
+      { ...task.ramp, rate: lane },
       abort.signal,
     );
     if (!result?.success)

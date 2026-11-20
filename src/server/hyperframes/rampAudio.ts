@@ -1,12 +1,14 @@
-import { mkdtemp, open, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, open, rm } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { sourceTimeAt } from "@hyperframes/core";
 import type { RateSpec } from "@hyperframes/core";
 import { MAX_PLAYBACK_RATE } from "@hyperframes/parsers/media-duration";
+import { AUDIO_SAMPLE_RATE } from "../../shared/timeline/rampWindow.ts";
+import type { RampPlayback } from "../../shared/timeline/rampWindow.ts";
 
-const SAMPLE_RATE = 48_000;
+const SAMPLE_RATE = AUDIO_SAMPLE_RATE;
 const CHANNELS = 2;
 const FRAME_BYTES = CHANNELS * 2;
 const BLOCK = SAMPLE_RATE * 0.03;
@@ -76,6 +78,8 @@ async function stretchAudio(
   destination: string,
   lane: RateLane,
   frames: number,
+  cropStart: number,
+  cropEnd: number,
   signal?: AbortSignal,
 ) {
   const createStretch =
@@ -122,7 +126,7 @@ async function stretchAudio(
     const pcm = await pcmData(reader);
     const writer = await open(destination, "w");
     try {
-      await writer.writeFile(wavHeader(frames));
+      await writer.writeFile(wavHeader(cropEnd - cropStart));
       const feed = async (start: number, count: number) => {
         signal?.throwIfAborted();
         const position = start * FRAME_BYTES;
@@ -143,13 +147,11 @@ async function stretchAudio(
         }
       };
       const collect = async (offset: number, count: number) => {
-        // Drop the processor's startup samples. The flush supplies the matching tail.
+        // Align the output after startup latency, then keep only the requested window.
+        const from = Math.max(0, cropStart + outputLatency - offset);
+        const to = Math.min(count, cropEnd + outputLatency - offset);
         let bytes = 0;
-        for (
-          let index = Math.max(0, outputLatency - offset);
-          index < count;
-          index++
-        ) {
+        for (let index = from; index < to; index++) {
           output.writeInt16LE(
             Math.round(
               Math.max(-1, Math.min(32767 / 32768, leftOut[index]!)) * 32768,
@@ -170,7 +172,11 @@ async function stretchAudio(
       const first = Math.min(INTERVAL, frames);
       await feed(0, inputLatency);
       stretch._seek(inputLatency, sourceFrame(first) / first);
-      for (let from = 0; from < frames; from += INTERVAL) {
+      for (
+        let from = 0;
+        from < Math.min(frames, cropEnd + outputLatency);
+        from += INTERVAL
+      ) {
         const to = Math.min(frames, from + INTERVAL);
         const sourceFrom = sourceFrame(from);
         const sourceFrames = sourceFrame(to) - sourceFrom;
@@ -179,8 +185,10 @@ async function stretchAudio(
         await collect(from, to - from);
       }
       signal?.throwIfAborted();
-      stretch._flush(outputLatency);
-      await collect(frames, outputLatency);
+      if (cropEnd + outputLatency > frames) {
+        stretch._flush(outputLatency);
+        await collect(frames, outputLatency);
+      }
     } finally {
       await writer.close();
     }
@@ -189,31 +197,81 @@ async function stretchAudio(
   }
 }
 
-/** Decode on HyperFrames' source clock, then stretch once before its clip and bus effects. */
-export async function prepareRampAudio<
+/** Decode and stretch a full run, preserving its initial analysis and end latency. */
+export async function prepareRampRun<
   Result extends { success: boolean; outputPath: string },
 >(
   destination: string,
-  duration: number,
-  lane: RateLane,
-  decode: (path: string, seconds: number) => Promise<Result>,
+  run: RampPlayback["run"],
+  decode: (
+    path: string,
+    sourceStart: number,
+    seconds: number,
+  ) => Promise<Result>,
   signal?: AbortSignal,
 ): Promise<Result | undefined> {
-  const frames = Math.round(duration * SAMPLE_RATE);
+  const { rate, frames, mediaStart } = run;
   const sourceFrames = Math.round(
-    sourceTimeAt(lane, frames / SAMPLE_RATE) * SAMPLE_RATE,
+    sourceTimeAt(rate, frames / SAMPLE_RATE) * SAMPLE_RATE,
   );
-  if (frames < 1 || frames > MAX_WAV_FRAMES || sourceFrames > MAX_WAV_FRAMES)
+  if (frames <= 0 || frames > MAX_WAV_FRAMES || sourceFrames > MAX_WAV_FRAMES)
     return;
   signal?.throwIfAborted();
   const directory = await mkdtemp(join(dirname(destination), ".audio-ramp-"));
   try {
     const source = join(directory, "source.wav");
-    const result = await decode(source, sourceFrames / SAMPLE_RATE);
+    const result = await decode(source, mediaStart, sourceFrames / SAMPLE_RATE);
     if (result.success)
-      await stretchAudio(source, destination, lane, frames, signal);
+      await stretchAudio(source, destination, rate, frames, 0, frames, signal);
     return { ...result, outputPath: destination };
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/** Write the kept samples, already on the original run's PCM grid. */
+export async function writeRampSlice(
+  source: string,
+  destination: string,
+  from: number,
+  to: number,
+  signal?: AbortSignal,
+) {
+  const reader = await open(source, "r");
+  try {
+    const pcm = await pcmData(reader);
+    const frames = pcm.bytes / FRAME_BYTES;
+    if (from < 0 || from >= to || to > frames)
+      throw new Error("The ramp audio slice is outside the prepared run.");
+    if (from === 0 && to === frames) {
+      await copyFile(source, destination);
+      return;
+    }
+    const writer = await open(destination, "w");
+    try {
+      await writer.writeFile(wavHeader(to - from));
+      const buffer = Buffer.alloc(1024 * 1024);
+      let offset = from * FRAME_BYTES;
+      const end = to * FRAME_BYTES;
+      while (offset < end) {
+        signal?.throwIfAborted();
+        const { bytesRead } = await reader.read(
+          buffer,
+          0,
+          Math.min(buffer.length, end - offset),
+          pcm.offset + offset,
+        );
+        if (!bytesRead)
+          throw new Error(
+            "The prepared ramp audio ended inside its sample range.",
+          );
+        await writer.writeFile(buffer.subarray(0, bytesRead));
+        offset += bytesRead;
+      }
+    } finally {
+      await writer.close();
+    }
+  } finally {
+    await reader.close();
   }
 }

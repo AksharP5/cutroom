@@ -8,7 +8,13 @@ import type { JobState } from "../../shared/jobs";
 import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
 import { FilmstripSchema, MediaInfoSchema, PiecesSchema } from "./protocol";
-import type { MediaKind, MediaTask, Pieces, RampWindow } from "./protocol";
+import type {
+  MediaKind,
+  MediaTask,
+  Pieces,
+  RampSlice,
+  RampWindow,
+} from "./protocol";
 import {
   fragmentsStart,
   pieceAt,
@@ -97,7 +103,7 @@ const recipe = {
   scrub: "media-v7",
   proxy: "media-v8",
   pieces: "media-v12",
-  ramp: "ramp-v1",
+  ramp: "ramp-v2",
 } satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
 /**
@@ -654,18 +660,64 @@ export function createMediaService(
     pump();
     return { key, pieces, state: machine.state, job };
   };
+  const rampSlices = new Map<string, Promise<boolean>>();
   return {
     request,
-    async rampAudio(project: Project, path: string, window: RampWindow) {
-      const result = await request(project, path, "ramp", 0, window);
-      return {
-        key: result.key,
-        available: Boolean(result.artifact),
-        pending:
-          result.state.status === "queued" || result.state.status === "running"
-            ? result.job?.ready?.promise
-            : undefined,
-      };
+    async rampAudio(project: Project, path: string, window: RampSlice) {
+      const result = await request(project, path, "ramp", 0, window.run);
+      const pending =
+        result.state.status === "queued" || result.state.status === "running"
+          ? result.job?.ready?.promise
+          : undefined;
+      if (window.from === 0 && window.to === window.run.frames)
+        return {
+          key: result.key,
+          available: Boolean(result.artifact),
+          pending,
+        };
+      const key = createHash("sha256")
+        .update(JSON.stringify([result.key, window.from, window.to]))
+        .digest("hex");
+      const cache = await projectPath(project, ".cutroom/cache");
+      const directory = join(cache, key);
+      const artifact = join(directory, artifacts.ramp);
+      if (await Bun.file(artifact).exists()) return { key, available: true };
+      if (!result.artifact && !pending) return { key, available: false };
+      let slice = rampSlices.get(directory);
+      if (!slice) {
+        slice = (async () => {
+          const ready = Boolean(result.artifact) || (await pending);
+          if (!ready || closing) return false;
+          const { writeRampSlice } = await import("../hyperframes/rampAudio");
+          const original = await projectPath(
+            project,
+            `.cutroom/cache/${result.key}/${artifacts.ramp}`,
+          );
+          const temp = await mkdtemp(join(cache, ".ramp-slice-"));
+          try {
+            await writeRampSlice(
+              original,
+              join(temp, artifacts.ramp),
+              window.from,
+              window.to,
+            );
+            await rename(temp, directory);
+            await trimCache(cache, directory);
+          } finally {
+            await removeDirectory(temp);
+          }
+          return true;
+        })()
+          .catch((error: unknown) => {
+            console.warn("Could not prepare ramp preview slice:", error);
+            return false;
+          })
+          .finally(() => rampSlices.delete(directory));
+        rampSlices.set(directory, slice);
+      }
+      return result.artifact
+        ? { key, available: await slice }
+        : { key, available: false, pending: slice };
     },
     rampArtifact(project: Project, key: string) {
       return projectPath(project, `.cutroom/cache/${key}/${artifacts.ramp}`);
@@ -830,7 +882,7 @@ export function createMediaService(
           );
         retire(job.work.directory, 0);
       }
-      await Promise.all([...running.values()]);
+      await Promise.all([...running.values(), ...rampSlices.values()]);
       await Promise.all(
         [...retiring].map(([directory, timer]) => {
           clearTimeout(timer);

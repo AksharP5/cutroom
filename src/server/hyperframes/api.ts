@@ -1148,9 +1148,14 @@ export function createHyperframesApi(
       headers.set("Referrer-Policy", "no-referrer");
     };
     if (path === "frames") {
+      const rawPage = url.searchParams.get("page");
+      const page = rawPage === null ? undefined : Number(rawPage);
+      if (page !== undefined && (!Number.isSafeInteger(page) || page < 0))
+        return c.json({ error: "Choose a native frame page." }, 400);
       const response = await framesOf(
         await store.get(projectId),
         url.searchParams.get("path") ?? undefined,
+        page,
       ).then(
         (grid) =>
           Response.json(grid, { headers: { "cache-control": "no-store" } }),

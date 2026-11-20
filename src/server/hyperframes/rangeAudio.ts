@@ -1,14 +1,18 @@
 import { copyFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { runFfmpeg } from "@hyperframes/engine";
-import type { AudioElement } from "@hyperframes/engine";
+import type { TimedAudio } from "./audioClock.ts";
 import type { ExportOptions } from "../../shared/export.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
+import {
+  AUDIO_SAMPLE_RATE,
+  audioSampleAt,
+  audioSamples,
+  resolveAudioTiming,
+} from "./audioClock.ts";
 
 type Frames = NonNullable<ExportOptions["range"]>;
 
-/** Every prepared track and mix the HyperFrames mixer writes is 48 kHz. */
-const SAMPLE_RATE = 48000;
 /** Mixed on each side of the range, so the delivery true-peak limiter (3 ms
  * look-ahead, 80 ms release) sees the same neighbourhood as in the full mix. */
 const CONTEXT_SECONDS = 1;
@@ -17,7 +21,7 @@ type RangeMix = {
   /** Composition time the mix starts at. */
   startSeconds: number;
   durationSeconds: number;
-  audios: AudioElement[];
+  audios: TimedAudio[];
 };
 
 /**
@@ -26,13 +30,13 @@ type RangeMix = {
  * Clips heard within a second of the range are kept whole and moved earlier by
  * the same whole number of seconds. The mixer prepares each clip from its own
  * start (source offset, loop, rate, fades, gain automation and FX all read clip
- * time), places it at its start in whole milliseconds, and sums tracks in
+ * time), places it at its start in samples, and sums tracks in
  * authored order. Every other clip is silence at these samples, so the window
  * holds the full mix's samples. A master or group bus effect and group
  * automation run on the whole composition's clock; those mix in full.
  */
 export function rangeMix(input: {
-  audios: AudioElement[];
+  audios: TimedAudio[];
   masterFxChain?: string;
   durationSeconds: number;
   startSeconds: number;
@@ -60,36 +64,35 @@ export function rangeMix(input: {
       audio.start < to &&
       (audio.fxChain || audio.end <= audio.start || audio.end > from),
   );
-  // Whole seconds subtract exactly from every later time. The mixer rounds a
-  // clip's start to milliseconds, and float error can round a half
-  // millisecond (an NTSC frame boundary) differently after the shift.
-  const placed = (seconds: number) => Math.round(seconds * 1000);
-  let shift = Math.max(
+  const shift = Math.max(
     0,
     Math.floor(Math.min(from, ...heard.map((audio) => audio.start))),
   );
-  while (
-    shift > 0 &&
-    heard.some(
-      (audio) =>
-        placed(audio.start - shift) !== placed(audio.start) - shift * 1000,
-    )
-  )
-    shift -= 1;
+  const shiftSamples = shift * AUDIO_SAMPLE_RATE;
   return {
     startSeconds: shift,
     durationSeconds: to - shift,
-    audios: heard.map((audio) => ({
-      ...audio,
-      start: audio.start - shift,
-      end: audio.end - shift,
-      ...(audio.volumeKeyframes && {
-        volumeKeyframes: audio.volumeKeyframes.map((keyframe) => ({
-          ...keyframe,
-          time: keyframe.time - shift,
-        })),
-      }),
-    })),
+    audios: heard.map((input) => {
+      const audio = resolveAudioTiming(input);
+      const samples = audio.end > audio.start ? audioSamples(audio) : null;
+      return {
+        ...audio,
+        start: audio.start - shift,
+        end: audio.end - shift,
+        ...(samples && {
+          samples: {
+            start: samples.start - shiftSamples,
+            end: samples.end - shiftSamples,
+          },
+        }),
+        ...(audio.volumeKeyframes && {
+          volumeKeyframes: audio.volumeKeyframes.map((keyframe) => ({
+            ...keyframe,
+            time: keyframe.time - shift,
+          })),
+        }),
+      };
+    }),
   };
 }
 
@@ -102,7 +105,7 @@ export async function mixRangeAudio<
   Result extends { deliverySourcePath?: string },
 >(
   plan: {
-    composition: { audios: AudioElement[]; masterFxChain?: string };
+    composition: { audios: TimedAudio[]; masterFxChain?: string };
     totalFrames: number;
     workDir: string;
   },
@@ -110,7 +113,7 @@ export async function mixRangeAudio<
   run: (stage: {
     totalFrames: number;
     fps: Fps;
-    audios: AudioElement[];
+    audios: TimedAudio[];
     keepDeliverySource: true;
   }) => Promise<Result>,
 ) {
@@ -164,8 +167,8 @@ export async function alignRangeAudio(input: {
   }
   const { num, den } = input.fps;
   const sample = (frame: number) =>
-    Math.round((frame * den * SAMPLE_RATE) / num) -
-    (planned?.startSeconds ?? 0) * SAMPLE_RATE;
+    audioSampleAt((frame * den) / num) -
+    (planned?.startSeconds ?? 0) * AUDIO_SAMPLE_RATE;
   const webm = input.outputPath.toLowerCase().endsWith(".webm");
   const first = sample(input.frames.start);
   const end = sample(input.frames.end);
@@ -176,7 +179,7 @@ export async function alignRangeAudio(input: {
       // No clip is heard in the range, though the full mix has audio there.
       ...(source
         ? ["-i", source]
-        : ["-f", "lavfi", "-i", `anullsrc=r=${SAMPLE_RATE}:cl=stereo`]),
+        : ["-f", "lavfi", "-i", `anullsrc=r=${AUDIO_SAMPLE_RATE}:cl=stereo`]),
       "-map",
       "0:v:0",
       "-map",

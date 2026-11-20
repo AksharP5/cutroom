@@ -2,22 +2,28 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  parseAudioElements,
-  processCompositionAudio,
-} from "@hyperframes/engine";
+import { parseAudioElements } from "@hyperframes/engine";
 import type { AudioElement } from "@hyperframes/engine";
 import { rangeMix } from "../src/server/hyperframes/rangeAudio";
 import type { Fps } from "../src/shared/timeline/schema";
 
+import { applyAll } from "../src/shared/timeline/apply";
+import type { ClipOrigin } from "../src/shared/timeline/apply";
+import {
+  CommandSchema,
+  emptyTimelineSettings,
+} from "../src/shared/timeline/schema";
+import type { CommandInput } from "../src/shared/timeline/schema";
+import {
+  parseComposition,
+  patchComposition,
+} from "../src/server/timeline/composition";
+import { countingIds } from "./clip-ids";
 const ntsc = { num: 30000, den: 1001 };
 const seconds = (frame: number, fps: Fps = ntsc) =>
   Number(((frame * fps.den) / fps.num).toFixed(6));
 
-// A 20 second timeline shaped like a Cutroom edit. The A-roll cut (frame 315)
-// and the loop (frame 285) start half a millisecond off the mixer's
-// millisecond grid at 29.97. Moved 2 s earlier, the loop's start rounds to the
-// other millisecond.
+// A 20 second timeline with an NTSC cut, fractional starts, and an authored bus.
 const composition = `<main data-composition-id="main" data-duration="20" data-fps="30000/1001">
 <hf-audio-group id="track-2" data-cutroom-track="2" data-volume="0.5"></hf-audio-group>
 <video id="a1" class="clip" src="aroll.mp4" data-has-audio="true" data-start="${seconds(225)}" data-duration="${seconds(90)}" data-media-start="0.3" data-fade-out="0.4"></video>
@@ -63,17 +69,28 @@ async function mixed(
   duration: number,
 ) {
   const pcm = join(dir, `${name}.wav`);
-  const result = await processCompositionAudio(
-    audios,
-    dir,
-    join(dir, `${name}-work`),
-    join(dir, `${name}.m4a`),
-    duration,
-    undefined,
-    { keepEncoderInputAt: pcm },
+  const worker = Bun.spawn(
+    [
+      "node",
+      "--input-type=module",
+      "-e",
+      `import { registerRenderIsolation } from ${JSON.stringify(import.meta.resolve("../src/server/hyperframes/renderIsolation.ts"))};
+     import { join } from "node:path";
+     registerRenderIsolation();
+     const { processCompositionAudio } = await import("@hyperframes/engine");
+     const [dir, name, pcm, duration, audios] = JSON.parse(process.argv[1]);
+     const result = await processCompositionAudio(audios, dir, join(dir, name + "-work"),
+       join(dir, name + ".m4a"), duration, undefined, { keepEncoderInputAt: pcm });
+     if (!result.success || result.failures?.length) throw new Error(JSON.stringify(result));`,
+      JSON.stringify([dir, name, pcm, duration, audios]),
+    ],
+    { stderr: "pipe", stdout: "ignore" },
   );
-  expect(result.error).toBeUndefined();
-  expect(result.success).toBe(true);
+  const [error, exit] = await Promise.all([
+    new Response(worker.stderr).text(),
+    worker.exited,
+  ]);
+  expect(exit, error).toBe(0);
   const bytes = await readFile(pcm);
   const data = bytes.indexOf("data", 12);
   const size = bytes.readUInt32LE(data + 4);
@@ -99,8 +116,8 @@ test("a range's mix covers only what is heard there, whole seconds earlier", () 
     "a1-audio",
     "a2-audio",
   ]);
-  expect(mix.startSeconds).toBe(1);
-  expect(mix.durationSeconds).toBeCloseTo(seconds(360) + 1 - 1, 9);
+  expect(mix.startSeconds).toBe(2);
+  expect(mix.durationSeconds).toBeCloseTo(seconds(360) + 1 - 2, 9);
 
   const quiet = rangeMix({
     audios: elements(),
@@ -111,6 +128,57 @@ test("a range's mix covers only what is heard there, whole seconds earlier", () 
   expect(quiet.audios).toEqual([]);
   expect(quiet.startSeconds).toBe(14);
 });
+
+test.skipIf(!Bun.which("ffmpeg"))(
+  "a mixer cut at a fractional frame boundary places adjacent clips on adjacent samples",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sample-grid-"));
+    try {
+      await ffmpeg([
+        "-f",
+        "lavfi",
+        "-i",
+        "aevalsrc=0.08+0.03*sin(2*PI*439*t)|0.1+0.03*sin(2*PI*631*t):s=48000:d=5",
+        "-c:a",
+        "pcm_s16le",
+        join(dir, "tone.wav"),
+      ]);
+      const start = seconds(2);
+      const end = seconds(120);
+      const group =
+        '<hf-audio-group id="bus" data-volume="0.5"></hf-audio-group>';
+      const tag = (id: string, from: number, to: number, mediaStart = 0) =>
+        `<audio id="${id}" src="tone.wav" data-audio-group="bus" data-start="${from}" data-end="${to}" data-media-start="${mediaStart}"></audio>`;
+      const whole = await mixed(
+        dir,
+        "whole",
+        parseAudioElements(group + tag("whole", start, end)),
+        end,
+      );
+      for (const frame of [61, 62]) {
+        const cut = seconds(frame);
+        const mediaStart =
+          (Math.round(cut * 48000) - Math.round(start * 48000)) / 48000;
+        const split = await mixed(
+          dir,
+          `split-${frame}`,
+          parseAudioElements(
+            group +
+              tag("left", start, cut) +
+              tag("right", cut, end, mediaStart),
+          ),
+          end,
+        );
+        expect(
+          Buffer.from(split.buffer).equals(Buffer.from(whole.buffer)),
+        ).toBe(true);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+  30_000,
+);
 
 test("bus effects and group automation read the whole timeline, so they mix in full", () => {
   const audios = elements();
@@ -208,4 +276,88 @@ test.skipIf(!Bun.which("ffmpeg"))(
     }
   },
   60_000,
+);
+
+test.skipIf(!Bun.which("ffmpeg"))(
+  "saved half-sample ramp cuts keep the same PCM through the full and marked mixer",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ramp-absolute-audio-"));
+    const audio = (fps: Fps, start: number, duration: number) =>
+      `<main data-composition-id="main" data-duration="12" data-fps="${fps.num}/${fps.den}">
+      <audio id="ramp" src="tone.wav" data-start="${start}" data-duration="${duration}" data-media-start="0.5"
+        data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":0.25,"curve":1},{"t":6,"v":4}]}]}'></audio></main>`;
+    const edit = (html: string, input: CommandInput) => {
+      const parsed = parseComposition(html, emptyTimelineSettings());
+      const origins = new Map<string, ClipOrigin>();
+      const changed = applyAll(parsed.timeline, [CommandSchema.parse(input)], {
+        newId: countingIds,
+        onCreate: (id, origin) => origins.set(id, origin),
+      });
+      return patchComposition(parsed, changed, origins);
+    };
+    try {
+      await ffmpeg([
+        "-f",
+        "lavfi",
+        "-i",
+        "aevalsrc=0.12*sin(2*PI*440*t)|0.12*sin(2*PI*331*t)+0.12*sin(2*PI*2273*t):s=48000:d=12",
+        "-c:a",
+        "pcm_s16le",
+        join(dir, "tone.wav"),
+      ]);
+      const bytes = (sum: Float32Array) => Buffer.from(sum.buffer);
+      for (const fps of [ntsc, { num: 24000, den: 1001 }]) {
+        const original = audio(fps, 600.5 / 48000, 6);
+        const split = edit(original, {
+          type: "split",
+          clipIds: ["ramp"],
+          at: 62,
+        });
+        const full = await mixed(
+          dir,
+          `before-${fps.num}`,
+          parseAudioElements(original),
+          12,
+        );
+        const kept = await mixed(
+          dir,
+          `split-${fps.num}`,
+          parseAudioElements(split),
+          12,
+        );
+        expect(bytes(kept).equals(bytes(full))).toBe(true);
+      }
+      const html = audio(ntsc, 5.01253125, 6);
+      const audios = parseAudioElements(
+        edit(html, { type: "trim", clipId: "ramp", edge: "start", to: 213 }),
+      );
+      const full = await mixed(dir, "whole", audios, 12);
+      const startSeconds = (228 * 1001) / 30000;
+      const endSeconds = (243 * 1001) / 30000;
+      const window = rangeMix({
+        audios,
+        durationSeconds: 12,
+        startSeconds,
+        endSeconds,
+      });
+      expect(window.startSeconds).toBeGreaterThan(0);
+      const marked = await mixed(
+        dir,
+        "marked",
+        window.audios,
+        window.durationSeconds,
+      );
+      const left = Math.round(startSeconds * 48000);
+      const right = Math.round(endSeconds * 48000);
+      const shift = window.startSeconds * 48000;
+      expect(
+        bytes(marked)
+          .subarray((left - shift) * 8, (right - shift) * 8)
+          .equals(bytes(full).subarray(left * 8, right * 8)),
+      ).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+  45_000,
 );

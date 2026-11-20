@@ -13,11 +13,18 @@ export const MediaKindSchema = z.enum([
 ]);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
 export const RampWindowSchema = z.object({
-  start: z.number().finite().nonnegative(),
-  duration: z.number().finite().positive(),
+  mediaStart: z.number().finite().nonnegative(),
+  frames: z.number().int().positive(),
+  phase: z.number().finite(),
   rate: z.string(),
 });
 export type RampWindow = z.infer<typeof RampWindowSchema>;
+export type RampSlice = {
+  run: RampWindow;
+  from: number;
+  to: number;
+  duration: number;
+};
 export const MediaInfoSchema = z.object({
   channels: z.number().int().positive().optional(),
   video: z

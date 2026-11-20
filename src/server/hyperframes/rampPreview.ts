@@ -4,7 +4,6 @@ import type { DefaultTreeAdapterTypes } from "parse5";
 import { transform } from "lightningcss";
 import type { Selector } from "lightningcss";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
-import { hostInPointSeconds } from "@hyperframes/core/media-timing";
 import {
   AudioAutomationError,
   parseAutomation,
@@ -19,11 +18,18 @@ import { HttpError } from "../../shared/errors";
 import { mediaKind } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
-import type { RampWindow } from "../media/protocol";
+import type { RampSlice } from "../media/protocol";
+import { resolveRampPlayback } from "../../shared/timeline/rampWindow";
+import {
+  compositionOriginSeconds,
+  MEDIA_START_BASIS_ATTR,
+  readMediaStartBasis,
+  resolveAbsoluteMediaStartSeconds,
+} from "@hyperframes/core/media-timing";
 import type { MediaService } from "../media/service";
 
 type Edit = { from: number; to: number; text: string };
-type RampAsset = { path: string; window: RampWindow };
+type RampAsset = { path: string; window: RampSlice };
 const companionAttrs = [
   "data-start",
   "data-duration",
@@ -140,7 +146,7 @@ export async function prepareRampPreview(
   if (!html.includes("data-automation") || !html.includes("rate")) return null;
   const document = parse(html, { sourceCodeLocationInfo: true });
   type Node = DefaultTreeAdapterTypes.Element;
-  const entries: { node: Node; fps: number }[] = [];
+  const entries: { node: Node; fps: number; origin: number }[] = [];
   const ids = new Set<string>();
   const styles: string[] = [];
   let externalStyle = false;
@@ -149,6 +155,7 @@ export async function prepareRampPreview(
     parent: DefaultTreeAdapterTypes.ParentNode,
     fps: number,
     hidden: boolean,
+    origin: number,
   ) => {
     for (const node of parent.childNodes) {
       if (!("tagName" in node)) continue;
@@ -169,24 +176,25 @@ export async function prepareRampPreview(
         );
       const parsed = parseFpsWithDefault(attrs.get("data-fps") ?? String(fps));
       const nodeFps = parsed.ok ? parsed.value.num / parsed.value.den : fps;
-      // The producer rebases a rate lane at a trimmed mount's in-point.
-      // Keep the native path until both render paths share that phase.
-      const trimmedMount =
-        [
-          "data-composition-id",
-          "data-composition-src",
-          "data-composition-file",
-        ].some((name) => attrs.has(name)) &&
-        hostInPointSeconds({
-          getAttribute: (name) => attrs.get(name) ?? null,
-        }) > 0;
-      const disabled = hidden || attrs.has("data-hidden") || trimmedMount;
+      const disabled = hidden || attrs.has("data-hidden");
       if (!disabled && (node.tagName === "audio" || node.tagName === "video"))
-        entries.push({ node, fps: nodeFps });
-      visit(node, nodeFps, disabled);
+        entries.push({ node, fps: nodeFps, origin });
+      const host =
+        attrs.has("data-composition-id") ||
+        attrs.has("data-composition-src") ||
+        attrs.has("data-composition-file");
+      const hostStart = Number(attrs.get("data-start") ?? 0);
+      const childOrigin =
+        host && Number.isFinite(hostStart)
+          ? origin +
+            compositionOriginSeconds(hostStart, {
+              getAttribute: (name) => attrs.get(name) ?? null,
+            })
+          : origin;
+      visit(node, nodeFps, disabled, childOrigin);
     }
   };
-  visit(document, 30, false);
+  visit(document, 30, false, 0);
   const safe = safeStyles(styles, externalStyle);
   const documentBase = URL.parse(base ?? request.href, request);
   if (!documentBase) return null;
@@ -195,7 +203,7 @@ export async function prepareRampPreview(
   const assets = new Map<string, RampAsset>();
   let ramp = false;
   await Promise.all(
-    entries.map(async ({ node, fps }, index) => {
+    entries.map(async ({ node, fps, origin }, index) => {
       if (node.tagName === "audio" ? !safe.audio : !safe.video) return;
       const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
       const raw = attrs.get("data-automation");
@@ -262,11 +270,32 @@ export async function prepareRampPreview(
       )
         return;
       ramp = true;
+      const basis = readMediaStartBasis(
+        attrs.get(MEDIA_START_BASIS_ATTR) ?? null,
+      );
+      const timelineStart = resolveAbsoluteMediaStartSeconds({
+        authoredStart: clip.start,
+        hostStart: origin,
+        basis,
+      });
+      const timelineEnd = timelineStart + (clip.end - clip.start);
+      const mediaStart = readMediaOffsetSeconds(
+        (name) => attrs.get(name) ?? null,
+      );
+      const { run, pcm } = resolveRampPlayback(
+        { start: timelineStart, end: timelineEnd, mediaStart },
+        lane,
+      );
       const window = {
-        start: readMediaOffsetSeconds((name) => attrs.get(name) ?? null),
+        run: {
+          ...run,
+          rate: serializeAutomation({ ...envelope, lanes: [run.rate] }),
+        },
+        from: Math.max(0, pcm.start - pcm.origin),
+        to: Math.min(run.frames, pcm.end - pcm.origin),
         duration: clip.end - clip.start,
-        rate: serializeAutomation({ ...envelope, lanes: [lane] }),
       };
+      if (window.to <= window.from) return;
       const result = await media
         .rampAudio(project, path, window)
         .catch((error: unknown) => {

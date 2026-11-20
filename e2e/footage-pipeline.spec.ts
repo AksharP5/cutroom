@@ -159,11 +159,22 @@ async function pictures(
       localStorage.setItem("cutroom.footagePipeline", String(on));
   }, pipeline);
   const stage = page.locator(".edit-stage");
-  const shots: string[] = [];
   await page.goto(`/#project/${project.id}`);
   await expect(stage).toHaveAttribute("data-preview-ready");
   if (pipeline) await expect(stage).toHaveAttribute("data-pipeline", "on");
   else await expect(stage).not.toHaveAttribute("data-pipeline");
+  return seekPictures(page, fps, frames, pipeline, exact);
+}
+
+async function seekPictures(
+  page: Page,
+  fps: number,
+  frames: number[],
+  pipeline: boolean,
+  exact = false,
+) {
+  const stage = page.locator(".edit-stage");
+  const shots: string[] = [];
   for (const frame of frames) {
     // One typed seek per frame: stepping into a transition under load can leave HyperFrames
     // holding a clip's transition animation several times over, which composes its opacity.
@@ -962,3 +973,208 @@ test("a title under footage switches only the intersecting range to HyperFrames"
     expect(result!.numbers[1]).toBe(frame);
   }
 });
+
+const ramp = JSON.stringify({
+  version: 1,
+  lanes: [
+    {
+      target: "rate",
+      points: [
+        { t: 0, v: 0.25 },
+        { t: 2.05, v: 0.25, curve: 1 },
+        { t: 4, v: 4 },
+      ],
+    },
+  ],
+});
+
+for (const operation of [
+  "split",
+  "head trim",
+  "tail trim",
+  "scene trim",
+  "mixed-rate seek",
+  "mixed-rate boundary",
+  "mixed-rate split",
+] as const)
+  test(`a ramp ${operation} preserves source pictures in the viewer and both MP4 exports`, async ({
+    page,
+    request,
+  }, info) => {
+    test.setTimeout(120_000);
+    const mounted = operation === "scene trim";
+    const mixed = operation.startsWith("mixed");
+    const split = operation === "split" || mixed;
+    const fps = mixed ? { num: 24000, den: 1001 } : { num: 30, den: 1 };
+    const clock = mixed ? 24 : 30;
+    const earlyNativeFrame = operation === "mixed-rate boundary";
+    const cut =
+      operation === "mixed-rate seek" || earlyNativeFrame
+        ? 3
+        : operation === "mixed-rate split"
+          ? 30
+          : split
+            ? 61
+            : mounted
+              ? 46
+              : 69;
+    // At output frame 2, this in-point maps 6.7 microseconds before source frame 32.
+    const mediaStart = earlyNativeFrame
+      ? 0.513005833333
+      : operation === "mixed-rate split"
+        ? 0.01
+        : 0.5;
+    const automation = mixed
+      ? JSON.stringify({
+          version: 1,
+          lanes: [
+            {
+              target: "rate",
+              ...(mediaStart === 0.01 && { offset: 1.92 }),
+              points: [{ t: 0, v: 0.25 }],
+            },
+          ],
+        })
+      : ramp;
+    const video = (start: number) =>
+      `<video id="v" src="ramp.mp4" muted data-start="${start}" data-duration="4" data-media-start="${mediaStart}" data-track-index="0" data-automation='${automation}' style="${fill}"></video>`;
+    const created = await project(
+      request,
+      fps,
+      (seconds) =>
+        (mounted
+          ? `<div id="mount" data-composition-id="scene" data-composition-src="scene.html" data-start="0.4" data-duration="3.6" data-track-index="0" style="${fill}"></div>`
+          : video(operation === "split" ? 0.012515625 : 0)) +
+        `<div id="end" data-start="${seconds(123)}" data-duration="${seconds(1)}" data-track-index="1"></div>`,
+      "",
+      124,
+    );
+    if (mounted)
+      await writeFile(
+        join(created.path, "scene.html"),
+        `<template id="scene-template"><main data-composition-id="scene" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="4">${video(0)}</main></template>`,
+      );
+    await numbered(join(created.path, "ramp.mp4"), mixed ? "60000/1001" : "30");
+
+    const frames = [cut - 1, cut, cut + 1, cut + 12];
+    const before = await pictures(page, created, clock, frames, false);
+    const exportPictures = async (name: string, inFrame?: number) => {
+      const response = await request.post(
+        `/api/projects/${created.id}/render`,
+        {
+          data: {
+            fps: `${fps.num}/${fps.den}`,
+            quality: "draft",
+            format: "mp4",
+            telemetryOptOut: true,
+            ...(inFrame !== undefined && {
+              cutroom: {
+                filename: name,
+                directory: info.outputDir,
+                range: { start: inFrame, end: cut + 14 },
+                gpu: false,
+              },
+            }),
+          },
+        },
+      );
+      expect(response.ok(), await response.text()).toBe(true);
+      const { jobId } = z
+        .object({ jobId: z.string() })
+        .parse(await response.json());
+      const progress = await request.get(`/api/render/${jobId}/progress`, {
+        timeout: 90_000,
+      });
+      expect(await progress.text()).toContain('"status":"complete"');
+      const destination = info.outputPath(name);
+      await writeFile(
+        destination,
+        await (await request.get(`/api/render/${jobId}/download`)).body(),
+      );
+      const extracted: string[] = [];
+      for (const frame of frames) {
+        const { stdout } = await promisify(execFile)(
+          "ffmpeg",
+          [
+            "-v",
+            "error",
+            "-i",
+            destination,
+            "-vf",
+            `select=eq(n\\,${frame - (inFrame ?? 0)})`,
+            "-frames:v",
+            "1",
+            "-c:v",
+            "png",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+          ],
+          { encoding: "buffer", maxBuffer: 4_000_000 },
+        );
+        extracted.push(stdout.toString("base64"));
+      }
+      return extracted;
+    };
+
+    const beforeExport = await exportPictures("before.mp4");
+    const stage = page.locator(".edit-stage");
+    const revision = await stage.getAttribute("data-preview-ready");
+    await edit(request, created, [
+      split
+        ? { type: "split", clipIds: ["v"], at: cut }
+        : {
+            type: "trim",
+            clipId: mounted ? "mount" : "v",
+            edge: operation === "tail trim" ? "end" : "start",
+            to: cut,
+          },
+    ]);
+    await expect(stage).not.toHaveAttribute("data-preview-ready", revision!);
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    const after = await seekPictures(page, clock, frames, false);
+    const full = await exportPictures("full.mp4");
+    const marked = await exportPictures("marked.mp4", cut - 2);
+    const results = {
+      viewer: await compare(page, before, after),
+      full: await compare(page, beforeExport, full),
+      marked: await compare(page, beforeExport, marked),
+    };
+    expect(results.full.map(({ numbers }) => numbers[0])).toEqual(
+      results.viewer.map(({ numbers }) => numbers[0]),
+    );
+    if (operation === "mixed-rate seek" || earlyNativeFrame)
+      expect(results.viewer[0]?.numbers).toEqual([31, 31]);
+    if (operation === "mixed-rate split")
+      expect(results.viewer[1]?.numbers).toEqual([19, 19]);
+    console.log(
+      `Ramp ${operation} source pictures`,
+      JSON.stringify({
+        frames,
+        ...Object.fromEntries(
+          Object.entries(results).map(([path, comparisons]) => [
+            path,
+            comparisons.map(({ numbers }) => numbers),
+          ]),
+        ),
+      }),
+    );
+    for (const [path, comparisons] of Object.entries(results))
+      for (const [index, { numbers, difference }] of comparisons.entries()) {
+        const frame = frames[index]!;
+        const removed =
+          operation === "tail trim" ? frame >= cut : !split && frame < cut;
+        expect(
+          numbers[0],
+          `uncut source number at frame ${frame}`,
+        ).toBeGreaterThan(0);
+        expect(numbers[1], `${path} source number at frame ${frame}`).toBe(
+          removed ? 0 : numbers[0],
+        );
+        if (!removed)
+          expect(
+            difference,
+            `${path} pixel difference at frame ${frame}`,
+          ).toBeLessThan(4);
+      }
+  });

@@ -1,3 +1,5 @@
+import { sourceTimeAt } from "@hyperframes/core/speed-ramp";
+import { clipRate } from "../../shared/timeline/time";
 import { isAudioKind } from "../../shared/timeline/schema";
 import {
   clipEnd,
@@ -359,7 +361,10 @@ export function matchFrame(
       return [];
     const seconds =
       mediaStart +
-      frameTime(target.frame - clip.start, timeline.fps) * clip.playbackRate;
+      sourceTimeAt(
+        clipRate(clip),
+        frameTime(target.frame - clip.start, timeline.fps),
+      );
     return [
       {
         id: clip.id,

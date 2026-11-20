@@ -1,3 +1,5 @@
+import { sourceTimeAt } from "@hyperframes/core/speed-ramp";
+import { clipRate } from "../../shared/timeline/time";
 import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import type { Timeline } from "../../shared/timeline/schema";
@@ -94,7 +96,10 @@ export function previewEditFrame(timeline: Timeline, intent: Intent) {
     clipId: clip.id,
     time:
       (clip.mediaStart ?? 0) +
-      frameTime(end ? clip.duration - 1 : 0, timeline.fps) * clip.playbackRate,
+      sourceTimeAt(
+        clipRate(clip),
+        frameTime(end ? clip.duration - 1 : 0, timeline.fps),
+      ),
   }));
   const edge = clips.at(-1)!;
   picture = {

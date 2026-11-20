@@ -1,10 +1,28 @@
-import { offsetSourceTime } from "../../shared/timeline/time";
+import { clipRate, offsetSourceTime } from "../../shared/timeline/time";
+import {
+  authoredRampAudioWindow,
+  authoredRampEdges,
+  frameAlignedRampEdges,
+} from "../../shared/timeline/rampGeometry";
+import {
+  matchingRampAudioWindow,
+  rampAudioSourceAt,
+  rampAudioWindowAt,
+} from "../../shared/timeline/rampWindow";
+import type { ObservedRampClip } from "../../shared/timeline/rampGeometry";
+import { exportClipWindow } from "@hyperframes/core";
 import {
   AudioAutomationError,
-  RATE_TARGET,
   parseAutomation,
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
+import {
+  resolveRateSpec,
+  shiftRateLane,
+  sourceTimeAt,
+  timeAtSourceTime,
+} from "@hyperframes/core/speed-ramp";
+import type { RateSpec } from "@hyperframes/core/speed-ramp";
 import { isCompositionVariable } from "@hyperframes/core/variables";
 import {
   CSS_URL_RE,
@@ -68,7 +86,9 @@ import {
 import { readRegion, regionAttribute } from "./regions";
 import {
   CUTROOM_AUDIO_GROUP_PREFIX,
+  clearRampAudioWindow,
   offsetAutomation,
+  shiftRampAutomation,
   trackGainWarning,
 } from "../../shared/timeline/mix";
 import { readFxChain, writeFxChain } from "../../shared/timeline/fx";
@@ -93,7 +113,6 @@ import {
   readClipTiming,
   readMediaOffsetSeconds,
   readPlaybackRate,
-  resolveMediaDuration,
   scanHtmlOpeningTags,
   topLevelElements,
 } from "@hyperframes/parsers";
@@ -400,16 +419,16 @@ function sourceAtFirstFrame(
   begin: number,
   start: number,
   fps: Fps,
-  playbackRate: number,
+  rate: RateSpec,
 ): number {
   const elementStart = toFrames(begin, fps);
   const handle = start - elementStart;
   const gap = frameTime(elementStart, fps) - begin;
   const source =
     Math.abs(gap) > 1e-6
-      ? authored + (gap + frameTime(handle, fps)) * playbackRate
+      ? authored + sourceTimeAt(rate, gap + frameTime(handle, fps))
       : handle
-        ? offsetSourceTime(authored, handle, fps, playbackRate)
+        ? offsetSourceTime(authored, handle, fps, rate)
         : authored;
   return Math.max(0, canonicalSeconds(source)) + 0;
 }
@@ -558,18 +577,23 @@ function projectComposition(
     resolving.delete(element);
     const begin = read.start ?? 0;
     const kind = clipKind(element);
-    const duration =
+    let duration =
       read.duration ??
-      (kind === "image" ? DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS : null) ??
-      (kind === "video" || isAudioKind(kind)
-        ? resolveMediaDuration({
-            tag: isAudioKind(kind) ? "audio" : "video",
-            authoredDurationSeconds: null,
-            sourceDurationSeconds: lengthOf(element),
-            mediaStartSeconds: readMediaOffsetSeconds(attribute),
-            playbackRate: readPlaybackRate(attribute),
-          }).seconds
-        : null);
+      (kind === "image" ? DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS : null);
+    if (duration === null && (kind === "video" || isAudioKind(kind))) {
+      const sourceDuration = lengthOf(element);
+      if (sourceDuration !== null) {
+        const mediaStart = readMediaOffsetSeconds(attribute);
+        const rate = resolveRateSpec(
+          attribute("data-automation"),
+          readPlaybackRate(attribute),
+        );
+        duration = timeAtSourceTime(
+          rate,
+          Math.max(0, sourceDuration - mediaStart),
+        );
+      }
+    }
     const result = {
       ...read,
       begin,
@@ -927,6 +951,16 @@ export function parseComposition(
     const group = element.attrs["data-audio-group"];
     const authoredGroup = group && !managedGroups.has(group);
     const playbackRate = readPlaybackRate(attribute);
+    const rate = resolveRateSpec(attribute("data-automation"), playbackRate);
+    const mediaStart = readMediaOffsetSeconds(attribute);
+    const elementWindow =
+      typeof rate === "object" && read.finish !== null
+        ? exportClipWindow(read.begin, read.finish, fps.num / fps.den)
+        : null;
+    const rampEdges = elementWindow && {
+      start: elementWindow.start - frameTime(toFrames(read.begin, fps), fps),
+      end: elementWindow.end - frameTime(toFrames(elementWindow.end, fps), fps),
+    };
     const hasAudio = isAudioKind(kind) || hasVideoAudio(element);
     if (authoredGroup && hasAudio) authoredMembers.add(element);
     const colorVariable = readColourVariable(element.attrs.style);
@@ -949,6 +983,20 @@ export function parseComposition(
           serializeAutomation(parseAutomation(rawAutomation)),
           -frameTime(edges.in ? framesBefore(edges.in) : 0, fps),
         );
+        if (
+          typeof rate === "object" &&
+          rate.audioWindow &&
+          elementWindow &&
+          !matchingRampAudioWindow(
+            rate,
+            mediaStart,
+            elementWindow.end - elementWindow.start,
+          )
+        ) {
+          automation = clearRampAudioWindow(automation);
+        }
+        if (automation && rampEdges?.start)
+          automation = shiftRampAutomation(automation, -rampEdges.start);
       } catch (error) {
         if (!(error instanceof AudioAutomationError)) throw error;
         if (!sourceAttribution)
@@ -958,7 +1006,7 @@ export function parseComposition(
           );
       }
     }
-    const clip: Clip = {
+    const clip: ObservedRampClip = {
       id,
       track: read.trackIndex,
       kind,
@@ -967,13 +1015,27 @@ export function parseComposition(
       mediaStart:
         kind === "video" || isAudioKind(kind) || kind === "composition"
           ? sourceAtFirstFrame(
-              readMediaOffsetSeconds(attribute),
-              read.begin,
+              mediaStart,
+              elementWindow?.start ?? read.begin,
               start,
               fps,
-              playbackRate,
+              rate,
             )
           : null,
+      ...(rampEdges &&
+        (Math.abs(rampEdges.start) > 1e-12 ||
+          Math.abs(rampEdges.end) > 1e-12) && {
+          [authoredRampEdges]: rampEdges,
+        }),
+      ...(typeof rate === "object" &&
+        elementWindow && {
+          [authoredRampAudioWindow]: rampAudioWindowAt(
+            rate,
+            mediaStart,
+            elementWindow.end - elementWindow.start,
+            elementWindow.start,
+          ),
+        }),
       playbackRate,
       src,
       sourceDuration: lengthOf(element),
@@ -1125,11 +1187,16 @@ export function parseComposition(
   parsed.timeline = {
     ...timeline,
     ...(fonts.size > 0 && { fonts: [...fonts] }),
-    clips: timeline.clips.map((clip) => {
+    clips: timeline.clips.map((clip: ObservedRampClip) => {
       const restrictions = sourceRestrictions(parsed, clip);
-      return restrictions
+      const projected = restrictions
         ? { ...clip, sourceRestrictions: restrictions }
         : clip;
+      if (projected[authoredRampAudioWindow])
+        Object.defineProperty(projected, authoredRampAudioWindow, {
+          enumerable: false,
+        });
+      return projected;
     }),
   };
   return parsed;
@@ -1145,7 +1212,12 @@ export function timelineContent(timeline: Timeline) {
       ),
     }),
     clips: timeline.clips.map(
-      ({ sourceRestrictions, variableBindings, ...clip }) => clip,
+      ({
+        sourceRestrictions,
+        variableBindings,
+        [authoredRampEdges]: _edges,
+        ...clip
+      }: ObservedRampClip) => clip,
     ),
   };
 }
@@ -1412,48 +1484,22 @@ function readAuthoredAudioGroups(
   });
 }
 
-/** Reading a transition samples its head. A mix edit must keep the element's original speed there. */
-function automationForElement(
-  before: Clip,
-  after: Clip,
-  authored: string | undefined,
-) {
-  const head = before.transitionIn ? framesBefore(before.transitionIn) : 0;
-  if (
-    !head ||
-    !after.transitionIn ||
-    framesBefore(after.transitionIn) !== head ||
-    !authored ||
-    !before.automation ||
-    !after.automation
-  )
-    return after.automation;
-
-  const next = parseAutomation(after.automation);
-  const rateLanes = (value: ReturnType<typeof parseAutomation>) =>
-    value.lanes.filter(({ target }) => target === RATE_TARGET);
-  const rates = rateLanes(next);
-  if (
-    !rates.length ||
-    !Bun.deepEquals(rates, rateLanes(parseAutomation(before.automation)))
-  )
-    return after.automation;
-
-  const original = rateLanes(parseAutomation(authored));
-  if (original.length !== rates.length) return after.automation;
-  let index = 0;
-  return serializeAutomation({
-    ...next,
-    lanes: next.lanes.map((lane) =>
-      lane.target === RATE_TARGET ? original[index++]! : lane,
-    ),
-  });
+/** Media time at the authored edge, which may lie between editor frames. */
+function mediaAtRampEdge(clip: Clip, rate: RateSpec, edge: number) {
+  if (clip.mediaStart === null) return null;
+  if (typeof rate === "number") return canonicalSeconds(clip.mediaStart) + 0;
+  return Math.max(
+    0,
+    rate.audioWindow
+      ? rampAudioSourceAt(shiftRateLane(rate, edge), rate.audioWindow)
+      : clip.mediaStart + sourceTimeAt(rate, edge),
+  );
 }
 
 /** The attribute changes that turn `before` into `after` on `element`. */
 function clipChanges(
-  before: Clip,
-  after: Clip,
+  before: ObservedRampClip,
+  after: ObservedRampClip,
   element: SourceElement,
   fps: Fps,
   normalizeTracks: boolean,
@@ -1461,16 +1507,37 @@ function clipChanges(
 ): AttributeChange[] {
   const has = (name: string) => element.attrs[name] !== undefined;
   const changes: AttributeChange[] = [];
+  const rate = clipRate(after);
+  const ramp = typeof rate === "object";
+  const oldRampEdges = before[authoredRampEdges] ?? frameAlignedRampEdges;
+  const rampEdges = after[authoredRampEdges] ?? frameAlignedRampEdges;
+  const rampStart = Math.max(rampEdges.start, -frameTime(after.start, fps));
   const writeStart =
     after.startRef === null &&
-    (before.start !== after.start || before.startRef !== null);
+    (before.start !== after.start ||
+      before.startRef !== null ||
+      oldRampEdges.start !== rampStart);
   if (writeStart)
-    changes.push(["data-start", String(toSeconds(after.start, fps))]);
+    changes.push([
+      "data-start",
+      String(
+        ramp
+          ? frameTime(after.start, fps) + rampStart
+          : toSeconds(after.start, fps),
+      ),
+    ]);
   if (after.authoredAudioGroupId !== before.authoredAudioGroupId)
     changes.push(["data-audio-group", after.authoredAudioGroupId ?? null]);
-  // Start and duration are written together so both land on the frame grid.
-  if (writeStart || before.duration !== after.duration) {
-    changes.push(["data-duration", String(toSeconds(after.duration, fps))]);
+  // Keep the physical edge of a ramp wherever the edit left that edge in place.
+  if (
+    writeStart ||
+    before.duration !== after.duration ||
+    oldRampEdges.end !== rampEdges.end
+  ) {
+    const duration = ramp
+      ? frameTime(after.duration, fps) + rampEdges.end - rampStart
+      : toSeconds(after.duration, fps);
+    changes.push(["data-duration", String(duration)]);
     if (has("data-end")) changes.push(["data-end", null]);
   }
   if (
@@ -1482,18 +1549,19 @@ function clipChanges(
     changes.push(["data-track-index", String(after.track)]);
     if (has("data-layer")) changes.push(["data-layer", null]);
   }
-  const mediaStart =
-    after.mediaStart === null ? null : canonicalSeconds(after.mediaStart) + 0;
+  const mediaStart = mediaAtRampEdge(after, rate, rampStart);
+  const oldMediaStart = mediaAtRampEdge(
+    before,
+    clipRate(before),
+    oldRampEdges.start,
+  );
   const authoredMediaStart = canonicalSeconds(
     readMediaOffsetSeconds((name) => element.attrs[name] ?? null),
   );
   if (
     mediaStart !== null &&
-    (mediaStart !==
-      (before.mediaStart === null
-        ? null
-        : canonicalSeconds(before.mediaStart)) ||
-      (writeStart && authoredMediaStart !== mediaStart))
+    (mediaStart !== oldMediaStart ||
+      (writeStart && !ramp && authoredMediaStart !== mediaStart))
   )
     changes.push([
       has("data-playback-start") ||
@@ -1532,11 +1600,13 @@ function clipChanges(
         attribute,
         after[field] ? String(toSeconds(after[field], fps)) : null,
       ]);
-  if (before.automation !== after.automation)
-    changes.push([
-      "data-automation",
-      automationForElement(before, after, element.attrs["data-automation"]),
-    ]);
+  const oldAutomation =
+    before.automation &&
+    shiftRampAutomation(before.automation, oldRampEdges.start);
+  const automation =
+    after.automation && shiftRampAutomation(after.automation, rampStart);
+  if (oldAutomation !== automation)
+    changes.push(["data-automation", automation]);
   if (!Bun.deepEquals(before.grade, after.grade))
     changes.push([GRADE_ATTRIBUTE, writeGrade(after.grade)]);
   if (!Bun.deepEquals(before.fx, after.fx))

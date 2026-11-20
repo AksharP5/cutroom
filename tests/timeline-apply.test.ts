@@ -2206,6 +2206,68 @@ test("slipping the sound alone puts it out of sync by that many frames", () => {
   expect(syncOffsets(state).size).toBe(0);
 });
 
+test("a curved J-cut keeps linked sync and refuses an ineffective constant speed edit", () => {
+  const points = [
+    { t: 0, v: 0.25, curve: 1 },
+    { t: 2, v: 2 },
+    { t: 4, v: 2 },
+  ];
+  const ramp = (offset: number) =>
+    JSON.stringify({ version: 1, lanes: [{ target: "rate", offset, points }] });
+  const state = timeline(
+    [
+      clip("v", 0, 30, 90, {
+        mediaStart: 0.756761471236,
+        link: "pair",
+        automation: ramp(1),
+      }),
+      clip("a", 1, 0, 120, {
+        kind: "audio",
+        mediaStart: 0.5,
+        link: "pair",
+        automation: ramp(0),
+      }),
+    ],
+    avTracks,
+  );
+  expect(syncOffsets(state).size).toBe(0);
+  expect(() =>
+    run(state, { type: "setTiming", clipId: "v", playbackRate: 1.5 }),
+  ).toThrow("uses a speed ramp");
+  const moved = run(state, {
+    type: "move",
+    clipIds: ["v"],
+    by: 5,
+    linked: false,
+  });
+  expect(Object.fromEntries(syncOffsets(moved))).toEqual({ v: 5, a: -5 });
+});
+
+test("a rate lane uses the same microsecond source-grid tolerance for transition handles", () => {
+  const state = timeline([
+    clip("a", 0, 0, 60),
+    clip("b", 0, 60, 90, {
+      mediaStart: 0.133333,
+      automation:
+        '{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":4}]}]}',
+    }),
+  ]);
+  const transition = {
+    kind: "dissolve",
+    alignment: "end",
+    duration: 1,
+  } as const;
+  const updated = run(state, {
+    type: "setTransition",
+    from: "a",
+    to: "b",
+    transition,
+  });
+  expect(updated.clips.find((clip) => clip.id === "b")?.transitionIn).toEqual(
+    transition,
+  );
+});
+
 test("slide moves a clip between its neighbours, which trim to follow with their sound", () => {
   const state = timeline(
     [...talk("a", 0, 30, 0), ...talk("b", 30, 30, 1), ...talk("c", 60, 30, 3)],

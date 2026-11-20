@@ -10,7 +10,7 @@ import { createMediaService } from "./service";
 import type { MediaService } from "./service";
 import { peakRange } from "./range";
 import { piecePlaylist } from "./pieces";
-import { frameGrid } from "./frames";
+import { frameGrid, nativeFramePage } from "./frames";
 
 const PathSchema = z.string().min(1).max(4096);
 const KeySchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -171,9 +171,15 @@ export function createMediaRoutes(
 }
 
 /** A project video's frame grid; files that are not media answer 422. */
-export async function framesOf(project: Project, path: string | undefined) {
+export async function framesOf(
+  project: Project,
+  path: string | undefined,
+  page?: number,
+) {
   const file = await projectPath(project, PathSchema.parse(path));
-  return frameGrid(file).catch(() => {
+  return (
+    page === undefined ? frameGrid(file) : nativeFramePage(file, page)
+  ).catch(() => {
     throw new HttpError(422, "The file has no readable video.");
   });
 }

@@ -1,9 +1,14 @@
 import { runFfmpeg, runFfprobe } from "@hyperframes/engine";
 import { decodableAudioStream } from "@hyperframes/parsers/media-streams";
-import type { RateSpec } from "@hyperframes/core";
 import { z } from "zod";
 import { localMediaInputOptions } from "../media/input.ts";
-import { prepareRampAudio } from "./rampAudio.ts";
+import { prepareRampRun, writeRampSlice } from "./rampAudio.ts";
+import { mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { fileFingerprint } from "../../shared/media.ts";
+import type { RampPlayback } from "../../shared/timeline/rampWindow.ts";
+import { AUDIO_SAMPLE_RATE } from "../../shared/timeline/rampWindow.ts";
 
 const clockProbe = z.object({
   streams: z.array(
@@ -19,12 +24,10 @@ const clockProbe = z.object({
 });
 
 /** A supported local source uses the same dry WAV before the preview and export mixers. */
-export async function prepareLocalRamp(
+export async function prepareLocalRampRun(
   source: string,
   output: string,
-  start: number,
-  duration: number,
-  lane: Exclude<RateSpec, number>,
+  run: RampPlayback["run"],
   signal?: AbortSignal,
   timeout?: number,
 ) {
@@ -65,12 +68,11 @@ export async function prepareLocalRamp(
   const offset = /\b(mp4|webm)\b/.test(probe.format.format_name ?? "")
     ? Math.max(0, first)
     : 0;
-  const seek = start - offset;
-  return prepareRampAudio(
+  return prepareRampRun(
     output,
-    duration,
-    lane,
-    async (outputPath, seconds) => {
+    run,
+    async (outputPath, sourceStart, seconds) => {
+      const seek = sourceStart - offset;
       const before = seek >= latest;
       const time = (value: number) => String(Number(value.toFixed(6)));
       const filters = [
@@ -98,7 +100,7 @@ export async function prepareLocalRamp(
           "-ac",
           "2",
           "-ar",
-          "48000",
+          String(AUDIO_SAMPLE_RATE),
           "-c:a",
           "pcm_s16le",
           "-t",
@@ -113,4 +115,59 @@ export async function prepareLocalRamp(
     },
     signal,
   );
+}
+
+const preparing = new Map<string, ReturnType<typeof prepareLocalRampRun>>();
+
+export async function prepareLocalRamp(
+  source: string,
+  output: string,
+  timing: Pick<RampPlayback, "run" | "pcm">,
+  cacheDir: string,
+  signal?: AbortSignal,
+  timeout?: number,
+) {
+  const { run, pcm } = timing;
+  const from = Math.max(0, pcm.start - pcm.origin);
+  const to = Math.min(run.frames, pcm.end - pcm.origin);
+  if (to <= from) return;
+  await mkdir(cacheDir, { recursive: true });
+  const revision = fileFingerprint(source, await stat(source));
+  const key = createHash("sha256")
+    .update(JSON.stringify([revision, run]))
+    .digest("hex");
+  const original = join(cacheDir, key + ".wav");
+  const existing = await stat(original).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return null;
+    throw error;
+  });
+  if (!existing) {
+    let task = preparing.get(original);
+    if (!task) {
+      task = (async () => {
+        const temp = await mkdtemp(join(cacheDir, ".run-"));
+        try {
+          const path = join(temp, "ramp.wav");
+          const result = await prepareLocalRampRun(
+            source,
+            path,
+            run,
+            signal,
+            timeout,
+          );
+          if (result?.success) await rename(path, original);
+          return result;
+        } finally {
+          preparing.delete(original);
+          await rm(temp, { recursive: true, force: true });
+        }
+      })();
+      preparing.set(original, task);
+    }
+    const result = await task;
+    if (!result?.success) return result;
+  }
+  await writeRampSlice(original, output, from, to, signal);
+  return { success: true, outputPath: output };
 }

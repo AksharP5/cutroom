@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import {
-  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -13,8 +12,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { createRenderWorkers } from "../src/server/hyperframes/jobs";
-import { prepareRampAudio } from "../src/server/hyperframes/rampAudio";
+import { prepareLocalRamp } from "../src/server/hyperframes/rampSource";
+import { resolveRampPlayback } from "../src/shared/timeline/rampWindow";
 import { browserExecutable } from "../src/server/hyperframes/render";
+import { parseAudioElements } from "@hyperframes/engine";
+import { applyAll } from "../src/shared/timeline/apply";
+import type { ClipOrigin } from "../src/shared/timeline/apply";
+import {
+  CommandSchema,
+  emptyTimelineSettings,
+} from "../src/shared/timeline/schema";
+import type { CommandInput } from "../src/shared/timeline/schema";
+import {
+  parseComposition,
+  patchComposition,
+} from "../src/server/timeline/composition";
+import { countingIds } from "./clip-ids";
 
 async function command(args: string[]) {
   const child = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
@@ -425,9 +438,25 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
 );
 
 test.skipIf(!Bun.which("ffmpeg"))(
-  "stretching a slow ramp twice produces the same dry samples",
+  "a saved ramp split and both trims preserve every dry sample",
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "export-ramp-repeat-"));
+    const directory = await mkdtemp(join(tmpdir(), "export-ramp-window-"));
+    const byteAtFrame = (frame: number) =>
+      Math.round((frame * 1001 * 48_000) / 30_000) * 4;
+    const startByte = 601 * 4;
+    const original = `<main data-composition-id="main" data-fps="30000/1001" data-duration="4.2042">
+      <audio id="sound" src="source.wav" data-start="0.012515625" data-duration="4.004" data-media-start="0.500000701"
+        data-automation='{"version":1,"lanes":[{"target":"rate","offset":0.137,"points":[{"t":0,"v":0.25,"curve":1},{"t":4,"v":4}]}]}'></audio>
+    </main>`;
+    const edit = (html: string, input: CommandInput) => {
+      const parsed = parseComposition(html, emptyTimelineSettings());
+      const origins = new Map<string, ClipOrigin>();
+      const timeline = applyAll(parsed.timeline, [CommandSchema.parse(input)], {
+        newId: countingIds,
+        onCreate: (id, origin) => origins.set(id, origin),
+      });
+      return patchComposition(parsed, timeline, origins);
+    };
     try {
       const source = join(directory, "source.wav");
       await command([
@@ -437,38 +466,193 @@ test.skipIf(!Bun.which("ffmpeg"))(
         "-f",
         "lavfi",
         "-i",
-        "aevalsrc=0.12*sin(2*PI*440*t)|0.12*sin(2*PI*331*t)+0.12*sin(2*PI*2273*t):s=48000:d=1",
+        "aevalsrc=0.12*sin(2*PI*440*t)|0.12*sin(2*PI*331*t)+0.12*sin(2*PI*2273*t):s=48000:d=7",
         "-c:a",
         "pcm_s16le",
         source,
       ]);
-      const stretched = async (name: string) => {
-        const path = join(directory, name);
-        const result = await prepareRampAudio(
-          path,
-          1,
-          {
-            target: "rate",
-            points: [
-              { t: 0, v: 0.25 },
-              { t: 1, v: 0.4 },
-            ],
-          },
-          async (outputPath) => {
-            await copyFile(source, outputPath);
-            return { success: true, outputPath };
-          },
-        );
-        expect(result?.success).toBe(true);
-        return readFile(path);
+      const stretched = async (html: string) => {
+        const pieces: Buffer[] = [];
+        for (const track of parseAudioElements(html)) {
+          if (track.id === "previous") continue;
+          if (typeof track.playbackRate !== "object")
+            throw new Error("The edited clip lost its ramp.");
+          const path = join(directory, "stretched.wav");
+          const result = await prepareLocalRamp(
+            source,
+            path,
+            resolveRampPlayback(track, track.playbackRate),
+            join(directory, "runs"),
+          );
+          expect(result?.success).toBe(true);
+          pieces.push((await readFile(path)).subarray(44));
+        }
+        return pieces;
       };
-      const first = await stretched("first.wav");
-      expect(first.readUInt32LE(40)).toBe(48_000 * 4);
-      expect(first.equals(await stretched("second.wav"))).toBe(true);
+
+      const [full] = await stretched(original);
+      expect(full?.length).toBe(byteAtFrame(120));
+      expect(full?.equals((await stretched(original))[0]!)).toBe(true);
+
+      const at = 61;
+      const split = edit(original, { type: "split", clipIds: ["sound"], at });
+      const [left, right] = await stretched(split);
+      const [tailTrimmed] = await stretched(
+        edit(original, { type: "trim", clipId: "sound", edge: "end", to: at }),
+      );
+      const [headTrimmed] = await stretched(
+        edit(original, {
+          type: "trim",
+          clipId: "sound",
+          edge: "start",
+          to: at,
+        }),
+      );
+      const cut = byteAtFrame(at) - startByte;
+      expect(left?.equals(full!.subarray(0, cut))).toBe(true);
+      expect(right?.equals(full!.subarray(cut))).toBe(true);
+      expect(tailTrimmed?.equals(left!)).toBe(true);
+      expect(headTrimmed?.equals(right!)).toBe(true);
+      const secondCut = 103;
+      const [, trimmedAgain] = await stretched(
+        edit(split, {
+          type: "trim",
+          clipId: parseAudioElements(split)[1]!.id,
+          edge: "start",
+          to: secondCut,
+        }),
+      );
+      expect(
+        trimmedAgain?.equals(
+          full!.subarray(byteAtFrame(secondCut) - startByte),
+        ),
+      ).toBe(true);
+
+      expect(await readdir(join(directory, "runs"))).toHaveLength(1);
+
+      const dissolve = edit(
+        `<main data-composition-id="main" data-fps="30" data-duration="6">
+          <audio id="previous" src="source.wav" data-track-index="0" data-start="0" data-duration="2"></audio>
+          <audio id="sound" src="source.wav" data-track-index="0" data-start="2" data-duration="4" data-media-start="0.5"
+            data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":0.25,"curve":1},{"t":4,"v":4}]}]}'></audio>
+        </main>`,
+        {
+          type: "setTransition",
+          from: "previous",
+          to: "sound",
+          transition: { kind: "dissolve", alignment: "center", duration: 30 },
+        },
+      );
+      const [uncutDissolve] = await stretched(dissolve);
+      const [dissolveHead, dissolveTail] = await stretched(
+        edit(dissolve, {
+          type: "split",
+          clipIds: ["sound"],
+          at: 120,
+        }),
+      );
+      expect(dissolveTail?.length).toBe(96_000 * 4);
+      expect(
+        dissolveHead?.equals(uncutDissolve!.subarray(0, 120_000 * 4)),
+      ).toBe(true);
+      expect(dissolveTail?.equals(uncutDissolve!.subarray(120_000 * 4))).toBe(
+        true,
+      );
+      expect(await readdir(join(directory, "runs"))).toHaveLength(2);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   },
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "a marked MP4 keeps the whole MP4's tone after an NTSC half-sample head trim",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-half-sample-"));
+    const project = join(root, "project");
+    const workers = createRenderWorkers({ scratchDir: join(root, "scratch") });
+    const fps = { num: 30_000, den: 1001 };
+    const cut = { start: 228, end: 243 };
+    const at = (frame: number) => (frame * fps.den) / fps.num;
+    const sample = (frame: number) => Math.round(at(frame) * 48_000);
+    try {
+      await mkdir(project);
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "aevalsrc=0.12*sin(2*PI*440*t)|0.12*sin(2*PI*331*t)+0.12*sin(2*PI*2273*t):s=48000:d=12",
+        "-c:a",
+        "pcm_s16le",
+        join(project, "tone.wav"),
+      ]);
+      const text = `<main data-composition-id="main" data-no-timeline data-width="160" data-height="120" data-duration="11.01253125" data-fps="30000/1001" style="background:orange">
+        <audio id="ramp" src="tone.wav" data-start="5.01253125" data-duration="6" data-media-start="0.5"
+        data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":0.25,"curve":1},{"t":6,"v":4}]}]}'></audio></main>`;
+      const parsed = parseComposition(text, emptyTimelineSettings());
+      const trimmed = applyAll(parsed.timeline, [
+        CommandSchema.parse({
+          type: "trim",
+          clipId: "ramp",
+          edge: "start",
+          to: 213,
+        }),
+      ]);
+      await writeFile(
+        join(project, "index.html"),
+        patchComposition(parsed, trimmed, new Map()),
+      );
+      const render = async (name: string, range: typeof cut | null) => {
+        const path = join(root, name + ".mp4");
+        const state = workers.start(
+          {
+            project: { id: name, dir: project },
+            outputPath: path,
+            format: "mp4",
+            fps,
+            quality: "draft",
+            jobId: name,
+          },
+          { filename: name + ".mp4", directory: root, range },
+        );
+        const deadline = Date.now() + 55_000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(20);
+        expect(state.error).toBeUndefined();
+        expect(state.status).toBe("complete");
+        const pcm = await command([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-i",
+          path,
+          "-vn",
+          "-f",
+          "f32le",
+          "pipe:1",
+        ]);
+        return new Float32Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 4);
+      };
+      const whole = await render("whole", null);
+      const marked = await render("marked", cut);
+      const expected = whole.subarray(
+        sample(cut.start) * 2,
+        sample(cut.end) * 2,
+      );
+      // The two AAC encodes have different neighbouring packets. Compare their decoded tone
+      // away from the encoder's first and last packets, on the same sample grid.
+      expect(
+        correlation(marked, expected, 2048, expected.length - 2048),
+      ).toBeGreaterThan(0.99);
+    } finally {
+      await workers.cancelAll();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  120_000,
 );
 
 // The editor rewrites .cutroom during an export, so the copy must not walk it either.

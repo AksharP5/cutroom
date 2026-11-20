@@ -18,7 +18,11 @@ import { canonicalText } from "../../shared/timeline/schema";
 import { previewTiming } from "./previewTiming";
 import type { PreviewTiming } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
-import { frameSeek } from "../../shared/frames";
+import {
+  frameAtOrBefore,
+  frameSeek,
+  nativeFramePageSeconds,
+} from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
 
 interface PreviewWindow extends DiagnosticWindow {
@@ -40,6 +44,10 @@ interface PreviewWindow extends DiagnosticWindow {
   __hf?: Window["__hf"] & {
     /** The runtime's resolved window of a clip, in composition seconds. */
     clipWindow?: (element: Element) => { start: number; end: number } | null;
+    cutroomRampTime?: (
+      video: HTMLMediaElement,
+      seconds: number,
+    ) => number | null;
     audioMeter?: {
       start(): void;
       stop(): void;
@@ -153,6 +161,8 @@ export function liveUpdatePlan(
 function installPreviewBridge(
   plan: typeof liveUpdatePlan,
   seekInFrame: typeof frameSeek,
+  frameIndex: typeof frameAtOrBefore,
+  framePageSeconds: number,
   /** The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does. */
   [minRate, maxRate]: [number, number],
   texts: [string, string[]][],
@@ -2194,13 +2204,16 @@ function installPreviewBridge(
     return videos;
   };
   /**
-   * Where the runtime places a constant-rate video's media at the playhead, from its own
-   * resolved clip window. Null when it cannot be known here, such as for speed ramps.
+   * Where the runtime places a video's media at the playhead, from its resolved clip window.
    */
+  const hasRamp = (video: HTMLMediaElement) =>
+    /"target"\s*:\s*"rate"/.test(video.getAttribute("data-automation") ?? "");
   const expectedMediaTime = (video: HTMLMediaElement) => {
-    const clip = win.__hf?.clipWindow?.(video);
     const time = win.__player?.getTime();
+    if (time === undefined) return null;
     const automation = video.getAttribute("data-automation");
+    if (hasRamp(video)) return win.__hf?.cutroomRampTime?.(video, time) ?? null;
+    const clip = win.__hf?.clipWindow?.(video);
     // The runtime's root: the composition marked as root, or else the first one.
     const marked = document.querySelector(
       '[data-composition-id][data-root="true"]',
@@ -2212,7 +2225,6 @@ function installPreviewBridge(
     // Only the root composition's clips are timed against the player's clock.
     if (
       !clip ||
-      time === undefined ||
       video.closest("[data-composition-id]") !== root ||
       video.loop ||
       (automation !== null && /"target"\s*:\s*"(?!volume")/.test(automation))
@@ -2273,7 +2285,14 @@ function installPreviewBridge(
               continue;
             }
             // Frames are placed by each source's grid, which a new source reads first.
-            await Promise.all(videos.map(loadGrid));
+            await Promise.all(
+              videos.map((video) => {
+                const time = expectedMediaTime(video);
+                return time !== null && hasRamp(video)
+                  ? loadNativePage(video, time)
+                  : loadGrid(video);
+              }),
+            );
             if (!current()) return;
             // A grid that just came moved its videos; their frames are on the way.
             if (videos.some((video) => video.seeking)) continue;
@@ -2531,12 +2550,54 @@ function installPreviewBridge(
     }
     return grid;
   };
+  const nativePages = new Map<string, Promise<number[]>>();
+  const nativeTimes = new Map<string, number[]>();
+  const nativePageKey = (path: string, time: number) =>
+    `${encodeURIComponent(path)}&page=${Math.max(0, Math.floor(time / framePageSeconds))}`;
+  const loadNativePage = (video: HTMLVideoElement, time: number) => {
+    const path = scrubPath(video);
+    if (!path) return Promise.resolve([]);
+    const key = nativePageKey(path, time);
+    const known = nativePages.get(key);
+    if (known) return known;
+    if (nativePages.size >= 64) {
+      const oldest = nativePages.keys().next().value!;
+      nativePages.delete(oldest);
+      nativeTimes.delete(oldest);
+    }
+    const pending = fetch(`${capability}frames?path=${key}`)
+      .then((response) => (response.ok ? response.json() : []))
+      .then((value: unknown) => {
+        const times = Array.isArray(value)
+          ? value.filter(
+              (time): time is number =>
+                typeof time === "number" && Number.isFinite(time),
+            )
+          : [];
+        nativeTimes.set(key, times);
+        return times;
+      })
+      .catch(() => []);
+    nativePages.set(key, pending);
+    return pending;
+  };
   /**
    * Where a paused video is put to show the frame export writes at `time`, which the runtime
    * asks for with its 10 microsecond lead. Without a grid, the time itself.
    */
   const framePosition = (media: HTMLMediaElement, time: number) => {
     const path = media instanceof HTMLVideoElement ? scrubPath(media) : null;
+    if (path && hasRamp(media)) {
+      // The runtime adds a seek lead for the browser. Select at the mapped time.
+      const mapped = Math.max(0, time - 1e-5);
+      const times = nativeTimes.get(nativePageKey(path, mapped));
+      if (!times?.length) return time;
+      const index = Math.max(0, frameIndex(times, mapped));
+      const start = times[index]!;
+      const next = times[index + 1];
+      if (next !== undefined) return start + (next - start) / 4;
+      return Math.max(start, time);
+    }
     const grid = path ? known.get(path) : null;
     return grid ? seekInFrame(grid, time) : time;
   };
@@ -4270,7 +4331,7 @@ export function previewDocument(
     rampPending,
     rampWindows,
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${frameAtOrBefore.toString()}, ${nativeFramePageSeconds}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

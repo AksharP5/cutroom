@@ -10,9 +10,19 @@ import {
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
 import type { HfAutomationLane } from "@hyperframes/core/audio-automation";
+import { shiftRateLane, sourceTimeAt } from "@hyperframes/core/speed-ramp";
 import { clampFadesToDuration } from "@hyperframes/core/audio-fade";
 import { TimelineError } from "./errors";
+import { frameTime } from "./time";
+import { readAutomation, writeAutomation } from "./automation.ts";
 import type { Clip, Fps } from "./schema";
+import {
+  authoredRampAudioWindow,
+  elementBounds,
+  elementRate,
+} from "./rampGeometry";
+import { resolveRampPlayback } from "./rampWindow";
+import type { ObservedRampClip } from "./rampGeometry";
 
 export const CUTROOM_AUDIO_GROUP_PREFIX = "cutroom-bus-";
 
@@ -28,6 +38,7 @@ const frameSeconds = (frames: number, fps: Fps) =>
  * one at the new start holds the level it had there. A negative offset only moves them later.
  */
 function startLaneAt(lane: HfAutomationLane, offset: number): HfAutomationLane {
+  if (lane.target === RATE_TARGET) return shiftRateLane(lane, offset);
   const moved = lane.points.map((point) => ({
     ...point,
     t: microseconds(point.t - offset),
@@ -52,6 +63,18 @@ export function offsetAutomation(automation: string, seconds: number) {
   return serializeAutomation({
     ...parsed,
     lanes: parsed.lanes.map((lane) => startLaneAt(lane, -seconds)),
+  });
+}
+
+/** Rebase only speed when projecting an element onto a different frame boundary. */
+export function shiftRampAutomation(automation: string, elapsed: number) {
+  if (!elapsed) return automation;
+  const parsed = parseAutomation(automation);
+  return serializeAutomation({
+    ...parsed,
+    lanes: parsed.lanes.map((lane) =>
+      lane.target === RATE_TARGET ? shiftRateLane(lane, elapsed) : lane,
+    ),
   });
 }
 
@@ -115,6 +138,17 @@ export function clearAudioAutomation(automation: string | null) {
   return serializeAutomation({ ...parsed, lanes });
 }
 
+/** Reset dry preparation on an explicit timing change while preserving the authored rate. */
+export function clearRampAudioWindow(automation: string | null) {
+  if (!automation) return null;
+  const parsed = parseAutomation(automation);
+  if (!parsed.lanes.some((lane) => lane.audioWindow)) return automation;
+  return serializeAutomation({
+    ...parsed,
+    lanes: parsed.lanes.map(({ audioWindow: _window, ...lane }) => lane),
+  });
+}
+
 /** Effective fades, in frames, using the same proportional clamp as preview and render. */
 export function clipFades(clip: Pick<Clip, "fadeIn" | "fadeOut" | "duration">) {
   return clampFadesToDuration(clip, clip.duration);
@@ -122,13 +156,14 @@ export function clipFades(clip: Pick<Clip, "fadeIn" | "fadeOut" | "duration">) {
 
 /** Trims keep edge fades; cuts preserve the source envelope across their internal edge. */
 export function windowMix(
-  clip: Clip,
-  from: number,
-  duration: number,
+  clip: ObservedRampClip,
+  piece: ObservedRampClip,
   fps: Fps,
   mode: "trim" | "cut",
-) {
-  if (mode === "trim" && (from === 0 || !clip.automation)) return {};
+): Partial<Pick<Clip, "automation" | "fadeIn" | "fadeOut">> {
+  const from = piece.start - clip.start;
+  const duration = piece.duration;
+  if (mode === "trim" && !clip.automation) return {};
   const { fadeIn, fadeOut } =
     mode === "cut" ? clipFades(clip) : { fadeIn: 0, fadeOut: 0 };
   const to = from + duration;
@@ -144,7 +179,7 @@ export function windowMix(
   const seconds = (frames: number) => frameSeconds(frames, fps);
   const offset = seconds(from);
   const automation = clip.automation
-    ? parseAutomation(clip.automation)
+    ? readAutomation(clip.automation)
     : { version: HF_AUDIO_AUTOMATION_VERSION, lanes: [] };
   const volume = automation.lanes.find((lane) => lane.target === VOLUME_TARGET);
   // Retain the source ramp beyond a cut so extension cannot hold a partial level.
@@ -165,10 +200,48 @@ export function windowMix(
       : 1;
     return head * tail;
   };
-  // Known limit: a head trim loses earlier clip-local points; restoring them needs source-anchored keyframes.
-  const lanes = automation.lanes.map((lane) =>
-    from === 0 ? lane : startLaneAt(lane, offset),
-  );
+  const elapsed = frameTime(from, fps);
+  const before = elementBounds(clip, fps);
+  const next = elementBounds(piece, fps);
+  const lanes = automation.lanes.map((lane) => {
+    if (lane.target !== RATE_TARGET)
+      return from ? startLaneAt(lane, offset) : lane;
+    if (clip.mediaStart === null || (from === 0 && duration === clip.duration))
+      return lane;
+    const { audioWindow: _original, ...shifted } = shiftRateLane(lane, elapsed);
+    const originalLane = elementRate(clip, fps, lane);
+    const authored = clip[authoredRampAudioWindow];
+    const mediaStart =
+      authored?.mediaStart ??
+      clip.mediaStart +
+        sourceTimeAt(lane, before.start - frameTime(clip.start, fps));
+    const resolved = resolveRampPlayback(
+      { start: before.start, end: before.end, mediaStart },
+      originalLane,
+    );
+    const original = originalLane.audioWindow
+      ? resolved.original
+      : (authored ?? resolved.original);
+    const originalStart =
+      !originalLane.audioWindow &&
+      authored?.timelineStart !== undefined &&
+      Math.abs(authored.timelineStart - before.start) <= 1e-12
+        ? authored.timelineStart
+        : resolved.originalStart;
+    if (
+      next.start < originalStart - 1e-9 ||
+      next.end > originalStart + original.duration + 1e-9
+    )
+      return shifted;
+    return {
+      ...shifted,
+      audioWindow: {
+        ...original,
+        timelineStart: originalStart,
+        elementStart: next.start,
+      },
+    };
+  });
   const crossing = volume?.points.findLast((point) => point.t <= offset);
   if (
     partialIn ||
@@ -227,8 +300,6 @@ export function windowMix(
   }
   return {
     ...(mode === "cut" && { fadeIn: nextIn, fadeOut: nextOut }),
-    automation: lanes.length
-      ? serializeAutomation({ ...automation, lanes })
-      : null,
+    automation: lanes.length ? writeAutomation({ ...automation, lanes }) : null,
   };
 }

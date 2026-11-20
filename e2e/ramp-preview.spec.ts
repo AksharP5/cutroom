@@ -294,8 +294,8 @@ for (const mode of [
       await page
         .getByRole("button", { name: "Play forward", exact: true })
         .click();
-      const samples = await audio.evaluate(
-        async (element, hostStart) => {
+      const sampleClock = (hostStart: number) =>
+        audio.evaluate(async (element, hostStart) => {
           const runtime = window as Window & {
             __player?: { getTime(): number };
             __hf?: { audioMeter: { read(): { master: { l: number } } } };
@@ -315,9 +315,8 @@ for (const mode of [
             });
           }
           return times.slice(8);
-        },
-        nested ? 1 : 0,
-      );
+        }, hostStart);
+      const samples = await sampleClock(nested ? 1 : 0);
       const peak = Math.max(...samples.map(({ level }) => level));
       expect(peak).toBeGreaterThan(embedded ? 0.023 : 0.047);
       expect(peak).toBeLessThan(embedded ? 0.037 : 0.073);
@@ -433,6 +432,7 @@ for (const mode of [
         ).toBe(true);
       }
       if (nested) {
+        await stop.click();
         const mounted = join(project.path, "index.html");
         const ready = await live.getAttribute("src");
         await writeFile(
@@ -444,13 +444,96 @@ for (const mode of [
         );
         await expect(live).not.toHaveAttribute("src", ready!);
         await expect(stage).toHaveAttribute("data-preview-ready");
-        await expect(audio).toHaveCount(0);
-        await expect(frame.locator("#sound")).toHaveAttribute(
-          "data-automation",
-          ramp,
+        await expect(audio).toHaveAttribute(
+          "src",
+          new RegExp(`/${key}\\.wav$`),
+        );
+        await seekFrame(page, 60);
+        await page
+          .getByRole("button", { name: "Play forward", exact: true })
+          .click();
+        const trimmed = await sampleClock(-1);
+        const trimmedPeak = Math.max(...trimmed.map(({ level }) => level));
+        expect(trimmedPeak).toBeGreaterThan(0.047);
+        expect(trimmedPeak).toBeLessThan(0.073);
+        expect(Math.max(...trimmed.map(({ drift }) => drift))).toBeLessThan(
+          0.06,
+        );
+        await writeFile(
+          info.outputPath("trimmed-audio-clock.json"),
+          JSON.stringify({ peak: trimmedPeak, samples: trimmed }, null, 2),
         );
       }
     } finally {
       release.resolve();
     }
   });
+
+test("the viewer plays the original prepared audio on both sides of a ramp split", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: {
+          name: "Ramp split audio",
+          width: 640,
+          height: 360,
+          duration: 4,
+        },
+      })
+    ).json(),
+  );
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "aevalsrc=0.12*sin(2*PI*440*t)|0.12*sin(2*PI*331*t)+0.12*sin(2*PI*2273*t):s=48000:d=6",
+    "-c:a",
+    "pcm_s16le",
+    join(project.path, "sound.wav"),
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<main data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30" data-duration="4.1">
+      <audio id="sound" src="sound.wav" data-start="0.012515625" data-duration="4" data-media-start="0.5" data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":0.25,"curve":1},{"t":4,"v":4}]}]}'></audio>
+    </main>`,
+  );
+  await page.goto(`/#project/${project.id}`);
+  const audio = page
+    .frameLocator("iframe[data-live]")
+    .locator('audio[src*="/ramp-audio/"]');
+  const samples = async (element: Locator) => {
+    const src = await element.getAttribute("src");
+    const response = await request.get(src!);
+    expect(response.status()).toBe(200);
+    const wav = await response.body();
+    expect(wav.subarray(0, 4).toString()).toBe("RIFF");
+    expect(wav.subarray(36, 40).toString()).toBe("data");
+    return wav.subarray(44);
+  };
+  await expect(audio).toHaveCount(1);
+  const before = await samples(audio);
+  expect(before.length).toBe(192_000 * 4);
+
+  await seekFrame(page, 60);
+  const clip = page.locator('[data-clip="sound"]');
+  await clip.click();
+  await page.keyboard.press("e");
+  await expect(audio).toHaveCount(2);
+  const left = await samples(audio.nth(0));
+  const right = await samples(audio.nth(1));
+  // The authored start lies three-quarters of a sample past sample 600.
+  expect(left.length).toBe((96_000 - 601) * 4);
+  expect(right.length).toBe((96_000 + 601) * 4);
+  expect(left.equals(before.subarray(0, left.length))).toBe(true);
+  expect(right.equals(before.subarray(left.length))).toBe(true);
+
+  await seekFrame(page, 55);
+  await page.getByRole("button", { name: "Play forward", exact: true }).click();
+  expect(await masterPeak(audio.nth(0))).toBeGreaterThan(0.08);
+  expect(await masterPeak(audio.nth(1))).toBeGreaterThan(0.08);
+});

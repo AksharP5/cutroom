@@ -6,7 +6,8 @@ import {
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
 import { frameTime, toFrames, toSeconds } from "../../shared/timeline/apply";
-import { offsetSourceTime } from "../../shared/timeline/time";
+import { elementBounds } from "../../shared/timeline/rampGeometry";
+import { clipRate, offsetSourceTime } from "../../shared/timeline/time";
 import { TransitionSchema } from "../../shared/timeline/schema";
 import { shiftKeyframes } from "../../shared/timeline/keyframes";
 import { offsetAutomation } from "../../shared/timeline/mix";
@@ -177,8 +178,7 @@ export function isCrossfadeAutomation(
 export function elementClip(clip: Clip, fps: Fps): Clip {
   const { transitionIn, transitionOut } = clip;
   if (!takesTransition(clip) || (!transitionIn && !transitionOut)) return clip;
-  const before = transitionIn ? framesBefore(transitionIn) : 0;
-  const after = transitionOut ? framesAfter(transitionOut) : 0;
+  const { before, after } = elementBounds(clip, fps);
   const straight = clip.hasAudio && clip.automation !== null;
   return {
     ...clip,
@@ -187,7 +187,7 @@ export function elementClip(clip: Clip, fps: Fps): Clip {
     mediaStart:
       clip.mediaStart === null || !before
         ? clip.mediaStart
-        : offsetSourceTime(clip.mediaStart, -before, fps, clip.playbackRate),
+        : offsetSourceTime(clip.mediaStart, -before, fps, clipRate(clip)),
     fadeIn: transitionIn && straight ? transitionIn.duration : clip.fadeIn,
     fadeOut: transitionOut && straight ? transitionOut.duration : clip.fadeOut,
     // Clip-local automation is timed from the element, which starts `before` frames early.

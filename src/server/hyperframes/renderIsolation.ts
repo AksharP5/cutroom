@@ -284,6 +284,21 @@ export function registerRenderIsolation(
   const rampSource = JSON.stringify(
     new URL("./rampSource.ts", import.meta.url).href,
   );
+  const audioClock = JSON.stringify(
+    new URL("./audioClock.ts", import.meta.url).href,
+  );
+  const rampWindow = JSON.stringify(
+    new URL("../../shared/timeline/rampWindow.ts", import.meta.url).href,
+  );
+  const nativeFrames = JSON.stringify(
+    new URL("./nativeFrames.ts", import.meta.url).href,
+  );
+  const frameTimes = JSON.stringify(
+    new URL("../../shared/frames.ts", import.meta.url).href,
+  );
+  const rampRuntime = JSON.stringify(
+    new URL("./rampRuntime.ts", import.meta.url).href,
+  );
   let producerLoaded = false;
   let audioMixerLoaded = false;
   let captureLoaded = false;
@@ -294,24 +309,63 @@ export function registerRenderIsolation(
       const loaded = nextLoad(url, context);
       if (url.endsWith("/@hyperframes/engine/dist/services/audioMixer.js")) {
         audioMixerLoaded = true;
-        return {
-          ...loaded,
-          source: replaceOnce(
-            String(loaded.source),
-            "    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);",
-            `    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);
+        let source = replaceOnce(
+          `import { AUDIO_SAMPLE_RATE, audioSampleAt, audioSamples } from ${audioClock};\nimport { resolveRampPlayback } from ${rampWindow};\n${String(loaded.source)}`,
+          "    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);",
+          `    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);
     if (typeof normalizedPlaybackRate === "object" && !options?.loop && !isHttpUrl(srcPath)) {
         const { prepareLocalRamp } = await import(${rampSource});
-        const prepared = await prepareLocalRamp(srcPath, outputPath, mediaStart, duration, normalizedPlaybackRate, signal, ffmpegProcessTimeout)
+        const timing = options?.rampTiming ?? resolveRampPlayback({
+            start: options?.timelineStart ?? 0,
+            end: (options?.timelineStart ?? 0) + duration,
+            mediaStart,
+        }, normalizedPlaybackRate);
+        const prepared = await prepareLocalRamp(srcPath, outputPath, timing, options?.rampCacheDir ?? join(outputDir, "ramp-runs"), signal, ffmpegProcessTimeout)
             .catch((error) => {
                 if (signal?.aborted) throw error;
                 return null;
             });
         if (prepared?.success) return prepared;
     }`,
+          url,
+        );
+        // Round the two composition edges once. Rounding the length independently
+        // can leave a gap or overlap even when both clips meet on the same sample.
+        source = replaceOnce(
+          source,
+          `    const delayMs = Math.round(track.start * 1000);
+    const trimDuration = track.end - track.start + (track.tailSeconds ?? 0);
+    const filters = \`[\${index}:a]atrim=0:\${formatFilterNumber(trimDuration)},\${volumeFilter}\${buildFadeFilters(track)},adelay=\${delayMs}|\${delayMs}\`;`,
+          `    const { start: delay, end: clipEnd } = audioSamples(track);
+    const end = clipEnd + audioSampleAt(track.tailSeconds ?? 0);
+    const filters = \`[\${index}:a]atrim=end_sample=\${end - delay},\${volumeFilter}\${buildFadeFilters(track)},adelay=\${delay}S:all=1\`;`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "            let audioSrcPath = srcPath;",
+          `            const samples = audioSamples(element);
+            const preparationDuration = typeof element.playbackRate === "object"
+                ? element.end - element.start
+                : (samples.end - samples.start) / AUDIO_SAMPLE_RATE;
+            let audioSrcPath = srcPath;`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "                duration: element.end - element.start,",
+          "                duration: element.end - element.start,\n                samples,",
+          url,
+        );
+        for (const stage of ["extract", "prepare"]) {
+          source = replaceOnce(
+            source,
+            `"${stage}", element.mediaStart, element.end - element.start, element.playbackRate, effectiveSignal, config, ${stage === "extract" ? "audioSidecarUrl" : "undefined"}, { loop: element.loop }`,
+            `"${stage}", element.mediaStart, preparationDuration, element.playbackRate, effectiveSignal, config, ${stage === "extract" ? "audioSidecarUrl" : "undefined"}, { loop: element.loop, timelineStart: element.start, rampTiming: element.rampTiming, rampCacheDir: join(workDir, "ramp-runs") }`,
             url,
-          ),
-        };
+          );
+        }
+        return { ...loaded, source };
       }
       // Standalone templates keep the parent shell's styles and scripts. Its
       // render canvas, like its duration, belongs to the selected scene.
@@ -362,6 +416,169 @@ export function registerRenderIsolation(
           '            work.finalFrameOnly ? "final-frame" : undefined,\n            ...cutroomColour(work.metadata).filter((filter) => filter.startsWith("colorspace=")),\n',
           url,
         );
+        source = `import { rampMediaTimeAt, resolveRampPlayback } from ${rampWindow};\nimport { nativeFrameClock } from ${nativeFrames};\nimport { frameAtOrBefore } from ${frameTimes};\n${source}`;
+        source = replaceOnce(
+          source,
+          "    const sampleAtOutputFps = !options.finalFrameOnly;",
+          `    const nativeFrames = options.nativeFrames;
+    const timestampOffset = videoStartOnMediaTimeline(metadata) - (metadata.videoStreamStartSeconds ?? 0);
+    const clock = nativeFrames ? nativeFrameClock(timestampOffset) : null;
+    const sampleAtOutputFps = !options.finalFrameOnly && !clock;`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    if (options.finalFrameOnly) {\n        // Output-side seek",
+          `    if (clock) {
+        args.push("-loglevel", "info", "-copyts", "-noaccurate_seek",
+            "-ss", formatFfmpegSeconds(Math.max(0, ffmpegSeek(startTime))),
+            "-i", videoPath, "-to", formatFfmpegSeconds(startTime + duration - timestampOffset),
+            "-fps_mode", "passthrough");
+    }
+    else if (options.finalFrameOnly) {
+        // Output-side seek`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "        const filters = filtersFor(seek);",
+          '        const filters = clock ? ["showinfo", ...filtersFor(seek)] : filtersFor(seek);',
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "            onStderr: framesWrittenReader(options.onProgress),",
+          `            onStderr: clock ? clock.record : framesWrittenReader(options.onProgress),`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    if (framePaths.size > 0 && duration > 0 && !options.finalFrameOnly && !options.frameRanges) {",
+          "    if (!clock && framePaths.size > 0 && duration > 0 && !options.finalFrameOnly && !options.frameRanges) {",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "        totalFrames: framePaths.size,\n        metadata,",
+          "        totalFrames: framePaths.size,\n        ...(clock && { nativeTimes: clock.finish(framePaths.size) }),\n        metadata,",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    if (misses.some(({ work }) => work.finalFrameOnly))",
+          "    if (misses.some(({ work }) => work.finalFrameOnly || work.nativeFrames))",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "            finalFrameOnly: work.finalFrameOnly,",
+          "            finalFrameOnly: work.finalFrameOnly,\n            nativeFrames: work.nativeFrames,",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    function lookupCacheFor(work) {\n        if (!cacheRootDir)",
+          "    function lookupCacheFor(work) {\n        if (!cacheRootDir || work.nativeFrames)",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "        if (work.finalFrameOnly ||\n            work.metadata.isVFR ||",
+          "        if (work.finalFrameOnly || work.nativeFrames ||\n            work.metadata.isVFR ||",
+          url,
+        );
+        const markedWindow = range?.range && {
+          start:
+            (range.range.frames.start * range.range.fps.den) /
+            range.range.fps.num,
+          end:
+            (range.range.frames.end * range.range.fps.den) /
+            range.range.fps.num,
+        };
+        source = replaceOnce(
+          source,
+          `            alignClipStartToFirstOutputFrame(video, fps);
+            const initialWindow = resolveVideoExtractionWindow(video, metadata, options.timelineEnd);
+            const window = await resolveFinalFrameExtractionWindow(videoPath, video, metadata, initialWindow, signal);
+            const videoDuration = window.durationSeconds;
+            if (videoDuration <= 0) {
+                return { skipped: true };
+            }
+            rebaseVideoToWindow(video, window);
+            const keyInput = cacheKeyInputs[index];
+            const extractionMediaStart = window.extractionMediaStart ?? window.mediaStart;`,
+          `            const rate = normalizeRateSpec(video.playbackRate);
+            const rampTiming = !video.loop && typeof rate === "object" && !isHttpUrl(videoPath)
+                ? video.rampTiming ?? resolveRampPlayback(video, rate) : null;
+            const nativeFrames = rampTiming !== null;
+            if (!nativeFrames) alignClipStartToFirstOutputFrame(video, fps);
+            const initialWindow = resolveVideoExtractionWindow(video, metadata, options.timelineEnd);
+            const window = await resolveFinalFrameExtractionWindow(videoPath, video, metadata, initialWindow, signal);
+            let videoDuration = window.durationSeconds;
+            let extractionMediaStart = window.extractionMediaStart ?? window.mediaStart;
+            if (rampTiming) {
+                const marks = ${JSON.stringify(markedWindow ?? null)};
+                const first = Math.max(0, video.start);
+                const last = Math.min(video.end, options.timelineEnd ?? Infinity);
+                if (last <= first) return { skipped: true };
+                let start = Math.max(first, marks?.start ?? first);
+                let end = Math.min(last, marks?.end ?? last);
+                // The plan needs a frame entry even for a clip the marked span never shows.
+                if (end <= start) {
+                    start = first;
+                    end = Math.min(last, first + 0.001);
+                }
+                extractionMediaStart = Math.max(0, Math.min(rampMediaTimeAt(rampTiming, start), window.extractionMediaStart ?? Infinity));
+                const sourceEnd = Math.min(resolvePlayableVideoDuration(metadata), rampMediaTimeAt(rampTiming, end));
+                // Include the frame at the mapped out-point when FFmpeg rounds its duration.
+                videoDuration = Math.max(0, sourceEnd - extractionMediaStart) + 0.0001;
+            } else {
+                rebaseVideoToWindow(video, window);
+            }
+            if (videoDuration <= 0) return { skipped: true };
+            const keyInput = cacheKeyInputs[index];`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "            const finalFrameOnly = window.finalFrameOnly === true;",
+          "            const finalFrameOnly = !nativeFrames && window.finalFrameOnly === true;",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          '${finalFrameOnly ? "final" : "range"}',
+          '${nativeFrames ? "native" : finalFrameOnly ? "final" : "range"}',
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "                    extractionMediaStart,\n                    finalFrameOnly,",
+          "                    extractionMediaStart,\n                    nativeFrames,\n                    rampTiming,\n                    finalFrameOnly,",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "        results.push({ result: { ...outcome.result, videoId: prepared.work.video.id } });",
+          `        const { video, rampTiming } = prepared.work;
+        const pictureTiming = rampTiming && {
+            start: rampTiming.start, end: rampTiming.end,
+            mediaStart: rampTiming.mediaStart, rate: rampTiming.rate,
+        };
+        results.push({ result: { ...outcome.result, videoId: video.id, pictureTiming } });`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    let sourceTime = sourceTimeAt(normalizedPlaybackRate, localTime);",
+          `    if (extracted.nativeTimes && extracted.pictureTiming) {
+        const mapped = rampMediaTimeAt(extracted.pictureTiming, globalTime);
+        if (isVideoHiddenBeforeStreamStart(videoStartOnMediaTimeline(extracted.metadata), mapped)) return null;
+        return Math.max(0, frameAtOrBefore(extracted.nativeTimes, mapped));
+    }
+    let sourceTime = sourceTimeAt(normalizedPlaybackRate, localTime);`,
+          url,
+        );
         if (range?.range) {
           source = `import { frameCacheSource as cutroomFrameCacheSource } from ${frameCache};\n${source}`;
           source = replaceOnce(
@@ -399,7 +616,83 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { rampRuntime } from ${rampRuntime};\nimport { rampMediaTimeAt, resolveRampPlayback } from ${rampWindow};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = replaceOnce(
+          source,
+          "return resolveVerifiedHyperframeRuntime().runtimeSource;",
+          "return rampRuntime(resolveVerifiedHyperframeRuntime().runtimeSource);",
+          url,
+        );
+        for (const [before, after] of [
+          [
+            "function collectRenderMedia(html) {",
+            `function placeRamp(clip, absolute, authoredEnd, rampTiming) {
+  const end = Number.isFinite(absolute.end) ? absolute.end : 0;
+  const placed = startAtPlayed({ ...clip, start: absolute.start, end }, absolute.played);
+  if (rampTiming) return { ...placed, rampTiming };
+  const rate = normalizeRateSpec2(clip.playbackRate);
+  const duration = authoredEnd - clip.start;
+  if (clip.loop || typeof rate !== "object" || !Number.isFinite(duration)) return placed;
+  return { ...placed, rampTiming: resolveRampPlayback({
+    start: absolute.start,
+    end: absolute.start + duration,
+    mediaStart: clip.mediaStart,
+  }, rate, absolute.played) };
+}
+function collectRenderMedia(html) {
+  const videoTiming = new Map();`,
+          ],
+          [
+            `    videos.push(
+      startAtPlayed({ ...video, start: absolute.start, end: absolute.end }, absolute.played)
+    );`,
+            `    const placed = placeRamp(video, absolute, video.end);
+    if (placed.rampTiming) videoTiming.set(video.id, placed.rampTiming);
+    videos.push(placed);`,
+          ],
+          [
+            "const placed = placeAudio(audio, windowFor(elementId));",
+            "const placed = placeAudio(audio, windowFor(elementId), audio.type === 'video' ? videoTiming.get(elementId) : undefined);",
+          ],
+          [
+            "function placeAudio(audio, window2) {",
+            "function placeAudio(audio, window2, rampTiming) {",
+          ],
+          [
+            `  const end = Number.isFinite(absolute.end) ? absolute.end : 0;
+  return startAtPlayed({ ...audio, start: absolute.start, end }, absolute.played);`,
+            "  return placeRamp(audio, absolute, authoredEnd, rampTiming);",
+          ],
+          [
+            "      playbackRate: video.playbackRate,\n      loop: video.loop,",
+            "      playbackRate: video.playbackRate,\n      rampTiming: video.rampTiming,\n      loop: video.loop,",
+          ],
+        ])
+          source = replaceOnce(source, before, after, url);
+        for (const [before, after] of [
+          [
+            "        metadata: ext.metadata,\n        ...ext.deferredRange",
+            "        metadata: ext.metadata,\n        ...(ext.nativeTimes && { nativeTimes: ext.nativeTimes, pictureTiming: ext.pictureTiming }),\n        ...ext.deferredRange",
+          ],
+          [
+            "      metadata: readVideoMetadata(entry.metadata, `${field}.metadata`),",
+            `      metadata: readVideoMetadata(entry.metadata, \`${"${field}"}.metadata\`),
+      ...(entry.nativeTimes && {
+        nativeTimes: entry.nativeTimes.map((time) => readFiniteNumber(time, field)),
+        pictureTiming: {
+          start: readFiniteNumber(entry.pictureTiming.start, field),
+          end: readFiniteNumber(entry.pictureTiming.end, field),
+          mediaStart: readFiniteNumber(entry.pictureTiming.mediaStart, field),
+          rate: readRateSpec(entry.pictureTiming.rate, field),
+        },
+      }),`,
+          ],
+          [
+            "      metadata: v.metadata,\n      framePaths,",
+            "      metadata: v.metadata,\n      ...(v.nativeTimes && { nativeTimes: v.nativeTimes, pictureTiming: v.pictureTiming }),\n      framePaths,",
+          ],
+        ])
+          source = replaceOnce(source, before, after, url);
         source = replaceOnce(
           source,
           "function runAudioStage(input) {",

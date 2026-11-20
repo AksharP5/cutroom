@@ -2,6 +2,7 @@ import { z } from "zod";
 
 /** Seconds of floating-point slack when comparing a seek to a presentation timestamp. */
 export const presentationTimeTolerance = 1e-6;
+export const nativeFramePageSeconds = 4;
 
 /**
  * Where export puts a video's frames: each frame's time is snapped to `start + k / rate`, which
@@ -28,4 +29,16 @@ export type FrameGrid = z.infer<typeof FrameGridSchema>;
 export function frameSeek(grid: { start: number; rate: number }, time: number) {
   const frame = Math.floor((time - grid.start) * grid.rate + 1e-6);
   return grid.start + (Math.max(0, frame) + 0.25) / grid.rate;
+}
+
+/** Last native presentation timestamp at or before the requested media time. */
+export function frameAtOrBefore(times: readonly number[], seconds: number) {
+  let first = 0;
+  let end = times.length;
+  while (first < end) {
+    const middle = (first + end) >>> 1;
+    if (times[middle]! <= seconds + 1e-9) first = middle + 1;
+    else end = middle;
+  }
+  return first - 1;
 }

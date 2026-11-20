@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
 import { isClipOnScreenAt } from "@hyperframes/core/runtime/clip-window";
+import {
+  parseRateLane,
+  rateAt,
+  sourceTimeAt,
+} from "@hyperframes/core/speed-ramp";
 import { applyAll, canonicalTimeline } from "../src/shared/timeline/apply";
 import type { ClipOrigin } from "../src/shared/timeline/apply";
 import {
@@ -61,6 +66,250 @@ const edit = (
   ).toEqual(timelineContent(timeline));
   return output;
 };
+
+test.each([
+  { type: "split", at: 60, clipIds: ["picture"] },
+  { type: "trim", clipId: "picture", edge: "start", to: 60 },
+] satisfies CommandInput[])(
+  "saved linked $type keeps the picture and sound on the same ramp",
+  (command) => {
+    const automation = JSON.stringify({
+      version: 1,
+      lanes: [
+        {
+          target: "rate",
+          points: [
+            { t: 0, v: 0.25, curve: 1 },
+            { t: 4, v: 4 },
+          ],
+        },
+      ],
+    });
+    const timing = `src="talk.mp4" data-link="pair" data-start="0" data-duration="4" data-media-start="0.5" data-automation='${automation}'`;
+    const html =
+      composition(`<video id="picture" ${timing} muted data-track-index="0"></video>
+    <audio id="sound" ${timing} data-track-index="1"></audio>`);
+    const original = parseRateLane(automation)!;
+    const output = edit(html, [command]);
+    const saved = parseComposition(
+      output,
+      emptyTimelineSettings(),
+    ).timeline.clips.filter((clip) => clip.start === 60);
+    expect(saved.map((clip) => clip.kind).sort()).toEqual(["audio", "video"]);
+    for (const clip of saved) {
+      const retained = parseRateLane(clip.automation)!;
+      expect(retained.audioWindow).toMatchObject({
+        offset: 0,
+        mediaStart: 0.5,
+        duration: 4,
+      });
+      for (const time of [0, 0.37, 1.9375]) {
+        expect(rateAt(retained, time)).toBeCloseTo(
+          rateAt(original, 2 + time),
+          6,
+        );
+        expect(clip.mediaStart! + sourceTimeAt(retained, time)).toBeCloseTo(
+          0.5 + sourceTimeAt(original, 2 + time),
+          6,
+        );
+      }
+    }
+  },
+);
+
+test("a linked ramp split keeps its physical cut and its original fractional outer edges", () => {
+  const points = [
+    { t: 0, v: 0.25, curve: 1 },
+    { t: 0.25, v: 4 },
+    { t: 0.8, v: 0.5, viaX: 0.25, viaY: 0.65 },
+    { t: 1.5, v: 2 },
+  ];
+  const automation = (offset: number) =>
+    JSON.stringify({ version: 1, lanes: [{ target: "rate", offset, points }] });
+  const soundStart = 0.0125;
+  const pictureStart = 0.1125;
+  const soundOffset = 0.03;
+  const pictureOffset = soundOffset + pictureStart - soundStart;
+  const soundRate = parseRateLane(automation(soundOffset))!;
+  const soundSource = 0.5;
+  const pictureSource =
+    soundSource + sourceTimeAt(soundRate, pictureStart - soundStart);
+  const timing = `src="take.mp4" data-link="pair"`;
+  const html = composition(
+    `<video id="picture" ${timing} muted data-track-index="0" data-start="${pictureStart}" data-duration="1.64" data-media-start="${pictureSource}" data-automation='${automation(pictureOffset)}'></video>
+     <audio id="sound" ${timing} data-track-index="1" data-start="${soundStart}" data-duration="2" data-media-start="${soundSource}" data-automation='${automation(soundOffset)}'></audio>`,
+  );
+  const saved = parseComposition(
+    edit(html, [{ type: "split", at: 6, clipIds: ["picture"] }]),
+    emptyTimelineSettings(),
+  );
+  const rows = saved.timeline.clips.map((clip) => {
+    const attrs = saved.elements.get(clip.id)!.attrs;
+    const start = Number(attrs["data-start"]);
+    const end = start + Number(attrs["data-duration"]);
+    const mediaStart = Number(attrs["data-media-start"]);
+    const rate = parseRateLane(attrs["data-automation"])!;
+    expect(rate.audioWindow).toBeDefined();
+    for (const at of [start, (start + end) / 2, end])
+      expect(mediaStart + sourceTimeAt(rate, at - start)).toBeCloseTo(
+        soundSource + sourceTimeAt(soundRate, at - soundStart),
+        6,
+      );
+    return { clip, start, end };
+  });
+  const [
+    { clip: pictureHead, start: picIn, end: picCut },
+    { clip: pictureTail, start: picJoin, end: picOut },
+    { clip: soundHead, start: soundIn, end: soundCut },
+    { clip: soundTail, start: soundJoin, end: soundOut },
+  ] = rows as [
+    (typeof rows)[number],
+    (typeof rows)[number],
+    (typeof rows)[number],
+    (typeof rows)[number],
+  ];
+  expect([
+    pictureHead.start,
+    pictureTail.start,
+    soundHead.start,
+    soundTail.start,
+  ]).toEqual([4, 6, 1, 6]);
+  expect([picIn, picCut, picJoin, soundIn, soundCut, soundJoin]).toEqual([
+    pictureStart,
+    0.2,
+    0.2,
+    soundStart,
+    0.2,
+    0.2,
+  ]);
+  expect(picOut).toBeCloseTo(pictureStart + 1.64, 12);
+  expect(soundOut).toBeCloseTo(soundStart + 2, 12);
+});
+
+test("moving before trimming in the same batch keeps the exact authored audio in-point", () => {
+  const html = composition(
+    `<audio id="sound" src="sound.wav" data-start="0" data-media-start="0.500000701" data-duration="4"
+      data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":0.5},{"t":4,"v":2}]}]}'></audio>`,
+  );
+  const saved = edit(html, [
+    { type: "move", clipIds: ["sound"], by: 30, mode: "place" },
+    { type: "trim", clipId: "sound", edge: "end", to: 90 },
+  ]);
+  const [clip] = parseComposition(saved, emptyTimelineSettings()).timeline
+    .clips;
+  expect(parseRateLane(clip!.automation)?.audioWindow).toMatchObject({
+    offset: 0,
+    mediaStart: 0.500000701,
+    duration: 4,
+  });
+});
+
+test("a ramp starting between frames at source zero still cuts from its authored in-point", () => {
+  const start = 0.012515625;
+  const html = composition(
+    `<video id="take" src="take.mp4" data-start="${start}" data-duration="4"
+      data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":0.5},{"t":4,"v":2}]}]}'></video>`,
+  );
+  const original = parseComposition(html, emptyTimelineSettings());
+  const originalRate = parseRateLane(
+    original.elements.get("take")!.attrs["data-automation"],
+  )!;
+  const split = parseComposition(
+    edit(html, [{ type: "split", clipIds: ["take"], at: 61 }]),
+    emptyTimelineSettings(),
+  );
+  const [left, right] = split.timeline.clips;
+  const leftAttrs = split.elements.get(left!.id)!.attrs;
+  const rightAttrs = split.elements.get(right!.id)!.attrs;
+  expect(Number(leftAttrs["data-media-start"] ?? 0)).toBe(0);
+  expect(Number(rightAttrs["data-media-start"])).toBeCloseTo(
+    sourceTimeAt(originalRate, 61 / 30 - start),
+    10,
+  );
+  expect(
+    parseRateLane(rightAttrs["data-automation"])?.audioWindow?.mediaStart,
+  ).toBe(0);
+});
+
+test("slipping and setting the source in-point keep dry ramp preparation valid", () => {
+  const automation = JSON.stringify({
+    version: 1,
+    lanes: [
+      {
+        target: "rate",
+        offset: 2,
+        audioWindow: { offset: 0, mediaStart: 1, duration: 6 },
+        points: [
+          { t: 0, v: 1 },
+          { t: 4, v: 1 },
+        ],
+      },
+    ],
+  });
+  const html = composition(
+    `<audio id="sound" src="sound.wav" data-start="0" data-media-start="3" data-duration="2" data-automation='${automation}'></audio>`,
+  );
+  const editedRate = (command: CommandInput) => {
+    const [clip] = parseComposition(
+      edit(html, [command]),
+      emptyTimelineSettings(),
+    ).timeline.clips;
+    expect(clip?.start).toBe(0);
+    return parseRateLane(clip!.automation)!;
+  };
+
+  expect(editedRate({ type: "slip", clipId: "sound", by: 30 })).toMatchObject({
+    offset: 3,
+    audioWindow: { offset: 0, mediaStart: 1, duration: 6 },
+  });
+  const extended = editedRate({ type: "slip", clipId: "sound", by: 90 });
+  expect(extended.offset).toBe(5);
+  expect(extended.audioWindow).toBeUndefined();
+  const reassigned = editedRate({
+    type: "setTiming",
+    clipId: "sound",
+    mediaStart: 3.5,
+  });
+  expect(reassigned.offset).toBe(2);
+  expect(reassigned.audioWindow).toBeUndefined();
+});
+
+test.each([
+  { rate: 4, last: 60 },
+  { rate: 0.5, last: 480 },
+])(
+  "a $rate× rate lane bounds a trim at the last source frame",
+  ({ rate, last }) => {
+    const automation = JSON.stringify({
+      version: 1,
+      lanes: [{ target: "rate", points: [{ t: 0, v: rate }] }],
+    });
+    const { timeline } = parseComposition(
+      composition(
+        `<video id="shot" src="shot.mp4" data-start="0" data-duration="1" data-automation='${automation}'></video>`,
+      ),
+      emptyTimelineSettings(),
+      { mediaLengths: new Map([["shot.mp4", 8]]) },
+    );
+    const trimTo = (to: number) =>
+      applyAll(timeline, [
+        CommandSchema.parse({ type: "trim", clipId: "shot", edge: "end", to }),
+      ]);
+    expect(trimTo(last).clips[0]?.duration).toBe(last);
+    expect(() => trimTo(last + 1)).toThrow("past the end of its source media");
+  },
+);
+
+test("an untrimmed ramp with measured media gets its natural length", () => {
+  const { timeline } = parseComposition(
+    composition(
+      `<audio id="voice" src="voice.wav" data-start="0" data-media-start="1" data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":2}]}]}'></audio>`,
+    ),
+    emptyTimelineSettings(),
+    { mediaLengths: new Map([["voice.wav", 9]]) },
+  );
+  expect(timeline.clips[0]?.duration).toBe(120);
+});
 
 const withoutStacking = (html: string) =>
   html

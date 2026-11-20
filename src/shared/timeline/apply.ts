@@ -1,4 +1,4 @@
-import { frameTime, sourceGridFrame } from "./time";
+import { clipRate, frameTime, sourceGridFrame } from "./time";
 import { activeVersion, fitsVersion } from "./versions";
 import { firstTextLine, isAudioKind } from "./schema";
 import type {
@@ -20,12 +20,16 @@ import type { Region, RegionEdit } from "./region";
 import { TimelineError } from "./errors";
 import {
   clearAudioAutomation,
+  clearRampAudioWindow,
   clipFades,
   CUTROOM_AUDIO_GROUP_PREFIX,
   trackGainWarning,
   windowMix,
   withVolumePoints,
 } from "./mix";
+import { authoredRampAudioWindow, authoredRampEdges } from "./rampGeometry";
+import { rampAudioSourceAt } from "./rampWindow";
+import type { ObservedRampClip } from "./rampGeometry";
 import { MAX_FX_NODES, asHfChain } from "./fx";
 import type { FxInput, FxNode } from "./fx";
 import {
@@ -46,7 +50,11 @@ import { newTrack, nextTrackIndex } from "./tracks";
 import { editTransform, hasTransformEdit } from "./transform";
 import { editStyle, takesStyleField } from "./elementStyle";
 import { FREEZE_DIR, localMediaPath, sourceUrl } from "../media";
-import { parseRateLane } from "@hyperframes/core/speed-ramp";
+import {
+  parseRateLane,
+  sourceTimeAt,
+  timeAtSourceTime,
+} from "@hyperframes/core/speed-ramp";
 import { editGrade } from "./grade";
 import {
   moveKeyframe,
@@ -224,11 +232,14 @@ export const clipEnd = (clip: Clip) => clip.start + clip.duration;
 
 // Plain clips have no persisted source in-point. Track their window only while observing a batch.
 const animationSource = Symbol("animation source offset");
-type ObservedClip = Clip & { [animationSource]?: number };
+type ObservedClip = ObservedRampClip & { [animationSource]?: number };
 export const animationOrigin = (clip: ObservedClip, fps: Fps) =>
   canonicalSeconds(
-    frameTime(clip.start, fps) -
-      (clip.mediaStart ?? clip[animationSource] ?? 0) / clip.playbackRate,
+    frameTime(clip.start, fps) +
+      timeAtSourceTime(
+        clipRate(clip),
+        -(clip.mediaStart ?? clip[animationSource] ?? 0),
+      ),
   );
 
 const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -338,15 +349,21 @@ export function applyAll(
       onCreate(id, resolved);
     },
   };
-  const observed = onApply
-    ? {
-        ...timeline,
-        clips: timeline.clips.map((clip) => ({
-          ...clip,
-          [animationSource]: 0,
-        })),
-      }
-    : timeline;
+  // Carry exact authored ramp timing through any clip spreads within this command batch.
+  const observed =
+    onApply ||
+    timeline.clips.some((clip: ObservedClip) => clip[authoredRampAudioWindow])
+      ? {
+          ...timeline,
+          clips: timeline.clips.map((clip: ObservedClip) => ({
+            ...clip,
+            ...(onApply && { [animationSource]: 0 }),
+            ...(clip[authoredRampAudioWindow] && {
+              [authoredRampAudioWindow]: clip[authoredRampAudioWindow],
+            }),
+          })),
+        }
+      : timeline;
   const result = commands.reduce((current, command, index) => {
     try {
       const next = applyIn(current, command, batch);
@@ -364,11 +381,15 @@ export function applyAll(
   if (result === observed) return timeline;
   // A roll trims both sides of a cut in turn, so transitions are settled once the batch is done.
   const fitted = fitTransitions(result);
-  if (!onApply) return fitted;
+  if (observed === timeline) return fitted;
   return {
     ...fitted,
     clips: fitted.clips.map((clip: ObservedClip) => {
-      const { [animationSource]: _offset, ...written } = clip;
+      const {
+        [animationSource]: _offset,
+        [authoredRampAudioWindow]: _window,
+        ...written
+      } = clip;
       return written;
     }),
   };
@@ -1213,6 +1234,14 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     case "setTiming": {
       const target = find(command.clipId);
       const targets = withPartners(clips, [target]);
+      if (
+        command.playbackRate !== undefined &&
+        targets.some((clip) => parseRateLane(clip.automation))
+      )
+        throw new TimelineError(
+          "unsupported",
+          "This clip or its linked partner uses a speed ramp. Edit the rate points in Source.",
+        );
       for (const clip of targets)
         if (clip.mediaStart === null)
           throw new TimelineError(
@@ -1221,25 +1250,30 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           );
       return {
         ...timeline,
-        clips: clips.map((clip) =>
-          targets.includes(clip)
-            ? {
-                ...clip,
-                ...(command.playbackRate !== undefined && {
-                  playbackRate: command.playbackRate,
-                }),
-                // Keep each partner's source at the selected clip's start in sync, including L-cuts.
-                mediaStart:
-                  clip.mediaStart! +
-                  (command.mediaStart === undefined
-                    ? 0
-                    : command.mediaStart - target.mediaStart!) +
-                  frameTime(clip.start - target.start, fps) *
-                    ((command.playbackRate ?? clip.playbackRate) -
-                      clip.playbackRate),
-              }
-            : clip,
-        ),
+        clips: clips.map((clip: ObservedClip) => {
+          if (!targets.includes(clip)) return clip;
+          const playbackRate = command.playbackRate ?? clip.playbackRate;
+          // Keep each partner's source at the selected clip's start in sync, including L-cuts.
+          const mediaStart =
+            clip.mediaStart! +
+            (command.mediaStart === undefined
+              ? 0
+              : command.mediaStart - target.mediaStart!) +
+            frameTime(clip.start - target.start, fps) *
+              (playbackRate - clip.playbackRate);
+          if (
+            mediaStart === clip.mediaStart &&
+            playbackRate === clip.playbackRate
+          )
+            return clip;
+          const { [authoredRampAudioWindow]: _window, ...current } = clip;
+          return {
+            ...current,
+            mediaStart,
+            playbackRate,
+            automation: clearRampAudioWindow(clip.automation),
+          };
+        }),
       };
     }
     case "setClip": {
@@ -1789,7 +1823,10 @@ function settle(before: Timeline, after: Timeline): Timeline {
       // The frames the runtime shows before the source runs out.
       clip.duration >
         toFrames(
-          (clip.sourceDuration - clip.mediaStart) / clip.playbackRate,
+          timeAtSourceTime(
+            clipRate(clip),
+            clip.sourceDuration - clip.mediaStart,
+          ),
           after.fps,
         )
     )
@@ -2109,7 +2146,7 @@ function slipEdit(timeline: Timeline, clip: Clip, linked: boolean) {
               member.start + by,
               clipEnd(member) + by,
               timeline.fps,
-              "trim",
+              "slip",
             ),
             start: member.start,
           }
@@ -2443,7 +2480,10 @@ function assertRippleSync(
     if (!old?.link) continue;
     const sourceAtStart =
       (old.mediaStart ?? 0) +
-      frameTime(clip.start - old.start, before.fps) * old.playbackRate;
+      sourceTimeAt(
+        clipRate(old),
+        frameTime(clip.start - old.start, before.fps),
+      );
     if (round6(clip.mediaStart ?? 0) === round6(sourceAtStart)) continue;
     const partners = shifted.get(old.link) ?? [];
     partners.push(clip);
@@ -2497,7 +2537,7 @@ function keyframeValue<P extends KeyframeProperty>(
 function advance(clip: Clip, frames: number, fps: Fps): number | null {
   return clip.mediaStart === null
     ? null
-    : clip.mediaStart + ((frames * fps.den) / fps.num) * clip.playbackRate;
+    : clip.mediaStart + sourceTimeAt(clipRate(clip), frameTime(frames, fps));
 }
 
 /** Source geometry is shared; edge trims and internal cuts have different fade semantics. */
@@ -2506,21 +2546,38 @@ function windowClip(
   start: number,
   end: number,
   fps: Fps,
-  mode: "trim" | "cut" = "cut",
-): Clip {
+  mode: "trim" | "cut" | "slip" = "cut",
+): ObservedClip {
   const duration = end - start;
   if (duration <= 0) return { ...clip, start, duration };
-  return {
-    ...clip,
-    ...windowMix(clip, start - clip.start, duration, fps, mode),
+  const elapsed = start - clip.start;
+  const before = clip[authoredRampEdges];
+  const edges = before && {
+    start: mode === "slip" || elapsed === 0 ? before.start : 0,
+    end: mode === "slip" || end === clipEnd(clip) ? before.end : 0,
+  };
+  const { [authoredRampAudioWindow]: _window, ...current } = clip;
+  const piece = {
+    ...current,
+    ...(edges && { [authoredRampEdges]: edges }),
     start,
     duration,
-    mediaStart: advance(clip, start - clip.start, fps),
-    // Keyframes stay on the frames of content they animate.
-    keyframes: shiftKeyframes(clip.keyframes, start - clip.start),
-    // A piece cut from a clip keeps a transition only on an edge it still has.
     ...(mode === "cut" && start !== clip.start && { transitionIn: null }),
     ...(mode === "cut" && end !== clipEnd(clip) && { transitionOut: null }),
+  };
+  const mix = windowMix(clip, piece, fps, mode === "cut" ? "cut" : "trim");
+  const rate = clipRate({
+    automation: mix.automation ?? null,
+    playbackRate: clip.playbackRate,
+  });
+  return {
+    ...piece,
+    ...mix,
+    mediaStart:
+      typeof rate === "object" && rate.audioWindow
+        ? Math.max(0, rampAudioSourceAt(rate, rate.audioWindow))
+        : advance(clip, elapsed, fps),
+    keyframes: shiftKeyframes(clip.keyframes, elapsed),
     ...(clip[animationSource] !== undefined && {
       [animationSource]:
         clip[animationSource] +
@@ -2564,16 +2621,28 @@ function linkedCuts(clips: Clip[], from: Clip, to: Clip): [Clip, Clip][] {
 function framesAfterOut(clip: Clip, fps: Fps) {
   if (clip.mediaStart === null || clip.sourceDuration === null) return Infinity;
   return (
-    toFrames((clip.sourceDuration - clip.mediaStart) / clip.playbackRate, fps) -
-    clip.duration
+    toFrames(
+      timeAtSourceTime(clipRate(clip), clip.sourceDuration - clip.mediaStart),
+      fps,
+    ) - clip.duration
   );
 }
 
 /** Whole frames of media a clip has before its in point. */
 function framesBeforeIn(clip: Clip, fps: Fps) {
   if (clip.mediaStart === null) return Infinity;
+  const rate = clipRate(clip);
+  if (typeof rate !== "number") {
+    const frames =
+      -timeAtSourceTime(rate, -clip.mediaStart) / frameTime(1, fps);
+    const nearest = Math.round(frames);
+    const inPoint = -sourceTimeAt(rate, -frameTime(nearest, fps));
+    return Math.abs(clip.mediaStart - inPoint) < 1e-6
+      ? nearest
+      : Math.floor(frames);
+  }
   return (
-    sourceGridFrame(clip.mediaStart, fps, clip.playbackRate) ??
+    sourceGridFrame(clip.mediaStart, fps, rate) ??
     Math.floor((clip.mediaStart * fps.num) / (fps.den * clip.playbackRate))
   );
 }
