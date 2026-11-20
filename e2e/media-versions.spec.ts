@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { link, mkdir, readFile, writeFile } from "node:fs/promises";
-import type { Browser, Page } from "@playwright/test";
+import type { Browser, Locator, Page } from "@playwright/test";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -21,6 +21,27 @@ const takes = [
 ];
 
 const comparison = process.env.CUTROOM_VERSION_EVIDENCE;
+
+async function stageColour(page: Page, stage: Locator) {
+  const png = await stage.screenshot({ animations: "disabled" });
+  return page.evaluate(async (data) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${data}`;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(image, image.width / 2, image.height / 2, 1, 1, 0, 0, 1, 1);
+    const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+    return r! > 170 && g! < 80
+      ? "red"
+      : g! > 170 && r! < 80
+        ? "lime"
+        : b! > 170 && r! < 80
+          ? "blue"
+          : "other";
+  }, png.toString("base64"));
+}
 
 async function recordComparison(page: Page, evidence: string) {
   const cdp = await page.context().newCDPSession(page);
@@ -407,36 +428,7 @@ for (const mode of playbackModes)
       if (evidence)
         await page.screenshot({ path: join(evidence, "footage.png") });
 
-      const picture = async () => {
-        const png = await stage.screenshot({ animations: "disabled" });
-        return page.evaluate(async (data) => {
-          const image = new Image();
-          image.src = `data:image/png;base64,${data}`;
-          await image.decode();
-          const canvas = document.createElement("canvas");
-          canvas.width = canvas.height = 1;
-          const ctx = canvas.getContext("2d")!;
-          ctx.drawImage(
-            image,
-            image.width / 2,
-            image.height / 2,
-            1,
-            1,
-            0,
-            0,
-            1,
-            1,
-          );
-          const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
-          return r! > 170 && g! < 80
-            ? "red"
-            : g! > 170 && r! < 80
-              ? "lime"
-              : b! > 170 && r! < 80
-                ? "blue"
-                : "other";
-        }, png.toString("base64"));
-      };
+      const picture = () => stageColour(page, stage);
 
       const iframe = await page
         .locator("iframe[data-live]")
@@ -636,6 +628,75 @@ for (const mode of playbackModes)
       await client.close();
     }
   });
+
+test("a 4K alternate stays on native playback while a smaller take uses the GPU", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Mixed-size versions" },
+      })
+    ).json(),
+  );
+  for (const [file, size, colour] of [
+    ["take.mp4", "640x360", "red"],
+    ["wide.mp4", "3840x2160", "lime"],
+  ] as const) {
+    await run("ffmpeg", [
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      `color=${colour}:s=${size}:r=30:d=3`,
+      "-c:v",
+      "libx264",
+      "-threads",
+      "2",
+      "-preset",
+      "ultrafast",
+      "-g",
+      "15",
+      "-movflags",
+      "+faststart",
+      join(project.path, file),
+    ]);
+  }
+  const versions = JSON.stringify([
+    { name: "Take", src: "take.mp4", sourceIn: 0 },
+    { name: "Wide 4K", src: "wide.mp4", sourceIn: 0 },
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><head></head><body><main data-composition-id="main" data-width="640" data-height="360" data-duration="2" data-fps="30"><video id="shot" src="take.mp4" muted data-start="0" data-duration="2" data-track-index="0" data-cutroom-versions='${versions}' data-cutroom-version-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video></main></body></html>`,
+  );
+  await page.addInitScript(() => {
+    if (window !== window.top) return;
+    localStorage.setItem("cutroom.footagePipeline", "true");
+    const configure = VideoDecoder.prototype.configure;
+    VideoDecoder.prototype.configure = function (config) {
+      if (config.codedHeight === 2160)
+        document.documentElement.setAttribute("data-probed-4k-decoder", "");
+      return configure.call(this, config);
+    };
+  });
+  await page.goto(`/#project/${project.id}`);
+  await seekFrame(page, 15);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-pipeline", "on");
+  await page.locator(".tl-versions").click();
+  const menu = page.getByRole("menu", { name: /Versions of/ });
+  const wide = menu.getByRole("menuitemradio", { name: /Wide 4K/ });
+  await wide.hover();
+  await expect(stage).toHaveAttribute("data-pipeline", "off");
+  await expect.poll(() => stageColour(page, stage)).toBe("lime");
+  await menu.getByRole("menuitemradio", { name: /^Take/ }).hover();
+  await expect(stage).toHaveAttribute("data-pipeline", "on");
+  await expect.poll(() => stageColour(page, stage)).toBe("red");
+  await expect(page.locator("html[data-probed-4k-decoder]")).toHaveCount(0);
+});
 
 test("audio versions can be added in the clip menu, Media and Source", async ({
   page,

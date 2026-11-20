@@ -45,4 +45,6 @@ export const PipelineResponseSchema = z.object({
   revision: z.string(),
   plan: PipelinePlanSchema,
   colours: z.record(z.string(), FootageColourSchema).default({}),
+  /** Sources the pipeline cannot draw, including alternates not mounted in the composition. */
+  sourceRefusals: z.record(z.string(), z.string()).default({}),
 });

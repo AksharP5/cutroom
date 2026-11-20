@@ -139,6 +139,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   );
   let plan: Plan | null = null;
   let sourceColours: Record<string, FootageColour> = {};
+  let sourceRefusals: Record<string, string> = {};
   const explained = new Set<string>();
   let stopped: string | null = null;
   const stop = (reason: string) => {
@@ -302,6 +303,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         sourceIn,
         fits,
         offline,
+        sourceRefusals[src],
       ]),
     ]);
     if (audition?.key !== key) {
@@ -315,7 +317,12 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       };
       scrubs.forgetFailures();
       for (const version of clip.versions) {
-        if (version.offline || version.fits === false) continue;
+        if (
+          version.offline ||
+          version.fits === false ||
+          sourceRefusals[version.src]
+        )
+          continue;
         const path = localMediaPath(view.composition, version.src);
         if (path === null || audition.proxyPaths.has(path)) continue;
         audition.proxyPaths.add(path);
@@ -325,10 +332,15 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const warming = audition;
     const selected = hovered ?? activeVersion(clip);
     const eligible = clip.versions.flatMap((version, index) =>
-      version.fits === false || version.offline ? [] : [index],
+      version.fits === false || version.offline || sourceRefusals[version.src]
+        ? []
+        : [index],
     );
     const next = nextAudition(eligible, selected);
-    const resident = new Set([selected, next]);
+    const resident = new Set([
+      eligible.includes(selected) ? selected : undefined,
+      next,
+    ]);
     for (const [index, take] of warming.takes) {
       if (resident.has(index)) continue;
       warming.takes.delete(index);
@@ -402,7 +414,12 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     }
     const version = clip.versions[selected];
     return version && !version.offline && version.fits !== false
-      ? { clip, version, decoder: warming.takes.get(selected) }
+      ? {
+          clip,
+          version,
+          decoder: warming.takes.get(selected),
+          refusal: sourceRefusals[version.src],
+        }
       : null;
   }
 
@@ -483,6 +500,13 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     if (!shown) {
       stop("the layers at the playhead need to be composited together");
       if (state.kind === "playing") prepare(view, frame, LOOKAHEAD, OPENING);
+      return;
+    }
+    if (
+      alternate?.refusal &&
+      shown.some(({ clip }) => clip.id === alternate.clip.id)
+    ) {
+      stop(alternate.refusal);
       return;
     }
     const moving = state.kind === "scrubbing" || state.kind === "shuttle";
@@ -760,7 +784,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       return stop(error instanceof Error ? error.message : String(error));
     }
     if (!isCurrent()) return;
-    const { plan: next, colours } = response;
+    const { plan: next, colours, sourceRefusals: refusals } = response;
     // Which videos HyperFrames keeps, and why, for whoever tries the setting, each said once.
     for (const reason of Object.values(next.hyperframes ?? {}))
       if (!explained.has(reason)) {
@@ -772,6 +796,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       return stop(next.reason);
     }
     sourceColours = colours;
+    sourceRefusals = refusals;
     plan = next;
     const drawn = Object.keys(next.drawable);
     const native = Object.keys(next.hyperframes);

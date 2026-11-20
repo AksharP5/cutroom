@@ -782,6 +782,7 @@ export function createTimelineRoutes(
       return c.json({
         revision: source.version,
         colours: Object.fromEntries(footageColours),
+        sourceRefusals: Object.fromEntries(footageRefusals),
         plan: planPreviewPipeline(
           source.content,
           parsed.timeline.fps,
