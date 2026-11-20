@@ -179,3 +179,9 @@ export function versionMedia(
     ...(files && !files.has(take.src) && { offline: true }),
   };
 }
+
+/** The next playable row in menu and keyboard order. */
+export function nextAudition(available: readonly number[], current: number) {
+  if (available.length < 2) return undefined;
+  return available.find((index) => index > current) ?? available[0];
+}

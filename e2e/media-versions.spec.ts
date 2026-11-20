@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, writeFile } from "node:fs/promises";
 import type { Browser, Page } from "@playwright/test";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -102,23 +102,27 @@ async function timePicture(
   page: Page,
   row: string,
   color: "red" | "lime" | "blue",
+  action: "hover" | "switch" = "hover",
 ) {
   const stage = (await page.locator(".edit-stage").boundingBox())!;
   const viewport = page.viewportSize()!;
   const target = page.getByRole("menuitemradio", { name: new RegExp(row) });
-  await page.evaluate(() => {
-    document.documentElement.removeAttribute("data-measure-pointer");
-    document.addEventListener(
-      "pointerover",
-      (event) => {
-        document.documentElement.setAttribute(
-          "data-measure-pointer",
-          String(performance.timeOrigin + event.timeStamp),
-        );
-      },
-      { capture: true, once: true },
-    );
-  });
+  await page.evaluate(
+    (eventName) => {
+      document.documentElement.removeAttribute("data-measure-pointer");
+      document.addEventListener(
+        eventName,
+        (event) => {
+          document.documentElement.setAttribute(
+            "data-measure-pointer",
+            String(performance.timeOrigin + event.timeStamp),
+          );
+        },
+        { capture: true, once: true },
+      );
+    },
+    action === "hover" ? "pointerover" : "click",
+  );
   const cdp = await page.context().newCDPSession(page);
   try {
     const latency = new Promise<number>((resolve, reject) => {
@@ -185,7 +189,8 @@ async function timePicture(
       maxWidth: 640,
       quality: 75,
     });
-    await target.hover();
+    if (action === "hover") await target.hover();
+    else await target.dispatchEvent("click");
     return Math.round((await latency) * 10) / 10;
   } finally {
     await cdp.send("Page.stopScreencast");
@@ -193,6 +198,7 @@ async function timePicture(
   }
 }
 
+const longProject = process.env.CUTROOM_VERSION_SCALE === "100";
 const playbackModes = comparison
   ? (["record", "native", "gpu"] as const)
   : (["native"] as const);
@@ -203,7 +209,7 @@ for (const mode of playbackModes)
     baseURL,
     request,
   }, testInfo) => {
-    test.setTimeout(120_000);
+    test.setTimeout(longProject ? 240_000 : 120_000);
     const client = new Client({ name: "media-versions", version: "1" });
     await client.connect(
       new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
@@ -277,6 +283,32 @@ for (const mode of playbackModes)
           commands,
         });
       const starter = (await read()).timeline.clips.map(({ id }) => id);
+      const more = [];
+      if (longProject) {
+        for (let i = 1; i < 100; i++) {
+          const src = `cut-${(i - 1) % 15}.mp4`;
+          if (i <= 15)
+            await link(join(project.path, "wide.mp4"), join(project.path, src));
+          const clipId = `cut-${i}`;
+          more.push({
+            type: "insert",
+            track: 3,
+            at: 30 + i * 90,
+            clip: { id: clipId, kind: "video", src, duration: 90, muted: true },
+          });
+          if (i > 9) continue;
+          const versions = [{ name: "Cut", src }];
+          for (let j = 1; j <= 3; j++) {
+            const alternate = `alt-${i}-${j}.mp4`;
+            await link(
+              join(project.path, takes[j % 3]!.src),
+              join(project.path, alternate),
+            );
+            versions.push({ name: `Take ${j + 1}`, src: alternate });
+          }
+          more.push({ type: "setVersions", clipId, versions });
+        }
+      }
       await edit([
         ...(starter.length ? [{ type: "remove", clipIds: starter }] : []),
         {
@@ -292,18 +324,19 @@ for (const mode of playbackModes)
             mediaStart: 0,
           },
         },
+        ...more,
       ]);
       const measure =
         Boolean(comparison && mode !== "record") ||
         process.env.CUTROOM_VERSION_MEASURE === "1";
       const evidence = mode === "record" ? comparison : undefined;
       const gpu = mode === "gpu" || process.env.CUTROOM_VERSION_GPU === "1";
-      if (gpu)
-        await page.addInitScript(
-          () =>
-            window === window.top &&
-            localStorage.setItem("cutroom.footagePipeline", "true"),
-        );
+      await page.addInitScript(
+        (gpu) =>
+          window === window.top &&
+          localStorage.setItem("cutroom.footagePipeline", String(gpu)),
+        gpu,
+      );
       await page.goto(`/#project/${projectId}`);
       const stage = page.locator(".edit-stage");
       const badge = page.locator('[data-clip-label="interview"] .tl-versions');
@@ -342,6 +375,11 @@ for (const mode of playbackModes)
       expect(refused.isError).toBe(true);
       expect(JSON.stringify(refused.content)).toContain("2:00 shorter");
       const count = measure ? "5" : "4";
+      if (longProject)
+        for (let i = 0; i < 12 && !(await badge.isVisible()); i++)
+          await page
+            .getByRole("button", { name: "Zoom in", exact: true })
+            .click();
       await expect(badge).toHaveText(count);
       const baseline = measure ? await browserMemory(browser) : 0;
       await badge.click();
@@ -407,15 +445,15 @@ for (const mode of playbackModes)
           samples.push(await timePicture(page, "Wide", "blue"));
           samples.push(await timePicture(page, "Take 1", "red"));
         }
+        await timePicture(page, "Take 2", "lime");
+        await page.waitForTimeout(300);
         const open = await browserMemory(browser);
-        console.log(
-          JSON.stringify({
-            mode,
-            samples,
-            baselineMiB: baseline,
-            openMiB: open,
-          }),
-        );
+        await page.mouse.move(4, 1045);
+        const switches = [
+          await timePicture(page, "Take 2", "lime", "switch"),
+          await timePicture(page, "Wide", "blue", "switch"),
+          await timePicture(page, "Take 1", "red", "switch"),
+        ];
         await second.hover();
         const routed = preview.locator('audio[data-cutroom-version="1"]');
         await expect
@@ -434,6 +472,25 @@ for (const mode of playbackModes)
             }),
           )
           .toBe(true);
+        await page.keyboard.press("Escape");
+        await expect(menu).toBeHidden();
+        await expect(preview.locator("[data-cutroom-version]")).toHaveCount(0);
+        await page.waitForTimeout(300);
+        const stats = {
+          mode,
+          cuts: longProject ? 100 : 1,
+          samples,
+          switches,
+          baselineMiB: baseline,
+          openMiB: open,
+          closedMiB: await browserMemory(browser),
+        };
+        console.log(JSON.stringify(stats));
+        if (comparison)
+          await writeFile(
+            join(comparison, `${mode}.json`),
+            JSON.stringify(stats),
+          );
         return;
       }
       await second.hover();

@@ -158,11 +158,6 @@
   left: anchor(left);
   right: auto;
   transform-origin: top left;
-  border: var(--stroke-hair) solid var(--line);
-}
-.versions-menu button[data-hovered],
-.versions-menu button:not(:disabled):hover {
-  background: var(--surface-active);
 }
 .versions-menu .versions-source b[data-offline] {
   color: var(--danger);

@@ -7,6 +7,7 @@ import {
   activeVersion,
   consumedSource,
   mediaVersions,
+  nextAudition,
   versionPartners,
   versionStart,
 } from "../../shared/timeline/versions";
@@ -53,53 +54,115 @@ const OWN_ATTRIBUTES = new Set([
  * descendants an animation makes visible again.
  */
 const AUDITION_STYLE = `<style data-cutroom-audition>[data-cutroom-version]:not([data-cutroom-shown]),[data-cutroom-version]:not([data-cutroom-shown]) *,video[data-cutroom-version]:not([data-cutroom-shown]) + canvas[data-cutroom-video-hold]{visibility:hidden!important;opacity:0!important;pointer-events:none!important}</style>`;
-function installAudition(source: string) {
+function installAudition(
+  source: string,
+  nextAudition: (available: number[], current: number) => number | undefined,
+) {
   const win = window as Window & {
     __cutroomAuditionGains?: WeakMap<HTMLMediaElement, GainNode>;
+    __cutroomAuditionResident?: (
+      media: HTMLMediaElement,
+      needed: boolean,
+    ) => boolean;
+    __cutroomRefreshAudition?: () => void;
     __cutroomShowAudition?: (
       video: HTMLVideoElement,
       show: () => boolean,
     ) => void;
   };
   win.__cutroomAuditionGains = new WeakMap();
+  const sources = new Map<HTMLMediaElement, string>();
+  let selected: number | undefined;
+  let outgoing: number | undefined;
+  const hostsOf = () =>
+    Array.from(
+      document.querySelectorAll<HTMLElement>("[data-cutroom-version]"),
+    );
+  const refresh = () => {
+    const hosts = hostsOf();
+    for (const host of hosts) {
+      if (!(host instanceof HTMLMediaElement) || sources.has(host)) continue;
+      const src = host.dataset.cutroomVersionSrc ?? host.getAttribute("src");
+      if (src) sources.set(host, src);
+    }
+    if (selected === undefined) {
+      const shown = hosts.find((host) =>
+        host.hasAttribute("data-cutroom-shown"),
+      );
+      if (shown) selected = Number(shown.dataset.cutroomVersion);
+    }
+    if (selected === undefined) return;
+    const available = [
+      ...new Set(hosts.map((host) => Number(host.dataset.cutroomVersion))),
+    ].sort((a, b) => a - b);
+    const next = nextAudition(available, selected);
+    for (const [media, src] of sources) {
+      const index = Number(media.dataset.cutroomVersion);
+      const needed =
+        index === selected ||
+        index === next ||
+        media.hasAttribute("data-cutroom-shown") ||
+        (media instanceof HTMLAudioElement && index === outgoing);
+      const resident = win.__cutroomAuditionResident?.(media, needed) ?? needed;
+      if (resident && !media.hasAttribute("src")) {
+        media.preload = "auto";
+        media.setAttribute("src", src);
+      } else if (!resident && media.hasAttribute("src")) {
+        media.removeAttribute("src");
+        media.load();
+      }
+    }
+  };
+  win.__cutroomRefreshAudition = refresh;
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", refresh, { once: true });
+  else refresh();
+
   let request = 0;
   addEventListener("message", (event) => {
     if (event.source !== parent) return;
     const data = event.data;
     if (!data || data.source !== source || !Number.isInteger(data.version))
       return;
-    const hosts = Array.from(
-      document.querySelectorAll<HTMLElement>("[data-cutroom-version]"),
-    );
-    const selected = String(data.version);
-    const incoming = hosts.find(
-      (host) => host.dataset.cutroomVersion === selected,
-    );
-    if (!incoming) return;
+    const hosts = hostsOf();
+    const index = String(data.version);
+    if (!hosts.some((host) => host.dataset.cutroomVersion === index)) return;
+    selected = data.version;
+    refresh();
     const mine = ++request;
-    for (const host of hosts) {
-      const shown = host.dataset.cutroomVersion === selected;
-      if (host instanceof HTMLMediaElement) {
-        const node = win.__cutroomAuditionGains?.get(host);
-        if (node) {
-          const at = node.context.currentTime;
-          node.gain.cancelAndHoldAtTime(at);
-          node.gain.linearRampToValueAtTime(shown ? 1 : 0, at + 0.01);
-        }
-      } else {
-        for (const media of host.querySelectorAll<HTMLMediaElement>(
-          "video,audio",
-        ))
-          media.muted = !shown || media.hasAttribute("muted");
-      }
-    }
     const show = () => {
       if (request !== mine) return false;
+      for (const host of hosts) {
+        const shown = host.dataset.cutroomVersion === index;
+        if (host instanceof HTMLMediaElement) {
+          const node = win.__cutroomAuditionGains?.get(host);
+          if (node) {
+            const at = node.context.currentTime;
+            node.gain.cancelAndHoldAtTime(at);
+            node.gain.linearRampToValueAtTime(shown ? 1 : 0, at + 0.01);
+          }
+        } else {
+          for (const media of host.querySelectorAll<HTMLMediaElement>(
+            "video,audio",
+          ))
+            media.muted = !shown || media.hasAttribute("muted");
+        }
+      }
+      const previous = hosts.find((host) =>
+        host.hasAttribute("data-cutroom-shown"),
+      );
+      outgoing = previous ? Number(previous.dataset.cutroomVersion) : undefined;
       for (const host of hosts)
         host.toggleAttribute(
           "data-cutroom-shown",
-          host.dataset.cutroomVersion === selected,
+          host.dataset.cutroomVersion === index,
         );
+      refresh();
+      setTimeout(() => {
+        if (request !== mine) return;
+        outgoing = undefined;
+        refresh();
+      }, 25);
       requestAnimationFrame(() =>
         parent.postMessage({ source, shown: data.version }, "*"),
       );
@@ -108,14 +171,14 @@ function installAudition(source: string) {
     const video = hosts.find(
       (host): host is HTMLVideoElement =>
         host instanceof HTMLVideoElement &&
-        host.dataset.cutroomVersion === selected,
+        host.dataset.cutroomVersion === index,
     );
     if (video && win.__cutroomShowAudition)
       win.__cutroomShowAudition(video, show);
     else show();
   });
 }
-const AUDITION_SCRIPT = `<script data-cutroom-audition>(${installAudition.toString()})(${JSON.stringify(AUDITION_MESSAGE)})</script>`;
+const AUDITION_SCRIPT = `<script data-cutroom-audition>(${installAudition.toString()})(${JSON.stringify(AUDITION_MESSAGE)}, ${nextAudition.toString()})</script>`;
 
 type Element = DefaultTreeAdapterTypes.Element;
 
@@ -316,8 +379,8 @@ function mediaAudition(
         ["id", `cutroom-version-${clip.id}-${index}`],
         ["data-cutroom-version-owner", clip.id],
         ["data-cutroom-version", String(index)],
-        ["src", url],
-        ["preload", "auto"],
+        ["data-cutroom-version-src", url],
+        ["preload", "none"],
         ["data-media-start", String(Math.max(0, start))],
         ...keep,
       ];

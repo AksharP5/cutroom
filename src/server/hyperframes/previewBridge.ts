@@ -63,6 +63,11 @@ interface PreviewWindow extends DiagnosticWindow {
     };
   };
   __cutroomParkedMedia?: ReadonlyMap<HTMLMediaElement, unknown>;
+  __cutroomRefreshAudition?: () => void;
+  __cutroomAuditionResident?: (
+    media: HTMLMediaElement,
+    needed: boolean,
+  ) => boolean;
   __cutroomShowAudition?: (
     video: HTMLVideoElement,
     show: () => boolean,
@@ -1922,6 +1927,21 @@ function installPreviewBridge(
     }
     if (rampFiles.size) watchRamp(media);
   };
+  // Inert alternates still have timing attributes. Park them so the runtime neither opens
+  // a decoder nor waits for a first picture from a file this row is not using.
+  win.__cutroomAuditionResident = (media, needed) => {
+    const resident =
+      needed &&
+      !(
+        pipelineActive &&
+        media instanceof HTMLVideoElement &&
+        drawnByPipeline(media)
+      );
+    if (resident) unpark(media, false);
+    else park(media);
+    return resident;
+  };
+
   const rootMedia = (kind: "video" | "audio") =>
     document.querySelectorAll<HTMLMediaElement>(
       `${ROOT_COMPOSITION} > ${kind}`,
@@ -1933,6 +1953,7 @@ function installPreviewBridge(
     if (!pipelineActive) return;
     const time = win.__player?.getTime() ?? 0;
     for (const audio of rootMedia("audio")) {
+      if (audio.hasAttribute("data-cutroom-version-owner")) continue;
       const clip = win.__hf?.clipWindow?.(audio);
       const near =
         !clip ||
@@ -1991,6 +2012,7 @@ function installPreviewBridge(
         if (released && gradeBypass) writeGradeBypass();
       }
       residentAudio(false);
+      win.__cutroomRefreshAudition?.();
       return released;
     }
     const released = parked.size > 0;
@@ -1999,6 +2021,7 @@ function installPreviewBridge(
       win.__hf?.colorGrading?.refresh();
       if (gradeBypass) writeGradeBypass();
     }
+    win.__cutroomRefreshAudition?.();
     return released;
   };
   const holdStyle = document.createElement("style");

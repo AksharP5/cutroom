@@ -83,7 +83,7 @@ export class SourceDecoder {
   readonly #sample: (offset: number, length: number) => Promise<Uint8Array>;
   readonly #config: VideoDecoderConfig;
   readonly #keep: number;
-  #decoder: VideoDecoder;
+  #decoder: VideoDecoder | null = null;
   /** Decode-order index of the next sample to send, or -1 when the next must be a keyframe. */
   #next = -1;
   /** The keyframe the current run of samples started from. */
@@ -116,7 +116,7 @@ export class SourceDecoder {
   readonly #missing = new Set<number>();
   /** A decoded picture's size, which 10-bit footage doubles. */
   #frameBytes = 0;
-  #closed = false;
+  readonly #closing = new AbortController();
 
   private constructor(
     track: VideoTrack,
@@ -143,7 +143,6 @@ export class SourceDecoder {
       // only 1.5 times over, and playback fell behind it to 2 pictures a second.
       optimizeForLatency: Boolean(shortWindow),
     };
-    this.#decoder = this.#create();
   }
 
   /** Independent decoder runs over one sample index and one cache of compressed bytes. */
@@ -152,13 +151,13 @@ export class SourceDecoder {
     read: ReadRange,
     size: number,
     colour: VideoColorSpaceInit,
-    shortWindow: "scrub" | "audition" | false,
   ) {
     const sample = blockReader(read, size);
     const indexOf = new Map<number, number>();
     for (const [index, sampleIndex] of track.shown.entries())
       indexOf.set(Math.round(track.samples[sampleIndex]!.time * 1e6), index);
-    return () => new SourceDecoder(track, sample, indexOf, colour, shortWindow);
+    return (window: "scrub" | "audition" | false = false) =>
+      new SourceDecoder(track, sample, indexOf, colour, window);
   }
 
   static supported(track: VideoTrack) {
@@ -193,7 +192,11 @@ export class SourceDecoder {
       return;
     }
     const index = this.#indexOf.get(frame.timestamp);
-    if (index === undefined || this.#closed || this.#frames.has(index)) {
+    if (
+      index === undefined ||
+      this.#closing.signal.aborted ||
+      this.#frames.has(index)
+    ) {
       frame.close();
       return;
     }
@@ -339,16 +342,18 @@ export class SourceDecoder {
     sequential: boolean,
     retried = false,
   ): Promise<VideoFrame> {
-    if (this.#closed) throw new Error("The decoder was closed.");
+    if (this.#closing.signal.aborted)
+      throw new Error("The decoder was closed.");
     if (this.#refused) throw this.#refused;
     while (this.#missing.has(index)) index--;
     const cached = this.#touch(index);
     if (cached) return cached.clone();
-    if (this.#error || this.#decoder.state === "closed") {
+    if (!this.#decoder || this.#error || this.#decoder.state === "closed") {
       this.#error = null;
       this.#decoder = this.#create();
       this.#restart(-1);
     }
+    const decoder = this.#decoder;
     const { samples, shown } = this.#track;
     const target = shown[index]!;
     // A file can still require preroll for a picture that presents after its keyframe.
@@ -387,8 +392,9 @@ export class SourceDecoder {
           continue;
         }
         const data = await this.#sample(sample.offset, sample.size);
-        if (this.#closed) throw new Error("The decoder was closed.");
-        this.#decoder.decode(
+        if (this.#closing.signal.aborted)
+          throw new Error("The decoder was closed.");
+        decoder.decode(
           new EncodedVideoChunk({
             type: sample.key ? "key" : "delta",
             timestamp: Math.round(sample.time * 1e6),
@@ -399,7 +405,7 @@ export class SourceDecoder {
       }
     };
     const flush = async () => {
-      await this.#decoder.flush();
+      await decoder.flush();
       // A flush ends the run even if the next sample is already a keyframe.
       this.#restart(
         this.#next === gopEnd && gopEnd < samples.length ? gopEnd : -1,
@@ -415,12 +421,12 @@ export class SourceDecoder {
           break;
         }
         await send(Math.min(samples.length, Math.max(this.#next, target) + 4));
-        await Promise.race([arrived, this.#drained()]);
+        await Promise.race([arrived, this.#drained(decoder)]);
       }
     } else {
       // A seek wants this one frame as soon as possible: send up to it and flush it out.
       await send(target + 1);
-      await Promise.race([arrived, this.#drained()]);
+      await Promise.race([arrived, this.#drained(decoder)]);
       if (!landed() && !this.#frames.has(index)) await flush();
     }
     this.#waiting.get(index)?.delete(wake);
@@ -440,12 +446,22 @@ export class SourceDecoder {
   }
 
   /** Resolves once every sample sent has decoded and its output had a moment to arrive. */
-  async #drained() {
-    const decoder = this.#decoder;
-    while (decoder.decodeQueueSize > 0 && decoder.state === "configured")
-      await new Promise((resolve) =>
-        decoder.addEventListener("dequeue", resolve, { once: true }),
-      );
+  async #drained(decoder: VideoDecoder) {
+    const { signal } = this.#closing;
+    while (
+      !signal.aborted &&
+      decoder.decodeQueueSize > 0 &&
+      decoder.state === "configured"
+    )
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          decoder.removeEventListener("dequeue", done);
+          signal.removeEventListener("abort", done);
+          resolve();
+        };
+        decoder.addEventListener("dequeue", done, { once: true });
+        signal.addEventListener("abort", done, { once: true });
+      });
     await new Promise((resolve) => setTimeout(resolve, 4));
   }
 
@@ -466,7 +482,11 @@ export class SourceDecoder {
       const { from, to } = this.#ahead!;
       this.#ahead = null;
       this.#asked = from;
-      for (let index = from; index <= to && !this.#closed; index++)
+      for (
+        let index = from;
+        index <= to && !this.#closing.signal.aborted;
+        index++
+      )
         if (!this.#frames.has(index)) (await this.#decode(index, true)).close();
     });
     this.#queue = run.catch(() => {});
@@ -497,14 +517,15 @@ export class SourceDecoder {
   }
 
   close() {
-    this.#closed = true;
+    this.#closing.abort();
     for (const frame of this.#frames.values()) {
       frameBudget.used -= frame.allocationSize();
       frame.close();
     }
     this.#frames.clear();
     sources.delete(this);
-    if (this.#decoder.state !== "closed") this.#decoder.close();
+    if (this.#decoder && this.#decoder.state !== "closed")
+      this.#decoder.close();
   }
 }
 

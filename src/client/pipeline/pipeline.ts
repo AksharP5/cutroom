@@ -3,6 +3,7 @@ import type { FootageColour, PipelinePlan } from "../../shared/pipeline";
 import type { Clip, TimelineView, Version } from "../../shared/timeline/schema";
 import {
   activeVersion,
+  nextAudition,
   consumedSource,
   versionStart,
 } from "../../shared/timeline/versions";
@@ -93,10 +94,7 @@ function colourOf(
 async function openSource(
   url: string,
   signal: AbortSignal,
-  {
-    colour,
-    window = false,
-  }: { colour?: FootageColour; window?: "scrub" | "audition" | false } = {},
+  colour?: FootageColour,
 ) {
   const { read, size } = await openRanges(url, signal);
   const track = await readVideoTrack(read, size);
@@ -109,7 +107,6 @@ async function openSource(
       read,
       size,
       colourOf(track, colour),
-      window,
     ),
     intrinsic: {
       width: turned ? track.height : track.width,
@@ -166,13 +163,14 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         if (response.status !== 202) break;
         await new Promise((done) => setTimeout(done, 2000));
       }
+      media.forgetFailures();
       sources.forgetFailures();
       void draw();
     } finally {
       preparing.delete(path);
     }
   };
-  const sources = sourceCache(async (src): Promise<Source> => {
+  const media = sourceCache(async (src) => {
     const path = localMediaPath("index.html", src);
     if (path === null)
       throw new Error("Choose footage from the project folder.");
@@ -187,10 +185,10 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       .catch(() => null);
     // A file this browser cannot decode or read, such as HEVC, ProRes or Matroska, plays from
     // its editing proxy: the same frames at the same times. HyperFrames draws until it exists.
-    const { createDecoder, intrinsic } = await openSource(
+    const opened = await openSource(
       mediaUrl(projectId, path),
       closing.signal,
-      { colour: sourceColours[src] },
+      sourceColours[src],
     ).catch(async (error: unknown) => {
       const url = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/proxy?path=${encodeURIComponent(path)}`;
       const response = await fetch(url, {
@@ -205,6 +203,10 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       if (!response.ok) throw error;
       return openSource(url, closing.signal);
     });
+    return { ...opened, grid: await grid, path };
+  });
+  const sources = sourceCache(async (src): Promise<Source> => {
+    const { createDecoder, intrinsic, grid, path } = await media.get(src);
     const proxyUrl = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/scrub?path=${encodeURIComponent(path)}`;
     let askedAt = -Infinity;
     let asking: Promise<void> | null = null;
@@ -214,23 +216,22 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       playing: decoder,
       proxy: null,
       intrinsic,
-      grid: await grid,
+      grid,
       // A proxy still being made answers 202. Moving seeks use the source until it exists, and
       // a draw that wants it asks again, at most every two seconds.
       askProxy: () => {
         if (found.proxy || asking || performance.now() - askedAt < 2000)
           return asking;
         askedAt = performance.now();
-        asking = openSource(proxyUrl, closing.signal, { window: "scrub" })
+        asking = openSource(proxyUrl, closing.signal)
           .then(({ createDecoder }) => {
-            if (!closing.signal.aborted) found.proxy = createDecoder();
+            if (!closing.signal.aborted) found.proxy = createDecoder("scrub");
           })
           .catch(() => {})
           .finally(() => (asking = null));
         return asking;
       },
     };
-    await found.askProxy();
     return found;
   });
   const source = sources.get;
@@ -243,17 +244,24 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   let audition: {
     key: string;
     clip: Clip;
-    controller: AbortController;
     takes: Map<number, Promise<Prepared>>;
+    initial: number;
   } | null = null;
   const disposeAudition = () => {
     if (!audition) return;
-    audition.controller.abort();
     for (const take of audition.takes.values())
       void take.then(
         ({ decoder }) => decoder.close(),
         () => {},
       );
+    const used = new Set(
+      useTimeline.getState().view?.timeline.clips.map(({ src }) => src),
+    );
+    for (const { src } of audition.clip.versions ?? []) {
+      if (used.has(src)) continue;
+      media.remove(src);
+      void sources.remove(src)?.then(closeSource, () => {});
+    }
     audition = null;
   };
   const auditionTime = (
@@ -275,14 +283,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       ? view.timeline.clips.find(({ id }) => id === open)
       : undefined;
     if (clip?.kind !== "video" || !clip.versions || !plan?.drawable[clip.id]) {
-      if (audition) {
-        const used = new Set(view.timeline.clips.map(({ src }) => src));
-        for (const { src } of audition.clip.versions ?? []) {
-          if (used.has(src)) continue;
-          void sources.remove(src)?.then(closeSource, () => {});
-        }
-        disposeAudition();
-      }
+      disposeAudition();
       return null;
     }
     const key = JSON.stringify([
@@ -296,41 +297,43 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     ]);
     if (audition?.key !== key) {
       disposeAudition();
-      const controller = new AbortController();
-      const signal = AbortSignal.any([controller.signal, closing.signal]);
-      const takes = new Map<number, Promise<Prepared>>();
-      audition = { key, clip, controller, takes };
-      for (const [index, version] of clip.versions.entries()) {
-        if (
-          version.offline ||
-          version.fits === false ||
-          index === activeVersion(clip)
-        )
-          continue;
-        const path = localMediaPath(view.composition, version.src);
-        if (!path) continue;
-        const prepared = Promise.all([
-          openSource(mediaUrl(projectId, path), signal, {
-            colour: sourceColours[version.src],
-            window: "audition",
-          }),
-          fetch(
-            `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/frames?path=${encodeURIComponent(path)}`,
-            { signal },
-          ).then(async (response) =>
-            response.ok ? FrameGridSchema.parse(await response.json()) : null,
-          ),
-        ]).then(([{ createDecoder, intrinsic }, grid]) => ({
-          decoder: createDecoder(),
-          intrinsic,
-          grid,
-        }));
-        prepared.catch(() => {});
-        takes.set(index, prepared);
-      }
+      audition = { key, clip, takes: new Map(), initial: activeVersion(clip) };
     }
     const warming = audition;
     const selected = hovered ?? activeVersion(clip);
+    const eligible = clip.versions.flatMap((version, index) =>
+      version.fits === false || version.offline ? [] : [index],
+    );
+    const next = nextAudition(eligible, selected);
+    const resident = new Set([selected, next]);
+    for (const [index, take] of warming.takes) {
+      if (resident.has(index)) continue;
+      warming.takes.delete(index);
+      void take.then(
+        ({ decoder }) => decoder.close(),
+        () => {},
+      );
+    }
+    for (const index of resident) {
+      const version = index === undefined ? undefined : clip.versions[index];
+      if (
+        !version ||
+        version.offline ||
+        version.fits === false ||
+        index === warming.initial ||
+        warming.takes.has(index!)
+      )
+        continue;
+      const prepared = media
+        .get(version.src)
+        .then(({ createDecoder, intrinsic, grid }) => ({
+          decoder: createDecoder("audition"),
+          intrinsic,
+          grid,
+        }));
+      prepared.catch(() => {});
+      warming.takes.set(index!, prepared);
+    }
     const first =
       clip.start - (clip.transitionIn ? framesBefore(clip.transitionIn) : 0);
     const warmAt = playing
@@ -355,13 +358,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         () => {},
       );
     }
-    // The version that was shown when the list opened borrows its ordinary source decoder.
-    // Keep its next pictures available even when an alternate is playing.
-    if (
-      hovered !== null &&
-      !warming.takes.has(activeVersion(warming.clip)) &&
-      warming.clip.src
-    ) {
+    // The original take borrows the main pipeline's decoder when it is next.
+    if (next === warming.initial && warming.clip.src) {
       const src = warming.clip.src;
       const original = clip.versions[activeVersion(warming.clip)]!;
       void source(src).then(
@@ -442,6 +440,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const view = useTimeline.getState().view;
     const { frame, state } = useTransport.getState();
     if (!view || view.composition !== "index.html") return;
+    const auditionAtDraw = useVersions.getState();
     const alternate = prepareAudition(view, frame, state.kind === "playing");
     const shown = visibleAt(view.timeline, drawingPlan, frame);
     if (!shown) {
@@ -526,6 +525,12 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         return;
       const baked = await textures;
       if ("error" in baked) throw baked.error;
+      const currentAudition = useVersions.getState();
+      if (
+        auditionAtDraw.open !== currentAudition.open ||
+        auditionAtDraw.hovered !== currentAudition.hovered
+      )
+        return;
       await compositor.draw(
         pictures.map(({ layer, found }, at) =>
           // The proxy is stored upright; a phone's file may be stored turned.
@@ -711,11 +716,12 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       native.join("\n") !== previous.native.join("\n")
     )
       usePipeline.setState({ drawn, native });
+    media.forgetFailures();
     sources.forgetFailures();
-    // Open every file now: opening one mid-playback costs the clock a few frames.
+    // Read the index now: opening one mid-playback costs the clock a few frames.
     for (const clip of view.timeline.clips)
       if (clip.src && next.drawable[clip.id])
-        void source(clip.src).catch(() => {});
+        void media.get(clip.src).catch(() => {});
     void draw();
   };
   void refresh();

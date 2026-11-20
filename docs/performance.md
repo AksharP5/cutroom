@@ -997,7 +997,7 @@ Only one clip's versions are loaded at a time, and a clip holds at most 12, so t
 
 ### Footage and audio versions
 
-An open list prepares only the takes on that slot. The native preview uses one media element per eligible picture and sound. GPU playback warms one WebCodecs decoder per alternate picture and releases those decoders on close. Sound stays in the preview's existing audio graph, with a 10 ms gain ramp between takes. Media versions do not warm just because a clip is selected.
+The open list warms the shown take and the next playable row. Native preview parks the other media elements and drops their sources. GPU playback shares the footage pipeline’s sample indices, frame grids and compressed-byte caches. It keeps a short decoder window for each of the two takes, borrowing the main decoder for the take that was already shown. Closing the list releases the audition decoders and any alternate source cache the timeline no longer uses. Sound stays in the preview's existing audio graph, with a 10 ms gain ramp between takes. Media versions do not warm just because a clip is selected.
 
 Nine localhost `setVersion` requests over the timeline command endpoint took 34.1 to 89.6 ms, with a 43.2 ms median. Each request saved the picture and its linked sound in one history step. This measurement ends at the server response.
 
