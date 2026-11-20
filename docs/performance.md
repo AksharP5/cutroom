@@ -944,6 +944,21 @@ HyperFrames' own playback of the interview, headed in Chromium through Playwrigh
 
 What changed: lookahead prepares every clip that comes into view, including one a clip above stops covering, and at rest the next clip to come into view, so W finds its frame decoded. Main's stalls came mostly from its decoders: the frames a decoder kept centred on the furthest frame playback had asked for and never moved back, so after playback restarted earlier in a file each new frame was evicted as it arrived, and a frame the decoder wrongly took to be in flight was waited for by feeding the rest of the file (8.3 s once). After undo, most of the remaining time is the editor's: its timeline view arrives 20-26 ms after the key on the interview and 63-137 ms on the 400-clip timeline, and the pipeline draws 17-43 ms after that.
 
+### Scheduling playback decode
+
+Playing in Electron revealed holds while the transport and compositor kept running. On a cold 30-cut OBS edit, one canvas hold lasted 483 ms with both decoder lanes busy. In a trial that forced low-latency decoding of a finished 1080p H.264 proxy from a 4K60 HEVC source, the canvas held for about 970 ms while the renderer still ran at 59.8 animation callbacks/s. The lane for the current shot submitted the next visible frame 427 ms into the gap and returned it 495 ms later. The spare lane spent 711 ms flushing work ahead of a cut.
+
+Lookahead used to queue a whole range of pictures ahead of the next draw. It now queues one missing picture at a time, so a draw can go ahead of the remaining lookahead. The decoder gives a target already in flight a chance to come out before feeding more samples. In a deterministic queue replay, 48 prefetched frames used to finish ahead of an unrelated picture request. Four already submitted frames finish ahead of it now.
+
+Electron 45.2.3, Wayland at 60 Hz, one 30-second warm pass per build at each size. Both timelines used the same 1080p60 H.264 editing proxy of an OBS recording. A hold is an interval over 25 ms between sampled canvas updates.
+
+| Warm edit   | Samples submitted, before → after | Decoder flushes, before → after | Canvas updates/s, before → after | Holds, before → after | Longest hold, before → after |
+| ----------- | --------------------------------: | ------------------------------: | -------------------------------: | --------------------: | ---------------------------: |
+| 30 cuts     |                     2,562 → 2,307 |                           5 → 0 |                      60.0 → 60.0 |                 1 → 2 |                   33 → 33 ms |
+| 1,000 clips |                     2,698 → 2,318 |                           6 → 0 |                      55.5 → 58.6 |               99 → 13 |                 153 → 250 ms |
+
+The shared machine's load was lower on the second run at both sizes. At 1,000 clips the renderer's animation callbacks ran at 55.8 and 58.8/s. The 250 ms canvas hold matched a 250 ms gap in renderer callbacks. The 1,000-clip editor still missed 60 Hz.
+
 ### Real footage
 
 On November 16, 2026, the pipeline was checked against HyperFrames on camera, phone and screen footage: the owner's own recordings (a DaVinci Resolve 1080p60 MOV render with a timecode track, a vertical Resolve MOV, a full-range MP4 with an ICC profile, a 60 fps screen recording at 1916x1074, an OBS HEVC recording), and ffmpeg stand-ins with numbered frames for what was missing. Parity is the e2e test's comparison, the viewer with and without the pipeline at nine frames across two cuts, headless; the export tolerance is a mean difference under 4/255 and a bias under 1.5/255. Playback, scrub, steps and edits were measured headed in Chromium 155 through Playwright (X11), on a four-cut 1080p composition of one file, with renderer memory as the proportional set size after a drag (Playwright's Network domain inflates the pipeline's side, as above).
