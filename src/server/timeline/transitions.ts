@@ -6,7 +6,8 @@ import {
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
 import { frameTime, toFrames, toSeconds } from "../../shared/timeline/apply";
-import { offsetSourceTime } from "../../shared/timeline/time";
+import { elementBounds, sourceAtEdge } from "../../shared/timeline/clipTiming";
+import { frames } from "../../shared/timeline/piece";
 import { TransitionSchema } from "../../shared/timeline/schema";
 import { shiftKeyframes } from "../../shared/timeline/keyframes";
 import { offsetAutomation } from "../../shared/timeline/mix";
@@ -177,22 +178,25 @@ export function isCrossfadeAutomation(
 export function elementClip(clip: Clip, fps: Fps): Clip {
   const { transitionIn, transitionOut } = clip;
   if (!takesTransition(clip) || (!transitionIn && !transitionOut)) return clip;
-  const before = transitionIn ? framesBefore(transitionIn) : 0;
-  const after = transitionOut ? framesAfter(transitionOut) : 0;
+  const { start, end } = elementBounds(clip);
+  const before = clip.start - start;
   const straight = clip.hasAudio && clip.automation !== null;
+  const source = sourceAtEdge(
+    clip,
+    frames(clip.start, fps),
+    frames(start, fps),
+    fps,
+  );
   return {
     ...clip,
-    start: clip.start - before,
-    duration: clip.duration + before + after,
-    mediaStart:
-      clip.mediaStart === null || !before
-        ? clip.mediaStart
-        : offsetSourceTime(clip.mediaStart, -before, fps, clip.playbackRate),
+    start,
+    duration: end - start,
+    mediaStart: source.mediaStart,
     fadeIn: transitionIn && straight ? transitionIn.duration : clip.fadeIn,
     fadeOut: transitionOut && straight ? transitionOut.duration : clip.fadeOut,
-    // Clip-local automation is timed from the element, which starts `before` frames early.
-    automation: clip.automation
-      ? offsetAutomation(clip.automation, frameTime(before, fps))
+    // Mix lanes run from the element start. The rate lane already carries its encoded offset.
+    automation: source.automation
+      ? offsetAutomation(source.automation, frameTime(before, fps))
       : crossfadeAutomation(clip, fps),
     keyframes: shiftKeyframes(clip.keyframes, -before),
   };

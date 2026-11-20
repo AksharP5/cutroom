@@ -1,5 +1,9 @@
 import { MEDIA_ELEMENT_LEAD_SECONDS } from "@hyperframes/core/runtime/media-clock";
-import { sourceTimeAt, type RateSpec } from "@hyperframes/core/speed-ramp";
+import {
+  sourceTimeAt,
+  timeAtSourceTime,
+  type RateSpec,
+} from "@hyperframes/core/speed-ramp";
 import type { Fps } from "./schema.ts";
 
 /** Seconds as a reduced fraction with a positive denominator. */
@@ -46,7 +50,7 @@ export const frames = (count: number | bigint, fps: Fps) =>
   fraction(BigInt(count) * BigInt(fps.den), BigInt(fps.num));
 export const micros = (count: number | bigint) =>
   fraction(BigInt(count), MICROS);
-const secondsOf = (time: ExactTime) => Number(time.n) / Number(time.d);
+export const secondsOf = (time: ExactTime) => Number(time.n) / Number(time.d);
 
 /** Read validated decimal seconds, including compiler-generated float spellings. */
 export const attrMicros = (seconds: string | number) =>
@@ -118,13 +122,19 @@ export type PlacedMedia = Pick<
   Omit<Placement, "played"> & { played?: Window };
 export type PlacedElement = (Media | Visual) & Placement;
 
-function localWindows({ fps, elements }: Composition) {
+export function localWindows<Element extends AuthoredWindow>({
+  fps,
+  elements,
+}: {
+  fps: Fps;
+  elements: readonly Element[];
+}) {
   const byId = new Map(elements.map((el) => [el.id, el]));
   const starts = new Map<string, ExactTime>();
   const visiting = new Set<string>();
 
   function endOf(el: AuthoredWindow, start: ExactTime) {
-    if (el.durationUs !== undefined && el.durationUs > 0n)
+    if (el.durationUs !== undefined && el.durationUs >= 0n)
       return add(start, decodeLocal(el.durationUs, fps));
     if (el.endUs !== undefined) {
       const end = decodeLocal(el.endUs, fps);
@@ -234,9 +244,8 @@ export type SourceMap = { c: number; tau: number; zero: number };
 /** The stored in-point and optional ramp offset, both in whole microseconds. */
 export type StoredSource = { mediaStart: number; offset?: number };
 
-/** Rate input is already validated by the document or Clip adapter. */
-function decimalRate(rate: string | number): ExactTime {
-  const [decimal = "", exponent] = String(rate).trim().toLowerCase().split("e");
+function decimalFraction(value: string | number): ExactTime {
+  const [decimal = "", exponent] = String(value).trim().toLowerCase().split("e");
   const [whole = "", digits = ""] = decimal.split(".");
   const scale = digits.length - Number(exponent ?? 0);
   const units = BigInt(whole + digits);
@@ -383,7 +392,7 @@ export function resolvePiece(
   const line: Line =
     typeof curve === "object"
       ? { kind: "ramp", rate: curve, curveZero }
-      : { kind: "exact", rate: decimalRate(curve), curveZero };
+      : { kind: "exact", rate: decimalFraction(curve), curveZero };
   let loop: Loop | null = null;
   if (media.loop) {
     const start = lineAt(line, map.zero, anchor);
@@ -440,6 +449,17 @@ export function sourceAt(piece: Piece, position: ExactTime): SourceTime {
   )
     return loop.start + ((time - loop.start) % loop.length);
   return time;
+}
+
+/** Timeline position at a source time on the unwrapped, monotone line. */
+export function positionAtSource(piece: Piece, source: ExactTime): ExactTime {
+  const elapsed = subtract(source, micros(piece.zero));
+  const { line } = piece;
+  const time =
+    line.kind === "exact"
+      ? fraction(elapsed.n * line.rate.d, elapsed.d * line.rate.n)
+      : decimalFraction(timeAtSourceTime(line.rate, secondsOf(elapsed)));
+  return add(line.curveZero, time);
 }
 
 /** Source sample at absolute output sample zero on the unwrapped 1× line. */
