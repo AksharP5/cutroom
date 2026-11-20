@@ -67,7 +67,7 @@ test.skipIf(!Bun.which("ffprobe"))(
       const volume = { target: "volume", points: [{ t: 0, v: 0.5 }] };
       const effect = { target: "fx.n1.threshold", points: [{ t: 0, v: -12 }] };
       const html = (src: string, lanes: (typeof rate)[]) =>
-        `<main data-composition-id="interview" data-width="320" data-height="240" data-duration="4"><div><audio id="tone" data-label="Interview sound" src="${src}" data-start="2" data-duration="1" data-track-index="0" data-playback-rate="2" data-automation='${JSON.stringify({ version: 1, lanes })}'></audio></div></main>`;
+        `<main data-composition-id="interview" data-width="320" data-height="240" data-duration="4"><hf-audio-group id="dialogue" data-volume="0.5"></hf-audio-group><div><audio id="tone" data-label="Interview sound" src="${src}" data-start="2" data-duration="1" data-track-index="0" data-playback-rate="2" data-audio-group="dialogue" data-automation='${JSON.stringify({ version: 1, lanes })}'></audio></div></main>`;
       const start = (options: Record<string, unknown>) =>
         f.app.request(`/api/projects/${project.id}/export`, {
           method: "POST",
@@ -122,10 +122,11 @@ test.skipIf(!Bun.which("ffprobe"))(
       );
       const fcpxml = await readFile(result.timeline, "utf8");
       expect(fcpxml).toContain('name="Interview sound"');
-      expect(fcpxml).toContain(
-        '<timept time="1s" value="2s" interp="linear"/>',
-      );
-      expect(fcpxml).toContain('<adjust-volume amount="-6.0206dB"/>');
+      expect(fcpxml).not.toContain("<timeMap>");
+      expect(fcpxml).toContain('<adjust-volume amount="-12.0412dB"/>');
+      const script = await readFile(result.importScript!, "utf8");
+      expect(script).toContain('["audio",1,60,90,"Interview sound",200]');
+      expect(script).toContain("item.SetSpeed");
     } finally {
       await f.close();
     }
@@ -202,8 +203,13 @@ test.skipIf(!Bun.which("ffmpeg"))(
       const files = (await readdir(result.outputPath)).sort();
       expect(files).toEqual(
         process.platform === "linux"
-          ? ["Night-shoot.fcpxml", "Sound", "Summary.txt"]
-          : ["Night-shoot.fcpxml", "Summary.txt"],
+          ? [
+              "Import Cutroom Timeline.py",
+              "Night-shoot.fcpxml",
+              "Sound",
+              "Summary.txt",
+            ]
+          : ["Import Cutroom Timeline.py", "Night-shoot.fcpxml", "Summary.txt"],
       );
       const fcpxml = await readFile(result.timeline, "utf8");
       if (process.platform === "linux") {
@@ -311,15 +317,16 @@ test.skipIf(!Bun.which("ffmpeg"))(
       const script = await readFile(result.gradeScript!, "utf8");
       expect(script).toContain(JSON.stringify('Chart "A" & cut.fcpxml'));
       expect(script).toContain(
-        'ImportTimelineFromFile(str(path), {"importSourceClips": True})',
+        'ImportTimelineFromFile(str(path), {"importSourceClips": True, "timelineName": name})',
       );
       expect(script).toContain("project.RefreshLUTList()");
       expect(script).toContain('destination.open("xb")');
       expect(script).toMatch(
         /GetSetting\("colorUseLocalVersionsAsDefault"\)[\s\S]+raise RuntimeError[\s\S]+ImportTimelineFromFile/,
       );
-      expect(script).toContain('imported.GetItemListInTrack("video", track)');
-      expect(script).toContain("graph.SetLUT(1, lut)");
+      expect(script).toContain("imported.GetItemListInTrack(kind, track)");
+      expect(script).toContain("graph.SetLUT(1, installed[lut])");
+      expect(script).toContain('comp.AddTool("FileLUT")');
       const assignments = [
         ...script.matchAll(
           /\[1,(\d+),(\d+),"Cutroom Grades\/([a-f\d]+\.cube)"\]/g,
@@ -339,6 +346,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       expect(summary).toContain("Use local version for new clips in timeline");
       expect(summary).toContain("Open LUT Folder");
       expect(summary).toContain("cutroom_lut_root");
+      expect(summary).toContain("CutroomGrade node in Fusion");
       expect(summary).toContain("Workspace > Console");
       expect(summary).toContain(
         `runpy.run_path(${JSON.stringify(result.gradeScript)}`,

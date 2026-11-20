@@ -83,7 +83,7 @@ const facts = (
 });
 
 /** A 29.97 edit: two shots and their sound with a dissolve, an animated inset, music, a title. */
-function edit() {
+function edit(extra: readonly CommandInput[] = []) {
   const empty = TimelineSchema.parse({
     fps: NTSC,
     duration: 390,
@@ -203,6 +203,7 @@ function edit() {
       note: "a note",
       color: "red",
     },
+    ...extra,
   ];
   const lengths = new Map([
     ["a.mp4", 20],
@@ -292,8 +293,8 @@ test("transforms carry in Resolve's units and eased keyframes are drawn frame by
   expect(scale).toBeLessThan(62);
 });
 
-test("names, paths and markers are escaped, and what Resolve can't show is listed", () => {
-  const { fcpxml, markers, notes } = edit();
+test("the marker EDL remains available and the importer retains the full marker", () => {
+  const { fcpxml, markers, timelineMarkers, notes } = edit();
   expect(fcpxml).toContain('name="Shot &quot;A&quot; &amp; &lt;B&gt;"');
   expect(fcpxml).toContain('src="file:///media/b%20b%23.mp4"');
   expect(fcpxml).toContain('<event name="Cut &lt;1&gt;">');
@@ -303,6 +304,42 @@ test("names, paths and markers are escaped, and what Resolve can't show is liste
   );
   expect(notes).toEqual([
     '"Hello" at 00:00:10:00 on V3 is not carried: Resolve can\'t open it as media.',
-    "Marker notes stay in Cutroom; the marker list carries names, colours and lengths.",
+    "Resolve may trim the empty tail after 00:00:11:00. Extend a black generator to 00:00:21:00 to restore that time.",
+  ]);
+  expect(timelineMarkers).toMatchObject([
+    { frame: 45, name: "Hook | beat", note: "a note", color: "red" },
+  ]);
+});
+
+test("an upper video transition is restored on the original cuts", () => {
+  const { transitions } = edit([
+    {
+      type: "insert",
+      track: 1,
+      at: 150,
+      clip: {
+        id: "next",
+        kind: "video",
+        src: "b.mp4",
+        duration: 90,
+        mediaStart: 3.003,
+        muted: true,
+      },
+    },
+    {
+      type: "setTransition",
+      from: "inset",
+      to: "next",
+      transition: { kind: "dip", duration: 24, alignment: "end" },
+    },
+  ]);
+  expect(transitions).toEqual([
+    {
+      track: 2,
+      start: 30,
+      end: 150,
+      label: "a.mp4",
+      transition: { kind: "dip", duration: 24, alignment: "end" },
+    },
   ]);
 });
