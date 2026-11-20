@@ -316,3 +316,8 @@ export const NotebookSchema = z.object({
   transcriptVersion: z.string(),
 });
 export type Notebook = z.infer<typeof NotebookSchema>;
+
+export const ReviewAcceptAllSchema = z.discriminatedUnion("scope", [
+  z.object({ scope: z.literal("project") }),
+  z.object({ scope: z.literal("composition"), composition: z.string().min(1) }),
+]);

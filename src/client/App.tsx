@@ -644,6 +644,7 @@ export function App() {
                   <ReviewPanel
                     key={project.id}
                     projectId={project.id}
+                    visible={panel === "review" && notebookVisible}
                     items={projectDocument.items}
                     reviewError={projectDocument.reviewError}
                     draft={reviewDraft}
@@ -668,9 +669,9 @@ export function App() {
                     }}
                     onAcceptChanges={async () => {
                       await api(
-                        `/projects/${projectId}/review/changes/accept`,
+                        `/projects/${projectId}/review/changes/accept-all`,
                         z.unknown(),
-                        json("POST"),
+                        json("POST", { scope: "project" }),
                       );
                       await refreshDocument();
                     }}

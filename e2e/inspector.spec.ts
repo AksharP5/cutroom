@@ -48,7 +48,7 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
   const path = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await request.get(`${path}/timeline`)).json(),
+      await (await request.get(`${path}/timeline?clipEdits=1`)).json(),
     );
   await page.goto(`/#project/${project.id}`);
   await page.locator('[data-clip="picture"]').click();
@@ -423,7 +423,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   const path = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await request.get(`${path}/timeline`)).json(),
+      await (await request.get(`${path}/timeline?clipEdits=1`)).json(),
     );
   for (let index = 1; index <= 15; index++) {
     const result = await request.post(`${path}/commands`, {
@@ -658,7 +658,7 @@ test("with nothing selected the inspector shows the timeline, its markers and it
   const path = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await request.get(`${path}/timeline`)).json(),
+      await (await request.get(`${path}/timeline?clipEdits=1`)).json(),
     );
   const edit = async (commands: unknown[], agent = false) =>
     expect(

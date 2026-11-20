@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { SourceSchema } from "../src/shared/project";
 import { sourceClipVersions } from "../src/server/projects/changes";
 import { projectFixture } from "./project-fixture";
@@ -65,7 +65,7 @@ test("a saved invalid clip envelope keeps the source reviewable and editable", a
         resolution: undefined,
       }),
     );
-    const rejected = await f.request(`${f.base}/timeline`);
+    const rejected = await f.request(`${f.base}/timeline?clipEdits=1`);
     expect(rejected.status).toBe(422);
     expect(await rejected.json()).toMatchObject({
       error: expect.stringContaining("Clip voice has invalid audio automation"),
@@ -80,7 +80,9 @@ test("a saved invalid clip envelope keeps the source reviewable and editable", a
     );
     expect(accepted.status).toBe(200);
     await f.save(earlier);
-    expect((await f.request(`${f.base}/timeline`)).status).toBe(200);
+    expect((await f.request(`${f.base}/timeline?clipEdits=1`)).status).toBe(
+      200,
+    );
     expect((await f.read()).clipEdits).toContainEqual(
       expect.objectContaining({ id: added!.id, accepted: true }),
     );
@@ -165,16 +167,32 @@ test.each(["changes", "clipEdits", "history-backed", "v2"])(
           historyId: history.list().at(-1)!.id,
         }),
       };
-      await mkdir(`${f.project.path}/.cutroom`, { recursive: true });
-      await writeFile(
-        `${f.project.path}/.cutroom/review.json`,
-        JSON.stringify({
-          schemaVersion: 1,
-          items: [],
-          ...(format === "changes" ? { changes: [row] } : { clipEdits: [row] }),
-        }),
+      const directory = `${f.project.path}/.cutroom`;
+      const path = `${directory}/review.json`;
+      const legacy = JSON.stringify({
+        schemaVersion: 1,
+        items: [],
+        ...(format === "changes" ? { changes: [row] } : { clipEdits: [row] }),
+      });
+      await mkdir(directory, { recursive: true });
+      await writeFile(path, legacy);
+      const migrated = await f.read();
+      expect(migrated.agentChanges).toEqual(["title"]);
+      expect(migrated.clipEdits[0]).toMatchObject({
+        id: format === "changes" ? `legacy:index.html:title:${hash}` : row.id,
+        label: format === "changes" ? "Edited source" : row.label,
+        historyId: row.historyId,
+      });
+      expect(await readFile(`${directory}/review.v1.json`, "utf8")).toBe(
+        legacy,
       );
-      expect((await f.read()).agentChanges).toEqual(["title"]);
+      const first = await stat(path);
+      expect(JSON.parse(await readFile(path, "utf8")).schemaVersion).toBe(2);
+      const fresh = createReviewService(f.store);
+      expect(await fresh.clipChanges(f.project, "index.html")).toEqual(
+        migrated,
+      );
+      expect((await stat(path)).ino).toBe(first.ino);
       await f.save(
         source
           .replace(">caption</div>", ">Earlier caption</div>")

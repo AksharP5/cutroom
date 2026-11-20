@@ -341,6 +341,11 @@ const cutroomTools: Record<
     kind: "queue",
     object: note,
   },
+  review_accept_all: {
+    verb: ["Accepted", "Accepting", "Accept"],
+    kind: "queue",
+    object: () => "all pending agent changes",
+  },
   review_send_back: {
     verb: ["Sent back", "Sending back", "Send back"],
     kind: "queue",

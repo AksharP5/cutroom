@@ -118,7 +118,7 @@ test("queue names stay whole and agent replies expand while MCP works a note", a
     ).toHaveText(time!);
     await row.getByRole("button", { name: "Less", exact: true }).click();
     const accept = page.getByRole("button", {
-      name: "Accept agent changes",
+      name: "Accept all agent changes",
       exact: true,
     });
     const buttonBox = await accept.boundingBox();

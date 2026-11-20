@@ -26,10 +26,12 @@ import {
   AgentReviewActionSchema,
   HumanReviewActionSchema,
   ReviewAddSchema,
+  ReviewAcceptAllSchema,
   NoteContentSchema,
   ReviewReorderSchema,
 } from "../../shared/review";
 import type { ReviewActor } from "../../shared/review";
+import { AcceptRowSchema } from "../../shared/timeline/reviewChanges";
 import { HttpError } from "../../shared/errors";
 import { ExportDestinationSchema } from "../../shared/export";
 import { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
@@ -43,7 +45,11 @@ import { mediaUses, removeMedia, renameMedia } from "./mediaFiles";
 import { ReviewFileError, addAnnotation } from "./review";
 import type { ReviewService } from "./review";
 import { readSource } from "./store";
-import { projectStatePath, projectWritePath } from "./path";
+import {
+  canonicalProjectPath,
+  projectStatePath,
+  projectWritePath,
+} from "./path";
 import type { ProjectStore } from "./store";
 
 export function parseInput<T extends z.ZodType>(
@@ -344,6 +350,43 @@ export function createProjectRoutes(
       201,
     );
   });
+  api.post("/projects/:id/review/changes", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const { composition, entries } = parseInput(
+      z.object({
+        composition: z.string(),
+        entries: z.array(z.string()),
+      }),
+      await c.req.json(),
+    );
+    return c.json({
+      clipEdits: await reviews.changeDetails(
+        project,
+        canonicalProjectPath(composition),
+        new Set(entries),
+      ),
+    });
+  });
+  api.post("/projects/:id/review/changes/accept-all", async (c) => {
+    const token = c.req.header(AGENT_HEADER);
+    if (token !== undefined && token !== "external")
+      throw new HttpError(
+        409,
+        "Only the owner or an outside client can accept agent changes.",
+      );
+    const scope = parseInput(ReviewAcceptAllSchema, await c.req.json());
+    const project = await store.get(c.req.param("id"));
+    const composition =
+      scope.scope === "composition"
+        ? canonicalProjectPath(scope.composition)
+        : undefined;
+    const accepted = await reviews.acceptChanges(
+      project,
+      undefined,
+      composition,
+    );
+    return c.json({ accepted });
+  });
   api.post("/projects/:id/review/changes/accept", async (c) => {
     if (c.req.header(AGENT_HEADER))
       throw new HttpError(409, "Only the owner can accept agent changes.");
@@ -352,6 +395,17 @@ export function createProjectRoutes(
       await c.req.text().then((text) => (text ? JSON.parse(text) : {})),
     );
     await reviews.acceptChanges(await store.get(c.req.param("id")), editId);
+    return c.json({ ok: true });
+  });
+  api.post("/projects/:id/review/changes/accept-row", async (c) => {
+    if (c.req.header(AGENT_HEADER))
+      throw new HttpError(409, "Only the owner can accept agent changes.");
+    const input = parseInput(AcceptRowSchema, await c.req.json());
+    const project = await store.get(c.req.param("id"));
+    await reviews.acceptChanges(project, undefined, undefined, {
+      ...input,
+      composition: canonicalProjectPath(input.composition),
+    });
     return c.json({ ok: true });
   });
   api.patch("/projects/:id/review/order", async (c) => {
