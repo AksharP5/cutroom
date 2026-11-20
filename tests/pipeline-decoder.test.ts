@@ -3,8 +3,14 @@ import { SourceDecoder } from "../src/client/pipeline/decoder";
 import type { VideoTrack } from "../src/client/pipeline/mp4";
 
 test("a picture request runs before the rest of an already-running lookahead", async () => {
-  const nativeDecoder = globalThis.VideoDecoder;
-  const nativeChunk = globalThis.EncodedVideoChunk;
+  const nativeDecoder = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "VideoDecoder",
+  );
+  const nativeChunk = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "EncodedVideoChunk",
+  );
   const started = Promise.withResolvers<void>();
   const outputs: number[] = [];
   class Frame {
@@ -95,9 +101,11 @@ test("a picture request runs before the rest of an already-running lookahead", a
     }
   } finally {
     decoder.close();
-    Object.assign(globalThis, {
-      VideoDecoder: nativeDecoder,
-      EncodedVideoChunk: nativeChunk,
-    });
+    if (nativeDecoder)
+      Object.defineProperty(globalThis, "VideoDecoder", nativeDecoder);
+    else Reflect.deleteProperty(globalThis, "VideoDecoder");
+    if (nativeChunk)
+      Object.defineProperty(globalThis, "EncodedVideoChunk", nativeChunk);
+    else Reflect.deleteProperty(globalThis, "EncodedVideoChunk");
   }
 });
