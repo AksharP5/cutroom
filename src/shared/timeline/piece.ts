@@ -245,7 +245,10 @@ export type SourceMap = { c: number; tau: number; zero: number };
 export type StoredSource = { mediaStart: number; offset?: number };
 
 function decimalFraction(value: string | number): ExactTime {
-  const [decimal = "", exponent] = String(value).trim().toLowerCase().split("e");
+  const [decimal = "", exponent] = String(value)
+    .trim()
+    .toLowerCase()
+    .split("e");
   const [whole = "", digits = ""] = decimal.split(".");
   const scale = digits.length - Number(exponent ?? 0);
   const units = BigInt(whole + digits);
