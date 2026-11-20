@@ -5,7 +5,12 @@ import {
 import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { MAX_AUTOMATION_POINTS } from "@hyperframes/core/audio-automation";
 // The export worker loads this file in Node, which needs the extension.
-import { FxChainInputSchema, FxNodeSchema, MAX_FX_NODES } from "./fx.ts";
+import {
+  canonicalMainVolume,
+  FxChainInputSchema,
+  FxNodeSchema,
+  MAX_FX_NODES,
+} from "./fx.ts";
 import { GradeEditSchema, GradeSchema } from "./grade.ts";
 import {
   ElementStyleEditSchema,
@@ -532,6 +537,59 @@ export const RangeSchema = z.object({
   out: frame.nullable(),
 });
 
+/** A bus: clips join it with `data-audio-group`, skipping their track's gain and effects. */
+export const AudioGroupSchema = z.object({
+  id: z.string(),
+  volume: z.number(),
+  label: z.string().optional(),
+  muted: z
+    .boolean()
+    .default(false)
+    .describe("Muted buses drop every member in preview and export"),
+  solo: z
+    .boolean()
+    .default(false)
+    .describe(
+      "While anything is soloed, a clip sounds when its track or its bus is soloed. Saved and exported like track solo; mute wins",
+    ),
+  fx: z
+    .array(FxNodeSchema)
+    .max(MAX_FX_NODES)
+    .default([])
+    .describe("Effects on the bus, after its members' own and before its gain"),
+  automated: z
+    .boolean()
+    .default(false)
+    .describe(
+      "The bus has an automation lane, which owns its gain while it plays. setAudioGroup automation: null clears it",
+    ),
+  sourceRestriction: z.string().optional(),
+});
+
+/** Main gain is a gain effect on the root's chain (`mainChain`), which holds -60 to +12 dB. */
+export const MIN_MAIN_VOLUME = 0.001;
+const mainVolume = z
+  .number()
+  .min(MIN_MAIN_VOLUME, "Main gain goes down to -60 dB.")
+  .max(MAX_AUDIO_GAIN, "Gain goes up to +12 dB per stage.")
+  .overwrite(canonicalMainVolume);
+
+export const MainSchema = z.object({
+  volume: mainVolume
+    .default(1)
+    .describe(
+      "Linear gain over the whole mix, after its effects: -60 to +12 dB",
+    ),
+  fx: z
+    .array(FxNodeSchema)
+    .max(MAX_FX_NODES)
+    .default([])
+    .describe(
+      "Effects on the whole mix, in order, before its gain. audio_loudness keeps the mix's loudness gain here",
+    ),
+  sourceRestriction: z.string().optional(),
+});
+
 export const TimelineSchema = z.object({
   fps: FpsSchema,
   duration: frame,
@@ -540,25 +598,14 @@ export const TimelineSchema = z.object({
   markers: z.array(MarkerSchema),
   range: RangeSchema,
   authoredAudioGroups: z
-    .array(
-      z.object({
-        id: z.string(),
-        volume: z.number(),
-        label: z.string().optional(),
-        sourceRestriction: z.string().optional(),
-      }),
-    )
+    .array(AudioGroupSchema)
     .optional()
     .describe(
-      "Authored audio bus declarations in this composition, including empty groups. Each volume is linear gain. sourceRestriction explains why its gain cannot be edited with setAudioGroup",
+      "Authored audio buses (HyperFrames <hf-audio-group>) in this composition, including empty ones. Each volume is linear gain. sourceRestriction explains why setAudioGroup cannot edit it",
     ),
-  masterFx: z
-    .array(FxNodeSchema)
-    .max(MAX_FX_NODES)
-    .optional()
-    .describe(
-      "Audio effects on the whole mix, the composition root's master bus, after every track. Omitted when it has none. Change them with setMaster",
-    ),
+  main: MainSchema.optional().describe(
+    "The master bus over the whole mix, after every track and bus: its gain and effect chain. Omitted at unity with no effects. Change it with setMaster",
+  ),
   /** Projected by the parser from the project's `@font-face` rules, never written back. */
   fonts: z
     .array(z.string())
@@ -1099,21 +1146,56 @@ export const CommandSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("setAudioGroup"),
-      clipId,
-      expectedGroupId: z.string().optional(),
-      volume,
+      group: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("The bus id from timeline.authoredAudioGroups"),
+      clipId: clipId
+        .optional()
+        .describe("Or a member clip, to set the bus it plays through"),
+      expectedGroupId: z
+        .string()
+        .optional()
+        .describe("With clipId, refuse if the clip was rerouted"),
+      label: z.string().trim().min(1).max(120).optional(),
+      volume: volume.optional(),
+      muted: z.boolean().optional(),
+      solo: z.boolean().optional(),
+      fx: FxChainInputSchema.optional().describe(
+        "Replace the bus's effects, as setTrack.fx does a track's",
+      ),
+      automation: z
+        .null()
+        .optional()
+        .describe("null clears the bus's automation lanes"),
+    })
+    .refine(
+      ({ group, clipId }) => (group === undefined) !== (clipId === undefined),
+      { message: "Name the bus with group or clipId, not both." },
+    )
+    .describe(
+      "Change an authored audio bus: name, gain, mute, solo, effects, or clear its automation. Only the fields given change. Applies to every member together and refuses missing or source-restricted buses and any locked member track. Routing and clip settings are kept",
+    ),
+  z
+    .object({
+      type: z.literal("removeAudioGroup"),
+      group: z.string().min(1),
     })
     .describe(
-      "Set the gain of a clip's existing authored audio group. Pass expectedGroupId to refuse if the clip was rerouted. Changes every member together and refuses missing or source-restricted groups and any locked member track. Preserves routing, FX, mute and automation",
+      "Delete an authored audio bus. Its members return to track mixing, keeping their gain, fades, effects and automation",
     ),
   z
     .object({
       type: z.literal("setMaster"),
-      fx: FxChainInputSchema,
+      volume: mainVolume
+        .optional()
+        .describe("Main gain, linear, after the effects: -60 to +12 dB"),
+      fx: FxChainInputSchema.optional().describe(
+        "Replace the master bus effects, which process the whole mix after every track, as setClip.fx does for one clip. Loudness normalization of the mix is a gain effect here",
+      ),
     })
-    .describe(
-      "Replace the master bus effects, which process the whole mix after every track, as setClip.fx does for one clip. Loudness normalization of the mix is a gain effect here",
-    ),
+    .describe("Set the master bus's gain or effects"),
   z
     .object({
       type: z.literal("removeTrack"),
@@ -1267,6 +1349,10 @@ export const TimelineSettingsSchema = z.object({
     }),
   ),
   range: z.object({ in: seconds.nullable(), out: seconds.nullable() }),
+  soloAudioGroups: z
+    .array(z.string())
+    .default([])
+    .describe("Soloed authored audio buses, by id"),
 });
 
 export type Fps = z.infer<typeof FpsSchema>;
@@ -1279,6 +1365,8 @@ export type ClipKind = z.infer<typeof ClipKindSchema>;
 export type Track = z.infer<typeof TrackSchema>;
 export type Marker = z.infer<typeof MarkerSchema>;
 export type Timeline = z.infer<typeof TimelineSchema>;
+export type AudioGroup = z.infer<typeof AudioGroupSchema>;
+export type Main = z.infer<typeof MainSchema>;
 export type InsertClip = z.infer<typeof InsertClipSchema>;
 export type InsertTitle = z.infer<typeof InsertTitleSchema>;
 export type InsertComposition = z.infer<typeof InsertCompositionSchema>;
@@ -1296,6 +1384,7 @@ export const emptyTimelineSettings = (): TimelineSettings => ({
   tracks: [],
   markers: [],
   range: { in: null, out: null },
+  soloAudioGroups: [],
 });
 
 /** Voiceover keeps its own identity while using the audio editing and rendering path. */

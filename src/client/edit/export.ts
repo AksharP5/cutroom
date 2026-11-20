@@ -291,13 +291,22 @@ export async function exportProject(
         seam: 0,
         divider: 0,
       });
-      const solo = rows.filter(({ track }) => track.solo).map(({ id }) => id);
-      const muted = rows.filter(({ track }) => track.muted).map(({ id }) => id);
+      const buses = current.authoredAudioGroups ?? [];
+      const busName = ({ id, label }: { id: string; label?: string }) =>
+        label ?? id;
+      const solo = [
+        ...rows.filter(({ track }) => track.solo).map(({ id }) => id),
+        ...buses.filter(({ solo }) => solo).map(busName),
+      ];
+      const muted = [
+        ...rows.filter(({ track }) => track.muted).map(({ id }) => id),
+        ...buses.filter(({ muted }) => muted).map(busName),
+      ];
       updateJob({
         frames: retimeFrames(range, current.fps, output.fps),
         notice: [
           solo.length
-            ? `${solo.join(", ")} soloed, other audio tracks are silent.`
+            ? `${solo.join(", ")} soloed, other audio is silent.`
             : "",
           muted.length ? `${muted.join(", ")} muted.` : "",
         ]

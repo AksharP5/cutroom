@@ -109,6 +109,10 @@ test("creating a named group leaves standalone and nested authored references at
       id: expect.stringMatching(/^cutroom-bus-/),
       label: "Dialogue",
       volume: 0.25,
+      muted: false,
+      solo: false,
+      fx: [],
+      automated: false,
     });
     expect(
       view.timeline.clips.find(({ id }) => id === "one")?.authoredAudioGroupId,
@@ -233,7 +237,7 @@ test("routing and gain accept the existing authored group ID", async () => {
     const body = await response.json();
     expect(response.status, JSON.stringify(body)).toBe(200);
     const { timeline } = TimelineViewSchema.parse(body);
-    expect(timeline.authoredAudioGroups).toEqual([{ id, volume: 0.5 }]);
+    expect(timeline.authoredAudioGroups).toMatchObject([{ id, volume: 0.5 }]);
     expect(
       timeline.clips.find(({ id }) => id === "outside")?.authoredAudioGroupId,
     ).toBe(id);
@@ -256,9 +260,9 @@ test("silent picture references do not block gain on a local authored bus", asyn
     const response = await fixture.edit("index.html", [groupGain]);
     const body = await response.json();
     expect(response.status, JSON.stringify(body)).toBe(200);
-    expect(TimelineViewSchema.parse(body).timeline.authoredAudioGroups).toEqual(
-      [{ id: "dialogue", volume: 0.5 }],
-    );
+    expect(
+      TimelineViewSchema.parse(body).timeline.authoredAudioGroups,
+    ).toMatchObject([{ id: "dialogue", volume: 0.5 }]);
   } finally {
     await fixture.close();
   }
@@ -387,11 +391,9 @@ test("creating an audio group and moving members writes the same bus the rendere
     ({ label }) => label === 'Lead "Vox"',
   )!;
   expect(id).toMatch(/^cutroom-bus-/);
-  expect(written.timeline.authoredAudioGroups).toContainEqual({
-    id,
-    label: 'Lead "Vox"',
-    volume: 0.25,
-  });
+  expect(written.timeline.authoredAudioGroups).toContainEqual(
+    expect.objectContaining({ id, label: 'Lead "Vox"', volume: 0.25 }),
+  );
   expect(
     parseAudioElements(output)
       .filter(({ groupId }) => groupId === id)
@@ -428,7 +430,9 @@ test("authored group gain writes only its fader and updates every member togethe
   expect(output).toBe(
     source.replace("data-volume='0.8'", "data-volume='0.25'"),
   );
-  expect(after.authoredAudioGroups).toEqual([{ id: "dialogue", volume: 0.25 }]);
+  expect(after.authoredAudioGroups).toMatchObject([
+    { id: "dialogue", volume: 0.25 },
+  ]);
   expect(after.clips).toEqual(parsed.timeline.clips);
   const audible = output.replace(" data-hidden", "");
   expect(
@@ -542,7 +546,7 @@ test("group reads match public gain semantics and cannot edit a bus inside anoth
     source.replace("data-volume='0.8'", "data-volume='0.5legacy'"),
     emptyTimelineSettings(),
   );
-  expect(parsed.timeline.authoredAudioGroups).toEqual([
+  expect(parsed.timeline.authoredAudioGroups).toMatchObject([
     { id: "dialogue", volume: 0.5 },
   ]);
   const nested = source
@@ -616,7 +620,7 @@ test("a group gain change persists when the same batch removes its last member",
   const written = parseComposition(output, settingsOf(after));
   expect(timelineContent(written.timeline)).toEqual(timelineContent(after));
   expect(written.timeline.clips.map(({ id }) => id)).toEqual(["outside"]);
-  expect(written.timeline.authoredAudioGroups).toEqual([
+  expect(written.timeline.authoredAudioGroups).toMatchObject([
     { id: "dialogue", volume: 0.25 },
   ]);
 });

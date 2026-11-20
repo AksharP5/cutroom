@@ -476,3 +476,44 @@ test("standalone audio keeps a 24-frame crossfade and reports a mixed fade curve
     expect.stringContaining("24-frame audio fade at A3 at 00:00:02:00"),
   );
 });
+
+test("Main gain and bus gain fold into clip volume, and Summary names what a bus carries that Resolve can't", () => {
+  const route: CommandInput[] = [
+    {
+      type: "routeAudioGroup",
+      clipIds: ["music"],
+      group: { label: "Music", volume: 0.5 },
+    },
+    { type: "setMaster", volume: 0.5 },
+  ];
+  const volume = (fcpxml: string, name: string) =>
+    new RegExp(
+      `<asset-clip[^>]*name="${name}"[^>]*>\\s*<adjust-volume amount="([-\\d.]+)dB"`,
+    ).exec(fcpxml)?.[1];
+  const folded = edit(route);
+  // -6 dB on the bus and -6 dB on Main reach the music; the rest gets Main alone.
+  expect(volume(folded.fcpxml, "music.wav")).toBe("-12.0412");
+  expect(volume(folded.fcpxml, "b.mp4")).toBe("-6.0206");
+  expect(folded.notes).toContainEqual(
+    expect.stringContaining('The "Music" bus gain is in its member clips'),
+  );
+
+  // Bus effects can't be folded; a muted bus disables its clips.
+  const effects = edit([
+    ...route,
+    { type: "setAudioGroup", clipId: "music", fx: [{ type: "compressor" }] },
+  ]);
+  expect(effects.notes).toContainEqual(
+    expect.stringContaining(
+      'Rebuild these effects on the "Music" bus in Fairlight, in this order, and route its clips through it. Compressor (',
+    ),
+  );
+  const muted = edit([
+    ...route,
+    { type: "setAudioGroup", clipId: "music", muted: true },
+  ]);
+  expect(muted.notes).toContainEqual(
+    'The "Music" bus is muted in Cutroom, so its clips are disabled.',
+  );
+  expect(muted.fcpxml).toMatch(/name="music.wav"[^>]*enabled="0"/);
+});
