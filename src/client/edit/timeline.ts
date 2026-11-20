@@ -113,6 +113,7 @@ let confirmed: { projectId: string; view: TimelineView } | null = null;
 const answers = new Map<string, TimelineView>();
 /** Edits shown already and not yet answered, oldest first. */
 let pending: Edit[] = [];
+const pendingHistory = new Map<string, Set<Promise<void>>>();
 /** The header toast this queue last showed, cleared by the next edit that lands. */
 let lastToast = "";
 let dismissRipple = () => {};
@@ -212,7 +213,11 @@ export function afterEditBurst(projectId: string, composition: string) {
   const saves = pending.filter(
     (edit) => edit.projectId === projectId && edit.composition === composition,
   );
-  return saves.length > 1 ? queue : Promise.resolve();
+  const history = pendingHistory.get(projectId);
+  const writes: Promise<void>[] = [];
+  if (saves.length > 1) writes.push(queue);
+  if (history && history.size > 1) writes.push(...history);
+  return Promise.allSettled(writes);
 }
 
 /** Runs a source operation or export only after the edits shown before it have landed. */
@@ -863,12 +868,12 @@ export async function editTimeline(
   }
 }
 
-export const stepHistory = (
+export function stepHistory(
   projectId: string,
   step: "undo" | "redo",
   expectedHistoryId?: string,
-) =>
-  queueNoteChange(projectId, () =>
+) {
+  const run = queueNoteChange(projectId, () =>
     clipboardTask.then(() =>
       enqueue(async () => {
         if (expectedHistoryId) {
@@ -931,6 +936,19 @@ export const stepHistory = (
       }),
     ),
   );
+  let history = pendingHistory.get(projectId);
+  if (!history) {
+    history = new Set();
+    pendingHistory.set(projectId, history);
+  }
+  history.add(run);
+  const settle = () => {
+    history.delete(run);
+    if (!history.size) pendingHistory.delete(projectId);
+  };
+  void run.then(settle, settle);
+  return run;
+}
 
 /** Whether clips have been copied in this project, so a paste has something to place. */
 export const hasClipboard = (projectId: string) => clipboardIds.has(projectId);
