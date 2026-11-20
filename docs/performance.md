@@ -160,6 +160,26 @@ captured 360 samples and read 150 pictures. Both found the six programmed holds.
 was 202 ms from the compositor and 201 ms from the screencast. The largest compositor sampling
 gap was 10.56 ms, below the 33.33 ms period of a source frame.
 
+**Source alignment at 1x.** A separate 30 fps test put two numbered synthetic shots on the
+same scanline. It played a 24-frame dissolve, then a two-track overlap with no transition.
+The Wayland reader decoded both numbers from each compositor sample. Five runs per setting
+and grade used Chromium XWayland on main `64574f62`. The incoming shot and the upper track
+were tested with and without a −0.5-stop grade.
+
+With GPU footage playback on, all 1,225 readable pairs at 60 Hz showed the same timeline
+frame on both shots. Playback covered all 25 positions from the start through the end of the
+dissolve. Both white reference levels matched paused playback at each position. The rendered
+MP4 showed the same source frames and its decoded white levels were within 7 out of 255
+of the viewer's.
+
+With GPU footage playback off, HyperFrames shows each video on its own browser surface.
+The compositor can advance one surface before the other. On the 143.981 Hz display, the
+graded dissolve showed different source numbers in 103 of 286 readable samples. In one
+two-track overlap with no dissolve, the lag stayed at one or two frames for 1.8 seconds.
+The ungraded dissolve also showed mismatches at 60 Hz. In one sample the outgoing shot
+showed frame 73 while the incoming shot showed 72, although their source clocks differed
+by only 0.18 ms. The exact paused frames and export agreed.
+
 The exact-frame check also caught a ripple delete that showed the right footage and then
 showed the deleted shot again. On main `3fbbcb36`, Electron Wayland, Electron XWayland and
 Chromium XWayland all showed source frame 1005 after deleting shot 22, then returned to 3405
@@ -248,6 +268,45 @@ gap over 38.2 ms, half a display interval longer than the maximum five refreshes
 show a regular 30 fps picture. The runner counts source pictures that could fit into gaps
 between capture samples. It rejects a window if more than 1 out of 300 pictures or more than
 4 out of 900 could go unseen. Focus changes invalidate a run.
+
+### 4K sources and editing proxies
+
+Cutroom checks the original file against the 1080p pixel budget before deciding which playback path owns a clip. The check also blocks a large HEVC source when its finished editing proxy is 1920 × 1080. The preview's native path already uses that proxy.
+
+An 8-bit 4K frame uses 11.9 MiB in the decoded cache. A third of the 128 MiB cache can hold three such frames, compared with the eight frames requested ahead of playback at 1080p. The GPU compositor copies and uploads the full-resolution planes even when the viewer is smaller. At 60 fps, each transfer moves about 712 MiB/s for one 8-bit 4K video layer.
+
+On November 20, 2026, Electron 45.2.3 (Chromium 156) played these projects in a 1920 × 1080, 60 Hz Wayland window on Hyprland 0.56.2, with an i5-14400F and RTX 5060. Each session used a new profile and played 30 seconds of a 30-cut timeline with six titles and a music bed. Each file was a 44-second numbered synthetic source. The 4K30 and 4K60 H.264 files were 32 and 40 Mbit/s with a one-second GOP. The HEVC sources were SDR Matroska, one 4K60 Main 10 and one 1080p60 Main at 12 Mbit/s with a 4.2-second GOP and two B-frames to match the documented OBS format.
+
+On this display, the [compositor reader](#desktop-playback) recovered all 270 pictures and all six deliberate holds from a six-second 50 fps test pattern, with every refresh sampled. Each accepted 30-second run could miss at most 0.5% of the source frames due to capture gaps. Focus changes, runs with more than two seconds of unreadable output and late changes of footage path invalidated a run. 60 fps playback began near the open frame. The 30 fps runs began at the same frame in the second shot.
+
+For sources above the limit, the control used the current 1080p check and the candidate temporarily allowed up to 3840 × 2160 pixels. Both had GPU playback enabled in Settings. The 1080p HEVC comparison toggled the setting with the original limit in place. Both HEVC paths used a finished Cutroom H.264 editing proxy. In the warmed rows, both paths also had a finished filmstrip and scrub proxy before the editor opened. Proxy preparation is outside the first-picture measurement.
+
+Each cell is native → GPU. Values are medians of the accepted runs. A long hold is a gap between picture changes over 41.7 ms at 30 fps or 25 ms at 60 fps on this display. End-of-window holds are tracked separately.
+
+| Source                    | Filmstrip and scrub |  Runs |  Pictures/s | Long holds / 30 s |     Open ms | Browser PSS MiB |
+| ------------------------- | ------------------- | ----: | ----------: | ----------------: | ----------: | --------------: |
+| 4K30 H.264                | On demand           | 1 → 1 | 29.1 → 24.6 |          73 → 197 | 2385 → 1778 |     3592 → 1969 |
+| 4K30 H.264                | Prepared            | 0 → 1 |    — → 28.1 |           — → 210 |    — → 1893 |        — → 1912 |
+| 4K60 H.264                | On demand           | 1 → 1 | 57.8 → 23.8 |          35 → 149 | 1361 → 1126 |     3227 → 1932 |
+| 4K60 H.264                | Prepared            | 1 → 1 |  18.7 → 8.5 |          15 → 155 | 1864 → 1298 |     2686 → 1856 |
+| 4K60 HEVC, 1080p proxy    | On demand           | 1 → 0 |    55.7 → — |           104 → — |    2635 → — |        1671 → — |
+| 4K60 HEVC, 1080p proxy    | Prepared            | 1 → 1 |  42.8 → 0.6 |           71 → 16 | 2964 → 1969 |      1774 → 997 |
+| 1080p60 HEVC, 1080p proxy | On demand           | 2 → 2 | 26.9 → 54.8 |      37.5 → 139.5 | 3614 → 1237 |     1778 → 1044 |
+| 1080p60 HEVC, 1080p proxy | Prepared            | 0 → 1 |    — → 52.1 |            — → 20 |    — → ≤893 |         — → 992 |
+
+The warmed 4K60 H.264 pair ran at a one-minute load average of 18.9 and 19.6 on 16 logical CPUs. The native picture held for the final 16.2 seconds while the editor clock advanced. The GPU path showed fewer pictures overall. The on-demand 4K60 pair also favored native playback (load 5.8 and 12.1).
+
+The 4K HEVC candidate drew from the finished 1920 × 1080 editing proxy. In the accepted warmed run the editor clock advanced 29.9 seconds while 17 distinct pictures reached the screen, including a 14.1-second hold. Its on-demand run was rejected after more missed capture samples than the accuracy budget permits. The native path produced 55.7 pictures/s with the editing proxy ready and 42.8 with all media prepared. Load was 13.1 native and 18.4 GPU in the warmed pair.
+
+The 1080p HEVC fixture reached 52.1–56.8 pictures/s across three GPU runs, with a 1.75-second hold in the warmed run. The native on-demand runs showed 18.2 and 35.5 pictures/s. Their machine load was higher than in the corresponding GPU runs. The warmed native control failed the capture checks.
+
+Keep the current pixel budget. The tests show that allowing 4K clips can reduce cadence sharply, including a 4K HEVC source decoded from a 1080p proxy. Evaluate any proxy-specific exception with repeated sustained playback and matched machine load. The HEVC footage here was synthetic.
+
+To reproduce, use the [desktop setup above](#desktop-playback) to build the screen helper. Give each fixture its own benchmark directory and a `screen` link to the helper. Generate a 4K fixture with the fifth argument to `makeProject` set to `"h264-30"`, `"h264-60"` or `"hevc-60"`. The HEVC fixture uses NVENC. For the 1080p HEVC comparison, copy the HEVC project and replace its `footage.mkv` with a 1920 × 1080 Main-profile version at 60 fps, encoded with `hevc_nvenc -preset p4 -g 252 -bf 2 -b:v 12M`.
+
+Validate capture with `--fps 60 --validate` on the measurement display, then use `--size 4k --fps 60` for the sustained run. Set `--fps 30` for 30 fps footage. Use `--editing-proxy footage.mkv` for either HEVC fixture and `--warm-media` to prepare the filmstrip and scrub proxy before opening. The runner reports preparation time separately.
+
+In a scratch checkout, compare the existing cap with a temporary 3840 × 2160 cap in `src/server/timeline/media.ts`. Start a fresh process per run to clear the file probe cache. Pass `--setting on --expect-pipeline on` for the candidate or for the eligible HD HEVC proxy. Use `--setting on` for the current 4K cap and `--setting off` for the native HD HEVC control. Restore the source guard after measuring.
 
 ## Timeline engine
 

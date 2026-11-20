@@ -7,6 +7,7 @@ import { z } from "zod";
 import { ProjectSchema } from "../src/shared/project";
 import { GradeSchema } from "../src/shared/timeline/grade";
 import type { GradeEdit } from "../src/shared/timeline/grade";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
 import { seekFrame } from "./position-helpers";
 import { waitForPreview } from "./preview-ready";
@@ -123,6 +124,125 @@ async function warmth(page: Page) {
   return (await centrePixel(page)).warmth;
 }
 
+test("the timeline filmstrip holds a grade through edits, undo and redo", async ({
+  page,
+  request,
+}, info) => {
+  const { project } = await gradeProject(
+    request,
+    ["0x786896", "0xa85b4f", "0x48a07e"].map(
+      (colour, i) =>
+        `drawbox=x=${i * 213}:y=0:w=214:h=ih:color=${colour}:t=fill`,
+    ),
+    true,
+  );
+  const cube = [0, 1].flatMap((blue) =>
+    [0, 1].flatMap((green) =>
+      [0, 1].map((red) => `${red * 0.98} ${green} ${blue * 0.94}`),
+    ),
+  );
+  await writeFile(
+    join(project.path, "film.cube"),
+    `LUT_3D_SIZE 2\n${cube.join("\n")}\n`,
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  const shot = page.locator('.tl-lanes [data-clip="a"]');
+  const sample = () =>
+    shot.evaluate((element) => {
+      const clip = element.getBoundingClientRect();
+      const canvas = document.querySelector<HTMLCanvasElement>(".tl-bodies")!;
+      const body = canvas.getBoundingClientRect();
+      const x = Math.floor((clip.left - body.left + 15) * devicePixelRatio);
+      const y = Math.floor((clip.bottom - body.top - 9) * devicePixelRatio);
+      return [...canvas.getContext("2d")!.getImageData(x, y, 1, 1).data];
+    });
+  const distance = (a: number[], b: number[]) =>
+    Math.max(...a.slice(0, 3).map((value, i) => Math.abs(value - b[i]!)));
+  const setGrade = async (grade: GradeEdit) => {
+    const { revision } = TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+    const response = await request.post(`${api}/commands`, {
+      data: {
+        expectedRevision: revision,
+        commands: [{ type: "setClip", clipId: "a", grade }],
+      },
+    });
+    expect(response.ok()).toBe(true);
+  };
+
+  await expect.poll(async () => (await sample())[3]).toBe(255);
+  const raw = await sample();
+  expect(raw[2]!).toBeGreaterThan(raw[1]! + 20);
+
+  await setGrade({
+    adjust: { exposure: -1, temperature: 0.6 },
+    lut: { src: "film.cube" },
+  });
+  await expect
+    .poll(async () => (await sample())[1]!)
+    .toBeLessThan(raw[1]! - 20);
+  const warm = await sample();
+  const channelErrors = async () => {
+    const { red, green, blue } = (await picturePixels(page, [0.21]))[0]!;
+    return [red, green, blue].map((value, i) => Math.abs(value - warm[i]!));
+  };
+  await expect
+    .poll(async () => Math.max(...(await channelErrors())))
+    .toBeLessThanOrEqual(2);
+  await info.attach("filmstrip colours", {
+    body: JSON.stringify({
+      raw,
+      warm,
+      viewerChannelErrors: await channelErrors(),
+    }),
+    contentType: "application/json",
+  });
+
+  // Sample every painted display frame between two grades. A screenshot after the second
+  // grade settles would miss a flash of source colour during the replacement.
+  const watcher = await shot.evaluateHandle((element) => {
+    const samples: number[][] = [];
+    const canvas = document.querySelector<HTMLCanvasElement>(".tl-bodies")!;
+    const clip = element.getBoundingClientRect();
+    const body = canvas.getBoundingClientRect();
+    const x = Math.floor((clip.left - body.left + 15) * devicePixelRatio);
+    const y = Math.floor((clip.bottom - body.top - 9) * devicePixelRatio);
+    const ctx = canvas.getContext("2d")!;
+    let raf = requestAnimationFrame(function sample() {
+      samples.push([...ctx.getImageData(x, y, 1, 1).data]);
+      raf = requestAnimationFrame(sample);
+    });
+    return { samples, stop: () => cancelAnimationFrame(raf) };
+  });
+  const aroundEdit = [];
+  try {
+    await setGrade({ adjust: { exposure: -0.45, temperature: -0.55 } });
+    await expect
+      .poll(async () => (await sample())[1]!)
+      .toBeGreaterThan(warm[1]! + 15);
+    aroundEdit.push(...(await watcher.evaluate(({ samples }) => samples)));
+  } finally {
+    await watcher.evaluate(({ stop }) => stop());
+    await watcher.dispose();
+  }
+  const cool = await sample();
+  expect(aroundEdit.length).toBeGreaterThan(0);
+  expect(aroundEdit.every((value) => distance(value, raw) > 8)).toBe(true);
+
+  await shot.click();
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(async () => distance(await sample(), warm))
+    .toBeLessThanOrEqual(2);
+  await page.keyboard.press("Control+Shift+z");
+  await expect
+    .poll(async () => distance(await sample(), cool))
+    .toBeLessThanOrEqual(2);
+});
+
 test("cancelling a grade restores the paused source colours", async ({
   page,
   request,
@@ -197,6 +317,58 @@ test("cancelling a grade restores the paused source colours", async ({
   await expect(holds).toHaveCount(1);
   await page.getByRole("button", { name: "Play forward" }).click();
   await expect(holds).toHaveCount(0);
+});
+
+test("an authored grade can return to its previous value after cancelling a draft", async ({
+  page,
+  request,
+}) => {
+  const { project } = await gradeProject(request);
+  const warm = JSON.stringify({ adjust: { temperature: 0.75 } });
+  const cool = JSON.stringify({ adjust: { temperature: -0.75 } });
+  const index = join(project.path, "index.html");
+  await writeFile(
+    index,
+    (await readFile(index, "utf8")).replace(
+      '<video id="a"',
+      `<video id="a" data-color-grading='${warm}'`,
+    ),
+  );
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const source = page.frameLocator("iframe[data-live]").locator("video#a");
+  const exposure = inspector.locator("label", { hasText: /^Exposure$/ });
+  const { x, y, width, height } = (await exposure.boundingBox())!;
+  await expect.poll(() => warmth(page)).toBeGreaterThan(20);
+  const original = await centrePixel(page);
+
+  await page.mouse.move(x + width / 2, y + height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x + width / 2 - 20, y + height / 2, { steps: 4 });
+  await expect
+    .poll(async () => (await centrePixel(page)).green)
+    .toBeLessThan(original.green - 20);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(source).toHaveAttribute("data-color-grading", warm);
+
+  // A composition script changes the grade and then returns it to the saved value.
+  const writeGrade = (value: string) =>
+    source.evaluate(
+      (element, grade) => element.setAttribute("data-color-grading", grade),
+      value,
+    );
+  await writeGrade(cool);
+  await expect.poll(() => warmth(page)).toBeLessThan(-20);
+  await writeGrade(warm);
+  await expect.poll(() => warmth(page)).toBeGreaterThan(20);
 });
 
 test("a video grade and a clip zoom compose while dragging and switching between Aim and Result", async ({
