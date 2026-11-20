@@ -960,6 +960,29 @@ Before the fixes measured here, rotated phone video drew sideways (mean differen
 
 In that comparison the 4K60 decoders produced about four frames for each one drawn. Cutroom now leaves sources above the 1080p pixel budget with HyperFrames, clip by clip. At an x264 open GOP's leading B-frames, a seeking `<video>` shows the keyframe after them and the pipeline shows the frame the file's timestamps name, as the export does; the e2e test checks those frames by number.
 
+### Linux hardware decoding in Electron
+
+On November 20, 2026, Electron 45.2.3 with Chromium 156 ran on an RTX 5060 (driver 615.78.08) under Hyprland. A muted WebCodecs probe decoded nine seconds of synthetic H.264 High at each resolution in a fresh profile. DevTools `Media` events recorded the selected decoder and whether it was a platform decoder. Every supported configuration decoded all 540 frames. Stock Electron selected `FFmpegVideoDecoder` even with `hardwareAcceleration: "no-preference"`, and rejected `"prefer-hardware"` at both resolutions.
+
+| Electron decode configuration            | Decoder            | Output | 1080p60 burst, frames/s | 4K60 burst, frames/s |
+| ---------------------------------------- | ------------------ | ------ | ----------------------: | -------------------: |
+| Stock Wayland, prefer software           | FFmpegVideoDecoder | I420   |                     211 |                  255 |
+| NVIDIA VA-API, Wayland, prefer hardware  | VaapiVideoDecoder  | NV12   |                     645 |                  363 |
+| NVIDIA VA-API, XWayland, prefer hardware | VaapiVideoDecoder  | BGRA   |                     732 |                  484 |
+
+The candidate used ANGLE OpenGL, `AcceleratedVideoDecodeLinuxGL`, `VaapiOnNvidiaGPUs`, and `AcceleratedVideoDecodeLinuxZeroCopyGL`, with the GPU blocklist and driver workarounds bypassed for the probe and the NVIDIA libva driver's direct backend. It kept Cutroom's `disable-gpu-memory-buffer-video-frames` switch. Chromium documents its NVIDIA VA-API option as experimental. [Chromium VA-API documentation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/gpu/vaapi.md)
+
+The same 4K60 clip then ran for 30 seconds in the desktop editor on a 60 Hz display, with 30 three-second cuts. The size guard was bypassed in the test. The trace counted canvas frame changes sampled on animation frames and logged the decoder selected by WebCodecs. These are canvas updates, a measure upstream of display presentation. The shared machine's one-minute load ranged from 11 to 37 across the runs.
+
+| 4K60 editor path                                             | Canvas updates/s | Timeline advanced | Result                                                                                  |
+| ------------------------------------------------------------ | ---------------: | ----------------: | --------------------------------------------------------------------------------------- |
+| Stock Wayland, software decode                               |             24.7 |            30.0 s | The canvas was held up to 634 ms                                                        |
+| NVIDIA VA-API with Wayland zero-copy                         |              7.5 |            26.0 s | GPU process exited, the drawing context was lost, and the decoders repeatedly restarted |
+| NVIDIA VA-API, Wayland without the explicit zero-copy option |              8.4 |            29.2 s | WebCodecs reported decoding errors and the pipeline fell back                           |
+| NVIDIA VA-API, XWayland                                      |              6.6 |            29.8 s | GPU uploads repeatedly failed to find the decoded image                                 |
+
+Software was already fast enough to decode all 540 frames when the probe fed them at 60 per second. In the editor, two software decoders accepted 7,312 chunks for 808 canvas updates in the same 30-second window. Decoder throughput alone leaves that extra work and the compositor's cost in the playback path. Keep the current software decode configuration and the raw 4K guard.
+
 ## Editing proxies
 
 Measured on November 16, 2026, on the owner's machine (16 threads, RTX 5060, FFmpeg 9.0), through the media service's own job, from ffmpeg stand-ins with grain at OBS-like settings (x265, a keyframe every 2 s, two B-frames, BT.709, AAC). CPU is the job's processes' user time.
