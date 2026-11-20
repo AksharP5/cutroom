@@ -3814,15 +3814,29 @@ function installPreviewBridge(
           rememberTitleAnimations();
           break;
         case "pipeline": {
+          const nativeIds = "native" in data ? data.native : undefined;
           if (
             !("active" in data) ||
             typeof data.active !== "boolean" ||
             !("drawn" in data) ||
             !Array.isArray(data.drawn) ||
-            !data.drawn.every((id) => typeof id === "string")
+            !data.drawn.every((id) => typeof id === "string") ||
+            (nativeIds !== undefined &&
+              (!Array.isArray(nativeIds) ||
+                !nativeIds.every((id) => typeof id === "string")))
           )
             return;
           const drawn = new Set<string>(data.drawn);
+          if (data.active && Array.isArray(nativeIds)) {
+            const native = new Set<string>(nativeIds);
+            // A retained document can still contain a clip deleted from the new plan.
+            // Keep it parked until this document leaves, or the plan puts it on HyperFrames.
+            for (const video of rootMedia("video")) {
+              const id = clipId(video);
+              if (id !== null && pipelineDrawn.has(id) && !native.has(id))
+                drawn.add(id);
+            }
+          }
           if (
             data.active === pipelineActive &&
             drawn.size === pipelineDrawn.size &&

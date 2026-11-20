@@ -10,6 +10,7 @@ export const usePipeline = create(() => ({
   enabled: localStorage.getItem(SETTING) === "true",
   active: false,
   drawn: [] as readonly string[],
+  native: [] as readonly string[],
 }));
 usePipeline.subscribe(({ enabled }, previous) => {
   if (enabled !== previous.enabled)

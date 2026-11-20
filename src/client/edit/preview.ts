@@ -722,9 +722,13 @@ export function connectPreview(
     player,
     mix,
     /** Whether the footage pipeline draws root videos beneath this document, and which. */
-    pipeline: (active: boolean, drawn: readonly string[]) => {
+    pipeline: (
+      active: boolean,
+      drawn: readonly string[],
+      native: readonly string[],
+    ) => {
       frame.setAttribute("data-seek-pending", "");
-      playbackRequest = send("pipeline", { active, drawn });
+      playbackRequest = send("pipeline", { active, drawn, native });
     },
     signal: closing.signal,
     async activate() {

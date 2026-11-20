@@ -514,8 +514,13 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     sourceColours = colours;
     plan = next;
     const drawn = Object.keys(next.drawable);
-    if (drawn.join("\n") !== usePipeline.getState().drawn.join("\n"))
-      usePipeline.setState({ drawn });
+    const native = Object.keys(next.hyperframes);
+    const previous = usePipeline.getState();
+    if (
+      drawn.join("\n") !== previous.drawn.join("\n") ||
+      native.join("\n") !== previous.native.join("\n")
+    )
+      usePipeline.setState({ drawn, native });
     sources.forgetFailures();
     // Open every file now: opening one mid-playback costs the clock a few frames.
     for (const clip of view.timeline.clips)

@@ -508,6 +508,70 @@ test("an edit or a jump at rest shows the right frame at once and settles on Hyp
   }
 });
 
+test("a ripple delete keeps the new footage visible while the old preview is retained", async ({
+  page,
+  request,
+}) => {
+  const created = await project(
+    request,
+    { num: 30, den: 1 },
+    () => `
+      <video id="v0" src="a.mp4" muted data-start="0" data-duration="1" data-track-index="0" style="${fill}"></video>
+      <video id="v1" src="a.mp4" muted data-start="1" data-duration="2" data-media-start="2" data-track-index="0" style="${fill}"></video>
+    `,
+    '<script src="gsap.min.js"></script>',
+    90,
+  );
+  const root = join(created.path, "index.html");
+  await writeFile(
+    root,
+    (await readFile(root, "utf8")).replace(
+      "</body>",
+      "<script>window.__timelines=window.__timelines||{};window.__timelines.main=gsap.timeline({paused:true});</script></body>",
+    ),
+  );
+  await copyFile(
+    "node_modules/gsap/dist/gsap.min.js",
+    join(created.path, "gsap.min.js"),
+  );
+  await numbered(join(created.path, "a.mp4"), "30");
+  await pictures(page, created, 30, [15], true, true);
+
+  // The confirmed document still has v0 after the new footage plan has dropped it.
+  const candidate = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  await page.route("**/isolated-preview?*", async (route) => {
+    candidate.resolve();
+    await release.promise;
+    await route.continue();
+  });
+  try {
+    const deleted = page.locator('[data-clip="v0"]');
+    await deleted.click();
+    await typeFrame(page, 15, 30);
+    const plan = page.waitForResponse(async (response) => {
+      if (!response.url().endsWith("/pipeline") || !response.ok()) return false;
+      const { plan } = PipelineResponseSchema.parse(await response.json());
+      return "drawable" in plan && !Object.hasOwn(plan.drawable, "v0");
+    });
+    await page.keyboard.press("Delete");
+    await expect(deleted).toHaveCount(0);
+    await candidate.promise;
+    await plan;
+    await expect(page.locator(".edit-frame[data-live]")).not.toHaveAttribute(
+      "data-seek-pending",
+    );
+    const shown = await settledShot(page);
+    const [picture] = await compare(page, [shown], [shown]);
+    expect(picture?.numbers[0]).toBe(75);
+  } finally {
+    release.resolve();
+  }
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-preview-ready",
+  );
+});
+
 test("a clip the pipeline cannot draw plays in HyperFrames on top while the pipeline draws the rest", async ({
   browser,
   request,
