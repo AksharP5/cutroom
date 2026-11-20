@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
+import { COLOR_GRADING_SOURCE_HIDDEN_ATTR } from "@hyperframes/core/color-grading";
 import { MEDIA_TRASH } from "../../shared/media.ts";
 import { previewPolicy } from "./isolation.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
@@ -223,6 +224,25 @@ function replaceOnce(
   return source.replace(before, after);
 }
 
+/** Frame injection supplies the decoded pixels. The source element still owns opacity. */
+export function renderGradeRuntime(source: string) {
+  const adapted = replaceOnce(
+    source,
+    'i=r&&!n;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=a.opacity||"1"',
+    'i=r;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=(n?window.getComputedStyle(e.element):a).opacity||"1"',
+    "the colour grading runtime",
+  );
+  // Composite the graded canvas once. The image still supplies the decoded pixels
+  // and can paint as a fallback until the grading canvas takes over.
+  const hideGradedFrame = `video[${COLOR_GRADING_SOURCE_HIDDEN_ATTR}] + img.__render_frame__ { opacity: 0 !important; }`;
+  return `${adapted}
+;{
+  const style = document.createElement("style");
+  style.textContent = ${JSON.stringify(hideGradedFrame)};
+  document.head.append(style);
+}`;
+}
+
 /** Version-checked host changes, like studioPlugin. No dependency files are modified. */
 export function registerRenderIsolation(
   sources: Record<string, string> = {},
@@ -399,7 +419,13 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = replaceOnce(
+          source,
+          "return resolveVerifiedHyperframeRuntime().runtimeSource;",
+          "return cutroomGradeRuntime(resolveVerifiedHyperframeRuntime().runtimeSource);",
+          url,
+        );
         source = replaceOnce(
           source,
           "function runAudioStage(input) {",

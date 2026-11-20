@@ -287,6 +287,8 @@ Either way the files are copied into the project's `assets/fonts` folder and dec
 
 A cross dissolve or a dip to black sits on a cut between two video, image or audio clips, and their linked sound crossfades with it. It plays the media past each clip's edit point, as Resolve does: centred on the cut, the outgoing clip runs on for half its length and the incoming clip starts half its length early. A transition that needs more media than the clips have is refused with the longest that fits. Ctrl+T adds a one-second cross dissolve at the nearest cut, Alt+T one for picture alone and Shift+T one for sound alone; [Keys](keyboard.md) has the rule for which cut. On the timeline a transition is a pale box with a diagonal over its cut, its length printed inside once it is 28px wide, so a mixed cut reads apart from a hard cut. Select a transition by clicking it on the timeline to change its kind, length and alignment in the inspector, drag its ends to change its length, or press Delete to remove it. Agents set them with [`setTransition`](mcp.md#transitions).
 
+Each shot keeps its colour grade through the dissolve. The viewer and rendered exports use the same mix at each frame.
+
 - A roll moves the transition with the cut. A trim that leaves less room shortens it.
 - A razor elsewhere in either clip keeps it on the piece that still meets the cut, and adds none at the razor.
 - Moving either clip away, a trim that opens a gap, or deleting either clip removes it.
