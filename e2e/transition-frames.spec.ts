@@ -11,6 +11,7 @@ import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { formatTimecode } from "../src/shared/timeline/timecode";
 import { expect, test } from "./fixtures";
+import { seekFrame } from "./position-helpers";
 
 const ffmpeg = promisify(execFile);
 const width = 432;
@@ -96,7 +97,7 @@ const samples = cuts.flatMap(({ kind, before, duration }, index) => {
 // Also check a hard cut after the transitions.
 samples.push({ at: total - 3, expected: [null, offsets[7]! + shotLength - 3] });
 
-async function imageNumbers(page: Page, image: string) {
+async function imageCells(page: Page, image: string) {
   const rgb = await page.evaluate(
     async ({ encoded, cells }) => {
       const bmp = await createImageBitmap(
@@ -108,11 +109,12 @@ async function imageNumbers(page: Page, image: string) {
       const ctx = canvas.getContext("2d")!;
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(bmp, 0, 0, cells, 2);
+      bmp.close();
       return Array.from(ctx.getImageData(0, 0, cells, 2).data);
     },
     { encoded: image, cells: digits + 1 },
   );
-  return numbers(Uint8Array.from(rgb), digits + 1, 2, 4);
+  return Uint8Array.from(rgb);
 }
 
 const frameBytes = width * height * 3;
@@ -269,11 +271,16 @@ ${offsets.map((offset, index) => `<video id="v${index}" src="${index % 2}.mp4" m
       await expect(stage).toBeVisible();
       expect
         .soft(
-          await imageNumbers(
-            page,
-            (await page.locator(".edit-picture").screenshot()).toString(
-              "base64",
+          numbers(
+            await imageCells(
+              page,
+              (await page.locator(".edit-picture").screenshot()).toString(
+                "base64",
+              ),
             ),
+            digits + 1,
+            2,
+            4,
           ),
           `paused preview at output frame ${at}`,
         )
@@ -316,7 +323,7 @@ ${offsets.map((offset, index) => `<video id="v${index}" src="${index % 2}.mp4" m
           const { at, expected } = batch[index]!;
           expect
             .soft(
-              await imageNumbers(page, data),
+              numbers(await imageCells(page, data), digits + 1, 2, 4),
               `timeline_view at output frame ${at}`,
             )
             .toEqual(expected);
@@ -340,4 +347,256 @@ ${offsets.map((offset, index) => `<video id="v${index}" src="${index % 2}.mp4" m
           offsets[1]! + at - shotLength,
         ]);
   });
+}
+
+const dissolveFrames = 24;
+const gradeCuts = [32, 72, 112, 152];
+const exposures = [0, 0, -0.5, -0.5, 0];
+const gradeStarts = [0, ...gradeCuts];
+const gradeOffsets = [10, 24, 32, 40, 48];
+const gradeEnd = 180;
+
+function whiteReferences(
+  rgb: Uint8Array,
+  w: number,
+  h: number,
+  stride: number,
+) {
+  return [0, 1].map(
+    (band) =>
+      rgb[
+        (Math.floor(((band + 0.5) * h) / 2) * w +
+          Math.floor(((digits + 0.5) * w) / (digits + 1))) *
+          stride
+      ]!,
+  );
+}
+
+for (const fps of [
+  { num: 30000, den: 1001 },
+  { num: 30, den: 1 },
+]) {
+  const rate = `${fps.num}/${fps.den}`;
+  for (const track of [0, 1]) {
+    test(`graded dissolves preserve the mix on V${track + 1} at ${rate}`, async ({
+      browser,
+      request,
+    }) => {
+      test.setTimeout(180_000);
+      const project = ProjectSchema.parse(
+        await (
+          await request.post("/api/cutroom/projects", {
+            data: {
+              name: `Graded dissolves V${track + 1} ${rate}`,
+              width,
+              height,
+            },
+          })
+        ).json(),
+      );
+      const route = `/api/cutroom/projects/${project.id}`;
+      const seconds = (frame: number) =>
+        ((frame * fps.den) / fps.num).toFixed(6);
+      await Promise.all(
+        [0, 1].map((band) =>
+          numberedSource(join(project.path, `${band}.mp4`), rate, band),
+        ),
+      );
+      const video = (
+        id: string,
+        band: number,
+        at: number,
+        end: number,
+        offset: number,
+        lane: number,
+      ) =>
+        `<video id="${id}" src="${band}.mp4" muted data-start="${seconds(at)}" data-duration="${seconds(end - at)}" data-media-start="${seconds(offset)}" data-track-index="${lane}" style="position:absolute;inset:0;width:100%;height:100%"></video>`;
+      // Put the last outgoing shot above its incoming partner. Both fade-in and fade-out
+      // must work when the fading shot is graded.
+      const clips = [0, 1, 2, 4, 3].map((i) =>
+        video(
+          `v${i}`,
+          i % 2,
+          gradeStarts[i]!,
+          gradeCuts[i] ?? gradeEnd,
+          gradeOffsets[i]!,
+          track,
+        ),
+      );
+      await writeFile(
+        join(project.path, "index.html"),
+        `<!doctype html><html><head><style>html,body{margin:0;background:#000}</style></head><body>
+<main data-composition-id="main" data-width="${width}" data-height="${height}" data-fps="${rate}" data-duration="${seconds(gradeEnd)}">
+${track ? video("lower-a", 0, 0, 90, 0, 0) + video("lower-b", 1, 90, gradeEnd, 0, 0) : ""}
+${clips.join("\n")}
+</main></body></html>`,
+      );
+      const view = TimelineViewSchema.parse(
+        await (await request.get(`${route}/timeline`)).json(),
+      );
+      const edited = await request.post(`${route}/commands`, {
+        data: {
+          composition: "index.html",
+          expectedRevision: view.revision,
+          commands: [
+            ...gradeCuts.map((_, i) => ({
+              type: "setTransition",
+              from: `v${i}`,
+              to: `v${i + 1}`,
+              transition: {
+                kind: "dissolve",
+                duration: dissolveFrames,
+                alignment: "center",
+              },
+            })),
+            ...exposures.flatMap((exposure, i) =>
+              exposure
+                ? [
+                    {
+                      type: "setClip",
+                      clipId: `v${i}`,
+                      grade: { adjust: { exposure } },
+                    },
+                  ]
+                : [],
+            ),
+          ],
+        },
+      });
+      expect(edited.ok(), await edited.text()).toBe(true);
+
+      const windows = gradeCuts.map((cut, index) =>
+        Array.from({ length: dissolveFrames + 1 }, (_, step) => {
+          const at = cut - dissolveFrames / 2 + step;
+          const numbers: (number | null)[] = [null, null];
+          const whites = [0, 0];
+          const bands = [index % 2, (index + 1) % 2];
+          for (const [side, band] of bands.entries()) {
+            const clip = index + side;
+            const gain = 2 ** exposures[clip]!;
+            const mix = side
+              ? step / dissolveFrames
+              : 1 - step / dissolveFrames;
+            whites[band] = 255 * gain * mix;
+            if (mix > 0)
+              numbers[band] = gradeOffsets[clip]! + at - gradeStarts[clip]!;
+          }
+          return { at, numbers, whites };
+        }),
+      );
+      const check = (
+        mode: string,
+        white: number[],
+        decoded: (number | null)[],
+        sample: (typeof windows)[number][number],
+      ) => {
+        for (const [band, target] of sample.whites.entries()) {
+          expect
+            .soft(
+              Math.abs(white[band]! - target),
+              `${mode} frame ${sample.at}, band ${band}: measured ${white[band]}, expected ${target.toFixed(1)}`,
+            )
+            .toBeLessThanOrEqual(5);
+          if (target >= 18)
+            expect
+              .soft(
+                decoded[band],
+                `${mode} frame ${sample.at}, band ${band} source number`,
+              )
+              .toBe(sample.numbers[band]);
+        }
+      };
+      const response = await request.post(
+        `/api/projects/${project.id}/export`,
+        {
+          data: {
+            format: "mp4",
+            range: "timeline",
+            directory: project.path,
+            gpu: false,
+          },
+        },
+      );
+      expect(response.ok(), await response.text()).toBe(true);
+      const { jobId } = z
+        .object({ jobId: z.string() })
+        .parse(await response.json());
+      await request.get(`/api/render/${jobId}/progress`, { timeout: 90_000 });
+      const job = ExportJobSchema.parse(
+        await (await request.get(`/api/render/${jobId}`)).json(),
+      );
+      expect(job.status, job.error ?? "MP4").toBe("complete");
+      const { stdout } = await ffmpeg(
+        "ffmpeg",
+        ["-v", "error", "-i", job.outputPath, ...rawOptions],
+        {
+          encoding: "buffer",
+          maxBuffer: gradeEnd * frameBytes * 2,
+        },
+      );
+      expect(stdout.length).toBe(gradeEnd * frameBytes);
+      for (const sample of windows.flat()) {
+        const frame = stdout.subarray(
+          sample.at * frameBytes,
+          (sample.at + 1) * frameBytes,
+        );
+        check(
+          "MP4",
+          whiteReferences(frame, width, height, 3),
+          numbers(frame, width, height, 3),
+          sample,
+        );
+      }
+
+      for (const pipeline of [false, true]) {
+        const context = await browser.newContext({
+          viewport: { width: 1720, height: 1050 },
+        });
+        try {
+          await context.addInitScript((enabled) => {
+            if (window === window.top)
+              localStorage.setItem("cutroom.footagePipeline", String(enabled));
+          }, pipeline);
+          const page = await context.newPage();
+          await page.goto(`/#project/${project.id}`);
+          const stage = page.locator(".edit-stage[data-preview-ready]");
+          await expect(stage).toBeVisible();
+
+          const runtime = page
+            .frameLocator("iframe[data-live]")
+            .locator("body");
+          for (const [step, sample] of windows.flat().entries()) {
+            if (step % (dissolveFrames + 1))
+              await page.keyboard.press("ArrowRight");
+            else await seekFrame(page, sample.at);
+            await expect
+              .poll(() =>
+                runtime.evaluate((_, { num, den }) => {
+                  const time = (
+                    window as { __player?: { getTime(): number } }
+                  ).__player?.getTime();
+                  return time === undefined
+                    ? null
+                    : Math.round((time * num) / den);
+                }, fps),
+              )
+              .toBe(sample.at);
+            await expect(stage).toBeVisible();
+            if (pipeline)
+              await expect(stage).toHaveAttribute("data-pipeline", "on");
+            const png = await page.locator(".edit-picture").screenshot();
+            const rgb = await imageCells(page, png.toString("base64"));
+            check(
+              pipeline ? "GPU viewer" : "Native viewer",
+              whiteReferences(rgb, digits + 1, 2, 4),
+              numbers(rgb, digits + 1, 2, 4),
+              sample,
+            );
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    });
+  }
 }
