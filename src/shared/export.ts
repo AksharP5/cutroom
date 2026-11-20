@@ -171,6 +171,11 @@ export const ResolveExportSchema = z.object({
       "The marker list, for Timeline > Import > Timeline Markers from EDL; null without markers",
     ),
   summary: z.string(),
+  importScript: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Resolve console script for the complete timeline import"),
   gradeScript: z
     .string()
     .nullable()

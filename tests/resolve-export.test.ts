@@ -67,7 +67,7 @@ test.skipIf(!Bun.which("ffprobe"))(
       const volume = { target: "volume", points: [{ t: 0, v: 0.5 }] };
       const effect = { target: "fx.n1.threshold", points: [{ t: 0, v: -12 }] };
       const html = (src: string, lanes: (typeof rate)[]) =>
-        `<main data-composition-id="interview" data-width="320" data-height="240" data-duration="4"><div><audio id="tone" data-label="Interview sound" src="${src}" data-start="2" data-duration="1" data-track-index="0" data-playback-rate="2" data-automation='${JSON.stringify({ version: 1, lanes })}'></audio></div></main>`;
+        `<main data-composition-id="interview" data-width="320" data-height="240" data-duration="4"><hf-audio-group id="dialogue" data-volume="0.5"></hf-audio-group><div><audio id="tone" data-label="Interview sound" src="${src}" data-start="2" data-duration="1" data-track-index="0" data-playback-rate="2" data-audio-group="dialogue" data-automation='${JSON.stringify({ version: 1, lanes })}'></audio></div></main>`;
       const start = (options: Record<string, unknown>) =>
         f.app.request(`/api/projects/${project.id}/export`, {
           method: "POST",
@@ -122,10 +122,17 @@ test.skipIf(!Bun.which("ffprobe"))(
       );
       const fcpxml = await readFile(result.timeline, "utf8");
       expect(fcpxml).toContain('name="Interview sound"');
-      expect(fcpxml).toContain(
-        '<timept time="1s" value="2s" interp="linear"/>',
+      expect(fcpxml).not.toContain("<timeMap>");
+      expect(fcpxml).toContain('<adjust-volume amount="-12.0412dB"/>');
+      expect(result.importScript).toBeString();
+      const summary = await readFile(result.summary, "utf8");
+      expect(summary).toContain(
+        '"Interview sound" on A1 at 00:00:02:00 plays at 100%',
       );
-      expect(fcpxml).toContain('<adjust-volume amount="-6.0206dB"/>');
+      expect(summary).toContain(
+        "Change Clip Speed to 200% with Ripple Timeline off",
+      );
+      expect(summary).toContain("trim or extend the end to 00:00:03:00");
     } finally {
       await f.close();
     }
@@ -202,8 +209,13 @@ test.skipIf(!Bun.which("ffmpeg"))(
       const files = (await readdir(result.outputPath)).sort();
       expect(files).toEqual(
         process.platform === "linux"
-          ? ["Night-shoot.fcpxml", "Sound", "Summary.txt"]
-          : ["Night-shoot.fcpxml", "Summary.txt"],
+          ? [
+              "Import Cutroom Timeline.py",
+              "Night-shoot.fcpxml",
+              "Sound",
+              "Summary.txt",
+            ]
+          : ["Import Cutroom Timeline.py", "Night-shoot.fcpxml", "Summary.txt"],
       );
       const fcpxml = await readFile(result.timeline, "utf8");
       if (process.platform === "linux") {
@@ -308,43 +320,29 @@ test.skipIf(!Bun.which("ffmpeg"))(
         expect(cube.size).toBe(65);
       }
 
-      const script = await readFile(result.gradeScript!, "utf8");
-      expect(script).toContain(JSON.stringify('Chart "A" & cut.fcpxml'));
-      expect(script).toContain(
-        'ImportTimelineFromFile(str(path), {"importSourceClips": True})',
-      );
-      expect(script).toContain("project.RefreshLUTList()");
-      expect(script).toContain('destination.open("xb")');
-      expect(script).toMatch(
-        /GetSetting\("colorUseLocalVersionsAsDefault"\)[\s\S]+raise RuntimeError[\s\S]+ImportTimelineFromFile/,
-      );
-      expect(script).toContain('imported.GetItemListInTrack("video", track)');
-      expect(script).toContain("graph.SetLUT(1, lut)");
+      const summary = await readFile(result.summary, "utf8");
       const assignments = [
-        ...script.matchAll(
-          /\[1,(\d+),(\d+),"Cutroom Grades\/([a-f\d]+\.cube)"\]/g,
+        ...summary.matchAll(
+          /at (00:00:\d\d:00) on V1: LUTs\/Cutroom Grades\/([a-f\d]+\.cube)/g,
         ),
       ];
-      expect(assignments.map(([, start, end]) => [start, end])).toEqual([
-        ["0", "30"],
-        ["30", "60"],
-        ["60", "90"],
+      expect(assignments.map(([, start]) => start)).toEqual([
+        "00:00:00:00",
+        "00:00:01:00",
+        "00:00:02:00",
       ]);
-      expect(assignments[0]?.[3]).toBe(assignments[1]?.[3]);
-      expect(assignments[2]?.[3]).not.toBe(assignments[0]?.[3]);
-      expect(cubes).toContain(assignments[0]?.[3]);
-      expect(cubes).toContain(assignments[2]?.[3]);
+      expect(assignments[0]?.[2]).toBe(assignments[1]?.[2]);
+      expect(assignments[2]?.[2]).not.toBe(assignments[0]?.[2]);
+      expect(cubes).toContain(assignments[0]?.[2]);
+      expect(cubes).toContain(assignments[2]?.[2]);
 
-      const summary = await readFile(result.summary, "utf8");
       expect(summary).toContain("Use local version for new clips in timeline");
       expect(summary).toContain("Open LUT Folder");
       expect(summary).toContain("cutroom_lut_root");
+      expect(summary).toContain("File LUT node in Fusion");
       expect(summary).toContain("Workspace > Console");
       expect(summary).toContain(
         `runpy.run_path(${JSON.stringify(result.gradeScript)}`,
-      );
-      expect(summary).toContain(
-        `at 00:00:01:00 on V1: LUTs/Cutroom Grades/${assignments[1]?.[3]}`,
       );
       expect(summary).toContain("offline.mp4 is offline");
     } finally {

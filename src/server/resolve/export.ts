@@ -29,18 +29,21 @@ import {
   planResolveTimeline,
   sourceClipWithSpeedAutomation,
 } from "./plan";
-import { writeResolveGrades } from "./grades";
+import { writeResolveImporter } from "./importer";
 import type { ClipMedia } from "./plan";
 import { probeMedia } from "./probe";
 import type { MediaFacts } from "./probe";
+import { oneLine, wellFormed } from "./text";
 
 /** A name Cutroom writes inside the export folder: one path segment, no hidden or control characters. */
 export const safeName = (name: string, fallback: string) =>
-  name
-    .replace(/[/\\\x00-\x1f\x7f]/g, "-")
-    .replace(/^[.\s]+/, "")
-    .trim()
-    .slice(0, 120) || fallback;
+  wellFormed(
+    name
+      .replace(/[/\\\x00-\x1f\x7f]/g, "-")
+      .replace(/^[.\s]+/, "")
+      .trim()
+      .slice(0, 120),
+  ) || fallback;
 
 /** Claims a new folder in `directory`, adding a number when the name is taken. */
 async function claimFolder(directory: string, name: string) {
@@ -258,7 +261,7 @@ export async function exportResolve(
   if (ramped)
     throw new HttpError(
       422,
-      `Resolve timeline export cannot carry the speed automation on "${label(ramped)}". Choose MP4 or MOV for a rendered export.`,
+      `Resolve timeline import cannot keep the editable speed ramp on "${oneLine(label(ramped))}". Choose MP4 or MOV to keep the ramp in the rendered video. To rebuild it in Resolve, import the clip at a constant speed and add the speed points with Retime Controls.`,
     );
 
   if (requested === own) {
@@ -390,10 +393,10 @@ async function writePackage(
         ]
       : []),
     ...plan.notes,
-  ];
+  ].map(oneLine);
   const timeline = join(folder, `${stem}.fcpxml`);
   await writeFile(timeline, plan.fcpxml, { flag: "wx" });
-  const grades = await writeResolveGrades(source, timeline, plan.grades);
+  const importer = await writeResolveImporter(source, timeline, plan);
   const markers = plan.markers ? join(folder, `${stem} markers.edl`) : null;
   if (markers && plan.markers)
     await writeFile(markers, plan.markers, { flag: "wx" });
@@ -401,14 +404,12 @@ async function writePackage(
   await writeFile(
     summary,
     [
-      `${stem} for DaVinci Resolve`,
+      `${oneLine(stem)} for DaVinci Resolve`,
       "",
-      ...(grades?.instructions ?? [
-        `Import the timeline with File > Import > Timeline and choose ${basename(timeline)}.`,
-      ]),
+      ...importer.instructions,
       ...(markers
         ? [
-            `Then add the markers with Timeline > Import > Timeline Markers from EDL and choose ${basename(markers)}.`,
+            `If you import the FCPXML by hand, use Timeline > Import > Timeline Markers from EDL and choose ${oneLine(basename(markers))}. Use the console command above to keep marker notes and punctuation.`,
           ]
         : []),
       "",
@@ -416,16 +417,16 @@ async function writePackage(
       options.copyMedia
         ? "Media: copied into the Media folder beside the timeline."
         : "Media: linked where it is in the project.",
-      ...(grades
-        ? ["", "Grades:", ...grades.notes.map((note) => `- ${note}`)]
+      ...(importer.notes.length
+        ? ["", "Grades:", ...importer.notes.map((note) => `- ${note}`)]
         : []),
       "",
       ...(layerNotes.length
         ? ["Rendered as layers:", ...layerNotes.map((note) => `- ${note}`), ""]
         : []),
       ...(notes.length
-        ? ["Not carried over:", ...notes.map((note) => `- ${note}`)]
-        : ["Everything else on the timeline was carried over."]),
+        ? ["What to check or rebuild:", ...notes.map((note) => `- ${note}`)]
+        : []),
       "",
     ].join("\n"),
     { flag: "wx" },
@@ -435,7 +436,8 @@ async function writePackage(
     timeline,
     markers,
     summary,
-    gradeScript: grades?.script ?? null,
+    importScript: importer.script,
+    gradeScript: plan.grades.length ? importer.script : null,
     notes: [...layerNotes, ...notes],
   };
 }

@@ -205,6 +205,7 @@ test("the dialog exports a folder for DaVinci Resolve with its layers rendered",
   expect(response.ok(), JSON.stringify(body)).toBe(true);
   const result = ResolveExportSchema.parse(body);
   await expect(dialog).toContainText("Ready for Resolve.", { timeout: 60_000 });
+  await expect(dialog).toContainText("Resolve 21.1.2 or later");
   await expect(dialog).toContainText(result.outputPath);
   await expect(dialog).toContainText("Layers/V1.mov");
   await dialog.screenshot({ path: info.outputPath("resolve-done.png") });

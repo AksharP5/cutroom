@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { wellFormed } from "./text";
 
 /** A time in seconds as an exact fraction, so NTSC frames (1001/30000 s) never drift. */
 export interface Rational {
@@ -15,8 +16,19 @@ export function rational(num: number, den = 1): Rational {
   return { num: num / divisor, den: den / divisor };
 }
 
-export const add = (a: Rational, b: Rational) =>
-  rational(a.num * b.den + b.num * a.den, a.den * b.den);
+export function add(a: Rational, b: Rational): Rational {
+  const an = BigInt(a.num);
+  const ad = BigInt(a.den);
+  const bn = BigInt(b.num);
+  const bd = BigInt(b.den);
+  const num = an * bd + bn * ad;
+  const den = ad * bd;
+  // A camera timecode plus a fractional key offset can overflow before reduction.
+  let dividend = num < 0n ? -num : num;
+  let divisor = den;
+  while (divisor) [dividend, divisor] = [divisor, dividend % divisor];
+  return rational(Number(num / dividend), Number(den / dividend));
+}
 
 export const times = (a: Rational, factor: number) =>
   rational(a.num * factor, a.den);
@@ -62,10 +74,10 @@ export function timecodeFrames(timecode: string, rate: Rate): number | null {
 
 /** Text safe inside an XML attribute: markup escaped and characters XML 1.0 forbids removed. */
 export const escapeXml = (text: string) =>
-  text
+  wellFormed(text)
     .replace(
       // eslint-disable-next-line no-control-regex
-      /[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
+      /[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]/g,
       "",
     )
     .replace(
