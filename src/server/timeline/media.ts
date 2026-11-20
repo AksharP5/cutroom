@@ -1,7 +1,10 @@
 import { stat } from "node:fs/promises";
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { z } from "zod";
-import { FootageColourSchema } from "../../shared/pipeline";
+import {
+  FOOTAGE_PIXEL_LIMIT,
+  FootageColourSchema,
+} from "../../shared/pipeline";
 import type { FootageColour } from "../../shared/pipeline";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
@@ -14,6 +17,7 @@ const ProbeSchema = z.object({
     .array(
       z.object({
         codec_type: z.string().optional(),
+        codec_name: z.string().optional(),
         width: z.number().optional(),
         height: z.number().optional(),
         pix_fmt: z.string().optional(),
@@ -51,7 +55,7 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       "error",
       ...localMediaInputOptions,
       "-show_entries",
-      "format=duration:stream=codec_type,width,height,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode",
+      "format=duration:stream=codec_type,codec_name,width,height,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode",
       "-of",
       "json",
       path,
@@ -67,9 +71,7 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   const seconds = format.duration;
   const video = streams.find((stream) => stream.codec_type === "video");
   let footageRefusal: string | undefined;
-  if (video?.width && video.height && video.width * video.height > 1920 * 1080)
-    footageRefusal = `its source is ${video.width} × ${video.height}, above the pipeline's 1080p limit`;
-  else if (
+  if (
     /^(yuva|rgba|bgra|argb|abgr|gbrap|ya)/.test(video?.pix_fmt ?? "") ||
     video?.tags?.alpha_mode === "1"
   )
@@ -79,6 +81,14 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
     video?.color_transfer === "arib-std-b67"
   )
     footageRefusal = "its source is HDR";
+  // HEVC can play an editing proxy. The pipeline checks the actual track it opens.
+  else if (
+    video?.codec_name !== "hevc" &&
+    video?.width &&
+    video.height &&
+    video.width * video.height > FOOTAGE_PIXEL_LIMIT
+  )
+    footageRefusal = `its source is ${video.width} × ${video.height}, above the pipeline's 1080p limit`;
 
   const primaries = FootageColourSchema.shape.primaries.safeParse(
     video?.color_primaries,
