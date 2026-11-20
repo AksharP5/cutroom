@@ -410,6 +410,252 @@ test("timeline_read narrows to a frame range and tracks, and holds the edit ledg
   }
 });
 
+test("a 1,000-clip MCP read gives track spans and its ripple returns every affected id", async () => {
+  const mcp = await connect();
+  try {
+    const clips = Array.from({ length: 1000 }, (_, index) => {
+      const id = `shot-${index}`;
+      const track = index < 990 ? 0 : 1;
+      const start = track === 0 ? index : (index - 989) * 10;
+      const style = index === 1 ? ' style="opacity:0.5"' : "";
+      const html = `<div id="${id}" class="clip" data-start="${start}" data-duration="1" data-track-index="${track}"${style}>Shot ${index}</div>`;
+      return { id, track, start: start * 30, html };
+    });
+    await writeFile(
+      join(mcp.project.path, "index.html"),
+      `<main data-composition-id="main" data-fps="30" data-duration="990">${clips.map(({ html }) => html).join("")}</main>`,
+    );
+    const view = z.object({ revision: z.string(), timeline: z.unknown() });
+    const first = view.parse(await mcp.result("timeline_read", {}));
+    const configured = view.pick({ revision: true }).parse(
+      await mcp.result("timeline_edit", {
+        expectedRevision: first.revision,
+        commands: [
+          { type: "setTrack", index: 2, kind: "video", name: "Empty" },
+          { type: "setMarker", frame: 301, name: "Cut" },
+        ],
+      }),
+    );
+    const summary = view.parse(await mcp.result("timeline_read", {}));
+    expect(summary.revision).toBe(configured.revision);
+    expect(summary.timeline).toMatchObject({
+      clipSummary: {
+        clipCount: 1000,
+        tracks: [
+          { index: 0, clipCount: 990, from: 0, to: 29_700 },
+          { index: 1, clipCount: 10, from: 300, to: 3030 },
+          { index: 2, clipCount: 0, from: null, to: null },
+        ],
+        guidance: expect.stringContaining("from, to"),
+      },
+      tracks: expect.arrayContaining([
+        expect.objectContaining({ index: 2, name: "Empty" }),
+      ]),
+      markers: [expect.objectContaining({ frame: 301 })],
+    });
+    expect(summary.timeline).not.toHaveProperty("clips");
+    const scoped = view.parse(
+      await mcp.result("timeline_read", {
+        from: 300,
+        to: 330,
+        tracks: [1],
+        replyFormat: "compact",
+      }),
+    );
+    expect(scoped.revision).toBe(summary.revision);
+    expect(scoped.timeline).toMatchObject({
+      clips: [{ id: "shot-990", track: 1, start: 300, duration: 30 }],
+      markers: [expect.objectContaining({ frame: 301 })],
+    });
+    const legacy = await mcp.read({ replyFormat: "legacy" });
+    expect(legacy.revision).toBe(summary.revision);
+    expect(legacy.timeline.clips).toHaveLength(1000);
+    expect(legacy.timeline.clips[0]).toMatchObject({
+      id: "shot-0",
+      opacity: null,
+      enabled: true,
+      fx: [],
+    });
+    const commands = [
+      { type: "remove", clipIds: ["shot-0"], ripple: true },
+      { type: "setClip", clipId: "shot-1", opacity: null },
+      { type: "move", clipIds: ["shot-2"], by: 1, mode: "overwrite" },
+    ];
+    const edit = z.object({
+      revision: z.string(),
+      changes: z.object({ clips: z.unknown() }),
+    });
+    const delta = edit.parse(
+      await mcp.result("timeline_edit", {
+        expectedRevision: summary.revision,
+        commands,
+      }),
+    );
+    expect(delta.changes.clips).toEqual({
+      removed: ["shot-0"],
+      changed: [
+        { id: "shot-1", start: 0, opacity: null },
+        { id: "shot-2", start: 31 },
+        { id: "shot-3", start: 61, duration: 29 },
+      ],
+      shifted: [{ by: -30, ids: clips.slice(4).map(({ id }) => id) }],
+    });
+    const editor = TimelineViewSchema.parse(
+      await (await mcp.request(`/projects/${mcp.project.id}/timeline`)).json(),
+    );
+    expect(editor.revision).toBe(delta.revision);
+    expect(editor.timeline.clips).toHaveLength(999);
+    const saved = new Map(editor.timeline.clips.map((clip) => [clip.id, clip]));
+    for (const clip of clips.slice(4))
+      expect(saved.get(clip.id)?.start).toBe(clip.start - 30);
+    expect(saved.get("shot-1")).toMatchObject({ start: 0, opacity: null });
+    expect(saved.get("shot-3")).toMatchObject({ start: 61, duration: 29 });
+    const full = TimelineViewSchema.parse(
+      await mcp.result("timeline_edit", {
+        expectedRevision: delta.revision,
+        fullTimeline: true,
+        commands: [{ type: "setMarker", frame: 100 }],
+      }),
+    );
+    expect(full.timeline.clips).toEqual(editor.timeline.clips);
+    const legacyEdit = edit.parse(
+      await mcp.result("timeline_edit", {
+        expectedRevision: full.revision,
+        replyFormat: "legacy",
+        commands: [{ type: "remove", clipIds: ["shot-1"], ripple: true }],
+      }),
+    );
+    expect(legacyEdit.changes.clips).not.toHaveProperty("shifted");
+    expect(legacyEdit.changes.clips).toMatchObject({
+      removed: ["shot-1"],
+      changed: expect.arrayContaining([
+        { id: "shot-2", start: 1 },
+        { id: "shot-999", start: 2940 },
+      ]),
+    });
+  } finally {
+    await mcp.close();
+  }
+});
+
+test("compact snapshots keep authored values and edits keep explicit resets", async () => {
+  const mcp = await connect();
+  try {
+    const source = `<main data-composition-id="main" data-fps="30" data-duration="3">
+      <video id="picture" muted src="take.mp4" data-link="pair" data-start="0" data-duration="2" data-track-index="0" data-hidden style="opacity:1;object-fit:cover"></video>
+      <audio id="sound" src="take.mp4" data-link="pair" data-start="0" data-media-start="0.5" data-duration="2" data-track-index="1" data-volume="0"></audio>
+    </main>`;
+    await writeFile(join(mcp.project.path, "index.html"), source);
+    const view = z.object({
+      revision: z.string(),
+      timeline: z.object({ clips: z.array(z.record(z.string(), z.unknown())) }),
+    });
+    const picture = view.parse(
+      await mcp.result("timeline_read", {
+        tracks: [0],
+        replyFormat: "compact",
+      }),
+    );
+    expect(picture.timeline.clips).toEqual([
+      {
+        id: "picture",
+        track: 0,
+        kind: "video",
+        start: 0,
+        duration: 60,
+        mediaStart: 0,
+        src: "take.mp4",
+        link: "pair",
+        opacity: 1,
+        enabled: false,
+        syncOffset: 15,
+        style: { objectFit: "cover" },
+      },
+    ]);
+    const sound = view.parse(
+      await mcp.result("timeline_read", {
+        tracks: [1],
+        replyFormat: "compact",
+      }),
+    );
+    expect(sound.timeline.clips).toMatchObject([
+      { id: "sound", hasAudio: true, volume: 0, syncOffset: -15 },
+    ]);
+    const { revision } = z.object({ revision: z.string() }).parse(
+      await mcp.result("timeline_edit", {
+        expectedRevision: sound.revision,
+        commands: [
+          {
+            type: "setClip",
+            clipId: "sound",
+            fadeIn: 5,
+            automation: { volume: [{ frame: 0, gain: 1 }] },
+            fx: [{ type: "limiter" }],
+          },
+        ],
+      }),
+    );
+    const delta = await mcp.result("timeline_edit", {
+      expectedRevision: revision,
+      replyFormat: "compact",
+      commands: [
+        {
+          type: "setClip",
+          clipId: "picture",
+          opacity: null,
+          enabled: true,
+          style: { objectFit: null },
+        },
+        {
+          type: "setClip",
+          clipId: "sound",
+          volume: null,
+          fadeIn: 0,
+          automation: null,
+          fx: [],
+        },
+        {
+          type: "insert",
+          at: 60,
+          track: 0,
+          clip: { id: "title", kind: "title", text: "Next", duration: 30 },
+        },
+      ],
+    });
+    expect(delta).toMatchObject({
+      changes: {
+        clips: {
+          changed: [
+            { id: "picture", opacity: null, style: {}, enabled: true },
+            { id: "sound", volume: null, automation: null, fadeIn: 0, fx: [] },
+          ],
+          added: [
+            {
+              id: "title",
+              start: 60,
+              duration: 30,
+              text: "Next",
+              title: expect.objectContaining({ position: "lower-left" }),
+            },
+          ],
+        },
+      },
+    });
+    const updated = view.parse(
+      await mcp.result("timeline_read", {
+        from: 60,
+        to: 90,
+        replyFormat: "compact",
+      }),
+    );
+    expect(updated.timeline.clips[0]).not.toHaveProperty("automation");
+    expect(updated.timeline.clips[0]).not.toHaveProperty("enabled");
+    expect(delta).toMatchObject({ revision: updated.revision });
+  } finally {
+    await mcp.close();
+  }
+});
+
 test("setClip scale, rotation and crop answer as changed fields and read back as the clip's transform", async () => {
   const mcp = await connect();
   try {
