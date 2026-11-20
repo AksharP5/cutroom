@@ -306,6 +306,9 @@ export function registerRenderIsolation(
   const rampSource = JSON.stringify(
     new URL("./rampSource.ts", import.meta.url).href,
   );
+  const capturePictures = JSON.stringify(
+    new URL("./capturePictures.ts", import.meta.url).href,
+  );
   let producerLoaded = false;
   let audioMixerLoaded = false;
   let captureLoaded = false;
@@ -370,7 +373,7 @@ export function registerRenderIsolation(
           "/@hyperframes/engine/dist/services/videoFrameExtractor.js",
         )
       ) {
-        let source = `import { chromeSdrColourFilters as cutroomColour } from ${colour};\n${String(loaded.source)}`;
+        let source = `import { capturePictures, extractPictures } from ${capturePictures};\nimport { chromeSdrColourFilters as cutroomColour } from ${colour};\n${String(loaded.source)}`;
         source = replaceOnce(
           source,
           "return [...chromeGuessForUntaggedMatrix(metadata), SDR_CANVAS_PASSTHROUGH_FILTER];",
@@ -389,9 +392,107 @@ export function registerRenderIsolation(
           source,
           '            work.finalFrameOnly ? "final-frame" : undefined,\n',
           `            work.finalFrameOnly ? "final-frame" : undefined,
+            work.cutroomPictures?.cacheKey,
             ...cutroomColour(work.metadata).filter((filter) => filter.startsWith("colorspace=")),
             work.format === "jpg" ? "cutroom-jpeg444" : undefined,
 `,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "            alignClipStartToFirstOutputFrame(video, fps);",
+          `            const cutroomPictures = await inExtractionSlot(() => capturePictures(
+                video, videoPath, metadata, configuredFps,
+                options.timelineEnd, ${JSON.stringify(range?.range?.frames)}, signal), signal);
+            if (cutroomPictures) {
+                video.cutroomPictures = cutroomPictures.lookup;
+                const format = resolveFrameFormat(metadata, options.format);
+                const sdrToHdrTransfer = sdrToHdrTransfers[index];
+                const hdrToSdrTransform = options.toneMapHdrToSdr === true && isHdrColorSpaceUtil(metadata.colorSpace)
+                    ? await hdrToSdrTransformKey()
+                    : undefined;
+                const keyInput = cacheKeyInputs[index];
+                if (keyInput) keyInput.mediaStart = 0;
+                return { work: {
+                    video, videoPath, index, metadata, format, sdrToHdrTransfer,
+                    hdrToSdrTransformKey: hdrToSdrTransform, cutroomPictures,
+                    videoDuration: 1, extractionMediaStart: 0,
+                    dedupeKey: JSON.stringify([videoPath, cutroomPictures.cacheKey, format, sdrToHdrTransfer, hdrToSdrTransform]),
+                } };
+            }
+            alignClipStartToFirstOutputFrame(video, fps);`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "            finalFrameOnly: work.finalFrameOnly,",
+          "            cutroomPictures: work.cutroomPictures,\n            finalFrameOnly: work.finalFrameOnly,",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    function lookupCacheFor(work) {\n        if (!cacheRootDir)",
+          "    function lookupCacheFor(work) {\n        if (!cacheRootDir || work.cutroomPictures?.ordinals.length === 0)",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "        if (work.finalFrameOnly ||\n            work.metadata.isVFR ||",
+          "        if (work.cutroomPictures || work.finalFrameOnly ||\n            work.metadata.isVFR ||",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    if (misses.some(({ work }) => work.finalFrameOnly))",
+          "    if (misses.some(({ work }) => work.cutroomPictures || work.finalFrameOnly))",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          '    if (!(playableDuration > 0)) {\n        throw new VideoSourceExtractionError("invalid_media", false, "Video source has no positive duration", `Playable video stream duration is ${playableDuration}s`);\n    }\n    if (startTime >= playableDuration) {',
+          '    if (!options.cutroomPictures && (!(playableDuration > 0) || startTime >= playableDuration)) {\n        if (!(playableDuration > 0)) throw new VideoSourceExtractionError("invalid_media", false, "Video source has no positive duration", `Playable video stream duration is ${playableDuration}s`);',
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    const sampleAtOutputFps = !options.finalFrameOnly;",
+          "    const sampleAtOutputFps = !options.finalFrameOnly && !options.cutroomPictures;",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          '    encodeArgs.push("-y", outputPattern);',
+          `    encodeArgs.push("-y", outputPattern);
+    if (options.cutroomPictures) {
+        const plan = options.cutroomPictures;
+        options.onProgress?.({ planned: plan.ordinals.length });
+        await inExtractionSlot(() => extractPictures({
+            plan, decodeArgs: keepsHdrForChrome ? ["-hwaccel", "videotoolbox", ...decodeArgs] : decodeArgs,
+            filters: filtersFor(0), encodeArgs, signal, timeout: ffmpegProcessTimeout,
+            done: (done) => options.onProgress?.({ done }),
+        }), signal);
+        const framePaths = framePathsFromDirectory(videoOutputDir, format);
+        if (framePaths.size !== plan.ordinals.length)
+            throw new Error("Extracted picture count did not match " + videoId);
+        return { videoId, srcPath: videoPath, outputDir: videoOutputDir, framePattern, fps,
+            totalFrames: framePaths.size, metadata, framePaths };
+    }`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    let localTime = Math.max(0, globalTime - videoStart);",
+          `    if (extracted.cutroomPictures) {
+        const { first, fps, slots } = extracted.cutroomPictures;
+        return slots[Math.round(globalTime * fps.num / fps.den) - first] ?? null;
+    }
+    let localTime = Math.max(0, globalTime - videoStart);`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "table.addVideo(ext, video.start, video.end, video.mediaStart, video.loop, video.playbackRate);",
+          "table.addVideo({ ...ext, cutroomPictures: video.cutroomPictures }, video.start, video.end, video.mediaStart, video.loop, video.playbackRate);",
           url,
         );
         if (range?.range) {
@@ -431,7 +532,23 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { PictureSlotsSchema } from ${capturePictures};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = replaceOnce(
+          source,
+          "      hasAudio: readBoolean(video.hasAudio, \`${field}.hasAudio\`)",
+          "      hasAudio: readBoolean(video.hasAudio, \`${field}.hasAudio\`),\n      ...(video.cutroomPictures && { cutroomPictures: PictureSlotsSchema.parse(video.cutroomPictures) })",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    const expectedFrames = expectedFramesForVideo(video, entry, fps);\n    const capturedFrames = entry ? entry.deferredRange ? entry.totalFrames : entry.framePaths.size : 0;",
+          `    const visibleSlots = video.cutroomPictures?.slots.filter((slot) => slot !== null);
+    const expectedFrames = visibleSlots?.length ?? expectedFramesForVideo(video, entry, fps);
+    const capturedFrames = visibleSlots
+      ? visibleSlots.filter((slot) => entry?.framePaths.has(slot)).length
+      : entry ? entry.deferredRange ? entry.totalFrames : entry.framePaths.size : 0;`,
+          url,
+        );
         source = replaceOnce(
           source,
           "return resolveVerifiedHyperframeRuntime().runtimeSource;",
