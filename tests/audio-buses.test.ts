@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { parseAudioElements, parseMasterFxChain } from "@hyperframes/engine";
 import { agentTimeline } from "../src/server/mcp/timelineReply";
 import { applyAll } from "../src/shared/timeline/apply";
@@ -138,6 +139,7 @@ test("Main gain is the last gain on the master chain, after loudness, and reads 
     volume: 0.5,
     fx: [{ id: "loudness" }],
   });
+  expect(main.output).toContain('data-cutroom-main-gain="main"');
   const chain = JSON.parse(parseMasterFxChain(main.output)!) as {
     nodes: { id: string; params: { gain: number } }[];
   };
@@ -152,6 +154,61 @@ test("Main gain is the last gain on the master chain, after loudness, and reads 
   ]);
   expect(unity.timeline.main).toBeUndefined();
   expect(unity.output).not.toContain("data-fx-chain");
+  expect(unity.output).not.toContain("data-cutroom-main-gain");
+});
+
+test("Main's +12 dB maximum survives validation in both editor and server", () => {
+  const { html, timeline } = start();
+  const fromEditor = CommandSchema.parse({
+    type: "setMaster",
+    volume: MAX_AUDIO_GAIN,
+  });
+  const saved = edit(html, timeline, [fromEditor]);
+  expect(saved.timeline.main?.volume).toBe(MAX_AUDIO_GAIN);
+  expect(JSON.parse(parseMasterFxChain(saved.output)!)).toMatchObject({
+    nodes: [{ id: "main", params: { gain: 12 } }],
+  });
+});
+
+test("Main gain preserves a preexisting effect with the id main", () => {
+  const sourceWithFx = source.replace(
+    "<main ",
+    `<main data-fx-chain='{"version":1,"nodes":[{"id":"main","type":"gain","label":"Legacy trim","params":{"gain":-6}}]}' `,
+  );
+  const { timeline } = parseComposition(sourceWithFx, emptyTimelineSettings());
+  expect(timeline.main).toMatchObject({
+    volume: 1,
+    fx: [{ id: "main", label: "Legacy trim", params: { gain: -6 } }],
+  });
+  const moved = edit(sourceWithFx, timeline, [
+    { type: "setMaster", volume: 0.5 },
+  ]);
+  expect(moved.output).toContain('data-cutroom-main-gain="main-2"');
+  expect(JSON.parse(parseMasterFxChain(moved.output)!)).toMatchObject({
+    nodes: [{ id: "main" }, { id: "main-2" }],
+  });
+  const reset = edit(moved.output, moved.timeline, [
+    { type: "setMaster", volume: 1 },
+  ]);
+  expect(reset.timeline.main).toEqual(timeline.main);
+  expect(reset.output).not.toContain("data-cutroom-main-gain");
+});
+
+test("changing only Main gain refuses to overwrite unreadable authored effects", () => {
+  const sourceWithFx = source.replace(
+    "<main ",
+    `<main data-fx-chain='{"version":2,"nodes":[{"id":"original","type":"compressor"}]}' `,
+  );
+  const { timeline } = parseComposition(sourceWithFx, emptyTimelineSettings());
+  expect(() =>
+    edit(sourceWithFx, timeline, [{ type: "setMaster", volume: 0.5 }]),
+  ).toThrow("Unsupported chain version: 2");
+  const unrelated = edit(sourceWithFx, timeline, [
+    { type: "setAudioGroup", group: "voices", volume: 0.5 },
+  ]);
+  expect(unrelated.output).toContain(
+    `data-fx-chain='{"version":2,"nodes":[{"id":"original","type":"compressor"}]}'`,
+  );
 });
 
 test("agents read each bus with its member count and Main, and refuse edits they cannot make", () => {

@@ -13,6 +13,7 @@ import type {
   HfAudioFxNode,
   HfAudioFxParamValues,
 } from "@hyperframes/core/audio-fx";
+import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import {
   HF_AUDIO_FX_PRESET_IDS,
   getAudioFxPreset,
@@ -243,14 +244,12 @@ export function mixLoudnessFx(
   ];
 }
 
-/**
- * Main gain's effect on the root chain. HyperFrames has no master gain stage, so Main gain is the
- * last effect of the master chain, a gain with this id, which the Main effect list leaves out.
- */
-export const MAIN_GAIN_FX_ID = "main";
-
 const decibels = (volume: number) =>
   Math.round(20 * Math.log10(volume) * 1e6) / 1e6;
+
+/** Keep six places for dB round trips without rounding +12 dB above its limit. */
+export const canonicalMainVolume = (volume: number) =>
+  Math.min(MAX_AUDIO_GAIN, Math.round(volume * 1e6) / 1e6);
 
 /** The master chain HyperFrames plays: Main's effects, then its gain when it is not unity. */
 export function mainChain(
@@ -258,10 +257,13 @@ export function mainChain(
 ): FxNode[] {
   if (!main) return [];
   if (main.volume === 1) return [...main.fx];
+  const taken = new Set(main.fx.map(({ id }) => id));
+  let id = "main";
+  for (let suffix = 2; taken.has(id); suffix++) id = `main-${suffix}`;
   return [
     ...main.fx,
     {
-      id: MAIN_GAIN_FX_ID,
+      id,
       type: "gain",
       enabled: true,
       label: "Main",
@@ -271,16 +273,30 @@ export function mainChain(
   ];
 }
 
-/** The root chain read back as Main: its gain effect apart from the effects listed. */
-export function readMain(chain: readonly FxNode[]) {
+/** The root's explicit gain marker distinguishes the fader from authored effects. */
+export function readMain(
+  attribute: string | undefined,
+  gainId: string | undefined,
+) {
+  let chain: FxNode[];
+  try {
+    chain = readFxChain(attribute);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      volume: 1,
+      fx: [],
+      sourceRestriction: `Main's data-fx-chain cannot be read (${detail}). Repair it in the source before changing Main gain.`,
+    };
+  }
   const gain = chain.at(-1);
   const own =
-    gain?.id === MAIN_GAIN_FX_ID && gain.type === "gain" && gain.enabled
+    gain && gain.id === gainId && gain.type === "gain" && gain.enabled
       ? gain
       : undefined;
   const fx = own ? chain.slice(0, -1) : [...chain];
   const volume = own
-    ? Math.round(10 ** (Number(own.params.gain ?? 0) / 20) * 1e6) / 1e6
+    ? canonicalMainVolume(10 ** (Number(own.params.gain ?? 0) / 20))
     : 1;
   return volume === 1 && !fx.length ? undefined : { volume, fx };
 }

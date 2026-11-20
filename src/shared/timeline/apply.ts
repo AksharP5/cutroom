@@ -1666,6 +1666,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       };
     }
     case "setMaster": {
+      if (command.volume === undefined && command.fx === undefined)
+        return timeline;
+      if (command.fx === undefined && timeline.main?.sourceRestriction)
+        throw new TimelineError("unsupported", timeline.main.sourceRestriction);
       const current = timeline.main ?? { volume: 1, fx: [] };
       const main = {
         volume: command.volume ?? current.volume,
