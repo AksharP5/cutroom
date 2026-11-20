@@ -11,7 +11,7 @@ import { framesBefore } from "../../shared/timeline/transition";
 import { useVersions } from "../edit/versions";
 import { localMediaPath } from "../../shared/media";
 import { useGradeBypass, usePreviewGrade } from "../edit/preview";
-import { previewGrades } from "./grades";
+import { acquireGrades } from "./grades";
 import type { GradeTexture } from "./grades";
 import { useTimeline } from "../edit/timeline";
 import { useTransport } from "../edit/transport";
@@ -26,6 +26,7 @@ import { usePipeline } from "./setting";
 import { chromeColourGuess } from "../../shared/videoColour";
 import { FrameGridSchema, frameSeek } from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
+import { useWorkspace } from "../workspace";
 
 type Plan = Exclude<PipelinePlan, { reason: string }>;
 
@@ -119,7 +120,7 @@ async function openSource(
 export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   const closing = new AbortController();
   let compositor = createCompositor(canvas);
-  const grades = previewGrades(projectId);
+  const grades = acquireGrades(projectId);
   // A GPU under memory pressure can drop the context; HyperFrames draws until it comes back.
   canvas.addEventListener(
     "webglcontextlost",
@@ -513,11 +514,16 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const playing = state.kind === "playing";
     const { draft } = usePreviewGrade.getState();
     const { bypass } = useGradeBypass.getState();
+    const { fileChanges } = useWorkspace.getState();
     const textures = Promise.all(
       shown.map(({ clip }) => {
         const editing = draft?.clipId === clip.id;
         const grade = editing ? draft.grade : clip.grade;
-        return grade && !bypass ? grades.get(grade, editing) : null;
+        const key =
+          grade && !bypass
+            ? grades.identify(grade, view.composition, fileChanges, editing)
+            : null;
+        return key ? grades.get(key) : null;
       }),
     ).then(
       (textures) => ({ textures }),
@@ -742,7 +748,12 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         !useGradeBypass.getState().bypass
       ) {
         preparedGrade = true;
-        void grades.get(layer.clip.grade).catch(() => {});
+        const key = grades.identify(
+          layer.clip.grade,
+          view.composition,
+          useWorkspace.getState().fileChanges,
+        );
+        if (key) void grades.get(key).catch(() => {});
       }
       const src = layer.clip.src!;
       // At rest, only the next opening of each file: the spare lane holds one.

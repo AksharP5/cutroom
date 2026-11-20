@@ -7,6 +7,7 @@ import {
   timelineFrames,
   timelineWorkload,
 } from "../scripts/timeline-performance";
+import { filmstripSettle, watchFilmstrip } from "./filmstrip-performance";
 
 for (const count of [400, 500] as const)
   test(
@@ -18,7 +19,8 @@ for (const count of [400, 500] as const)
       if (!Number.isInteger(runs) || runs < 1)
         throw new Error("CUTROOM_PERF_RUNS must be a positive integer.");
       await page.emulateMedia({ reducedMotion: "no-preference" });
-      const project = await timelineWorkload(request, count);
+      await watchFilmstrip(page);
+      const project = await timelineWorkload(request, count, { graded: true });
       await page.goto(`/#project/${project.id}`);
       await expect(page.locator("iframe[data-live]")).toHaveCount(1);
       await expect(page.locator("[data-clip]")).toHaveCount(count);
@@ -34,7 +36,8 @@ for (const count of [400, 500] as const)
           }),
         )
         .toBe(true);
-      await page.waitForTimeout(4500);
+      const filmstrip = await filmstripSettle(page, (count - 20) / 2);
+      console.log(JSON.stringify({ count, filmstrip }));
       const renderer = await page.evaluate(() => {
         const gl = document.createElement("canvas").getContext("webgl");
         const debug = gl?.getExtension("WEBGL_debug_renderer_info");
@@ -111,6 +114,7 @@ for (const count of [400, 500] as const)
         browser: page.context().browser()?.version(),
         renderer,
         viewport: page.viewportSize(),
+        filmstrip,
         summary,
         results,
       };
