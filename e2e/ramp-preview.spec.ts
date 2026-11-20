@@ -142,6 +142,59 @@ for (const mode of [
         if (window === window.top)
           localStorage.setItem("cutroom.footagePipeline", "true");
       });
+    const releasePipeline =
+      mode === "parked audio with blocked media"
+        ? Promise.withResolvers<void>()
+        : undefined;
+    if (releasePipeline) {
+      await page.route("**/pipeline", async (route) => {
+        await releasePipeline.promise;
+        await route.continue();
+      });
+      await page.addInitScript(() => {
+        if (window === parent) {
+          addEventListener("message", (event) => {
+            if (
+              event.data === "held-ramp-inspect" ||
+              event.data === "reordered-ramp-inspect"
+            )
+              document.documentElement.dataset.rampInspection = event.data;
+          });
+          return;
+        }
+        let inspect: MessageEvent | undefined;
+        let reordered = false;
+        // Reply to the first inspection after the editor has sent a pipeline command,
+        // but before the pipeline has acknowledged it.
+        addEventListener(
+          "message",
+          (event) => {
+            if (
+              reordered ||
+              event.source !== parent ||
+              event.data?.source !== "cutroom-viewer"
+            )
+              return;
+            if (event.data.action === "inspect") {
+              event.stopImmediatePropagation();
+              inspect = new MessageEvent("message", {
+                data: event.data,
+                origin: event.origin,
+                source: event.source,
+              });
+              parent.postMessage("held-ramp-inspect", "*");
+              return;
+            }
+            if (event.data.action === "pipeline" && inspect) {
+              reordered = true;
+              dispatchEvent(inspect);
+              parent.postMessage("reordered-ramp-inspect", "*");
+            }
+          },
+          true,
+        );
+      });
+    }
     if (playDuringSwap)
       await page.addInitScript(() => {
         if (window === parent) {
@@ -171,6 +224,18 @@ for (const mode of [
       });
     try {
       await page.goto(`/#project/${project.id}`);
+      if (releasePipeline) {
+        const pageRoot = page.locator("html");
+        await expect(pageRoot).toHaveAttribute(
+          "data-ramp-inspection",
+          "held-ramp-inspect",
+        );
+        releasePipeline.resolve();
+        await expect(pageRoot).toHaveAttribute(
+          "data-ramp-inspection",
+          "reordered-ramp-inspect",
+        );
+      }
       const stage = page.locator(".edit-stage");
       await expect(stage).toHaveAttribute("data-preview-ready");
       if (parked) await expect(stage).toHaveAttribute("data-pipeline", "on");
@@ -451,6 +516,7 @@ for (const mode of [
         );
       }
     } finally {
+      releasePipeline?.resolve();
       release.resolve();
     }
   });

@@ -730,8 +730,9 @@ export function Viewer({
     connections.current.get(gen)?.dispose();
     connections.current.set(gen, preview);
     try {
-      await preview.inspect();
-      if (preview.state.rampPending) {
+      const inspection = await preview.inspect();
+      // A pending footage-pipeline reply can keep inspection out of transport state.
+      if (inspection.rampPending) {
         void preview
           .waitForRamp()
           .then((ready) => {

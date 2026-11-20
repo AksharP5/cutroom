@@ -801,7 +801,7 @@ export function connectPreview(
     get state() {
       return state;
     },
-    inspect: async () => void (await request("inspect")),
+    inspect: async () => (await request("inspect")).state,
     checkRampAudio: async () => void (await request("check-ramp")),
     async waitForRamp() {
       const response = await fetch(`${frame.src}&cutroom-ramp=1`, {
