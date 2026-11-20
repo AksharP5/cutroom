@@ -428,6 +428,7 @@ export function MediaPanel({
   /** The row that takes focus once the list shows it: a renamed file, or a removed one's neighbour. */
   const focusNext = useRef<string | null>(undefined);
   const busy = useRef(false);
+  const pendingRename = useRef<string | null>(null);
   const picker = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLElement>(null);
   // Its panel key lands on the list's current file, or on Import while there is none.
@@ -493,7 +494,12 @@ export function MediaPanel({
     }));
     listed.current = { projectUrl, files };
     const source = useSource.getState().file;
-    if (source && !files.includes(source.path)) closeSource();
+    if (
+      source &&
+      source.path !== pendingRename.current &&
+      !files.includes(source.path)
+    )
+      closeSource();
     setListedMedia(
       files
         .flatMap((path) => {
@@ -556,11 +562,22 @@ export function MediaPanel({
     const current = fileName(path);
     const name = `${stem}${current.slice(current.lastIndexOf("."))}`;
     return change(async () => {
+      // The watcher can list the new name before the command tells us what it is.
+      pendingRename.current = path;
       const renamed = await api(
         `${cutroomUrl}/media/rename`,
         z.object({ path: z.string() }),
         json("POST", { path, name }),
-      );
+      ).catch((error: unknown) => {
+        pendingRename.current = null;
+        if (
+          useSource.getState().file?.path === path &&
+          !listed.current.files.includes(path)
+        )
+          closeSource();
+        throw error;
+      });
+      pendingRename.current = null;
       useSource.setState(({ file }) => ({
         file: file?.path === path ? { ...file, path: renamed.path } : file,
       }));

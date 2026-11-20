@@ -460,32 +460,27 @@ test("renaming a still on the timeline, then asking to remove it, makes no reque
   await row("still.png").dblclick();
   const source = page.getByRole("group", { name: "Source", exact: true });
   await pictured(source.locator("img"));
-  // The watcher says the old name is gone before the rename answers and the list is read again,
-  // while the row and the source still show it.
-  let answered = () => {};
-  const renamed = new Promise<void>((resolve) => (answered = resolve));
+  // The watcher's list already has the new name while the rename response is still in flight.
+  const renamed = Promise.withResolvers<void>();
   await page.route(
     (url) => url.pathname.endsWith("/media/rename"),
     async (route) => {
       const response = await route.fetch();
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await renamed.promise;
       await route.fulfill({ response });
-      answered();
-    },
-  );
-  await page.route(
-    (url) => url.pathname === `/api/projects/${project.id}`,
-    async (route) => {
-      await renamed;
-      await route.continue();
     },
   );
 
-  await row("still.png").click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Rename" }).click();
-  await page.keyboard.type("logo-card");
-  await page.keyboard.press("Enter");
-  await expect(row("logo-card.png")).toBeVisible();
+  try {
+    await row("still.png").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Rename" }).click();
+    await page.keyboard.type("logo-card");
+    await page.keyboard.press("Enter");
+    await expect(row("logo-card.png")).toBeVisible();
+    await expect(source.locator(".edit-source-name")).toHaveText("still.png");
+  } finally {
+    renamed.resolve();
+  }
   await expect.poll(sources).toContain("assets/logo-card.png");
   await pictured(row("logo-card.png").locator("img"));
   await expect(source.locator(".edit-source-name")).toHaveText("logo-card.png");
