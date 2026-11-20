@@ -213,3 +213,60 @@ test(
     await page.mouse.up();
   },
 );
+
+test("the preview polls a pending scrub proxy once per source across repeated cuts", async ({
+  page,
+  request,
+}) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("cutroom.footagePipeline", "false"),
+  );
+  const response = await request.post("/api/cutroom/projects", {
+    data: { name: "Repeated cuts", width: 640, height: 360, duration: 6 },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  const project = ProjectSchema.parse(await response.json());
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=blue:s=320x180:r=30:d=2",
+    "-c:v",
+    "libx264",
+    join(project.path, "picture.mp4"),
+  ]);
+  const cuts = Array.from(
+    { length: 6 },
+    (_, index) =>
+      `<video id="cut-${index}" src="picture.mp4" muted data-start="${index}" data-duration="1" data-track-index="0"></video>`,
+  ).join("\n");
+  await writeFile(
+    join(project.path, "index.html"),
+    `<main id="main" data-composition-id="main" data-width="640" data-height="360" data-duration="6" data-fps="30">${cuts}</main>`,
+  );
+
+  const lastPoll = new Map<string, number>();
+  const intervals: number[] = [];
+  await page.route(
+    /\/api\/isolated\/[^/]+\/scrub\?path=picture\.mp4$/,
+    (route) => {
+      const url = route.request().url();
+      const now = performance.now();
+      const previous = lastPoll.get(url);
+      if (previous !== undefined) intervals.push(now - previous);
+      lastPoll.set(url, now);
+      return route.fulfill({
+        status: 202,
+        headers: { "access-control-allow-origin": "*" },
+        json: { status: "running" },
+      });
+    },
+  );
+  await page.goto(`/#project/${project.id}`);
+  await expect.poll(() => intervals.length).toBeGreaterThan(0);
+  // A pending proxy is rechecked after two seconds. Repeated cuts used to poll it again
+  // immediately, while it was still being made.
+  expect(Math.min(...intervals)).toBeGreaterThanOrEqual(1500);
+});

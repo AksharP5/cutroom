@@ -8,6 +8,7 @@ import {
 import { clampFadesToDuration } from "@hyperframes/core/audio-fade";
 import { getAudioFxDef } from "@hyperframes/core/audio-fx";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
+import { mainChain } from "../../shared/timeline/fx";
 import type { FxNode } from "../../shared/timeline/fx";
 import { cubicBezier, valueAt } from "../../shared/timeline/keyframes";
 import type { KeyframeValues } from "../../shared/timeline/keyframes";
@@ -26,7 +27,7 @@ import type {
   Transition,
 } from "../../shared/timeline/schema";
 import { formatTimecode } from "../../shared/timeline/timecode";
-import { trackMix } from "../../shared/timeline/tracks";
+import { mixSilences, trackMix } from "../../shared/timeline/tracks";
 import { framesBefore, sameTransition } from "../../shared/timeline/transition";
 import {
   add,
@@ -249,6 +250,8 @@ interface Context {
   zooms: Map<string, Zoom[]>;
   hidden: ReadonlySet<number>;
   muted: ReadonlySet<number>;
+  /** Whether Cutroom's mix silences a clip: its track, a solo, or its bus's mute. */
+  silent(clip: Clip): boolean;
   trackNames: Map<number, string>;
 }
 
@@ -620,10 +623,10 @@ function gainCurve(context: Context, clip: Clip) {
     (entry) => entry.index === clip.track,
   );
   const trackGain = clip.trackGainWarning ? 1 : (track?.volume ?? 1);
-  const groupGain =
-    context.input.timeline.authoredAudioGroups?.find(
-      (group) => group.id === clip.authoredAudioGroupId,
-    )?.volume ?? 1;
+  const group = context.input.timeline.authoredAudioGroups?.find(
+    (entry) => entry.id === clip.authoredAudioGroupId,
+  );
+  const groupGain = group?.volume ?? 1;
   const lanes = clip.automation ? parseAutomation(clip.automation).lanes : [];
   const lane = lanes.find((entry) => entry.target === VOLUME_TARGET);
   const effects = [
@@ -634,7 +637,11 @@ function gainCurve(context: Context, clip: Clip) {
     ...gainEffects(clip.trackGainWarning ? [] : (track?.fx ?? [])).map(
       (effect) => ({ effect, lane: undefined }),
     ),
-    ...gainEffects(context.input.timeline.masterFx ?? []).map((effect) => ({
+    ...gainEffects(group?.fx ?? []).map((effect) => ({
+      effect,
+      lane: undefined,
+    })),
+    ...gainEffects(mainChain(context.input.timeline.main)).map((effect) => ({
       effect,
       lane: undefined,
     })),
@@ -773,7 +780,12 @@ export function planResolveTimeline(input: PlanInput): Plan {
     ...videoTracks.map((index, order) => [index, `V${order + 1}`] as const),
     ...audioTracks.map((index, order) => [index, `A${order + 1}`] as const),
   ]);
-  const mix = trackMix(timeline.tracks);
+  const mix = trackMix(timeline);
+  const mutedGroups = new Set(
+    (timeline.authoredAudioGroups ?? []).flatMap(({ id, muted }) =>
+      muted ? [id] : [],
+    ),
+  );
   const context: Context = {
     input,
     fps,
@@ -787,6 +799,10 @@ export function planResolveTimeline(input: PlanInput): Plan {
     zooms: new Map(),
     hidden: mix.hidden,
     muted: mix.muted,
+    silent: (clip) =>
+      mixSilences(mix, clip) ||
+      (clip.authoredAudioGroupId !== undefined &&
+        mutedGroups.has(clip.authoredAudioGroupId)),
     trackNames,
   };
   const media = (clip: Clip) => input.media.get(clip.id);
@@ -943,21 +959,37 @@ export function planResolveTimeline(input: PlanInput): Plan {
         `Rebuild these track effects for ${trackNames.get(track.index)} in Fairlight, in this order. ${effects}.`,
       );
   }
-  const masterEffects = effectNotes(timeline.masterFx ?? []);
+  const masterEffects = effectNotes(mainChain(timeline.main));
   if (masterEffects)
     context.notes.push(
       `Rebuild these effects on the main Fairlight bus, in this order. ${masterEffects}.`,
     );
-  for (const group of timeline.authoredAudioGroups ?? [])
-    if (
-      group.volume !== 1 &&
-      [...embedded, ...sounds].some(
-        (clip) => clip.authoredAudioGroupId === group.id,
-      )
-    )
+  for (const group of timeline.authoredAudioGroups ?? []) {
+    const members = [...embedded, ...sounds].filter(
+      (clip) => clip.authoredAudioGroupId === group.id,
+    );
+    if (!members.length) continue;
+    const name = `"${oneLine(group.label ?? group.id)}" bus`;
+    if (group.muted) {
       context.notes.push(
-        `The "${oneLine(group.label ?? group.id)}" group gain is in its member clips’ volume. Route those clips through a Fairlight bus at 0 dB to adjust them together.`,
+        `The ${name} is muted in Cutroom, so its clips are disabled.`,
       );
+      continue;
+    }
+    const effects = effectNotes(group.fx);
+    if (effects)
+      context.notes.push(
+        `Rebuild these effects on the ${name} in Fairlight, in this order, and route its clips through it. ${effects}.`,
+      );
+    if (group.volume !== 1 || gainEffects(group.fx).length)
+      context.notes.push(
+        `The ${name} gain is in its member clips’ volume. Route those clips through a Fairlight bus at 0 dB to adjust them together.`,
+      );
+    if (group.automated)
+      context.notes.push(
+        `The ${name} automation is not carried. Its clips play at the bus's static gain; draw the automation on a Fairlight bus.`,
+      );
+  }
   for (const index of videoTracks)
     if (
       context.hidden.has(index) &&
@@ -969,7 +1001,9 @@ export function planResolveTimeline(input: PlanInput): Plan {
   for (const index of audioTracks)
     if (
       context.muted.has(index) &&
-      timeline.clips.some((clip) => clip.track === index)
+      timeline.clips.some(
+        (clip) => clip.track === index && context.silent(clip),
+      )
     )
       context.notes.push(
         `${trackNames.get(index)} is muted in Cutroom, so its clips are disabled.`,
@@ -1007,7 +1041,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
   const soundChild = (clip: Clip, file: FileMedia) => {
     const mediaOf = soundOf(file);
     const start = sourceStart(clip, mediaOf);
-    const audible = clip.enabled && !context.muted.has(clip.track);
+    const audible = clip.enabled && !context.silent(clip);
     const { start: at, end } = soundTarget(clip);
     return element(
       "audio",
@@ -1196,7 +1230,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
       audible.includes(next) &&
       clip.enabled &&
       next.enabled &&
-      !context.muted.has(clip.track) &&
+      !context.silent(clip) &&
       linear === (next.automation !== null)
     ) {
       transitions.push({ ...soundTarget(clip), transition, linear });
@@ -1244,7 +1278,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
   for (const clip of loose) {
     const own = soundOf(media(clip) as FileMedia);
     const start = sourceStart(clip, own);
-    const audible = clip.enabled && !context.muted.has(clip.track);
+    const audible = clip.enabled && !context.silent(clip);
     const { start: at, end } = soundTarget(clip);
     attach(clip, (offset) =>
       element(

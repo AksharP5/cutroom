@@ -1564,7 +1564,15 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         taken.add(id);
         groups = [
           ...groups,
-          { id, label: target.label, volume: target.volume ?? 1 },
+          {
+            id,
+            label: target.label,
+            volume: target.volume ?? 1,
+            muted: false,
+            solo: false,
+            fx: [],
+            automated: false,
+          },
         ];
       } else if (target) {
         const group = groups.find(({ id }) => id === target);
@@ -1600,24 +1608,32 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         }),
       };
     }
-    case "setAudioGroup": {
-      const target = find(command.clipId);
-      if (
-        command.expectedGroupId !== undefined &&
-        target.authoredAudioGroupId !== command.expectedGroupId
-      )
+    case "setAudioGroup":
+    case "removeAudioGroup": {
+      const groups = timeline.authoredAudioGroups ?? [];
+      let groupId = command.group;
+      if (command.type === "setAudioGroup" && command.clipId !== undefined) {
+        const target = find(command.clipId);
+        if (
+          command.expectedGroupId !== undefined &&
+          target.authoredAudioGroupId !== command.expectedGroupId
+        )
+          throw new TimelineError(
+            "unsupported",
+            `${clipName(target)} changed audio groups. Check its group before editing it.`,
+          );
+        groupId = target.authoredAudioGroupId;
+        if (!groups.some(({ id }) => id === groupId))
+          throw new TimelineError(
+            "unsupported",
+            `${clipName(target)} has no editable authored audio group.`,
+          );
+      }
+      const group = groups.find(({ id }) => id === groupId);
+      if (!group)
         throw new TimelineError(
-          "unsupported",
-          `${clipName(target)} changed audio groups. Check its group before editing gain.`,
-        );
-      const groups = timeline.authoredAudioGroups;
-      const group = groups?.find(
-        ({ id }) => id === target.authoredAudioGroupId,
-      );
-      if (!groups || !group)
-        throw new TimelineError(
-          "unsupported",
-          `${clipName(target)} has no editable authored audio group.`,
+          "not_found",
+          `No audio group has ID ${groupId}.`,
         );
       if (group.sourceRestriction)
         throw new TimelineError("unsupported", group.sourceRestriction);
@@ -1633,18 +1649,57 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       );
       if (locked)
         throw new TimelineError("locked", `Track ${locked.track} is locked.`);
-      if (group.volume === command.volume) return timeline;
+      if (command.type === "removeAudioGroup") {
+        const rest = groups.filter((entry) => entry !== group);
+        const { authoredAudioGroups: _, ...others } = timeline;
+        return {
+          ...others,
+          ...(rest.length && { authoredAudioGroups: rest }),
+          clips: clips.map((clip) => {
+            if (clip.authoredAudioGroupId !== group.id) return clip;
+            const {
+              authoredAudioGroupId: _group,
+              trackGainWarning: _warning,
+              ...track
+            } = clip;
+            return track;
+          }),
+        };
+      }
+      const next = {
+        ...group,
+        ...(command.label !== undefined && { label: command.label }),
+        ...(command.volume !== undefined && { volume: command.volume }),
+        ...(command.muted !== undefined && { muted: command.muted }),
+        ...(command.solo !== undefined && { solo: command.solo }),
+        ...(command.fx !== undefined && {
+          fx: buildFxChain(group.fx, command.fx),
+        }),
+        ...(command.automation === null && { automated: false }),
+      };
+      if (JSON.stringify(next) === JSON.stringify(group)) return timeline;
       return {
         ...timeline,
         authoredAudioGroups: groups.map((entry) =>
-          entry === group ? { ...entry, volume: command.volume } : entry,
+          entry === group ? next : entry,
         ),
       };
     }
     case "setMaster": {
-      const masterFx = buildFxChain(timeline.masterFx ?? [], command.fx);
-      const { masterFx: _, ...rest } = timeline;
-      return masterFx.length ? { ...rest, masterFx } : rest;
+      if (command.volume === undefined && command.fx === undefined)
+        return timeline;
+      if (command.fx === undefined && timeline.main?.sourceRestriction)
+        throw new TimelineError("unsupported", timeline.main.sourceRestriction);
+      const current = timeline.main ?? { volume: 1, fx: [] };
+      const main = {
+        volume: command.volume ?? current.volume,
+        fx:
+          command.fx === undefined
+            ? current.fx
+            : buildFxChain(current.fx, command.fx),
+      };
+      const { main: _, ...rest } = timeline;
+      return main.volume === 1 && !main.fx.length ? rest : { ...rest, main };
     }
     case "removeTrack": {
       const track = timeline.tracks.find(

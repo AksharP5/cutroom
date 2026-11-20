@@ -58,7 +58,7 @@ interface PreviewWindow extends DiagnosticWindow {
           lineWidth: number;
         },
       ): boolean;
-      refresh(): number;
+      refresh(clip?: Element): number;
       redraw(): void;
     };
   };
@@ -685,9 +685,9 @@ function installPreviewBridge(
     if (video && parked.has(video)) return;
     // Let the runtime's graded canvas replace the held copy while a grade is active.
     if (video && value !== null && holds.has(video)) removeHold(video);
-    // The runtime watches the attribute only from `<body>` on, which its head script misses.
+    // Draw the changed clip now. The runtime skips its duplicate attribute notification.
     const grading = win.__hf?.colorGrading;
-    grading?.refresh();
+    grading?.refresh(element);
     if (!video || grading?.isGraded(video) || win.__player?.isPlaying()) return;
     // Native video and the held frame can decode untagged colour differently. Restore
     // the hold after any pending seek, provided the video is still showing its source.
@@ -2418,9 +2418,12 @@ function installPreviewBridge(
       try {
         for (let pending = true; pending && !retired;) {
           pending = false;
+          // Cuts from the same file share one pending job and one poll per pass.
+          const checked = new Set<string>();
           for (const video of document.querySelectorAll("video")) {
             const path = scrubPath(video);
-            if (!path) continue;
+            if (!path || checked.has(path)) continue;
+            checked.add(path);
             const source = scrubSources.get(path) ?? { used: 0 };
             scrubSources.set(path, source);
             if (source.key || source.failed) continue;

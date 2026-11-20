@@ -1797,7 +1797,7 @@ test("Duck under voice lowers a music bed only while the voice speaks, Normalize
       .click();
     await expect(dialog).toContainText("Export again to hear it.");
   });
-  expect((await read()).timeline.masterFx?.[0]?.params.gain).toBeCloseTo(
+  expect((await read()).timeline.main?.fx[0]?.params.gain).toBeCloseTo(
     -16 - before,
     1,
   );

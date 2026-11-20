@@ -123,8 +123,7 @@ export function ColourWheel({
 
   const angle = (shown.hue * Math.PI) / 180;
   const marker = {
-    left: `${50 + 50 * Math.cos(angle) * shown.amount}%`,
-    top: `${50 + 50 * Math.sin(angle) * shown.amount}%`,
+    translate: `${50 * Math.cos(angle) * shown.amount}% ${50 * Math.sin(angle) * shown.amount}%`,
   };
 
   const editField = (key: keyof Wheel, next: number): WheelEdit => ({
@@ -169,7 +168,9 @@ export function ColourWheel({
           onPointerCancel={onPointerCancel}
         >
           <span className="inspector-wheel-centre" aria-hidden />
-          <span className="inspector-wheel-marker" style={marker} aria-hidden />
+          <span className="inspector-wheel-travel" style={marker} aria-hidden>
+            <span className="inspector-wheel-marker" />
+          </span>
         </div>
         <div className="inspector-wheel-fields">
           {fields.map(({ key, label, unit, min, max }) => (

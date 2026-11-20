@@ -269,6 +269,45 @@ show a regular 30 fps picture. The runner counts source pictures that could fit 
 between capture samples. It rejects a window if more than 1 out of 300 pictures or more than
 4 out of 900 could go unseen. Focus changes invalidate a run.
 
+### 4K sources and editing proxies
+
+Cutroom checks the original file against the 1080p pixel budget before deciding which playback path owns a clip. The check also blocks a large HEVC source when its finished editing proxy is 1920 × 1080. The preview's native path already uses that proxy.
+
+An 8-bit 4K frame uses 11.9 MiB in the decoded cache. A third of the 128 MiB cache can hold three such frames, compared with the eight frames requested ahead of playback at 1080p. The GPU compositor copies and uploads the full-resolution planes even when the viewer is smaller. At 60 fps, each transfer moves about 712 MiB/s for one 8-bit 4K video layer.
+
+On November 20, 2026, Electron 45.2.3 (Chromium 156) played these projects in a 1920 × 1080, 60 Hz Wayland window on Hyprland 0.56.2, with an i5-14400F and RTX 5060. Each session used a new profile and played 30 seconds of a 30-cut timeline with six titles and a music bed. Each file was a 44-second numbered synthetic source. The 4K30 and 4K60 H.264 files were 32 and 40 Mbit/s with a one-second GOP. The HEVC sources were SDR Matroska, one 4K60 Main 10 and one 1080p60 Main at 12 Mbit/s with a 4.2-second GOP and two B-frames to match the documented OBS format.
+
+On this display, the [compositor reader](#desktop-playback) recovered all 270 pictures and all six deliberate holds from a six-second 50 fps test pattern, with every refresh sampled. Each accepted 30-second run could miss at most 0.5% of the source frames due to capture gaps. Focus changes, runs with more than two seconds of unreadable output and late changes of footage path invalidated a run. 60 fps playback began near the open frame. The 30 fps runs began at the same frame in the second shot.
+
+For sources above the limit, the control used the current 1080p check and the candidate temporarily allowed up to 3840 × 2160 pixels. Both had GPU playback enabled in Settings. The 1080p HEVC comparison toggled the setting with the original limit in place. Both HEVC paths used a finished Cutroom H.264 editing proxy. In the warmed rows, both paths also had a finished filmstrip and scrub proxy before the editor opened. Proxy preparation is outside the first-picture measurement.
+
+Each cell is native → GPU. Values are medians of the accepted runs. A long hold is a gap between picture changes over 41.7 ms at 30 fps or 25 ms at 60 fps on this display. End-of-window holds are tracked separately.
+
+| Source                    | Filmstrip and scrub |  Runs |  Pictures/s | Long holds / 30 s |     Open ms | Browser PSS MiB |
+| ------------------------- | ------------------- | ----: | ----------: | ----------------: | ----------: | --------------: |
+| 4K30 H.264                | On demand           | 1 → 1 | 29.1 → 24.6 |          73 → 197 | 2385 → 1778 |     3592 → 1969 |
+| 4K30 H.264                | Prepared            | 0 → 1 |    — → 28.1 |           — → 210 |    — → 1893 |        — → 1912 |
+| 4K60 H.264                | On demand           | 1 → 1 | 57.8 → 23.8 |          35 → 149 | 1361 → 1126 |     3227 → 1932 |
+| 4K60 H.264                | Prepared            | 1 → 1 |  18.7 → 8.5 |          15 → 155 | 1864 → 1298 |     2686 → 1856 |
+| 4K60 HEVC, 1080p proxy    | On demand           | 1 → 0 |    55.7 → — |           104 → — |    2635 → — |        1671 → — |
+| 4K60 HEVC, 1080p proxy    | Prepared            | 1 → 1 |  42.8 → 0.6 |           71 → 16 | 2964 → 1969 |      1774 → 997 |
+| 1080p60 HEVC, 1080p proxy | On demand           | 2 → 2 | 26.9 → 54.8 |      37.5 → 139.5 | 3614 → 1237 |     1778 → 1044 |
+| 1080p60 HEVC, 1080p proxy | Prepared            | 0 → 1 |    — → 52.1 |            — → 20 |    — → ≤893 |         — → 992 |
+
+The warmed 4K60 H.264 pair ran at a one-minute load average of 18.9 and 19.6 on 16 logical CPUs. The native picture held for the final 16.2 seconds while the editor clock advanced. The GPU path showed fewer pictures overall. The on-demand 4K60 pair also favored native playback (load 5.8 and 12.1).
+
+The 4K HEVC candidate drew from the finished 1920 × 1080 editing proxy. In the accepted warmed run the editor clock advanced 29.9 seconds while 17 distinct pictures reached the screen, including a 14.1-second hold. Its on-demand run was rejected after more missed capture samples than the accuracy budget permits. The native path produced 55.7 pictures/s with the editing proxy ready and 42.8 with all media prepared. Load was 13.1 native and 18.4 GPU in the warmed pair.
+
+The 1080p HEVC fixture reached 52.1–56.8 pictures/s across three GPU runs, with a 1.75-second hold in the warmed run. The native on-demand runs showed 18.2 and 35.5 pictures/s. Their machine load was higher than in the corresponding GPU runs. The warmed native control failed the capture checks.
+
+Keep the current pixel budget. The tests show that allowing 4K clips can reduce cadence sharply, including a 4K HEVC source decoded from a 1080p proxy. Evaluate any proxy-specific exception with repeated sustained playback and matched machine load. The HEVC footage here was synthetic.
+
+To reproduce, use the [desktop setup above](#desktop-playback) to build the screen helper. Give each fixture its own benchmark directory and a `screen` link to the helper. Generate a 4K fixture with the fifth argument to `makeProject` set to `"h264-30"`, `"h264-60"` or `"hevc-60"`. The HEVC fixture uses NVENC. For the 1080p HEVC comparison, copy the HEVC project and replace its `footage.mkv` with a 1920 × 1080 Main-profile version at 60 fps, encoded with `hevc_nvenc -preset p4 -g 252 -bf 2 -b:v 12M`.
+
+Validate capture with `--fps 60 --validate` on the measurement display, then use `--size 4k --fps 60` for the sustained run. Set `--fps 30` for 30 fps footage. Use `--editing-proxy footage.mkv` for either HEVC fixture and `--warm-media` to prepare the filmstrip and scrub proxy before opening. The runner reports preparation time separately.
+
+In a scratch checkout, compare the existing cap with a temporary 3840 × 2160 cap in `src/server/timeline/media.ts`. Start a fresh process per run to clear the file probe cache. Pass `--setting on --expect-pipeline on` for the candidate or for the eligible HD HEVC proxy. Use `--setting on` for the current 4K cap and `--setting off` for the native HD HEVC control. Restore the source guard after measuring.
+
 ## Timeline engine
 
 `bun run bench:timeline` measures the timeline engine on a transcript-cut composition: 240 linked picture and sound pieces plus 20 titles, 500 clips in 75 KB of HTML. It reports median milliseconds over 31 runs and exits with an error when a step exceeds its budget. The batch is a ripple delete near the start, a razor across every track, and a ripple trim, so most clips move. A second case lifts 1,000 of 2,000 clips in one batch, as select all and delete would; each removal first checks that the clip owns its bytes.
@@ -837,6 +876,17 @@ A ruler drag asks for a new frame on every pointer move. [Scrub proxies](archite
 
 CPU was measured with the screencast off. The 300-clip timeline uses more CPU because it now loads and draws each clip it passes; it is bounded by those loads, not by decoding. A single move shows the exact frame later than before, since the source decodes only after 60 ms of rest; the proxy frame at Fit is close to the viewer's own resolution.
 
+### Polling while a scrub proxy is made
+
+On November 20, 2026, private Electron 45.2.3 profiles played 30 seconds at 1× on a 60 Hz Wayland display. Each timeline cut the same 1080p60 OBS HEVC recording. The 1080p H.264 editing proxy was ready before open. Filmstrips and the 540p scrub proxy were made on demand. The preview used to poll separately for every cut while the scrub proxy was pending. It now polls once per source in each pass. The footage pipeline also stops its range probe as soon as the server says the proxy is pending.
+
+| Cold timeline | Pending requests from the preview, before → after | Canvas updates/s, before → after | Longest canvas hold, before → after | Machine load, before → after |
+| ------------- | ------------------------------------------------: | -------------------------------: | ----------------------------------: | ---------------------------: |
+| 30 cuts       |                                          300 → 19 |                      60.0 → 55.9 |                         18 → 483 ms |                     4.6 → 27 |
+| 1,000 clips   |                                        4,521 → 18 |                      41.0 → 39.0 |                        495 → 433 ms |                      42 → 33 |
+
+Requests were counted through the end of the playback sample. Each row is one run per build. The 1,000-clip comparison used the same renderer bundle to isolate the preview request change. Machine load varied substantially, and the renderer itself ran at 41.9 and 43.3 animation callbacks/s in the 1,000-clip runs. These runs establish the request reduction. The 60 Hz cadence target is still open at this scale.
+
 ## Footage pipeline
 
 The [footage pipeline](architecture.md#footage-pipeline) is a setting, off by default. On November 15, 2026 both settings ran on the same production build of this change, alternating, on a private server: installed Chromium 155 at 1720x1050 on the RTX 5060 (ANGLE Vulkan), muted, with the machine shared with other work and DaVinci Resolve holding 4.5 of the GPU's 8 GB. Every source frame carries its number in 16 blocks along the top, and a picture counts only when a screencast frame shows a new number. The interview is `interviewWorkload` with a 60 s 1080p30 file at 8 Mbit/s and a 1 s GOP: ten cuts that each jump back a second in one file, four b-roll clips from a 720p file over them, music and four titles. The 400-clip timeline is `timelineWorkload(400)` over a 720p30 copy with a 1 s GOP: 190 linked 2.5 s cuts and 20 titles. Playback was measured headed (headless halves the clock with this much media), with `requestVideoFrameCallback` in the preview for HyperFrames and the pipeline canvas's draws for the pipeline; HyperFrames' count includes both pictures where b-roll overlaps the interview. Its gaps are the callbacks' times, which can land a display frame early or late of the picture itself (see [Cutroom vs HyperFrames Studio](#cutroom-vs-hyperframes-studio)), so they can overstate HyperFrames' gap p95.
@@ -920,6 +970,29 @@ Chromium 155 and Electron 45 on Linux decode no HEVC, in `<video>` or WebCodecs,
 Before the fixes measured here, rotated phone video drew sideways (mean difference 121 to 218), HDR in a MOV and HDR named only in the bitstream drew untone-mapped (bias 26 and 18), Android's full-range EBU footage drew 8/255 too little blue, a delayed edit list drew the wrong frames, and Resolve's MOVs, which write negative composition offsets in a version 0 `ctts`, showed the previous frame for one in two or three frames, then stalled on the open GOP's B-frames once their times were read right. 4K60 played at 2.3 pictures a second: low-latency decoding ran at 94 fps there against 166 with frame threading, and the two lanes fell behind each other. On the 400-clip timeline, frame threading measured the same as low latency (29.6 pictures a second, steps 31 / 54-104 ms against 29-31 / 105-107 ms, W 39 ms, undo 96-102 against 100-165 ms).
 
 In that comparison the 4K60 decoders produced about four frames for each one drawn. Cutroom now leaves sources above the 1080p pixel budget with HyperFrames, clip by clip. At an x264 open GOP's leading B-frames, a seeking `<video>` shows the keyframe after them and the pipeline shows the frame the file's timestamps name, as the export does; the e2e test checks those frames by number.
+
+### Linux hardware decoding in Electron
+
+On November 20, 2026, Electron 45.2.3 with Chromium 156 ran on an RTX 5060 (driver 615.78.08) under Hyprland. A muted WebCodecs probe decoded nine seconds of synthetic H.264 High at each resolution in a fresh profile. DevTools `Media` events recorded the selected decoder and whether it was a platform decoder. Every supported configuration decoded all 540 frames. Stock Electron selected `FFmpegVideoDecoder` even with `hardwareAcceleration: "no-preference"`, and rejected `"prefer-hardware"` at both resolutions.
+
+| Electron decode configuration            | Decoder            | Output | 1080p60 burst, frames/s | 4K60 burst, frames/s |
+| ---------------------------------------- | ------------------ | ------ | ----------------------: | -------------------: |
+| Stock Wayland, prefer software           | FFmpegVideoDecoder | I420   |                     211 |                  255 |
+| NVIDIA VA-API, Wayland, prefer hardware  | VaapiVideoDecoder  | NV12   |                     645 |                  363 |
+| NVIDIA VA-API, XWayland, prefer hardware | VaapiVideoDecoder  | BGRA   |                     732 |                  484 |
+
+The candidate used ANGLE OpenGL, `AcceleratedVideoDecodeLinuxGL`, `VaapiOnNvidiaGPUs`, and `AcceleratedVideoDecodeLinuxZeroCopyGL`, with the GPU blocklist and driver workarounds bypassed for the probe and the NVIDIA libva driver's direct backend. It kept Cutroom's `disable-gpu-memory-buffer-video-frames` switch. Chromium documents its NVIDIA VA-API option as experimental. [Chromium VA-API documentation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/gpu/vaapi.md)
+
+The same 4K60 clip then ran for 30 seconds in the desktop editor on a 60 Hz display, with 30 three-second cuts. The size guard was bypassed in the test. The trace counted canvas frame changes sampled on animation frames and logged the decoder selected by WebCodecs. These are canvas updates, a measure upstream of display presentation. The shared machine's one-minute load ranged from 11 to 37 across the runs.
+
+| 4K60 editor path                                             | Canvas updates/s | Timeline advanced | Result                                                                                  |
+| ------------------------------------------------------------ | ---------------: | ----------------: | --------------------------------------------------------------------------------------- |
+| Stock Wayland, software decode                               |             24.7 |            30.0 s | The canvas was held up to 634 ms                                                        |
+| NVIDIA VA-API with Wayland zero-copy                         |              7.5 |            26.0 s | GPU process exited, the drawing context was lost, and the decoders repeatedly restarted |
+| NVIDIA VA-API, Wayland without the explicit zero-copy option |              8.4 |            29.2 s | WebCodecs reported decoding errors and the pipeline fell back                           |
+| NVIDIA VA-API, XWayland                                      |              6.6 |            29.8 s | GPU uploads repeatedly failed to find the decoded image                                 |
+
+Software was already fast enough to decode all 540 frames when the probe fed them at 60 per second. In the editor, two software decoders accepted 7,312 chunks for 808 canvas updates in the same 30-second window. Decoder throughput alone leaves that extra work and the compositor's cost in the playback path. Keep the current software decode configuration and the raw 4K guard.
 
 ## Editing proxies
 

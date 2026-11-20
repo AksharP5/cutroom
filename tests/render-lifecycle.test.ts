@@ -251,6 +251,59 @@ test("a worker startup failure retains its cause instead of only the Node versio
   }
 });
 
+test("capture and encoder write failures name the failing stage and tell the editor what to try", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cutroom-render-write-"));
+  const workerPath = join(directory, "worker.mjs");
+  const workers = createRenderWorkers({
+    scratchDir: join(directory, "scratch"),
+    workerPath,
+  });
+  try {
+    for (const { error, message } of [
+      {
+        error: {
+          message:
+            "[Parallel] Capture failed: Worker 0: UNKNOWN: unknown error, write; diagnostics: [Browser:REQUESTFAILED] favicon.ico",
+        },
+        message:
+          "Capturing frames failed. A write stopped before it finished. Check available disk space. Try again with a shorter marked range.",
+      },
+      {
+        error: { stage: "encode", message: "ffmpeg: No space left on device" },
+        message:
+          "Encoding video failed. Free space on the export and Cutroom data drives, then try again.",
+      },
+      {
+        error: {
+          stage: "start_browsers",
+          message:
+            "Runtime.evaluate timed out. Increase the 'protocolTimeout' setting.",
+        },
+        message:
+          "Starting Chromium failed. Chromium stopped responding. Try again and check the Chromium installation if it repeats.",
+      },
+    ]) {
+      await writeFile(
+        workerPath,
+        `process.stdin.resume(); await new Promise(resolve => process.stdin.on("end", resolve)); console.log('CUTROOM_RENDER:' + JSON.stringify({ type: "progress", progress: 40, stage: "Capturing frames", stageProgress: { code: "capture" } })); console.log('CUTROOM_RENDER:' + JSON.stringify({ type: "error", cancelled: false, ...${JSON.stringify(error)} })); process.exitCode = 1;`,
+      );
+      const state = workers.start({
+        project: { id: "test", dir: directory },
+        outputPath: join(directory, "output.mp4"),
+        format: "mp4",
+        quality: "standard",
+        fps: { num: 30, den: 1 },
+        jobId: error.message,
+      });
+      await waitFor(() => state.status === "failed");
+      expect(state.error).toBe(message);
+    }
+  } finally {
+    await workers.cancelAll();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 /**
  * A worker that launches a stand-in browser through Puppeteer's real launcher under the
  * render isolation hooks, reports browser startup, then stops running JavaScript, so its

@@ -13,12 +13,20 @@ import type { Timeline, TimelineView } from "../../shared/timeline/schema";
  * hundreds of points. Effects leave out parameters at their defaults. Linked picture and sound
  * that have drifted apart carry their offset, as the timeline's out-of-sync badge shows it.
  */
-export function agentTimeline(timeline: Timeline) {
+export function agentTimeline(timeline: Timeline, whole = timeline) {
   const offsets = syncOffsets(timeline);
+  const members = new Map<string, number>();
+  for (const { authoredAudioGroupId: group } of whole.clips)
+    if (group) members.set(group, (members.get(group) ?? 0) + 1);
   return {
     ...timeline,
-    ...(timeline.masterFx && {
-      masterFx: timeline.masterFx.map(compactFxNode),
+    authoredAudioGroups: timeline.authoredAudioGroups?.map((group) => ({
+      ...group,
+      members: members.get(group.id) ?? 0,
+      fx: group.fx.map(compactFxNode),
+    })),
+    ...(timeline.main && {
+      main: { ...timeline.main, fx: timeline.main.fx.map(compactFxNode) },
     }),
     tracks: timeline.tracks.map((track) => ({
       ...track,
@@ -119,6 +127,9 @@ export function editReply(
     ),
     ...(JSON.stringify(old.range) !== JSON.stringify(timeline.range) && {
       range: timeline.range,
+    }),
+    ...(JSON.stringify(old.main) !== JSON.stringify(timeline.main) && {
+      main: timeline.main,
     }),
     ...(old.duration !== timeline.duration && { duration: timeline.duration }),
   };

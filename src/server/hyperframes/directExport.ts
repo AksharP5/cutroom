@@ -16,6 +16,7 @@ import type {
   VideoMetadata,
 } from "@hyperframes/engine";
 import { alignRangeAudio, mixRangeAudio } from "./rangeAudio.ts";
+import { ExportStageError } from "./renderFailure.ts";
 import { projectPath } from "../projects/path.ts";
 import { bakeGrade, writeBakedGrade } from "../grade/luts.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
@@ -622,8 +623,10 @@ export async function exportDirect(
   // Settle both before reading either, so a failed encode never leaves the mix running.
   const [videoResult, audioResult] = await Promise.allSettled([video, audio]);
   signal.throwIfAborted();
-  if (videoResult.status === "rejected") throw videoResult.reason;
-  if (audioResult.status === "rejected") throw audioResult.reason;
+  if (videoResult.status === "rejected")
+    throw new ExportStageError("encode", videoResult.reason);
+  if (audioResult.status === "rejected")
+    throw new ExportStageError("process_audio", audioResult.reason);
 
   input.progress({
     progress: 96,

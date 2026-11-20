@@ -33,7 +33,7 @@ export function layerTracks(
   timeline: Timeline,
   native: ReadonlySet<string>,
 ): LayerTrack[] {
-  const { hidden } = trackMix(timeline.tracks);
+  const { hidden } = trackMix(timeline);
   const byTrack = new Map<number, Clip[]>();
   for (const clip of timeline.clips) {
     if (
