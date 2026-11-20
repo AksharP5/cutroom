@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { mkdir, rename } from "node:fs/promises";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
@@ -352,6 +354,122 @@ test("video versions bind native source frames to both linked elements through s
     expect((await clip("tail"))?.versions).toBeUndefined();
     expect((await post("/history/undo", {})).ok).toBe(true);
     expect(await source()).toBe(complete);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an offline take stays unavailable after a rename or a cross-folder paste", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Offline take" });
+  const base = `/projects/${project.id}`;
+  const entry = "index.html";
+  const scene = "compositions/scene.html";
+  const read = async (composition: string) =>
+    TimelineViewSchema.parse(
+      await (
+        await fixture.request(`${base}/timeline?composition=${composition}`)
+      ).json(),
+    );
+  const edit = async (composition: string, commands: unknown[]) =>
+    fixture.request(`${base}/commands`, "POST", {
+      composition,
+      expectedRevision: (await read(composition)).revision,
+      commands,
+    });
+  const versionState = ({ timeline }: z.infer<typeof TimelineViewSchema>) =>
+    timeline.clips[0]?.versions?.map(({ name, src, offline }) => ({
+      name,
+      src,
+      offline: offline === true,
+    }));
+  try {
+    const live = join(project.path, "live.wav");
+    const alternate = join(project.path, "alternate.wav");
+    const parked = join(project.path, "moved.wav");
+    const ffmpeg = Bun.spawnSync([
+      "ffmpeg",
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=duration=2",
+      live,
+    ]);
+    expect(ffmpeg.exitCode, ffmpeg.stderr.toString()).toBe(0);
+    await Bun.write(alternate, Bun.file(live));
+    await Bun.write(
+      join(project.path, entry),
+      '<main data-composition-id="main" data-fps="30"><audio id="voice" src="live.wav" data-start="0" data-duration="2" data-track-index="0"></audio></main>',
+    );
+    await mkdir(join(project.path, "compositions"), { recursive: true });
+    await Bun.write(
+      join(project.path, scene),
+      '<template><div data-composition-id="scene" data-fps="30"></div></template>',
+    );
+    const seeded = await edit(entry, [
+      {
+        type: "setVersions",
+        clipId: "voice",
+        versions: [
+          { name: "Live", src: "live.wav" },
+          { name: "Alternate", src: "alternate.wav" },
+        ],
+      },
+    ]);
+    expect(seeded.status, await seeded.text()).toBe(200);
+
+    await rename(alternate, parked);
+    const renamed = TimelineViewSchema.parse(
+      await (
+        await edit(entry, [
+          {
+            type: "renameVersion",
+            clipId: "voice",
+            version: 1,
+            name: "Alternate read",
+          },
+        ])
+      ).json(),
+    );
+    expect(versionState(renamed)).toEqual([
+      { name: "Live", src: "live.wav", offline: false },
+      { name: "Alternate read", src: "alternate.wav", offline: true },
+    ]);
+
+    await rename(parked, alternate);
+    const copied = await fixture.request(`${base}/timeline/copy`, "POST", {
+      composition: entry,
+      expectedRevision: (await read(entry)).revision,
+      clipIds: ["voice"],
+    });
+    const clipboard = z.object({ id: z.string() }).parse(await copied.json());
+    await rename(alternate, parked);
+    const paste = {
+      type: "paste",
+      clipboardId: clipboard.id,
+      at: 0,
+      ids: { voice: ["pasted"] },
+    };
+    const refused = await edit(scene, [
+      paste,
+      { type: "setVersion", clipId: "pasted", version: 1 },
+    ]);
+    expect(refused.status, await refused.clone().text()).toBe(422);
+    expect(await refused.text()).toContain("Alternate read is offline");
+    const pasted = TimelineViewSchema.parse(
+      await (await edit(scene, [paste])).json(),
+    );
+    expect(versionState(pasted)).toEqual([
+      { name: "Live", src: "../live.wav", offline: false },
+      { name: "Alternate read", src: "../alternate.wav", offline: true },
+    ]);
+    expect(versionState(await read(scene))).toEqual(versionState(pasted));
   } finally {
     await fixture.close();
   }

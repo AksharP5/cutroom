@@ -85,7 +85,11 @@ import { compositionMediaFacts, mediaFacts } from "./media";
 import { prepareFrozenFrames, saveFrozenFrames } from "./freeze";
 import { freezeCompanion } from "../projects/freezeAssets";
 import { versionFiles } from "./versions";
-import { isCompositionFile } from "../../shared/timeline/versions";
+import {
+  isCompositionFile,
+  mediaVersions,
+  versionMedia,
+} from "../../shared/timeline/versions";
 import {
   DuckRequestSchema,
   LoudnessRequestSchema,
@@ -259,17 +263,6 @@ export function createTimelineRoutes(
       current.parsed.timeline,
       batch.commands,
     );
-    const inserted = await mediaFacts(project, composition, [
-      ...batch.commands.flatMap((command) =>
-        command.type === "insert" &&
-        command.clip.kind !== "title" &&
-        command.clip.kind !== "composition" &&
-        command.clip.kind !== "adjustment"
-          ? [command.clip.src]
-          : [],
-      ),
-      ...versionSources.filter((src) => !isCompositionFile(src)),
-    ]);
     const hosted = await hostedCompositions(project, composition, [
       ...batch.commands.flatMap((command) =>
         command.type === "insert" && command.clip.kind === "composition"
@@ -278,10 +271,6 @@ export function createTimelineRoutes(
       ),
       ...versionSources.filter(isCompositionFile),
     ]);
-    const lengths = new Map([...current.lengths, ...inserted.lengths]);
-    const rates = new Map([...current.rates, ...inserted.rates]);
-    const silent = new Set([...current.silent, ...inserted.silent]);
-    const files = new Set([...current.files, ...inserted.files]);
     // A font no rule declares would fall back to a system face that export may not share.
     const fonts = new Set(
       batch.commands.flatMap((command) => {
@@ -341,16 +330,35 @@ export function createTimelineRoutes(
         },
       });
     }
+    // Copy-time facts can be stale. Check the rebased takes with the other new media in this batch.
+    const addedMedia = await mediaFacts(project, composition, [
+      ...batch.commands.flatMap((command) =>
+        command.type === "insert" &&
+        command.clip.kind !== "title" &&
+        command.clip.kind !== "composition" &&
+        command.clip.kind !== "adjustment"
+          ? [command.clip.src]
+          : [],
+      ),
+      ...versionSources.filter((src) => !isCompositionFile(src)),
+      ...[...snapshots.values()].flatMap(({ timeline }) =>
+        timeline.clips.flatMap(({ kind, versions }) =>
+          mediaVersions(kind) ? (versions?.map(({ src }) => src) ?? []) : [],
+        ),
+      ),
+    ]);
+    const lengths = new Map([...current.lengths, ...addedMedia.lengths]);
+    const rates = new Map([...current.rates, ...addedMedia.rates]);
+    const silent = new Set([...current.silent, ...addedMedia.silent]);
+    const files = new Set([...current.files, ...addedMedia.files]);
     for (const parsed of snapshots.values())
-      for (const clip of parsed.timeline.clips) {
-        if (clip.src !== null && clip.sourceDuration !== null)
+      for (const clip of parsed.timeline.clips)
+        if (
+          clip.src !== null &&
+          clip.sourceDuration !== null &&
+          !lengths.has(clip.src)
+        )
           lengths.set(clip.src, clip.sourceDuration);
-        for (const version of clip.versions ?? []) {
-          if (version.sourceDuration !== undefined)
-            lengths.set(version.src, version.sourceDuration);
-          if (version.silent) silent.add(version.src);
-        }
-      }
     const origins = new Map<string, ClipOrigin>();
     const shifts = new Map<string, number>();
     const labels: string[] = [];
@@ -398,7 +406,19 @@ export function createTimelineRoutes(
             reason,
           }),
         clipboards: new Map(
-          [...snapshots].map(([id, parsed]) => [id, parsed.timeline.clips]),
+          [...snapshots].map(([id, { timeline }]) => [
+            id,
+            timeline.clips.map((clip) =>
+              clip.versions && mediaVersions(clip.kind)
+                ? {
+                    ...clip,
+                    versions: clip.versions.map((version) =>
+                      versionMedia(version, lengths, silent, files),
+                    ),
+                  }
+                : clip,
+            ),
+          ]),
         ),
         mediaLengths: lengths,
         silentMedia: silent,
@@ -471,6 +491,7 @@ export function createTimelineRoutes(
       scope: current.scope,
       mediaLengths: lengths,
       silentMedia: silent,
+      mediaFiles: files,
       fonts: current.parsed.fonts,
     });
     const { timeline: written } = writtenSource;
