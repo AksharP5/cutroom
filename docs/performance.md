@@ -177,6 +177,46 @@ PSS is the browser process tree after these operations, excluding Electron's Bun
 one-second GOP. It has 30 cuts, six titles and a music bed. With the setting enabled, the 4K
 source still uses HyperFrames because it exceeds the pipeline's source-pixel budget.
 
+On November 20, 2026, the desktop ran Electron 45.2.3 with Chromium 156.0.8078.80.
+The browser control ran Chromium 155.0.8059.84. The machine had an i5-14400F, an RTX 5060
+on driver 615.78.08, and Hyprland 0.56.2. Each accepted run used the same 1920 × 1080,
+143.981 Hz output. The second 60 Hz monitor stayed connected. Background load varied during
+the runs. Runs interrupted by a focus change or excessive capture gaps were repeated.
+
+Each cell reads **off → on**. Values are medians. The 1080p GPU-on rows use the build with
+the ripple fix (`60fe861c`), and the unchanged off path includes controls recorded before
+and after it. Settings ran in both orders. Ripple and undo pool three shots per run.
+
+| Host              | Runs per setting |  Pictures/s | Long holds / 10 s | Scrub pictures/s |  Ripple ms |   Undo ms |     Open ms | Browser PSS MiB |
+| ----------------- | ---------------: | ----------: | ----------------: | ---------------: | ---------: | --------: | ----------: | --------------: |
+| Electron Wayland  |                3 | 27.1 → 30.0 |          100 → 10 |       7.6 → 46.5 | 1837 → 113 | 1423 → 88 | 2969 → 1535 |      939 → 1174 |
+| Electron XWayland |                3 | 29.7 → 30.0 |            33 → 5 |      16.9 → 29.9 |   965 → 90 | 708 → 134 | 1717 → 1003 |      936 → 1081 |
+| Chromium XWayland |                3 | 29.9 → 30.0 |            34 → 6 |      17.3 → 29.8 |   983 → 84 |  764 → 98 |  1834 → 997 |     1065 → 1208 |
+| Chromium Wayland  |                1 | 30.1 → 30.2 |           70 → 67 |      17.2 → 45.1 | 1015 → 129 |  734 → 85 | 1868 → 1025 |     1061 → 1288 |
+
+For 4K H.264, the footage path stayed native with either setting. The Chromium rows are
+one pair per display path and give a reference for the desktop runs.
+
+| Host              | Runs per setting |  Pictures/s | Long holds / 30 s | Longest hold ms |     Open ms | Browser PSS MiB |
+| ----------------- | ---------------: | ----------: | ----------------: | --------------: | ----------: | --------------: |
+| Electron Wayland  |                3 | 28.8 → 29.9 |          219 → 98 |        195 → 69 | 1608 → 1189 |     3174 → 3541 |
+| Electron XWayland |                3 | 29.8 → 29.8 |          38 → 102 |         77 → 83 | 1250 → 1181 |     3465 → 3540 |
+| Chromium XWayland |                1 | 29.9 → 30.0 |         157 → 140 |         76 → 77 | 2134 → 2300 |     3899 → 3878 |
+| Chromium Wayland  |                1 | 29.9 → 29.8 |         146 → 130 |         77 → 84 | 1186 → 1270 |     3440 → 3380 |
+
+**Decision.** Keep the setting opt-in. At 1080p the corrected pipeline improved playback,
+scrub, first picture, ripple and undo in both Electron modes and in the Chromium control.
+The output capture measured 30.0 pictures/s in Electron Wayland with GPU playback,
+replacing the earlier screencast estimate of 23.6. Browser PSS at 1080p increased by 145 MiB on Electron XWayland and
+235 MiB on Electron Wayland.
+
+The 4K XWayland playback rates were even to a tenth of a picture per second, but the three
+hold comparisons were 133 → 117, 31 → 37, and 38 → 102. Both settings used the same native
+path, and the direction changed between runs. These measurements leave 4K cadence parity
+unresolved. The Chromium Wayland reference also showed more 1080p holds than the XWayland
+reference with either setting. Cadence varied with display path and background load. The
+stale preview was the reproducible fault.
+
 To run locally on Hyprland, use an unrotated display at scale 1 and leave the benchmark window
 in front. The tool uses Node with TypeScript stripping, Bun, FFmpeg, a C compiler, the Wayland
 client headers and `wayland-scanner`. It launches a full-screen window at the display resolution
@@ -201,8 +241,8 @@ flock /tmp/cutroom-e2e.lock node scripts/bench-desktop-playback.ts --dir "$bench
 flock /tmp/cutroom-e2e.lock node scripts/bench-desktop-playback.ts --dir "$bench_dir" --host wayland --setting on --size 1080p
 ```
 
-Use `--host x11` for Electron on XWayland and `--host chromium` for the Chromium app window.
-Use `--setting off` for the control and `--size 4k` for the sustained run. `--out` saves the JSON
+Use `--host x11` for Electron on XWayland, `--host chromium` for Chromium on XWayland,
+and `--host chromium-wayland` for Chromium on Wayland. Use `--setting off` for the control and `--size 4k` for the sustained run. `--out` saves the JSON
 summary. Run paired settings in both orders. On a 144 Hz display, a long hold is a picture
 gap over 38.2 ms, half a display interval longer than the maximum five refreshes needed to
 show a regular 30 fps picture. The runner counts source pictures that could fit into gaps

@@ -4,13 +4,19 @@ import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
+import { loadavg } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { chromium, type CDPSession, type Page } from "@playwright/test";
 import { z } from "zod";
-import { clipSeconds, fps, mediaStart } from "./bench-vs-studio-project.ts";
+import {
+  clipSeconds,
+  desktop4kSourceSeconds,
+  fps,
+  mediaStart,
+} from "./bench-vs-studio-project.ts";
 import { formatTimecode } from "../src/shared/timeline/timecode.ts";
 
 const { values: options } = parseArgs({
@@ -274,6 +280,11 @@ function stats(
   const captureGaps = window.slice(1).map((p, i) => p.time - window[i].time);
   const tick = 1000 / refresh;
   const threshold = (Math.ceil(refresh / fps - 0.01) + 0.5) * tick;
+  const shortestPicture = Math.max(1, Math.floor(refresh / fps));
+  const picturesAtRisk = captureGaps.reduce((sum, gap) => {
+    const missedRefreshes = Math.max(0, Math.round(gap / tick) - 1);
+    return sum + Math.floor(missedRefreshes / shortestPicture);
+  }, 0);
   const round = (value: number) => Number(value.toFixed(2));
   const duration = (end - start) / 1000;
   return {
@@ -283,10 +294,7 @@ function stats(
     maxHoldMs: round(Math.max(0, ...gaps)),
     captureHz: round(window.length / duration),
     captureMaxGapMs: round(Math.max(0, ...captureGaps)),
-    capturePicturesAtRisk: captureGaps.reduce(
-      (sum, gap) => sum + Math.floor(gap / (Math.floor(refresh / fps) * tick)),
-      0,
-    ),
+    capturePicturesAtRisk: picturesAtRisk,
     unreadable: window.length - shown.length,
   };
 }
@@ -697,7 +705,8 @@ async function benchmark(
       return box;
     }
     const sourceFrame = (index: number) =>
-      mediaStart(index, size === "4k" ? 44 : undefined) * fps;
+      mediaStart(index, size === "4k" ? desktop4kSourceSeconds : undefined) *
+      fps;
     async function seek(index: number, offset: number) {
       const timecode = formatTimecode(index * clipSeconds * fps + offset, {
         num: fps,
@@ -741,6 +750,7 @@ async function benchmark(
     await sleep(300);
     await page.keyboard.press("Space");
     await sleep(500);
+    const playbackLoad = loadavg()[0];
     const playStart = Date.now();
     await capture.wait(size === "4k" ? 30_000 : 10_000);
     const playEnd = Date.now();
@@ -827,6 +837,7 @@ async function benchmark(
     return {
       openMs,
       playback,
+      playbackLoad,
       scrub,
       edits,
       browserPssMiB: await browserMemory(pid, backend),

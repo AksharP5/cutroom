@@ -7,6 +7,7 @@ const run = promisify(execFile);
 
 export const fps = 30;
 export const sourceSeconds = 120;
+export const desktop4kSourceSeconds = 44;
 export const clipCount = 100;
 export const clipSeconds = 3;
 export const duration = clipCount * clipSeconds;
@@ -53,7 +54,7 @@ export async function makeProject(
 ) {
   const width = desktop === "4k" ? 3840 : 1920;
   const height = desktop === "4k" ? 2160 : 1080;
-  const seconds = desktop === "4k" ? 44 : sourceSeconds;
+  const seconds = desktop === "4k" ? desktop4kSourceSeconds : sourceSeconds;
   const count = desktop === "4k" ? 30 : clipCount;
   const length = count * clipSeconds;
   const marker = desktop
