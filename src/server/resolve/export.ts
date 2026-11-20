@@ -33,14 +33,17 @@ import { writeResolveImporter } from "./importer";
 import type { ClipMedia } from "./plan";
 import { probeMedia } from "./probe";
 import type { MediaFacts } from "./probe";
+import { oneLine, wellFormed } from "./text";
 
 /** A name Cutroom writes inside the export folder: one path segment, no hidden or control characters. */
 export const safeName = (name: string, fallback: string) =>
-  name
-    .replace(/[/\\\x00-\x1f\x7f]/g, "-")
-    .replace(/^[.\s]+/, "")
-    .trim()
-    .slice(0, 120) || fallback;
+  wellFormed(
+    name
+      .replace(/[/\\\x00-\x1f\x7f]/g, "-")
+      .replace(/^[.\s]+/, "")
+      .trim()
+      .slice(0, 120),
+  ) || fallback;
 
 /** Claims a new folder in `directory`, adding a number when the name is taken. */
 async function claimFolder(directory: string, name: string) {
@@ -258,7 +261,7 @@ export async function exportResolve(
   if (ramped)
     throw new HttpError(
       422,
-      `Resolve timeline import cannot keep the editable speed ramp on "${label(ramped)}". Choose MP4 or MOV to keep the ramp in the rendered video. To rebuild it in Resolve, import the clip at a constant speed and add the speed points with Retime Controls.`,
+      `Resolve timeline import cannot keep the editable speed ramp on "${oneLine(label(ramped))}". Choose MP4 or MOV to keep the ramp in the rendered video. To rebuild it in Resolve, import the clip at a constant speed and add the speed points with Retime Controls.`,
     );
 
   if (requested === own) {
@@ -390,7 +393,7 @@ async function writePackage(
         ]
       : []),
     ...plan.notes,
-  ];
+  ].map(oneLine);
   const timeline = join(folder, `${stem}.fcpxml`);
   await writeFile(timeline, plan.fcpxml, { flag: "wx" });
   const importer = await writeResolveImporter(source, timeline, plan);
@@ -401,14 +404,12 @@ async function writePackage(
   await writeFile(
     summary,
     [
-      `${stem} for DaVinci Resolve`,
+      `${oneLine(stem)} for DaVinci Resolve`,
       "",
-      ...(importer?.instructions ?? [
-        `Import the timeline with File > Import > Timeline and choose ${basename(timeline)}.`,
-      ]),
+      ...importer.instructions,
       ...(markers
         ? [
-            `If you import the FCPXML by hand, use Timeline > Import > Timeline Markers from EDL and choose ${basename(markers)}. Use the console command above to keep marker notes and punctuation.`,
+            `If you import the FCPXML by hand, use Timeline > Import > Timeline Markers from EDL and choose ${oneLine(basename(markers))}. Use the console command above to keep marker notes and punctuation.`,
           ]
         : []),
       "",
@@ -416,7 +417,7 @@ async function writePackage(
       options.copyMedia
         ? "Media: copied into the Media folder beside the timeline."
         : "Media: linked where it is in the project.",
-      ...(importer?.notes.length
+      ...(importer.notes.length
         ? ["", "Grades:", ...importer.notes.map((note) => `- ${note}`)]
         : []),
       "",
@@ -435,8 +436,8 @@ async function writePackage(
     timeline,
     markers,
     summary,
-    importScript: importer?.script ?? null,
-    gradeScript: plan.grades.length ? (importer?.script ?? null) : null,
+    importScript: importer.script,
+    gradeScript: plan.grades.length ? importer.script : null,
     notes: [...layerNotes, ...notes],
   };
 }

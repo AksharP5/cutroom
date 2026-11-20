@@ -27,7 +27,7 @@ import type {
 } from "../../shared/timeline/schema";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { trackMix } from "../../shared/timeline/tracks";
-import { framesBefore } from "../../shared/timeline/transition";
+import { framesBefore, sameTransition } from "../../shared/timeline/transition";
 import {
   add,
   element,
@@ -39,6 +39,7 @@ import {
 } from "./fcpxml";
 import type { Element, Rational } from "./fcpxml";
 import type { MediaFacts } from "./probe";
+import { oneLine } from "./text";
 
 /**
  * A clip's media as the planner reads it: a probed video or audio file, or a still image. `sound`
@@ -65,20 +66,14 @@ export interface PlanInput {
   baked?: ReadonlySet<string>;
 }
 
-export interface GradeTarget {
+interface GradeTarget extends ClipTarget {
   grade: Grade;
-  track: number;
-  start: number;
-  end: number;
-  label: string;
 }
 
-export interface TransitionTarget {
-  track: number;
-  start: number;
-  end: number;
-  label: string;
+interface TransitionTarget extends ClipTarget {
   transition: Transition;
+  /** Cutroom uses linear fades when one of these sounds has authored automation. */
+  linear?: boolean;
 }
 
 interface ClipTarget {
@@ -108,6 +103,8 @@ export interface Plan {
   links: ClipTarget[][];
   tracks: TrackTarget[];
   timelineMarkers: Marker[];
+  /** Absolute file paths used by the FCPXML's media resources. */
+  mediaPaths: string[];
   fcpxml: string;
   /** Resolve's marker EDL, or null when the timeline has no markers. */
   markers: string | null;
@@ -232,6 +229,7 @@ interface Context {
   fps: Fps;
   notes: string[];
   assets: Element[];
+  mediaPaths: Set<string>;
   formats: Element[];
   assetIds: Map<string, string>;
   formatIds: Map<string, string>;
@@ -285,6 +283,7 @@ function assetFor(
     media.kind === "still" || video ? formatFor(context, video) : undefined;
   id = nextId(context);
   context.assetIds.set(key, id);
+  context.mediaPaths.add(path);
   context.assets.push(
     element(
       "asset",
@@ -348,7 +347,7 @@ export const label = (clip: Clip) =>
   clip.label ?? clip.textPreview ?? (clip.src ? basename(clip.src) : clip.id);
 
 const where = (context: Context, clip: Clip) =>
-  `"${label(clip)}" at ${formatTimecode(clip.start, context.fps)} on ${context.trackNames.get(clip.track) ?? "its track"}`;
+  `"${oneLine(label(clip))}" at ${formatTimecode(clip.start, context.fps)} on ${context.trackNames.get(clip.track) ?? "its track"}`;
 
 /** Keyframe values in FCPXML's units, as numbers for comparison and as attribute text. */
 const PROPERTY_TEXT = {
@@ -775,6 +774,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
     fps,
     notes: [],
     assets: [],
+    mediaPaths: new Set(),
     formats: [],
     assetIds: new Map(),
     formatIds: new Map(),
@@ -793,7 +793,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
   for (const marker of timeline.markers) {
     if (markedFrames.has(marker.frame)) {
       context.notes.push(
-        `Resolve allows one marker per frame. Move the marker "${marker.name}" at ${formatTimecode(marker.frame, fps)} to a free frame in Cutroom and export again.`,
+        `Resolve allows one marker per frame. Move the marker "${oneLine(marker.name) || "Marker"}" at ${formatTimecode(marker.frame, fps)} to a free frame in Cutroom and export again.`,
       );
       continue;
     }
@@ -821,6 +821,21 @@ export function planResolveTimeline(input: PlanInput): Plan {
   );
   const laneOfSound = (clip: Clip) =>
     context.audioLanes.get(`${kindOf(clip.track, clip)} ${clip.track}`)!;
+  const target = (
+    clip: Clip,
+    kind: ClipTarget["kind"],
+    track: number,
+  ): ClipTarget => ({
+    kind,
+    track,
+    start: clip.start,
+    end: clip.start + clip.duration,
+    label: oneLine(label(clip)),
+  });
+  const pictureTarget = (clip: Clip) =>
+    target(clip, "video", videoTracks.indexOf(clip.track) + 1);
+  const soundTarget = (clip: Clip) =>
+    target(clip, "audio", soundTracks.length + laneOfSound(clip) + 1);
   const targetTracks: TrackTarget[] = [];
   const trackTarget = (
     kind: TrackTarget["kind"],
@@ -929,7 +944,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
       )
     )
       context.notes.push(
-        `The "${group.label ?? group.id}" group gain is in its member clips’ volume. Route those clips through a Fairlight bus at 0 dB to adjust them together.`,
+        `The "${oneLine(group.label ?? group.id)}" group gain is in its member clips’ volume. Route those clips through a Fairlight bus at 0 dB to adjust them together.`,
       );
   for (const index of videoTracks)
     if (
@@ -950,6 +965,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
 
   // Retimed picture and sound get their own edits so the importer can set their speed.
   const retimed = (clip: Clip) => clip.playbackRate !== 1;
+  const hasTransition = (clip: Clip) => clip.transitionIn || clip.transitionOut;
   // Resolve drops keyframes written inside a <video>, the one element whose sound it links, so an
   // animated picture is an <asset-clip> and its sound a clip of its own.
   const animated = (clip: Clip) =>
@@ -962,10 +978,11 @@ export function planResolveTimeline(input: PlanInput): Plan {
   const separate = (clip: Clip) =>
     retimed(clip) ||
     animated(clip) ||
-    (embedded.includes(clip) && varies(clip));
+    (embedded.includes(clip) && (hasTransition(clip) || varies(clip)));
   const linkedTo = new Map<Clip, Clip[]>();
   for (const sound of sounds) {
-    if (!sound.link || retimed(sound) || varies(sound)) continue;
+    if (!sound.link || retimed(sound) || hasTransition(sound) || varies(sound))
+      continue;
     const picture = pictures.find(
       (clip) => clip.link === sound.link && !separate(clip),
     );
@@ -979,14 +996,15 @@ export function planResolveTimeline(input: PlanInput): Plan {
     const mediaOf = soundOf(file);
     const start = sourceStart(clip, mediaOf);
     const audible = clip.enabled && !context.muted.has(clip.track);
+    const { start: at, end } = soundTarget(clip);
     return element(
       "audio",
       {
         ref: assetFor(context, mediaOf, "all"),
         lane: laneOfSound(clip),
-        offset: framesAt(clip.start, fps),
+        offset: framesAt(at, fps),
         start,
-        duration: framesAt(clip.duration, fps),
+        duration: framesAt(end - at, fps),
         enabled: audible ? undefined : 0,
         role: "dialogue",
       },
@@ -1002,6 +1020,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
     const own = media(clip)!;
     const start = sourceStart(clip, own);
     const visible = clip.enabled && !context.hidden.has(clip.track);
+    const { start: at, end } = pictureTarget(clip);
     const children = pictureAdjustments(context, clip, keyOrigin(clip, own));
     if (separate(clip))
       return element(
@@ -1012,7 +1031,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
           name: label(clip),
           offset: attach.offset,
           start,
-          duration: framesAt(clip.duration, fps),
+          duration: framesAt(end - at, fps),
           enabled: visible ? undefined : 0,
         },
         children,
@@ -1029,7 +1048,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
         name: label(clip),
         offset: attach.offset,
         start,
-        duration: framesAt(clip.duration, fps),
+        duration: framesAt(end - at, fps),
         enabled: visible ? undefined : 0,
       },
       children,
@@ -1097,7 +1116,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
       transition &&
       next &&
       next.start === cursor &&
-      next.transitionIn &&
+      sameTransition(transition, next.transitionIn) &&
       !retimed(clip) &&
       !retimed(next)
     ) {
@@ -1129,23 +1148,58 @@ export function planResolveTimeline(input: PlanInput): Plan {
     const next = pictures.find(
       (other) => other.track === clip.track && other.start === cut,
     );
-    if (!next?.transitionIn) {
+    if (!next || !sameTransition(transition, next.transitionIn)) {
       context.notes.push(
         `The transition after ${where(context, clip)} needs both source clips. Restore the missing media in Cutroom and export again.`,
       );
       return [];
     }
     if (clip.track === v1 && !retimed(clip) && !retimed(next)) return [];
-    return [
-      {
-        track: videoTracks.indexOf(clip.track) + 1,
-        start: clip.start,
-        end: cut,
-        label: label(clip),
-        transition,
-      },
-    ];
+    return [{ ...pictureTarget(clip), transition }];
   });
+  const audible = [...sounds, ...embedded];
+  const audioClips = timeline.clips.filter(
+    (clip) =>
+      clip.hasAudio && (clip.kind === "video" || isAudioKind(clip.kind)),
+  );
+  const incoming = new Set<Clip>();
+  for (const clip of audioClips) {
+    const transition = clip.transitionOut;
+    if (!transition) continue;
+    const cut = clip.start + clip.duration;
+    const next = audioClips.find(
+      (other) =>
+        other.track === clip.track &&
+        other.start === cut &&
+        sameTransition(transition, other.transitionIn),
+    );
+    if (next) incoming.add(next);
+    const whereSound = audible.includes(clip)
+      ? `A${soundTarget(clip).track} at ${formatTimecode(cut, fps)}`
+      : `${where(context, clip)} ending at ${formatTimecode(cut, fps)}`;
+    const linear = clip.automation !== null;
+    if (
+      next &&
+      audible.includes(clip) &&
+      audible.includes(next) &&
+      clip.enabled &&
+      next.enabled &&
+      !context.muted.has(clip.track) &&
+      linear === (next.automation !== null)
+    ) {
+      transitions.push({ ...soundTarget(clip), transition, linear });
+    } else {
+      context.notes.push(
+        `Rebuild the ${transition.duration}-frame audio fade at ${whereSound} in Fairlight. Extend the audio into the transition and fade the existing sides. Use a straight fade on a side with clip automation and an equal-power fade on the other sides.`,
+      );
+    }
+  }
+  for (const clip of audioClips) {
+    if (clip.transitionIn && !incoming.has(clip))
+      context.notes.push(
+        `Rebuild the ${clip.transitionIn.duration}-frame audio fade before ${where(context, clip)} in Fairlight. Extend the incoming audio into the transition and fade it in.`,
+      );
+  }
 
   /** Connected clips hang off the spine slot under their first frame. */
   const attach = (clip: Clip, node: (offset: Rational) => Element) => {
@@ -1161,7 +1215,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
   for (const clip of pictures) {
     if (clip.track === v1) continue;
     attach(clip, (offset) =>
-      pictureElement(clip, { lane: videoTracks.indexOf(clip.track), offset }),
+      pictureElement(clip, { lane: pictureTarget(clip).track - 1, offset }),
     );
   }
   const loose = [
@@ -1172,6 +1226,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
     const own = soundOf(media(clip) as FileMedia);
     const start = sourceStart(clip, own);
     const audible = clip.enabled && !context.muted.has(clip.track);
+    const { start: at, end } = soundTarget(clip);
     attach(clip, (offset) =>
       element(
         "asset-clip",
@@ -1181,7 +1236,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
           name: label(clip),
           offset,
           start,
-          duration: framesAt(clip.duration, fps),
+          duration: framesAt(end - at, fps),
           enabled: audible ? undefined : 0,
           audioRole: "dialogue",
         },
@@ -1189,21 +1244,6 @@ export function planResolveTimeline(input: PlanInput): Plan {
       ),
     );
   }
-  const target = (
-    clip: Clip,
-    kind: ClipTarget["kind"],
-    track: number,
-  ): ClipTarget => ({
-    kind,
-    track,
-    start: clip.start,
-    end: clip.start + clip.duration,
-    label: label(clip),
-  });
-  const pictureTarget = (clip: Clip) =>
-    target(clip, "video", videoTracks.indexOf(clip.track) + 1);
-  const soundTarget = (clip: Clip) =>
-    target(clip, "audio", soundTracks.length + laneOfSound(clip) + 1);
   const retimes = [
     ...pictures
       .filter(retimed)
@@ -1274,6 +1314,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
     fcpxml: fcpxmlDocument(root),
     markers: markerList(input.name, timelineMarkers, fps),
     timelineMarkers,
+    mediaPaths: [...context.mediaPaths],
     transitions,
     retimes,
     links,
@@ -1283,11 +1324,8 @@ export function planResolveTimeline(input: PlanInput): Plan {
       clip.grade && !input.baked?.has(clip.id)
         ? [
             {
+              ...pictureTarget(clip),
               grade: clip.grade,
-              track: videoTracks.indexOf(clip.track) + 1,
-              start: clip.start,
-              end: clip.start + clip.duration,
-              label: label(clip),
             },
           ]
         : [],
@@ -1301,7 +1339,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
  */
 export function markerList(name: string, markers: readonly Marker[], fps: Fps) {
   if (!markers.length) return null;
-  const line = (text: string) => text.replace(/[\s|]+/g, " ").trim();
+  const line = (text: string) => oneLine(text.replaceAll("|", " "));
   const events = markers
     .toSorted((a, b) => a.frame - b.frame)
     .map((marker, index) => {

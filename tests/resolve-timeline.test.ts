@@ -83,7 +83,7 @@ const facts = (
 });
 
 /** A 29.97 edit: two shots and their sound with a dissolve, an animated inset, music, a title. */
-function edit(extra: readonly CommandInput[] = []) {
+function edit(extra: readonly CommandInput[] = [], timecode = 107892) {
   const empty = TimelineSchema.parse({
     fps: NTSC,
     duration: 390,
@@ -218,7 +218,7 @@ function edit(extra: readonly CommandInput[] = []) {
   const files: Record<string, ClipMedia> = {
     "a.mp4": {
       kind: "file",
-      facts: facts("/media/a.mp4", { timecode: 107892 }),
+      facts: facts("/media/a.mp4", { timecode }),
     },
     "b.mp4": { kind: "file", facts: facts("/media/b b#.mp4") },
     "music.wav": {
@@ -240,6 +240,31 @@ function edit(extra: readonly CommandInput[] = []) {
   });
 }
 
+test("a 200% NTSC camera clip keeps its opacity keys at hour-long timecode", () => {
+  const { fcpxml } = edit(
+    [
+      { type: "setTiming", clipId: "a", mediaStart: 1, playbackRate: 2 },
+      {
+        type: "setKeyframe",
+        clipId: "a",
+        property: "opacity",
+        frame: 0,
+        value: 0.5,
+      },
+      {
+        type: "setKeyframe",
+        clipId: "a",
+        property: "opacity",
+        frame: 60,
+        value: 1,
+      },
+    ],
+    108000,
+  );
+  expect(fcpxml).toContain('<keyframe time="2703063113/750000s" value="0.5"/>');
+  expect(fcpxml).toContain('<keyframe time="2704564613/750000s" value="1"/>');
+});
+
 test("V1 is the storyline, upper tracks are lanes and each audio track keeps its place", () => {
   const { fcpxml } = edit();
   const spine = fcpxml.slice(
@@ -257,9 +282,9 @@ test("V1 is the storyline, upper tracks are lanes and each audio track keeps its
   );
   // Shot A's source starts at its 01:00:00;00 timecode plus 2.002 s, frame 60.
   expect(spine).toContain(`start="${fcpTime(framesAt(107952, NTSC))}"`);
-  // Linked sound sits inside its picture at sequence time, on A1 (the deeper lane), at -6 dB.
+  // Sound with a transition stays on the deeper lane, at its cut and original level.
   expect(spine).toMatch(
-    /<audio ref="r\d+" lane="-2" offset="0s" start="2251249\/625s" duration="1001\/250s" role="dialogue">\s*<adjust-volume amount="-6.0206dB"\/>/,
+    /<asset-clip ref="r\d+" lane="-2" name="[^"]+" offset="2251249\/625s" start="2251249\/625s" duration="1001\/250s" audioRole="dialogue">\s*<adjust-volume amount="-6.0206dB"\/>/,
   );
   // Music on A2 is its own clip, never linked.
   expect(spine).toMatch(/<asset-clip ref="r\d+" lane="-1" name="music.wav"/);
@@ -311,7 +336,7 @@ test("the marker EDL remains available and the importer retains the full marker"
   ]);
 });
 
-test("an upper video transition is restored on the original cuts", () => {
+test("upper video and linked audio transitions are restored at their cuts", () => {
   const { transitions } = edit([
     {
       type: "insert",
@@ -335,11 +360,80 @@ test("an upper video transition is restored on the original cuts", () => {
   ]);
   expect(transitions).toEqual([
     {
+      kind: "video",
       track: 2,
       start: 30,
       end: 150,
       label: "a.mp4",
       transition: { kind: "dip", duration: 24, alignment: "end" },
     },
+    {
+      kind: "audio",
+      track: 1,
+      start: 0,
+      end: 120,
+      label: 'Shot "A" & <B>',
+      transition: { kind: "dissolve", duration: 30, alignment: "center" },
+      linear: false,
+    },
   ]);
+});
+
+test("standalone audio keeps a 24-frame crossfade and reports a mixed fade curve", () => {
+  const commands: CommandInput[] = [
+    { type: "setTrack", index: 5, kind: "audio" },
+    {
+      type: "insert",
+      track: 5,
+      at: 0,
+      clip: {
+        id: "music-left",
+        kind: "audio",
+        src: "music.wav",
+        duration: 60,
+        mediaStart: 2,
+      },
+    },
+    {
+      type: "insert",
+      track: 5,
+      at: 60,
+      clip: {
+        id: "music-right",
+        kind: "audio",
+        src: "music.wav",
+        duration: 60,
+        mediaStart: 4,
+      },
+    },
+    {
+      type: "setTransition",
+      from: "music-left",
+      to: "music-right",
+      transition: { duration: 24 },
+    },
+  ];
+  expect(edit(commands).transitions).toContainEqual({
+    kind: "audio",
+    track: 3,
+    start: 0,
+    end: 60,
+    label: "music.wav",
+    transition: { kind: "dissolve", duration: 24, alignment: "center" },
+    linear: false,
+  });
+  const { transitions, notes } = edit([
+    ...commands,
+    {
+      type: "setClip",
+      clipId: "music-left",
+      automation: { volume: [{ frame: 0, gain: 0.5 }] },
+    },
+  ]);
+  expect(
+    transitions.some(({ kind, track }) => kind === "audio" && track === 3),
+  ).toBe(false);
+  expect(notes).toContainEqual(
+    expect.stringContaining("24-frame audio fade at A3 at 00:00:02:00"),
+  );
 });
