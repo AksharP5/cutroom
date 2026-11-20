@@ -1,7 +1,12 @@
 import { expect, test } from "bun:test";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { SourceSchema } from "../src/shared/project";
-import { sourceClipVersions } from "../src/server/projects/changes";
+import {
+  clipVersions,
+  sourceClipVersions,
+} from "../src/server/projects/changes";
+import { parseComposition } from "../src/server/timeline/composition";
+import { emptyTimelineSettings } from "../src/shared/timeline/schema";
 import { projectFixture } from "./project-fixture";
 import { createReviewService } from "../src/server/projects/review";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
@@ -316,6 +321,44 @@ test("every source byte is covered, including anonymous clips, invalid timelines
     expect(sourceClipVersions(changed, "index.html").get(null)).not.toBe(
       before.get(null),
     );
+  }
+});
+
+test("review uses the on-disk bytes and composition scope when given a timeline readback", async () => {
+  const html = `<main data-composition-id="main">${clip("entry")}</main><template><main data-composition-id="scene">${clip("scene")}</main></template>`;
+  const f = await setup(html);
+  try {
+    const readback = parseComposition(html, emptyTimelineSettings());
+    const before = await clipVersions(f.project, "index.html", readback);
+    expect(before).toEqual(sourceClipVersions(html, "index.html"));
+
+    await writeFile(`${f.project.path}/scene.html`, html);
+    const scene = await clipVersions(f.project, "scene.html", readback);
+    expect([...scene.keys()]).toEqual(["scene", null]);
+
+    const outside = html.replace('id="entry"', 'id="outside"');
+    await writeFile(`${f.project.path}/index.html`, outside);
+    const after = await clipVersions(f.project, "index.html", readback);
+    expect(after).toEqual(sourceClipVersions(outside, "index.html"));
+    expect(after.has("entry")).toBe(false);
+  } finally {
+    await f.close();
+  }
+});
+
+test("measured clip timing keeps review on its source-only projection", async () => {
+  const html =
+    '<main data-composition-id="main"><video id="voice" data-start="0" src="voice.mp4"></video></main>';
+  const f = await setup(html);
+  try {
+    const readback = parseComposition(html, emptyTimelineSettings(), {
+      mediaLengths: new Map([["voice.mp4", 5]]),
+    });
+    expect(readback.timeline.clips.map(({ id }) => id)).toEqual(["voice"]);
+    const versions = await clipVersions(f.project, "index.html", readback);
+    expect([...versions.keys()]).toEqual([null]);
+  } finally {
+    await f.close();
   }
 });
 

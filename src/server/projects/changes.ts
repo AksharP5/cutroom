@@ -6,6 +6,10 @@ import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { imageDeclarationUrls } from "../../shared/variables";
 import { compositionScope, parseComposition } from "../timeline/composition";
+import type {
+  CompositionScope,
+  ParsedComposition,
+} from "../timeline/composition";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { imageOverridesAt, sceneImageReferences } from "./mediaReferences";
 import { sceneSources } from "./sceneSources";
@@ -20,6 +24,7 @@ const signature = (content: string) =>
 
 type SourceVersions = {
   source: string;
+  scope: CompositionScope;
   versions: ClipVersions;
   urls: Map<string | null, Set<string>>;
 };
@@ -36,9 +41,15 @@ function references(text: string) {
   ].map((match) => match[1]!);
 }
 
-function sourceVersions(source: string, composition: string, cacheKey: string) {
+function sourceVersions(
+  source: string,
+  composition: string,
+  cacheKey: string,
+  savedSource?: ParsedComposition,
+) {
+  const scope = compositionScope(composition);
   const previous = cache.get(cacheKey);
-  if (previous?.source === source) return previous;
+  if (previous?.source === source && previous.scope === scope) return previous;
   const versions: ClipVersions = new Map();
   const media = new Map<string | null, Set<string>>();
   const add = (id: string | null, value: string) => {
@@ -49,10 +60,17 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
     urls.add(url);
   };
   try {
-    const parsed = parseComposition(source, emptyTimelineSettings(), {
-      scope: compositionScope(composition),
-      sourceAttribution: true,
-    });
+    // Review only uses clip ownership, kinds, links, and source ranges. Settings
+    // and inherited fonts affect presentation but leave these fields intact.
+    const parsed =
+      savedSource?.html === source &&
+      savedSource.scope === scope &&
+      savedSource.sourceAttributionCompatible
+        ? savedSource
+        : parseComposition(source, emptyTimelineSettings(), {
+            scope,
+            sourceAttribution: true,
+          });
     const clips = parsed.timeline.clips
       .filter((clip) => !parsed.anonymous.has(clip.id))
       .map((clip) => ({ ...clip, element: parsed.elements.get(clip.id)! }))
@@ -117,7 +135,7 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
     versions.set(null, signature(source));
     for (const url of references(source)) add(null, url);
   }
-  const result = { source, versions, urls: media };
+  const result = { source, scope, versions, urls: media };
   cache.delete(cacheKey);
   cache.set(cacheKey, result);
   if (cache.size > 8) cache.delete(cache.keys().next().value!);
@@ -137,7 +155,8 @@ export async function compositionVersions(
   project: Pick<Project, "path">,
   composition: string,
   options?: {
-    content: string;
+    content?: string;
+    savedSource?: ParsedComposition;
     mounted?: boolean;
     resolveScene?: ReturnType<typeof sceneSources>;
     readChanged?: (path: string) => Promise<string | null | undefined>;
@@ -149,6 +168,7 @@ export async function compositionVersions(
     content,
     composition,
     `${project.path}/${composition}`,
+    options?.savedSource,
   );
   const canonicalMedia = new Map<string, string>();
   const files = new Map<
@@ -310,6 +330,13 @@ export async function compositionVersions(
 }
 
 /** A null id covers every authored byte outside addressable clip elements. */
-export async function clipVersions(project: Project, composition: string) {
-  return (await compositionVersions(project, composition)).versions;
+export async function clipVersions(
+  project: Project,
+  composition: string,
+  savedSource?: ParsedComposition,
+) {
+  const { versions } = await compositionVersions(project, composition, {
+    savedSource,
+  });
+  return versions;
 }

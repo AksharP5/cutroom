@@ -174,6 +174,8 @@ export interface ParsedComposition {
   timeline: Timeline;
   roots: SourceElement[];
   scope: CompositionScope;
+  /** Review projects the default root with no measured media lengths. */
+  sourceAttributionCompatible: boolean;
   root: SourceElement;
   rootDurationAuthored: boolean;
   elements: Map<string, SourceElement>;
@@ -543,6 +545,7 @@ function projectComposition(
   type Timing = ClipTiming & { begin: number; finish: number | null };
   const timings = new Map<SourceElement, Timing>();
   const resolving = new Set<SourceElement>();
+  let usesMeasuredTiming = false;
   const timing = (element: SourceElement): Timing => {
     const known = timings.get(element);
     if (known) return known;
@@ -563,18 +566,20 @@ function projectComposition(
     resolving.delete(element);
     const begin = read.start ?? 0;
     const kind = clipKind(element);
-    const duration =
-      read.duration ??
-      (kind === "image" ? DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS : null) ??
-      (kind === "video" || isAudioKind(kind)
-        ? resolveMediaDuration({
-            tag: isAudioKind(kind) ? "audio" : "video",
-            authoredDurationSeconds: null,
-            sourceDurationSeconds: lengthOf(element),
-            mediaStartSeconds: readMediaOffsetSeconds(attribute),
-            playbackRate: readPlaybackRate(attribute),
-          }).seconds
-        : null);
+    let duration = read.duration;
+    if (duration === null && kind === "image")
+      duration = DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS;
+    if (duration === null && (kind === "video" || isAudioKind(kind))) {
+      const sourceDurationSeconds = lengthOf(element);
+      usesMeasuredTiming ||= sourceDurationSeconds !== null;
+      duration = resolveMediaDuration({
+        tag: isAudioKind(kind) ? "audio" : "video",
+        authoredDurationSeconds: null,
+        sourceDurationSeconds,
+        mediaStartSeconds: readMediaOffsetSeconds(attribute),
+        playbackRate: readPlaybackRate(attribute),
+      }).seconds;
+    }
     const result = {
       ...read,
       begin,
@@ -641,6 +646,7 @@ function projectComposition(
     clipIds,
     timing,
     lengthOf,
+    usesMeasuredTiming,
   };
 }
 
@@ -885,6 +891,7 @@ export function parseComposition(
     clipIds,
     timing,
     lengthOf,
+    usesMeasuredTiming,
   } = projectComposition(html, { scope, mediaLengths, rootId });
   const rows = projected.map(({ id, element, read, start, end, edges }) => {
     const name = element.attrs.id || element.attrs["data-hf-id"] || "clip";
@@ -1108,6 +1115,7 @@ export function parseComposition(
     timeline,
     roots,
     scope,
+    sourceAttributionCompatible: rootId === undefined && !usesMeasuredTiming,
     root,
     rootDurationAuthored,
     textLayout,

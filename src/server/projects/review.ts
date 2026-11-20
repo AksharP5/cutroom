@@ -37,6 +37,7 @@ import type {
 import { pendingEdit } from "../../shared/timeline/reviewChanges";
 import type { AcceptRowSchema } from "../../shared/timeline/reviewChanges";
 import { HttpError } from "../../shared/errors";
+import type { ParsedComposition } from "../timeline/composition";
 import { ProjectDocumentError, isMissing, projectPath } from "./store";
 import type { ProjectStore } from "./store";
 import { clipVersions, compositionVersions, missingSignature } from "./changes";
@@ -767,6 +768,7 @@ export function createReviewService(store: ProjectStore) {
         create?: boolean;
         label?: string | ((result: T) => string);
         batchLabels?: (result: T) => string[] | undefined;
+        savedSource?: (result: T) => ParsedComposition;
       } = {},
     ) =>
       serialize(project, async () => {
@@ -821,7 +823,11 @@ export function createReviewService(store: ProjectStore) {
             )
           : new Map<string | null, string>();
         const result = await work();
-        const after = await clipVersions(project, composition);
+        const after = await clipVersions(
+          project,
+          composition,
+          options.savedSource?.(result),
+        );
         const changed = new Set(
           [...before.keys(), ...after.keys()].filter(
             (id) => before.get(id) !== after.get(id),

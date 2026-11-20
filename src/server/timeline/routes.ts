@@ -523,6 +523,7 @@ export function createTimelineRoutes(
       label,
       summary,
       encodedSummary,
+      writtenSource,
       batchLabels:
         summaries.length > 1 || summaries.some((item) => item.includes("; "))
           ? summaries
@@ -1032,6 +1033,7 @@ export function createTimelineRoutes(
           const committed = history.list().at(-1)?.id;
           return {
             view: result,
+            savedSource: prepared.writtenSource,
             historyId: committed !== previous ? committed : undefined,
             summary: prepared.summary,
             encodedSummary: prepared.encodedSummary,
@@ -1042,6 +1044,7 @@ export function createTimelineRoutes(
         {
           label: (result) => result.summary,
           batchLabels: (result) => result.batchLabels,
+          savedSource: (result) => result.savedSource,
         },
       );
       const response = {
