@@ -184,7 +184,45 @@ diff --git a/dist/compiler/htmlBundler.js b/dist/compiler/htmlBundler.js
 diff --git a/dist/colorGradingBake.js b/dist/colorGradingBake.js
 --- a/dist/colorGradingBake.js
 +++ b/dist/colorGradingBake.js
-@@ -297,3 +297,24 @@
+@@ -94,11 +94,13 @@
+     const total = Math.max(shadows + midtones + highlights, 0.0001);
+     const c = [...color];
+     for (const [wheel, weight] of [
+-        [wheels.shadows, shadows / total],
+-        [wheels.midtones, midtones / total],
+-        [wheels.highlights, highlights / total],
++        [wheels[0], shadows / total],
++        [wheels[1], midtones / total],
++        [wheels[2], highlights / total],
+     ]) {
+-        const direction = wheelDirection(wheel.hue / 360);
++        if (wheel.amount === 0 && wheel.level === 0)
++            continue;
++        const { direction } = wheel;
+         for (let channel = 0; channel < 3; channel += 1) {
+             c[channel] =
+                 (c[channel] ?? 0) +
+@@ -237,6 +239,10 @@
+     const { curves, hueCurves, secondaries } = grading;
+     return {
+         grading,
++        wheels: [grading.wheels.shadows, grading.wheels.midtones, grading.wheels.highlights].map(wheel => ({
++            ...wheel,
++            direction: wheelDirection(wheel.hue / 360),
++        })),
+         curves: hasHfColorGradingRgbCurveValues(curves)
+             ? {
+                 red: quantisedCurve(compileHfColorCurve(curves.red)),
+@@ -260,7 +266,7 @@
+ }
+ function gradeColor(input, grade) {
+     let c = applyPrimaryGrade(input, grade.grading.adjust);
+-    c = applyTonalWheels(c, grade.grading.wheels);
++    c = applyTonalWheels(c, grade.wheels);
+     if (grade.curves)
+         c = applyRgbCurves(c, grade.curves);
+     if (grade.hueCurves)
+@@ -297,3 +303,24 @@
      }
      return `${lines.join("\n")}\n`;
  }

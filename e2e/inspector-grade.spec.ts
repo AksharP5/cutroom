@@ -319,6 +319,58 @@ test("cancelling a grade restores the paused source colours", async ({
   await expect(holds).toHaveCount(0);
 });
 
+test("an authored grade can return to its previous value after cancelling a draft", async ({
+  page,
+  request,
+}) => {
+  const { project } = await gradeProject(request);
+  const warm = JSON.stringify({ adjust: { temperature: 0.75 } });
+  const cool = JSON.stringify({ adjust: { temperature: -0.75 } });
+  const index = join(project.path, "index.html");
+  await writeFile(
+    index,
+    (await readFile(index, "utf8")).replace(
+      '<video id="a"',
+      `<video id="a" data-color-grading='${warm}'`,
+    ),
+  );
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const source = page.frameLocator("iframe[data-live]").locator("video#a");
+  const exposure = inspector.locator("label", { hasText: /^Exposure$/ });
+  const { x, y, width, height } = (await exposure.boundingBox())!;
+  await expect.poll(() => warmth(page)).toBeGreaterThan(20);
+  const original = await centrePixel(page);
+
+  await page.mouse.move(x + width / 2, y + height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x + width / 2 - 20, y + height / 2, { steps: 4 });
+  await expect
+    .poll(async () => (await centrePixel(page)).green)
+    .toBeLessThan(original.green - 20);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(source).toHaveAttribute("data-color-grading", warm);
+
+  // A composition script changes the grade and then returns it to the saved value.
+  const writeGrade = (value: string) =>
+    source.evaluate(
+      (element, grade) => element.setAttribute("data-color-grading", grade),
+      value,
+    );
+  await writeGrade(cool);
+  await expect.poll(() => warmth(page)).toBeLessThan(-20);
+  await writeGrade(warm);
+  await expect.poll(() => warmth(page)).toBeGreaterThan(20);
+});
+
 test("a video grade and a clip zoom compose while dragging and switching between Aim and Result", async ({
   page,
   request,

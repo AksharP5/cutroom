@@ -1,3 +1,4 @@
+import { trackMix } from "../../shared/timeline/tracks";
 import {
   drawnPoints,
   envelopeAt,
@@ -419,6 +420,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       tracks: shown === timeline ? tracks : clipsByTrack(shown.clips),
       fps: shown.fps,
       imageSources: latest.current.imageSources,
+      mix: trackMix(shown),
     });
   }
 

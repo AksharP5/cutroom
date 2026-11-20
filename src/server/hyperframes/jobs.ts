@@ -465,6 +465,7 @@ export function createRenderWorkers(configuration: {
           useGpu: options.useGpu,
           pageMotionBlur: options.pageMotionBlur,
         };
+        const chromium = browserExecutable();
         const child = Bun.spawn(
           [
             node,
@@ -481,9 +482,7 @@ export function createRenderWorkers(configuration: {
               ...process.env,
               HYPERFRAMES_NO_TELEMETRY: "1",
               DO_NOT_TRACK: "1",
-              ...(browserExecutable()
-                ? { PRODUCER_HEADLESS_SHELL_PATH: browserExecutable() }
-                : {}),
+              ...(chromium ? { PRODUCER_HEADLESS_SHELL_PATH: chromium } : {}),
               TMPDIR: temporary,
               HYPERFRAMES_EXTRACT_CACHE_DIR:
                 configuration.frameCache?.dir ?? join(scratch, "frames"),

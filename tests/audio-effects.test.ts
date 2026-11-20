@@ -234,10 +234,10 @@ test("loudness is gain: a clip measured 4 LU quiet gets +4 dB, held at +12 dB, a
   ]);
   // Measured again at -16.4 through that gain, the next pass adds 0.4 dB to it.
   const { read } = edit(voice(), [{ type: "setMaster", fx: first }]);
-  expect(read.masterFx?.map(compactFxNode)).toEqual([
+  expect(read.main?.fx.map(compactFxNode)).toEqual([
     { id: "loudness", type: "gain", label: "Loudness", params: { gain: 5.3 } },
   ]);
-  expect(mixLoudnessFx(read.masterFx!, -16.4, -16).at(-1)).toMatchObject({
+  expect(mixLoudnessFx(read.main!.fx, -16.4, -16).at(-1)).toMatchObject({
     params: { gain: 5.7 },
   });
 });
@@ -249,8 +249,8 @@ test("the mix's effects ride the composition root, which HyperFrames plays as th
   expect(chainOf(output, "main").nodes).toMatchObject([
     { type: "limiter", params: { limit: -1 } },
   ]);
-  expect(read.masterFx).toHaveLength(1);
+  expect(read.main?.fx).toHaveLength(1);
   const cleared = edit(output, [{ type: "setMaster", fx: [] }]);
   expect(cleared.output).not.toContain("data-fx-chain");
-  expect(cleared.read.masterFx).toBeUndefined();
+  expect(cleared.read.main).toBeUndefined();
 });

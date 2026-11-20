@@ -896,6 +896,11 @@ export function Timeline({
       ? state
       : null,
   );
+  const { tracks: timelineTracks, authoredAudioGroups } = timeline;
+  const mix = useMemo(
+    () => trackMix({ tracks: timelineTracks, authoredAudioGroups }),
+    [timelineTracks, authoredAudioGroups],
+  );
   const imageSources = useMemo(
     () => previewImageSources(variables),
     [variables],
@@ -946,7 +951,13 @@ export function Timeline({
     draw: (next) => {
       const view = viewport.current?.state();
       if (view) bodies.current?.view(view);
-      bodies.current?.scene({ rows: next.rows, tracks, fps, imageSources });
+      bodies.current?.scene({
+        rows: next.rows,
+        tracks,
+        fps,
+        imageSources,
+        mix,
+      });
     },
   });
   const gestures = useLaneGestures({
@@ -992,7 +1003,13 @@ export function Timeline({
     };
   }, [source.projectId, source.composition]);
   useLayoutEffect(() => {
-    bodies.current?.scene({ rows: layout.rows, tracks, fps, imageSources });
+    bodies.current?.scene({
+      rows: layout.rows,
+      tracks,
+      fps,
+      imageSources,
+      mix,
+    });
     // A newly available edge destination needs the held filmstrip redrawn.
     if (trackDrag) refreshDrag.current();
   }, [
@@ -1002,6 +1019,7 @@ export function Timeline({
     tracks,
     fps,
     imageSources,
+    mix,
     trackDrag,
   ]);
 
@@ -1179,17 +1197,13 @@ export function Timeline({
     ghost === undefined
       ? rows
       : rows.filter((row) => row.track.index !== ghost);
-  const suppressed = useMemo(
-    () => trackMix(timeline.tracks).hidden,
-    [timeline.tracks],
-  );
   const clips = mounted
     ? rows.flatMap((row) => {
         const track = tracks.get(row.track.index);
         return track
           ? clipsInRange(track, mounted.frames).map((clip) => ({
               clip:
-                clipVisible(clip, suppressed) === clip.enabled
+                clipVisible(clip, mix) === clip.enabled
                   ? clip
                   : { ...clip, enabled: false },
               row,

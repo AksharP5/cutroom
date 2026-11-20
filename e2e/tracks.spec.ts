@@ -359,7 +359,7 @@ test("build and mix picture, voice and music with track drops, then export exact
   const solo = await exportAudio(
     page,
     info.outputPath("voice-solo.mp4"),
-    "A2 soloed, other audio tracks are silent. A3 muted.",
+    "A2 soloed, other audio is silent. A3 muted.",
   );
   expect(solo.levels[0]).toBeLessThan(0.001);
   expect(solo.levels[1]).toBeCloseTo(all.levels[1], 2);
@@ -498,7 +498,7 @@ test("browser-probed exports honor mute and solo for authored video sound while 
   const solo = await exportAudio(
     page,
     info.outputPath("embedded-solo.mp4"),
-    "A1 soloed, other audio tracks are silent.",
+    "A1 soloed, other audio is silent.",
   );
   expect(solo.levels[0]).toBeLessThan(0.001);
   expect(solo.levels[1]).toBeCloseTo(normal.levels[1], 2);

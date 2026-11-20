@@ -1,4 +1,4 @@
-import type { Clip, Track } from "./schema";
+import type { Clip, Timeline, Track } from "./schema";
 import type { TimelineViewSettings } from "./view";
 
 export const newTrack = (index: number, kind: Track["kind"]): Track => ({
@@ -51,21 +51,57 @@ export function destinationTracks(
   };
 }
 
-/** Sound can be muted independently of picture, including embedded audio in authored video. */
-export function trackMix(tracks: readonly Track[]) {
-  const solo = tracks.some((track) => track.kind === "audio" && track.solo);
+/**
+ * Sound can be muted independently of picture, including embedded audio in authored video. While
+ * anything is soloed, a clip sounds when its track or its bus is soloed; mute wins over solo.
+ */
+export function trackMix(
+  timeline: Pick<Timeline, "tracks" | "authoredAudioGroups">,
+) {
+  const soloGroups = new Set(
+    (timeline.authoredAudioGroups ?? []).flatMap(({ id, solo }) =>
+      solo ? [id] : [],
+    ),
+  );
+  const solo =
+    soloGroups.size > 0 ||
+    timeline.tracks.some((track) => track.kind === "audio" && track.solo);
   const hidden = new Set<number>();
   const muted = new Set<number>();
-  for (const track of tracks) {
-    const silent = !track.enabled || track.muted || (solo && !track.solo);
+  /** Tracks only another solo silences, where a clip in a soloed bus still sounds. */
+  const soloedOut = new Set<number>();
+  for (const track of timeline.tracks) {
+    const off = !track.enabled || track.muted;
+    const silent = off || (solo && !track.solo);
     if (silent) muted.add(track.index);
+    if (!off && silent) soloedOut.add(track.index);
     if (!track.enabled || (track.kind === "audio" && silent))
       hidden.add(track.index);
   }
-  return { hidden, muted };
+  return { hidden, muted, soloedOut, soloGroups };
 }
 
 export type TrackMix = ReturnType<typeof trackMix>;
 
-export const clipVisible = (clip: Clip, suppressed: ReadonlySet<number>) =>
-  clip.enabled && !suppressed.has(clip.track);
+const soloedBus = (
+  mix: TrackMix,
+  clip: Pick<Clip, "track" | "authoredAudioGroupId">,
+) =>
+  clip.authoredAudioGroupId !== undefined &&
+  mix.soloGroups.has(clip.authoredAudioGroupId) &&
+  mix.soloedOut.has(clip.track);
+
+/** Whether the mix hides this clip: a disabled track, or an audio track that is silent for it. */
+export const mixHides = (
+  mix: TrackMix,
+  clip: Pick<Clip, "track" | "authoredAudioGroupId">,
+) => mix.hidden.has(clip.track) && !soloedBus(mix, clip);
+
+/** Whether the mix silences this clip's sound, picture aside. */
+export const mixSilences = (
+  mix: TrackMix,
+  clip: Pick<Clip, "track" | "authoredAudioGroupId">,
+) => mix.muted.has(clip.track) && !soloedBus(mix, clip);
+
+export const clipVisible = (clip: Clip, mix: TrackMix) =>
+  clip.enabled && !mixHides(mix, clip);

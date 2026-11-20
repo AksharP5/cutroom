@@ -37,6 +37,11 @@ export const REGION_NAMES = {
   highlight: "Highlight",
 } as const;
 
+const decibelText = (volume: number) => {
+  const db = audioGainToDb(volume);
+  return volume === 0 ? "-inf dB" : `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
+};
+
 const sourceName = (src: string) =>
   (localMediaPath("index.html", src) ?? src).split("/").at(-1);
 
@@ -548,9 +553,35 @@ export function editLabel(
         return name ? `Route audio to ${name}` : "Return audio to track mixing";
       }
       case "setAudioGroup":
-        return "Set audio group gain";
+      case "removeAudioGroup": {
+        const group = timeline?.authoredAudioGroups?.find(({ id }) =>
+          command.type === "removeAudioGroup" || command.group !== undefined
+            ? id === command.group
+            : id ===
+              timeline.clips.find((clip) => clip.id === command.clipId)
+                ?.authoredAudioGroupId,
+        );
+        const name = group ? (group.label ?? group.id) : "bus";
+        if (command.type === "removeAudioGroup")
+          return `${pending ? "Delete" : "Deleted"} ${name}`;
+        const change =
+          command.label !== undefined
+            ? `${pending ? "Rename" : "Renamed"} ${name} to ${command.label}`
+            : command.volume !== undefined
+              ? `Set ${name} gain to ${decibelText(command.volume)}`
+              : command.muted !== undefined
+                ? `${command.muted ? (pending ? "Mute" : "Muted") : pending ? "Unmute" : "Unmuted"} ${name}`
+                : command.solo !== undefined
+                  ? `${command.solo ? (pending ? "Solo" : "Soloed") : pending ? "Unsolo" : "Unsoloed"} ${name}`
+                  : command.fx !== undefined
+                    ? `${pending ? "Change" : "Changed"} ${name} effects`
+                    : `${pending ? "Clear" : "Cleared"} ${name} automation`;
+        return change;
+      }
       case "setMaster":
-        return "Set mix effects";
+        return command.volume !== undefined && command.fx === undefined
+          ? `Set Main gain to ${decibelText(command.volume)}`
+          : `${pending ? "Change" : "Changed"} Main effects`;
       case "removeTrack":
         return pending
           ? `Remove empty ${trackName(command.index)}`

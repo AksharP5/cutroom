@@ -698,7 +698,7 @@ export async function editTimeline(
         commands.flatMap((command) =>
           "clipIds" in command
             ? (command.clipIds ?? [])
-            : "clipId" in command
+            : "clipId" in command && command.clipId !== undefined
               ? [command.clipId]
               : command.type === "setTransition"
                 ? [command.from, command.to]

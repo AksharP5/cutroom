@@ -14,10 +14,13 @@ import { z } from "zod";
 import {
   clipSeconds,
   desktop4kSourceSeconds,
-  fps,
+  fps as defaultFps,
   mediaStart,
 } from "./bench-vs-studio-project.ts";
-import { formatTimecode } from "../src/shared/timeline/timecode.ts";
+import {
+  formatTimecode,
+  parseTimecode,
+} from "../src/shared/timeline/timecode.ts";
 
 const { values: options } = parseArgs({
   options: {
@@ -25,6 +28,10 @@ const { values: options } = parseArgs({
     host: { type: "string" },
     setting: { type: "string" },
     size: { type: "string", default: "1080p" },
+    fps: { type: "string", default: String(defaultFps) },
+    "editing-proxy": { type: "string" },
+    "warm-media": { type: "boolean" },
+    "expect-pipeline": { type: "string" },
     port: { type: "string", default: "4939" },
     debug: { type: "string", default: "4940" },
     out: { type: "string" },
@@ -44,6 +51,17 @@ const embedded = host === "wayland" || host === "x11";
 const xwayland = host === "x11" || host === "chromium";
 const size = z.enum(["1080p", "4k"]).parse(options.size);
 const setting = z.enum(["on", "off"]).parse(options.setting);
+const fps = Number(z.enum(["30", "60"]).parse(options.fps));
+const editingProxy = options["editing-proxy"];
+const warmMedia = options["warm-media"] === true;
+const expectedPipeline =
+  setting === "on"
+    ? z
+        .enum(["on", "off"])
+        .parse(options["expect-pipeline"] ?? (size === "1080p" ? "on" : "off"))
+    : null;
+if (setting === "off" && options["expect-pipeline"])
+  throw new Error("--expect-pipeline applies when --setting on.");
 const directory = resolve(z.string().min(1).parse(options.dir));
 const work = join(directory, `run-${process.pid}`);
 const executable = resolve(options[embedded ? "electron" : "chromium"]!);
@@ -259,9 +277,9 @@ function record(display: ReturnType<typeof screen>, box: Box) {
 function screenBox(picture: Box, inset: number): Box {
   return {
     x: picture.x,
-    y: picture.y + inset + picture.height / 40,
+    y: picture.y + inset + picture.height / 60,
     width: picture.width,
-    height: 1,
+    height: Math.max(3, Math.floor(picture.height / 60)),
   };
 }
 
@@ -270,6 +288,7 @@ function stats(
   start: number,
   end: number,
   refresh: number,
+  rate = fps,
 ) {
   const window = samples.filter((p) => p.time >= start && p.time < end);
   const shown = window.filter((p) => p.number !== null);
@@ -279,8 +298,8 @@ function stats(
   const gaps = changes.slice(1).map((p, i) => p.time - changes[i].time);
   const captureGaps = window.slice(1).map((p, i) => p.time - window[i].time);
   const tick = 1000 / refresh;
-  const threshold = (Math.ceil(refresh / fps - 0.01) + 0.5) * tick;
-  const shortestPicture = Math.max(1, Math.floor(refresh / fps));
+  const threshold = (Math.ceil(refresh / rate - 0.01) + 0.5) * tick;
+  const shortestPicture = Math.max(1, Math.floor(refresh / rate));
   const picturesAtRisk = captureGaps.reduce((sum, gap) => {
     const missedRefreshes = Math.max(0, Math.round(gap / tick) - 1);
     return sum + Math.floor(missedRefreshes / shortestPicture);
@@ -292,6 +311,7 @@ function stats(
     picturesPerSecond: round(changes.length / duration),
     longHolds: gaps.filter((gap) => gap > threshold).length,
     maxHoldMs: round(Math.max(0, ...gaps)),
+    trailingHoldMs: round(end - (changes.at(-1)?.time ?? start)),
     captureHz: round(window.length / duration),
     captureMaxGapMs: round(Math.max(0, ...captureGaps)),
     capturePicturesAtRisk: picturesAtRisk,
@@ -332,30 +352,36 @@ async function calibration(
   if (inset < 0 || inset > 90)
     throw new Error(`Unexpected window inset: ${inset}.`);
   if (options.validate) {
+    const refresh = display.monitor.refreshRate;
+    // At 60 Hz a 60 fps browser animation can skip a frame even when screencopy saw every
+    // refresh. Use a known 50 fps pattern there to validate capture at the display cadence.
+    const validationRate = fps === 60 && refresh < fps * 1.25 ? 50 : fps;
     const cast: { time: number; data: string; width: number }[] = [];
-    cdp.on("Page.screencastFrame", ({ data, metadata, sessionId }) => {
-      void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
-      if (metadata.timestamp !== undefined)
-        cast.push({
-          time: metadata.timestamp * 1000,
-          width: metadata.deviceWidth,
-          data,
-        });
-    });
+    if (validationRate === 30)
+      cdp.on("Page.screencastFrame", ({ data, metadata, sessionId }) => {
+        void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+        if (metadata.timestamp !== undefined)
+          cast.push({
+            time: metadata.timestamp * 1000,
+            width: metadata.deviceWidth,
+            data,
+          });
+      });
     const capture = record(display, {
       ...calibrationBox,
       y: calibrationBox.y + inset + 6,
       height: 1,
     });
     try {
-      await cdp.send("Page.startScreencast", {
-        format: "jpeg",
-        quality: 80,
-        everyNthFrame: 1,
-        maxWidth: 960,
-        maxHeight: 540,
-      });
-      const start = await page.evaluate(async () => {
+      if (validationRate === 30)
+        await cdp.send("Page.startScreencast", {
+          format: "jpeg",
+          quality: 80,
+          everyNthFrame: 1,
+          maxWidth: 960,
+          maxHeight: 540,
+        });
+      const start = await page.evaluate(async (fps) => {
         const canvas =
           document.querySelector<HTMLCanvasElement>("#bench-frame-strip")!;
         const ctx = canvas.getContext("2d")!;
@@ -367,8 +393,8 @@ async function calibration(
               return;
             }
             if (now >= start) {
-              const frame = Math.floor(((now - start) * 30) / 1000);
-              const slot = frame % 30;
+              const frame = Math.floor(((now - start) * fps) / 1000);
+              const slot = frame % fps;
               const number = frame - (slot >= 11 && slot <= 15 ? slot - 10 : 0);
               for (let bit = 0; bit < 15; bit++) {
                 ctx.fillStyle = number & (1 << bit) ? "white" : "black";
@@ -384,8 +410,8 @@ async function calibration(
           }
           requestAnimationFrame(draw);
         });
-      });
-      await cdp.send("Page.stopScreencast");
+      }, validationRate);
+      if (validationRate === 30) await cdp.send("Page.stopScreencast");
       const pictures = await page.evaluate(
         async ({ cast, box }) => {
           const canvas = new OffscreenCanvas(16, 1);
@@ -419,12 +445,24 @@ async function calibration(
         },
       );
       capture.verify();
-      const refresh = display.monitor.refreshRate;
-      const screenResult = stats(capture.samples, start, start + 6000, refresh);
-      const castResult = stats(pictures, start, start + 6000, refresh);
+      const screenResult = stats(
+        capture.samples,
+        start,
+        start + 6000,
+        refresh,
+        validationRate,
+      );
+      const castResult =
+        validationRate === 30
+          ? stats(pictures, start, start + 6000, refresh, validationRate)
+          : undefined;
+      const expectedPictures = (validationRate - 5) * 6;
       console.log(
         JSON.stringify({
-          expectedPictures: 150,
+          monitor: display.monitor.name,
+          refresh,
+          validationRate,
+          expectedPictures,
           expectedHolds: 6,
           screen: screenResult,
           screencast: castResult,
@@ -432,13 +470,15 @@ async function calibration(
       );
       // A capture may straddle the first or last sample, one display tick either way.
       if (
-        Math.abs(screenResult.pictures - 150) > 1 ||
+        Math.abs(screenResult.pictures - expectedPictures) > 1 ||
         screenResult.longHolds !== 6 ||
-        Math.abs(screenResult.pictures - castResult.pictures) > 1 ||
-        screenResult.longHolds !== castResult.longHolds
+        (fps === 60 && screenResult.capturePicturesAtRisk !== 0) ||
+        (castResult &&
+          (Math.abs(screenResult.pictures - castResult.pictures) > 1 ||
+            screenResult.longHolds !== castResult.longHolds))
       )
         throw new Error(
-          "The compositor capture did not agree with the known playback and Chromium screencast.",
+          "The compositor capture did not match the known pattern or its screencast reference.",
         );
     } finally {
       capture.close();
@@ -508,14 +548,15 @@ async function session() {
     ELECTRON_RUN_AS_NODE: undefined,
     HYPERFRAMES_NO_TELEMETRY: "1",
   };
-  const server = !embedded
-    ? start(bun, ["src/server/index.ts"], env)
-    : undefined;
+  let server =
+    !embedded || ((editingProxy || warmMedia) && !options.validate)
+      ? start(bun, ["src/server/index.ts"], env)
+      : undefined;
   let app: ChildProcess | undefined;
   try {
     const debug = `--remote-debugging-port=${debugPort}`;
     const desktopMain = join(work, "benchmark.cjs");
-    if (!server) {
+    if (embedded) {
       const main = resolve(options["desktop-main"]!);
       await Promise.all([
         cp(main, join(work, "main.cjs")),
@@ -539,6 +580,16 @@ require("./main.cjs");
           ),
         "the server",
       );
+    // Warm the proxy before opening the foreground window, so the timed open starts with it ready.
+    const prepared =
+      (editingProxy || warmMedia) && !options.validate
+        ? await prepareProject(project)
+        : null;
+    if (embedded && server) {
+      await stop(server);
+      server = undefined;
+      await checkPort(port);
+    }
     app = !embedded
       ? start(executable, [
           debug,
@@ -584,6 +635,10 @@ require("./main.cjs");
       await page.waitForLoadState();
       await sleep(500);
       const display = screen(pid);
+      if (display.monitor.refreshRate + 0.5 < fps)
+        throw new Error(
+          "The display refresh rate is lower than the source frame rate.",
+        );
       if (
         display.window.size[0] !== display.monitor.width ||
         display.window.size[1] !== display.monitor.height
@@ -604,7 +659,13 @@ require("./main.cjs");
       const cdp = await page.context().newCDPSession(page);
       const inset = await calibration(page, cdp, display);
       if (options.validate) return;
-      const result = await benchmark(page, display, inset, project, pid);
+      const result = await benchmark(
+        page,
+        display,
+        inset,
+        pid,
+        prepared ?? (await prepareProject(project)),
+      );
       const output = {
         host,
         size,
@@ -635,13 +696,7 @@ require("./main.cjs");
   }
 }
 
-async function benchmark(
-  page: Page,
-  display: ReturnType<typeof screen>,
-  inset: number,
-  project: string,
-  pid: number,
-) {
+async function prepareProject(project: string) {
   const importResult = await fetch(`${origin}/api/cutroom/projects/import`, {
     method: "POST",
     headers: { "content-type": "application/json", origin },
@@ -649,10 +704,63 @@ async function benchmark(
   });
   if (!importResult.ok) throw new Error(await importResult.text());
   const { id } = z.object({ id: z.string() }).parse(await importResult.json());
+  const mediaPath = encodeURIComponent(editingProxy ?? "footage.mp4");
+  const waitForMedia = async (kind: "proxy" | "filmstrip" | "scrub") => {
+    const url = `${origin}/api/cutroom/projects/${id}/media/${kind}?path=${mediaPath}`;
+    await until(
+      async () => {
+        const response = await fetch(url, {
+          headers: { origin, range: "bytes=0-0" },
+        });
+        await response.body?.cancel();
+        if (response.ok && response.status !== 202) return true;
+        if (response.status !== 202)
+          throw new Error(`${kind} returned ${response.status}.`);
+        await sleep(500);
+      },
+      `the finished ${kind}`,
+      120_000,
+    );
+    return url;
+  };
+  const proxyStart = Date.now();
+  const proxy = editingProxy ? await waitForMedia("proxy") : undefined;
+  const proxyWaitMs = proxy ? Date.now() - proxyStart : undefined;
+  const warmStart = Date.now();
+  if (warmMedia) {
+    await waitForMedia("filmstrip");
+    await waitForMedia("scrub");
+  }
+  return {
+    id,
+    proxy,
+    proxyWaitMs,
+    warmMediaMs: warmMedia ? Date.now() - warmStart : undefined,
+  };
+}
+
+async function benchmark(
+  page: Page,
+  display: ReturnType<typeof screen>,
+  inset: number,
+  pid: number,
+  {
+    id,
+    proxy,
+    proxyWaitMs,
+    warmMediaMs,
+  }: Awaited<ReturnType<typeof prepareProject>>,
+) {
   await page.evaluate(
     (on) => localStorage.setItem("cutroom.footagePipeline", String(on)),
     setting === "on",
   );
+  let proxyRequests = 0;
+  if (proxy)
+    page.on("request", (request) => {
+      if (request.url() === proxy && request.frame() === page.mainFrame())
+        proxyRequests++;
+    });
   const stage = page.locator(".edit-stage");
   const picture = page.locator(".edit-picture");
   const open = Date.now();
@@ -664,21 +772,27 @@ async function benchmark(
     const box = await picture.boundingBox({ timeout: 3000 }).catch(() => null);
     return box && box.width > 100 ? box : undefined;
   }, "the viewer's bounds");
-  const capture = record(display, screenBox(firstBox, inset));
+  let area = screenBox(firstBox, inset);
+  let capture = record(display, area);
+  const settleCaptureArea = async () => {
+    const box = await picture.boundingBox();
+    if (!box) throw new Error("The viewer is off-screen.");
+    const next = screenBox(box, inset);
+    if (JSON.stringify(next) === JSON.stringify(area)) return;
+    capture.verify();
+    capture.close();
+    capture = record(display, next);
+    area = next;
+  };
   try {
     const first = await capture.picture((n) => n === 0, open);
-    if (!capture.samples.some((p) => p.time < first.time && p.number === null))
-      throw new Error("Capture started too late to time first picture.");
-    const openMs = Math.round(first.time - open);
+    const sawBlank = capture.samples.some(
+      (p) => p.time < first.time && p.number === null,
+    );
+    const observedOpenMs = Math.round(first.time - open);
     await stage
       .locator(".edit-frame[data-live]")
       .waitFor({ state: "attached" });
-    const expectedPipeline =
-      setting === "on" && size === "1080p"
-        ? "on"
-        : setting === "on"
-          ? "off"
-          : null;
     await until(
       async () =>
         (await stage.getAttribute("data-pipeline")) === expectedPipeline
@@ -686,15 +800,8 @@ async function benchmark(
           : undefined,
       "the expected footage path",
     );
-    const box = await picture.boundingBox();
-    if (
-      !box ||
-      JSON.stringify(screenBox(box, inset)) !==
-        JSON.stringify(screenBox(firstBox, inset))
-    )
-      throw new Error("The viewer changed size after opening.");
+    await settleCaptureArea();
     await page.getByRole("slider", { name: "Zoom", exact: true }).dblclick();
-    await page.getByRole("region", { name: "Viewer", exact: true }).click();
     const ruler = await page.locator(".tl-ruler").boundingBox();
     if (!ruler) throw new Error("No timeline ruler.");
     const y = ruler.y + ruler.height / 2;
@@ -746,25 +853,64 @@ async function benchmark(
         60_000,
       );
     }
-    await seek(size === "4k" ? 1 : 22, 14);
+    if (fps !== 60) await seek(size === "4k" ? 1 : 22, 14);
     await sleep(300);
-    await page.keyboard.press("Space");
+    await settleCaptureArea();
+    await page
+      .getByRole("button", { name: "Play forward", exact: true })
+      .click();
     await sleep(500);
+    const pathObserver = await stage.evaluateHandle((stage) => {
+      const states = new Set([stage.getAttribute("data-pipeline")]);
+      const observer = new MutationObserver((records) => {
+        for (const record of records) states.add(record.oldValue);
+        states.add(stage.getAttribute("data-pipeline"));
+      });
+      observer.observe(stage, {
+        attributeFilter: ["data-pipeline"],
+        attributeOldValue: true,
+      });
+      return { states, observer };
+    });
+    const timecode = page.getByRole("button", { name: /^Current time\./ });
+    const playhead = async () => {
+      const shown = (await timecode.textContent()) ?? "";
+      const frame = parseTimecode(shown.replaceAll(":", ""), {
+        num: fps,
+        den: 1,
+      });
+      if (frame === null)
+        throw new Error(`Cannot read the playhead at ${shown}.`);
+      return frame / fps;
+    };
+    const clockStart = await playhead();
     const playbackLoad = loadavg()[0];
     const playStart = Date.now();
     await capture.wait(size === "4k" ? 30_000 : 10_000);
     const playEnd = Date.now();
-    await page.keyboard.press("Space");
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    const clockSeconds = (await playhead()) - clockStart;
+    const states = await pathObserver.evaluate(({ states, observer }) => {
+      observer.disconnect();
+      return [...states];
+    });
+    await pathObserver.dispose();
+    if (states.length !== 1 || states[0] !== expectedPipeline)
+      throw new Error(
+        `The footage path changed while playing: ${JSON.stringify(states)}.`,
+      );
     const playback = stats(
       capture.samples,
       playStart,
       playEnd,
       display.monitor.refreshRate,
     );
-    if (process.env.CUTROOM_BENCH_DEBUG) console.error({ openMs, playback });
+    if (process.env.CUTROOM_BENCH_DEBUG)
+      console.error({ observedOpenMs, sawBlank, playback });
+    const captureRiskBudget = size === "4k" ? Math.floor(fps * 30 * 0.005) : 1;
     if (
       playback.captureHz < display.monitor.refreshRate * 0.9 ||
-      playback.capturePicturesAtRisk > (size === "4k" ? 4 : 1) ||
+      playback.capturePicturesAtRisk > captureRiskBudget ||
       playback.unreadable / playback.captureHz > (size === "4k" ? 2 : 1)
     )
       throw new Error(
@@ -821,6 +967,10 @@ async function benchmark(
     }
     if ((await stage.getAttribute("data-pipeline")) !== expectedPipeline)
       throw new Error("The footage path changed during measurement.");
+    if (editingProxy && expectedPipeline === "on" && !proxyRequests)
+      throw new Error(
+        "The GPU path did not request the finished editing proxy.",
+      );
     capture.verify();
     capture.close();
     const backend = !embedded
@@ -835,7 +985,13 @@ async function benchmark(
             .split(/\s+/)[0],
         );
     return {
-      openMs,
+      openMs: sawBlank ? observedOpenMs : null,
+      ...(sawBlank ? {} : { openUpperBoundMs: observedOpenMs }),
+      fps,
+      path: expectedPipeline === "on" ? "gpu" : "native",
+      clockSeconds,
+      ...(editingProxy ? { proxyWaitMs, proxyRequests } : {}),
+      warmMediaMs,
       playback,
       playbackLoad,
       scrub,

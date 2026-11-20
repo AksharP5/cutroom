@@ -75,7 +75,7 @@ test("Inspector changes an authored group's live and exported gain, and Undo res
     );
   await expect
     .poll(async () => (await read()).timeline.authoredAudioGroups)
-    .toEqual([{ id: "dialogue", volume }]);
+    .toMatchObject([{ id: "dialogue", volume }]);
   expect(await readFile(path, "utf8")).toBe(
     source.replace('data-volume="0.8"', `data-volume="${volume}"`),
   );

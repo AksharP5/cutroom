@@ -72,7 +72,7 @@ export function MixLoudness({
                   {
                     type: "setMaster",
                     fx: mixLoudnessFx(
-                      timeline.masterFx ?? [],
+                      timeline.main?.fx ?? [],
                       lufs,
                       TARGET_LUFS,
                     ),
