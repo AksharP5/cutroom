@@ -196,12 +196,12 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   const gradeUnit = gl.TEXTURE0 + textures.length;
   gl.uniform1i(uniform("grade"), textures.length);
   const gradeGrid = uniform("gradeGrid");
-  const grades = new Map<string, WebGLTexture>();
+  const grades = new Map<number, WebGLTexture>();
   const ungraded = gl.createTexture();
   gl.activeTexture(gradeUnit);
   gl.bindTexture(gl.TEXTURE_3D, ungraded);
   gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA8, 1, 1, 1);
-  let boundGrade: string | null = null;
+  let boundGrade: number | null = null;
   const bindGrade = (lut: GradeTexture | null) => {
     const key = lut?.key ?? null;
     if (key === boundGrade) return;

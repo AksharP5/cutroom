@@ -160,6 +160,26 @@ captured 360 samples and read 150 pictures. Both found the six programmed holds.
 was 202 ms from the compositor and 201 ms from the screencast. The largest compositor sampling
 gap was 10.56 ms, below the 33.33 ms period of a source frame.
 
+**Source alignment at 1x.** A separate 30 fps test put two numbered synthetic shots on the
+same scanline. It played a 24-frame dissolve, then a two-track overlap with no transition.
+The Wayland reader decoded both numbers from each compositor sample. Five runs per setting
+and grade used Chromium XWayland on main `64574f62`. The incoming shot and the upper track
+were tested with and without a −0.5-stop grade.
+
+With GPU footage playback on, all 1,225 readable pairs at 60 Hz showed the same timeline
+frame on both shots. Playback covered all 25 positions from the start through the end of the
+dissolve. Both white reference levels matched paused playback at each position. The rendered
+MP4 showed the same source frames and its decoded white levels were within 7 out of 255
+of the viewer's.
+
+With GPU footage playback off, HyperFrames shows each video on its own browser surface.
+The compositor can advance one surface before the other. On the 143.981 Hz display, the
+graded dissolve showed different source numbers in 103 of 286 readable samples. In one
+two-track overlap with no dissolve, the lag stayed at one or two frames for 1.8 seconds.
+The ungraded dissolve also showed mismatches at 60 Hz. In one sample the outgoing shot
+showed frame 73 while the incoming shot showed 72, although their source clocks differed
+by only 0.18 ms. The exact paused frames and export agreed.
+
 The exact-frame check also caught a ripple delete that showed the right footage and then
 showed the deleted shot again. On main `3fbbcb36`, Electron Wayland, Electron XWayland and
 Chromium XWayland all showed source frame 1005 after deleting shot 22, then returned to 3405

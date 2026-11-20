@@ -7,6 +7,7 @@ import { z } from "zod";
 import { ProjectSchema } from "../src/shared/project";
 import { GradeSchema } from "../src/shared/timeline/grade";
 import type { GradeEdit } from "../src/shared/timeline/grade";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
 import { seekFrame } from "./position-helpers";
 import { waitForPreview } from "./preview-ready";
@@ -122,6 +123,125 @@ async function centrePixel(page: Page) {
 async function warmth(page: Page) {
   return (await centrePixel(page)).warmth;
 }
+
+test("the timeline filmstrip holds a grade through edits, undo and redo", async ({
+  page,
+  request,
+}, info) => {
+  const { project } = await gradeProject(
+    request,
+    ["0x786896", "0xa85b4f", "0x48a07e"].map(
+      (colour, i) =>
+        `drawbox=x=${i * 213}:y=0:w=214:h=ih:color=${colour}:t=fill`,
+    ),
+    true,
+  );
+  const cube = [0, 1].flatMap((blue) =>
+    [0, 1].flatMap((green) =>
+      [0, 1].map((red) => `${red * 0.98} ${green} ${blue * 0.94}`),
+    ),
+  );
+  await writeFile(
+    join(project.path, "film.cube"),
+    `LUT_3D_SIZE 2\n${cube.join("\n")}\n`,
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  const shot = page.locator('.tl-lanes [data-clip="a"]');
+  const sample = () =>
+    shot.evaluate((element) => {
+      const clip = element.getBoundingClientRect();
+      const canvas = document.querySelector<HTMLCanvasElement>(".tl-bodies")!;
+      const body = canvas.getBoundingClientRect();
+      const x = Math.floor((clip.left - body.left + 15) * devicePixelRatio);
+      const y = Math.floor((clip.bottom - body.top - 9) * devicePixelRatio);
+      return [...canvas.getContext("2d")!.getImageData(x, y, 1, 1).data];
+    });
+  const distance = (a: number[], b: number[]) =>
+    Math.max(...a.slice(0, 3).map((value, i) => Math.abs(value - b[i]!)));
+  const setGrade = async (grade: GradeEdit) => {
+    const { revision } = TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+    const response = await request.post(`${api}/commands`, {
+      data: {
+        expectedRevision: revision,
+        commands: [{ type: "setClip", clipId: "a", grade }],
+      },
+    });
+    expect(response.ok()).toBe(true);
+  };
+
+  await expect.poll(async () => (await sample())[3]).toBe(255);
+  const raw = await sample();
+  expect(raw[2]!).toBeGreaterThan(raw[1]! + 20);
+
+  await setGrade({
+    adjust: { exposure: -1, temperature: 0.6 },
+    lut: { src: "film.cube" },
+  });
+  await expect
+    .poll(async () => (await sample())[1]!)
+    .toBeLessThan(raw[1]! - 20);
+  const warm = await sample();
+  const channelErrors = async () => {
+    const { red, green, blue } = (await picturePixels(page, [0.21]))[0]!;
+    return [red, green, blue].map((value, i) => Math.abs(value - warm[i]!));
+  };
+  await expect
+    .poll(async () => Math.max(...(await channelErrors())))
+    .toBeLessThanOrEqual(2);
+  await info.attach("filmstrip colours", {
+    body: JSON.stringify({
+      raw,
+      warm,
+      viewerChannelErrors: await channelErrors(),
+    }),
+    contentType: "application/json",
+  });
+
+  // Sample every painted display frame between two grades. A screenshot after the second
+  // grade settles would miss a flash of source colour during the replacement.
+  const watcher = await shot.evaluateHandle((element) => {
+    const samples: number[][] = [];
+    const canvas = document.querySelector<HTMLCanvasElement>(".tl-bodies")!;
+    const clip = element.getBoundingClientRect();
+    const body = canvas.getBoundingClientRect();
+    const x = Math.floor((clip.left - body.left + 15) * devicePixelRatio);
+    const y = Math.floor((clip.bottom - body.top - 9) * devicePixelRatio);
+    const ctx = canvas.getContext("2d")!;
+    let raf = requestAnimationFrame(function sample() {
+      samples.push([...ctx.getImageData(x, y, 1, 1).data]);
+      raf = requestAnimationFrame(sample);
+    });
+    return { samples, stop: () => cancelAnimationFrame(raf) };
+  });
+  const aroundEdit = [];
+  try {
+    await setGrade({ adjust: { exposure: -0.45, temperature: -0.55 } });
+    await expect
+      .poll(async () => (await sample())[1]!)
+      .toBeGreaterThan(warm[1]! + 15);
+    aroundEdit.push(...(await watcher.evaluate(({ samples }) => samples)));
+  } finally {
+    await watcher.evaluate(({ stop }) => stop());
+    await watcher.dispose();
+  }
+  const cool = await sample();
+  expect(aroundEdit.length).toBeGreaterThan(0);
+  expect(aroundEdit.every((value) => distance(value, raw) > 8)).toBe(true);
+
+  await shot.click();
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(async () => distance(await sample(), warm))
+    .toBeLessThanOrEqual(2);
+  await page.keyboard.press("Control+Shift+z");
+  await expect
+    .poll(async () => distance(await sample(), cool))
+    .toBeLessThanOrEqual(2);
+});
 
 test("cancelling a HyperFrames grade restores the paused source colours", async ({
   page,
