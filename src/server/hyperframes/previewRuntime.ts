@@ -53,9 +53,42 @@ export function previewRuntimeScript() {
       "function Bp(e){return cH(e)||GH(e)}",
       "function Bp(e){return !window.__cutroomParkedMedia?.has(e)&&(cH(e)||GH(e))}",
     ],
+    // Draft messages change one clip. Leave the other clips' parsed grades and pending
+    // sources intact. Runtime changes and pipeline ownership still refresh the whole set.
     [
-      "if(!br(L))return;F.add(L);let V=Ka(L)",
-      "if(!br(L)||window.__cutroomParkedMedia?.has(L))return;F.add(L);let V=Ka(L)",
+      'S=()=>{if(s)return 0;let F=new Set;r.clear(),document.querySelectorAll(Yw).forEach(L=>{if(!br(L))return;F.add(L);let V=Ka(L);Qo(L,V)?Bp(L)?E(L,V,"attribute"):(w(L),r.add(L)):w(L)});',
+      `cutroomGradeAttributes=null,S=target=>{
+        if(s)return 0;
+        let F=new Set;
+        const syncGrade=element=>{
+          if(!br(element)||window.__cutroomParkedMedia?.has(element))return;
+          F.add(element);
+          const grade=Ka(element);
+          if(!Qo(element,grade)){w(element);return;}
+          if(Bp(element)){E(element,grade,"attribute");return;}
+          w(element);
+          r.add(element);
+        };
+        if(target){
+          (cutroomGradeAttributes??=new WeakMap).set(target,target.getAttribute(No));
+          syncGrade(target);
+          return n.size;
+        }
+        r.clear();
+        document.querySelectorAll(Yw).forEach(syncGrade);`,
+    ],
+    // Skip the draft changes the bridge already drew in this observer delivery. A later
+    // authored change can restore the same value and must still redraw the clip.
+    [
+      "i=new MutationObserver(N=>{F(N)&&S()})",
+      `i=new MutationObserver(changes=>{
+        const drawn=cutroomGradeAttributes;
+        cutroomGradeAttributes=null;
+        const remaining=drawn?changes.filter(change=>
+          change.type!=="attributes"||change.attributeName!==No||
+          drawn.get(change.target)!==change.target.getAttribute(No)):changes;
+        if(F(remaining))S();
+      })`,
     ],
     [
       "E=(F,N,L)=>{r.delete(F);let V=t.get(F);",

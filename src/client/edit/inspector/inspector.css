@@ -1009,7 +1009,13 @@
   width: var(--space-1);
   background: var(--glyph-faint);
 }
+.inspector-wheel-travel {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
 .inspector-wheel-marker {
+  inset: 50% auto auto 50%;
   border: var(--stroke-hair) solid var(--text-primary);
   box-shadow: 0 0 0 var(--stroke-hair) var(--surface-panel);
 }
