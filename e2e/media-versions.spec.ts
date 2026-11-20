@@ -21,6 +21,11 @@ const takes = [
 ];
 
 const comparison = process.env.CUTROOM_VERSION_EVIDENCE;
+const DecoderCountsSchema = z.object({
+  opened: z.number(),
+  closed: z.number(),
+  live: z.number(),
+});
 
 async function stageColour(page: Page, stage: Locator) {
   const png = await stage.screenshot({ animations: "disabled" });
@@ -124,25 +129,31 @@ async function timePicture(
   row: string,
   color: "red" | "lime" | "blue",
   action: "hover" | "switch" = "hover",
+  open?: () => Promise<void>,
 ) {
   const stage = (await page.locator(".edit-stage").boundingBox())!;
   const viewport = page.viewportSize()!;
   const target = page.getByRole("menuitemradio", { name: new RegExp(row) });
   await page.evaluate(
-    (eventName) => {
+    ({ eventName, row }) => {
       document.documentElement.removeAttribute("data-measure-pointer");
-      document.addEventListener(
-        eventName,
-        (event) => {
-          document.documentElement.setAttribute(
-            "data-measure-pointer",
-            String(performance.timeOrigin + event.timeStamp),
-          );
-        },
-        { capture: true, once: true },
-      );
+      const mark = (event: Event) => {
+        if (
+          !(event.target instanceof Element) ||
+          !new RegExp(row).test(
+            event.target.closest("[data-version]")?.textContent ?? "",
+          )
+        )
+          return;
+        document.removeEventListener(eventName, mark, true);
+        document.documentElement.setAttribute(
+          "data-measure-pointer",
+          String(performance.timeOrigin + event.timeStamp),
+        );
+      };
+      document.addEventListener(eventName, mark, true);
     },
-    action === "hover" ? "pointerover" : "click",
+    { eventName: action === "hover" ? "pointerover" : "click", row },
   );
   const cdp = await page.context().newCDPSession(page);
   const samples: { time: number; data: string }[] = [];
@@ -157,9 +168,10 @@ async function timePicture(
       maxWidth: 640,
       quality: 75,
     });
-    if (action === "hover") await target.hover();
+    await open?.();
+    if (action === "hover") await target.hover({ force: Boolean(open) });
     else await target.dispatchEvent("click");
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(800);
     await cdp.send("Page.stopScreencast");
   } finally {
     await cdp.detach();
@@ -170,11 +182,15 @@ async function timePicture(
       const start = Number(
         document.documentElement.getAttribute("data-measure-pointer"),
       );
+      const menuOpen = Number(document.documentElement.dataset.measureMenuOpen);
+      if (!start || !menuOpen)
+        throw new Error("The gesture or menu opening was not recorded.");
+      const menuAgeMs = Math.round((start - menuOpen) * 10) / 10;
       const canvas = new OffscreenCanvas(1, 1);
       const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
       const index = { red: 0, lime: 1, blue: 2 }[color];
       for (const { data, time } of samples) {
-        if (!start || time < start) continue;
+        if (time < start) continue;
         const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
         const image = await createImageBitmap(
           new Blob([bytes], { type: "image/jpeg" }),
@@ -198,9 +214,12 @@ async function timePicture(
             (value, channel) => channel === index || value < 80,
           )
         )
-          return time - start;
+          return {
+            pictureMs: Math.round((time - start) * 10) / 10,
+            menuAgeMs,
+          };
       }
-      return null;
+      return { pictureMs: null, menuAgeMs };
     },
     {
       samples,
@@ -209,11 +228,12 @@ async function timePicture(
       color,
     },
   );
-  if (latency === null)
-    throw new Error(
-      `The captured screen never showed ${color} after ${action}`,
-    );
-  return Math.round(latency * 10) / 10;
+  // Preserve a missed capture as a timing result, but still verify that the editor switched.
+  if (latency.pictureMs === null)
+    await expect
+      .poll(() => stageColour(page, page.locator(".edit-stage")))
+      .toBe(color);
+  return latency;
 }
 
 const longProject = process.env.CUTROOM_VERSION_SCALE === "100";
@@ -352,10 +372,53 @@ for (const mode of playbackModes)
       const evidence = mode === "record" ? comparison : undefined;
       const gpu = mode === "gpu" || process.env.CUTROOM_VERSION_GPU === "1";
       await page.addInitScript(
-        (gpu) =>
-          window === window.top &&
-          localStorage.setItem("cutroom.footagePipeline", String(gpu)),
-        gpu,
+        ({ gpu, measure }) => {
+          if (window !== window.top) return;
+          localStorage.setItem("cutroom.footagePipeline", String(gpu));
+          if (!measure) return;
+          document.addEventListener(
+            "beforetoggle",
+            (event) => {
+              if (
+                event instanceof ToggleEvent &&
+                event.newState === "open" &&
+                event.target instanceof Element &&
+                event.target.matches(".versions-menu")
+              )
+                document.documentElement.dataset.measureMenuOpen = String(
+                  performance.timeOrigin + event.timeStamp,
+                );
+            },
+            true,
+          );
+          if (!gpu) return;
+          const configured = new WeakSet<VideoDecoder>();
+          let opened = 0;
+          let closed = 0;
+          const publish = () => {
+            document.documentElement.dataset.measureDecoders = JSON.stringify({
+              opened,
+              closed,
+              live: opened - closed,
+            });
+          };
+          const configure = VideoDecoder.prototype.configure;
+          VideoDecoder.prototype.configure = function (config) {
+            configure.call(this, config);
+            if (configured.has(this)) return;
+            configured.add(this);
+            opened++;
+            publish();
+          };
+          const close = VideoDecoder.prototype.close;
+          VideoDecoder.prototype.close = function () {
+            close.call(this);
+            if (!configured.delete(this)) return;
+            closed++;
+            publish();
+          };
+        },
+        { gpu, measure },
       );
       await page.goto(`/#project/${projectId}`);
       const stage = page.locator(".edit-stage");
@@ -407,7 +470,19 @@ for (const mode of playbackModes)
       }
       await expect(badge).toHaveText(count);
       const baseline = measure ? await browserMemory(browser) : 0;
-      await badge.click();
+      const decoderCounts = async () => {
+        const counts = await page
+          .locator("html")
+          .getAttribute("data-measure-decoders");
+        return counts === null
+          ? null
+          : DecoderCountsSchema.parse(JSON.parse(counts));
+      };
+      const decodersBefore = measure && gpu ? await decoderCounts() : null;
+      const cold = measure
+        ? await timePicture(page, "Wide", "blue", "hover", () => badge.click())
+        : null;
+      if (!measure) await badge.click();
       const menu = page.getByRole("menu", {
         name: "Versions of interview.mp4",
       });
@@ -435,6 +510,8 @@ for (const mode of playbackModes)
         .getAttribute("src");
       if (measure) {
         if (gpu) await expect(stage).toHaveAttribute("data-pipeline", "on");
+        await page.mouse.move(4, 1045);
+        await expect.poll(picture).toBe("red");
         await page.waitForTimeout(300);
         const samples = [];
         for (let i = 0; i < 3; i++) {
@@ -442,9 +519,16 @@ for (const mode of playbackModes)
           samples.push(await timePicture(page, "Wide", "blue"));
           samples.push(await timePicture(page, "Take 1", "red"));
         }
+        const nonAdjacent = [];
+        for (let i = 0; i < 3; i++) {
+          nonAdjacent.push(await timePicture(page, "Wide", "blue"));
+          nonAdjacent.push(await timePicture(page, "Take 2", "lime"));
+          nonAdjacent.push(await timePicture(page, "Take 1", "red"));
+        }
         await timePicture(page, "Take 2", "lime");
         await page.waitForTimeout(300);
         const open = await browserMemory(browser);
+        const decodersOpen = gpu ? await decoderCounts() : null;
         await page.mouse.move(4, 1045);
         // Time the saved switch only after the preview has returned to the shown take.
         await expect.poll(picture).toBe("red");
@@ -474,12 +558,45 @@ for (const mode of playbackModes)
         await page.keyboard.press("Escape");
         await expect(menu).toBeHidden();
         await expect(preview.locator("[data-cutroom-version]")).toHaveCount(0);
+        await expect(stage).toHaveAttribute("data-handoff", "showing");
+        await expect.poll(picture).toBe("red");
         await page.waitForTimeout(300);
+        const decodersClosed = gpu ? await decoderCounts() : null;
+        const reopenedDecoders = [];
+        if (gpu) {
+          for (let i = 0; i < 3; i++) {
+            await badge.click();
+            await expect(
+              preview.locator("video[data-cutroom-version]"),
+            ).toHaveCount(4);
+            await expect(stage).toHaveAttribute("data-handoff", "showing");
+            await wide.hover();
+            await expect(wide).toHaveAttribute("data-hovered", "true");
+            await expect.poll(picture).toBe("blue");
+            const open = await decoderCounts();
+            await page.keyboard.press("Escape");
+            await expect(menu).toBeHidden();
+            await expect(preview.locator("[data-cutroom-version]")).toHaveCount(
+              0,
+            );
+            await expect(stage).toHaveAttribute("data-handoff", "showing");
+            await expect.poll(picture).toBe("red");
+            reopenedDecoders.push({ open, closed: await decoderCounts() });
+          }
+        }
         const stats = {
-          mode,
+          mode: gpu ? "gpu" : "native",
           cuts: longProject ? 100 : 1,
+          cold,
           samples,
+          nonAdjacent,
           switches,
+          decoders: {
+            before: decodersBefore,
+            open: decodersOpen,
+            closed: decodersClosed,
+            reopened: reopenedDecoders,
+          },
           baselineMiB: baseline,
           openMiB: open,
           closedMiB: await browserMemory(browser),
