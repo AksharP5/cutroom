@@ -332,12 +332,14 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       from: SourceDecoder[],
       standIn: boolean,
     ) => {
-      // A page that paints nothing shows the browser's white canvas, as frame capture does.
-      if (plan !== drawingPlan || closing.signal.aborted || compositor.lost())
-        return;
+      const target = compositor;
+      const canPaint = () =>
+        plan === drawingPlan && !closing.signal.aborted && target.isAvailable();
+      if (!canPaint()) return;
       const baked = await textures;
+      if (!canPaint()) return;
       if ("error" in baked) throw baked.error;
-      await compositor.draw(
+      await target.draw(
         pictures.map(({ layer, found }, at) =>
           // The proxy is stored upright; a phone's file may be stored turned.
           placed(
@@ -352,8 +354,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         drawingPlan.width,
         drawingPlan.height,
       );
-      // A refusal or detachment during GPU upload must not make this canvas visible again.
-      if (plan !== drawingPlan || closing.signal.aborted) return;
+      // HyperFrames keeps the picture if this upload lost its drawing context.
+      if (!canPaint()) return;
       canvas.dataset.standin = String(standIn);
       canvas.dataset.frame = String(frame);
       stopped = null;

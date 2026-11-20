@@ -252,6 +252,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   /** Each layer's plane bytes, reused from draw to draw. */
   const buffers: Uint8Array[] = [];
   let disposed = false;
+  const isAvailable = () => !disposed && !gl.isContextLost();
   // The canvas is hidden before its first draw. Track its parent so playback can size the
   // backing store without forcing layout on every frame.
   const picture = canvas.parentElement ?? canvas;
@@ -347,7 +348,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       const copies = await Promise.all(
         layers.map((layer, slot) => copy(layer.frame, slot)),
       );
-      if (disposed || gl.isContextLost()) return;
+      if (!isAvailable()) return;
       // Sized after the copies, since resizing clears the picture still on screen.
       const backing = [size.width, size.height].map((side) =>
         Math.max(1, Math.round(side * devicePixelRatio)),
@@ -424,7 +425,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
     },
-    lost: () => gl.isContextLost(),
+    isAvailable,
     dispose() {
       if (disposed) return;
       disposed = true;
