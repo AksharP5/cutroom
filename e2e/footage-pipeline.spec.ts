@@ -377,7 +377,9 @@ test("a click on GPU footage selects the clip the viewer draws", async ({
         .evaluate((video: HTMLVideoElement) => video.preload),
     )
     .toBe("none");
-  await page.locator(".edit-picture").click({ position: { x: 60, y: 60 } });
+  await page
+    .getByRole("application", { name: "Picture", exact: true })
+    .click({ position: { x: 60, y: 60 } });
   await expect(page.locator(".edit-select-outline")).toHaveAttribute(
     "data-outlined",
     "picture",

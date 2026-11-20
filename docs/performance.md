@@ -217,6 +217,13 @@ default. The Chromium Wayland reference also showed more 1080p holds than the XW
 reference with either setting. Cadence varied with display path and background load. The
 stale preview was the reproducible fault.
 
+The default-on tests also caught picture selection missing GPU-drawn clips and trim,
+slip and slide missing the source-edge pictures. The preview now preserves authored
+opacity for picking and restores the native decoder only for the edges it needs.
+In CI's 500-clip playback test, observing viewer resizes instead of reading the layout
+each draw reduced forced style and layout events in the editor from 252 to 12 over
+roughly 150 display frames. Both runs used GPU playback.
+
 To run locally on Hyprland, use an unrotated display at scale 1 and leave the benchmark window
 in front. The tool uses Node with TypeScript stripping, Bun, FFmpeg, a C compiler, the Wayland
 client headers and `wayland-scanner`. It launches a full-screen window at the display resolution

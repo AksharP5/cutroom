@@ -123,7 +123,7 @@ async function warmth(page: Page) {
   return (await centrePixel(page)).warmth;
 }
 
-test("cancelling a grade restores the paused source colours", async ({
+test("cancelling a HyperFrames grade restores the paused source colours", async ({
   page,
   request,
 }, info) => {
@@ -133,6 +133,10 @@ test("cancelling a grade restores the paused source colours", async ({
     "drawbox=x=0:y=0:w=iw/2:h=ih:color=blue:t=fill:enable='gte(t,2)'",
     "drawbox=x=iw/2:y=0:w=iw/2:h=ih:color=lime:t=fill:enable='gte(t,2)'",
   ]);
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
   await page.goto(`/#project/${project.id}`);
   await waitForPreview(page, { timing: true });
   await seekFrame(page, 29);
