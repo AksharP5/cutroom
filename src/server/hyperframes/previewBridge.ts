@@ -459,14 +459,31 @@ function installPreviewBridge(
   const win = window as PreviewWindow;
   // Finished entrance effects disappear from getAnimations(), but the pinned runtime
   // can still retain their handles. Collect them before the parent's first seek.
-  const rememberTitleAnimations = () => {
+  const rememberTitleAnimations = (pageAnimations?: Animation[]) => {
     if (!initialTiming || !win.__player) return;
+    const byTarget = new Map<Element, Animation[]>();
+    for (const animation of pageAnimations ?? []) {
+      const effect = animation.effect;
+      // Match Element.getAnimations() without its per-element style flush.
+      if (
+        !(effect instanceof KeyframeEffect) ||
+        !effect.target ||
+        effect.pseudoElement
+      )
+        continue;
+      const animations = byTarget.get(effect.target);
+      if (animations) animations.push(animation);
+      else byTarget.set(effect.target, [animation]);
+    }
     for (const clip of liveClips) {
       if (!clip.titleAttributes) continue;
       const element = clipElement(clip.id);
       if (!element) continue;
       const handles = titleAnimations.get(clip.id) ?? new Set<Animation>();
-      for (const animation of element.getAnimations()) handles.add(animation);
+      const animations = pageAnimations
+        ? (byTarget.get(element) ?? [])
+        : element.getAnimations();
+      for (const animation of animations) handles.add(animation);
       titleAnimations.set(clip.id, handles);
     }
   };
@@ -3655,7 +3672,8 @@ function installPreviewBridge(
           try {
             stopRecording();
             seekAttributes.clear();
-            rememberTitleAnimations();
+            const beforeAnimations = document.getAnimations();
+            rememberTitleAnimations(beforeAnimations);
             // Each write records its inverse, so a refused result leaves the page as it was
             // before anything paints. Reading animations here also settles the old styles.
             const undo: (() => void)[] = [];
@@ -3675,7 +3693,7 @@ function installPreviewBridge(
               else element.setAttribute(name, value);
               return true;
             };
-            const running = new Set(document.getAnimations());
+            const running = new Set(beforeAnimations);
             // Synchronous writes are one MutationObserver batch to the runtime.
             for (const { id, element, space } of removals) {
               const parent = element.parentNode!;
@@ -3847,7 +3865,8 @@ function installPreviewBridge(
             // Resolve new font metrics before recreating animation effects.
             for (const element of changedTitles)
               element.getBoundingClientRect();
-            rememberTitleAnimations();
+            if (liveClips.some((clip) => clip.titleAttributes))
+              rememberTitleAnimations(document.getAnimations());
             if (changedTitles.size) await document.fonts.ready;
             // Recreate the changed title's CSS animations before seeking. The pinned
             // adapter retains handles across name/rule changes and can revive canceled
