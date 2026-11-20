@@ -454,6 +454,8 @@ for (const mode of playbackModes)
         await page.waitForTimeout(300);
         const open = await browserMemory(browser);
         await page.mouse.move(4, 1045);
+        // Time the saved switch only after the preview has returned to the shown take.
+        await expect.poll(picture).toBe("red");
         const switches = [
           await timePicture(page, "Take 2", "lime", "switch"),
           await timePicture(page, "Wide", "blue", "switch"),

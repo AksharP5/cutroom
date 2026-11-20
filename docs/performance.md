@@ -1018,3 +1018,12 @@ The headed retest after limiting residency used the same single-slot fixture at 
 The headed results exceed the 15–20 ms hover target. Jumping past the next playable row can require opening and seeking a new decoder. A click at a paused position outside the warmed frames can require decoding from a keyframe. A stand-in depends on the scrub proxy already being available, and the measurement includes Chromium compositing the resulting picture.
 
 Set `CUTROOM_VERSION_EVIDENCE` to a scratch directory to record timings from `e2e/media-versions.spec.ts`. With `CUTROOM_VERSION_SCALE=100`, the fixture has 100 cuts, ten with four 1080p versions each. The test explicitly exercises native and GPU footage playback and records the first displayed frame of each alternate.
+
+The 100-cut headed comparison used `e95f5eba` as the baseline. The menu was open on the first clip while playing an alternate. PSS is in MiB. The closed figure was sampled 300 ms after the audition preview was replaced.
+
+| Playback | PSS before / open / closed, baseline | PSS before / open / closed, bounded | List overhead, baseline → bounded | Hover median, baseline → bounded |
+| -------- | -----------------------------------: | ----------------------------------: | --------------------------------: | -------------------------------: |
+| Native   |                    834 / 1,012 / 895 |                     796 / 888 / 852 |                      178 → 92 MiB |                   35.7 → 43.9 ms |
+| GPU      |                1,070 / 1,431 / 1,302 |               1,018 / 1,272 / 1,277 |                     361 → 254 MiB |                   29.7 → 39.8 ms |
+
+Browser PSS includes Chromium's playback and compositor allocations. The GPU run still held 1,277 MiB at the closed sample. The bounded build releases its audition decoders on close, and this measurement does not establish when Chromium returns the remaining memory to the OS.
