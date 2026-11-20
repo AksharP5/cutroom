@@ -8,6 +8,8 @@
  *   node scripts/bench-vs-studio.ts --editor studio  --throttle 4 --runs 3 --out studio-4x.json
  *   node scripts/bench-vs-studio.ts --summary cutroom-1x.json studio-1x.json ...
  *
+ * --scale 100 or --scale 1000 runs the numbered 1080p60 dialogue project. It compares
+ * ruler drags, 1x playback, ripple deletion and browser memory.
  * --grade puts a colour grade on every shot, to compare against the same project ungraded.
  * --pipeline enables GPU footage playback. --pipeline-compatible removes the root's empty
  * timeline script, uses the vendored GSAP URL and omits the videos' CSS class so the pipeline
@@ -21,7 +23,7 @@
  * browser, and stops both before it exits. See docs/performance.md, "Cutroom vs HyperFrames
  * Studio".
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -38,15 +40,18 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   clipSeconds,
-  fps,
+  fps as studioFps,
   makeProject,
   mediaStart,
+  scaleFps,
+  scaleShots,
 } from "./bench-vs-studio-project.ts";
 
 const { values: options, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     editor: { type: "string" },
+    scale: { type: "string" },
     throttle: { type: "string", default: "1" },
     runs: { type: "string", default: "3" },
     port: { type: "string", default: "4961" },
@@ -74,7 +79,17 @@ type Picture = { time: number; number: number | null; tone?: number };
 type CastFrame = { time: number; data: string; deviceWidth: number };
 
 const viewport = { width: 1720, height: 1050 };
-const editsAt = [22, 23, 24, 27, 28] as const;
+const scale =
+  options.scale === "1000" ? 1000 : options.scale === "100" ? 100 : null;
+const shots = scale && scaleShots(scale);
+const fps = scale ? scaleFps : studioFps;
+const editsAt = scale ? [4, 12] : [22, 23, 24, 27, 28];
+const sourceFrame = (index: number) =>
+  (shots && shots[index]?.source) || Math.round(mediaStart(index) * fps);
+const shotFrames = (index: number) => {
+  const shot = shots && shots[index];
+  return shot ? shot.end - shot.start : clipSeconds * fps;
+};
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 const median = (values: number[]) => quantile(values, 0.5);
@@ -185,13 +200,13 @@ function adapter(editor: Editor) {
       undo: "Control+z",
       play: "Space",
       playhead: (page: Page) =>
-        page.evaluate(() => {
+        page.evaluate((fps) => {
           const text = document.querySelector(
             "[aria-label^='Current time']",
           )!.textContent!;
           const [h, m, s, f] = text.split(":").map(Number);
-          return ((h! * 60 + m!) * 60 + s!) * 30 + f!;
-        }),
+          return ((h! * 60 + m!) * 60 + s!) * fps + f!;
+        }, fps),
     };
   return {
     clip: (page: Page, id: string) =>
@@ -323,6 +338,8 @@ async function main() {
   const editor = options.editor;
   if (editor !== "cutroom" && editor !== "studio")
     throw new Error("Pass --editor cutroom or --editor studio.");
+  if (options.scale && (!scale || editor !== "cutroom"))
+    throw new Error("Pass --scale 100 or --scale 1000 with --editor cutroom.");
   return measure(editor);
 }
 
@@ -335,6 +352,7 @@ async function measure(editor: Editor) {
     dir,
     [
       "master",
+      scale,
       options.grade && "graded",
       options["pipeline-compatible"] && "pipeline",
       options.bus && "bus",
@@ -344,7 +362,16 @@ async function measure(editor: Editor) {
   );
   if (!existsSync(join(master, "index.html"))) {
     console.log("Making the project…");
-    await makeProject(master, options.grade, options["pipeline-compatible"]);
+    if (scale)
+      execFileSync(
+        "bun",
+        ["scripts/scale-performance-project.ts", master, String(scale)],
+        {
+          stdio: "inherit",
+        },
+      );
+    else
+      await makeProject(master, options.grade, options["pipeline-compatible"]);
     if (options.bus) {
       const index = join(master, "index.html");
       const html = await readFile(index, "utf8");
@@ -367,6 +394,7 @@ async function measure(editor: Editor) {
     throttle,
     runs,
     date: new Date().toISOString(),
+    scale,
     browser: options.browser,
     viewport,
     results,
@@ -465,7 +493,7 @@ async function session(
     const ui = adapter(editor);
     const opens = [];
     let page: Page | undefined;
-    for (let open = 0; open < 3; open++) {
+    for (let open = 0; open < (scale ? 1 : 3); open++) {
       await page?.close();
       page = await context.newPage();
       opens.push(await openToPicture(page, ui, url, decoder));
@@ -484,9 +512,16 @@ async function session(
       opens,
       throttledTargets: throttled,
       scrub: await step("scrub", () => scrub(page, ui, cdp, decoder)),
-      playback: await step("playback", () => playback(page, ui, cdp, decoder)),
+      playback: await step("playback", () =>
+        playback(page, ui, cdp, decoder, scale === 100 ? 11 : 22),
+      ),
+      playbackLater: scale
+        ? await step("playbackLater", () =>
+            playback(page, ui, cdp, decoder, scale === 100 ? 37 : 259),
+          )
+        : null,
     };
-    const full = !options["footage-only"] && !options["ripple-only"];
+    const full = !scale && !options["footage-only"] && !options["ripple-only"];
     const result = {
       ...footage,
       zoom: full ? await step("zoom", () => zoom(page, ui)) : null,
@@ -595,7 +630,7 @@ async function openToPicture(
     box ??= await ui.pictureBox(page).catch(() => undefined);
     if (!box) continue;
     const decoded = await decode(decoder, cast.frames, box);
-    picture = decoded.find((p) => p.number === 0)?.time ?? null;
+    picture = decoded.find((p) => p.number === sourceFrame(0))?.time ?? null;
   }
   await cast.stop();
   await cdp.detach();
@@ -615,9 +650,9 @@ async function seekToShot(
   const box = (await ui.clip(page, `shot-${shot}`).boundingBox())!;
   const cast = await screencast(cdp);
   await page.mouse.click(box.x + box.width * fraction, await ui.rulerY(page));
-  const first = Math.round(mediaStart(shot) * fps);
-  const inShot = (n: number | null) =>
-    n !== null && n >= first && n < first + clipSeconds * fps;
+  const first = sourceFrame(shot);
+  const end = first + shotFrames(shot);
+  const inShot = (n: number | null) => n !== null && n >= first && n < end;
   const picture = await waitPicture(page, ui, cast, decoder, inShot, 10_000);
   await cast.stop();
   if (!picture) {
@@ -662,13 +697,20 @@ async function waitPicture(
   return null;
 }
 
-/** A 3 s ruler drag from shot 10 to shot 40 at Fit, about 60 pointer moves a second. */
+/** A 3 s ruler drag across cuts, about 60 pointer moves a second. */
 async function scrub(page: Page, ui: Adapter, cdp: CDPSession, decoder: Page) {
-  await ui.fit(page);
-  await sleep(800);
+  // At Fit seven cuts can be only a dozen pixels at 1,000 clips. Match the drag
+  // distance at both sizes so input quantization does not limit the picture count.
+  if (scale) await zoomTo(page, ui, ui.clip(page, "shot-10"), 80);
+  else {
+    await ui.fit(page);
+    await sleep(800);
+  }
   await seekToShot(page, ui, cdp, decoder, 10, 0.1);
   const from = (await ui.clip(page, "shot-10").boundingBox())!;
-  const to = (await ui.clip(page, "shot-40").boundingBox())!;
+  const to = (await ui
+    .clip(page, scale ? "shot-17" : "shot-40")
+    .boundingBox())!;
   const y = await ui.rulerY(page);
   const cast = await screencast(cdp);
   await page.mouse.move(from.x + from.width * 0.1, y);
@@ -697,6 +739,7 @@ async function scrub(page: Page, ui: Adapter, cdp: CDPSession, decoder: Page) {
   const times = [start, ...changes.map((p) => p.time), end];
   return {
     seconds: (end - start) / 1000,
+    distance: to.x - from.x,
     newPictures: changes.length,
     picturesPerSecond: changes.length / ((end - start) / 1000),
     gapP95: quantile(gaps(times), 0.95),
@@ -715,8 +758,11 @@ async function playback(
   ui: Adapter,
   cdp: CDPSession,
   decoder: Page,
+  shot: number,
 ) {
-  await seekToShot(page, ui, cdp, decoder, 22, 0.1);
+  if (scale) await ui.fit(page);
+  await seekToShot(page, ui, cdp, decoder, shot, 0.1);
+  const initial = await ui.playhead(page);
   const editorFrames = page.evaluate(async () => {
     const times: number[] = [];
     const end = performance.now() + 10_500;
@@ -734,6 +780,7 @@ async function playback(
   const start = Date.now();
   await sleep(10_000);
   const end = Date.now();
+  const final = await ui.playhead(page);
   const frames = await cast.stop();
   await page.keyboard.press(ui.play);
   const editor = gaps(await editorFrames);
@@ -751,6 +798,7 @@ async function playback(
   );
   return {
     composited: composited.length,
+    timelineFramesPerSecond: (final - initial) / ((end - start + 500) / 1000),
     displayFrame: display,
     pictures: changes.length,
     picturesPerSecond: changes.length / ((end - start) / 1000),
@@ -926,8 +974,7 @@ async function edits(
     const pressed = Date.now();
     await page.keyboard.press(kind === "razor" ? ui.razor : ui.rippleDelete);
     const shown = await ui1;
-    const expected =
-      before + Math.round((mediaStart(shot + 1) - mediaStart(shot)) * fps);
+    const expected = before + sourceFrame(shot + 1) - sourceFrame(shot);
     const picture =
       kind === "ripple"
         ? await waitPicture(
@@ -1062,13 +1109,13 @@ async function selectorOf(ui: Adapter, page: Page, id: string) {
     );
 }
 
-/** Ctrl+wheel over the clip until it is at least 160 px wide. */
-async function zoomTo(page: Page, ui: Adapter, clip: Locator) {
+/** Ctrl+wheel over the clip until it is wide enough for the gesture. */
+async function zoomTo(page: Page, ui: Adapter, clip: Locator, width = 160) {
   await ui.fit(page);
   await sleep(800);
   for (let step = 0; step < 60; step++) {
     const box = await clip.boundingBox();
-    if (box && box.width >= 160) break;
+    if (box && box.width >= width) break;
     if (box)
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.keyboard.down("Control");
@@ -1078,7 +1125,7 @@ async function zoomTo(page: Page, ui: Adapter, clip: Locator) {
   }
   await sleep(800);
   const box = await clip.boundingBox();
-  if (!box || box.width < 160)
+  if (!box || box.width < width)
     throw new Error("Could not zoom in on the clip.");
 }
 
@@ -1103,8 +1150,7 @@ async function agentEdits(
   const samples = [];
   for (const shot of editsAt) {
     const before = await seekToShot(page, ui, cdp, decoder, shot);
-    const expected =
-      before + Math.round((mediaStart(shot + 1) - mediaStart(shot)) * fps);
+    const expected = before + sourceFrame(shot + 1) - sourceFrame(shot);
     const original = await readFile(file, "utf8");
     const cast = await screencast(cdp);
     const started = Date.now();
@@ -1188,6 +1234,7 @@ type Output = {
   throttle: number;
   runs: number;
   date: string;
+  scale?: 100 | 1000 | null;
   browser: string | undefined;
   viewport: typeof viewport;
   results: Result[];
@@ -1211,6 +1258,8 @@ function summaryOf(output: Output) {
   return {
     editor: output.editor,
     throttle: output.throttle,
+    scale: output.scale,
+    pipeline: r[0]?.pipeline,
     firstOpenPicture: r[0]?.opens[0]?.picture,
     reopenPicture: stat(pick((x) => x.opens.slice(1).map((o) => o.picture))),
     reopenTimeline: stat(pick((x) => x.opens.slice(1).map((o) => o.timeline))),
@@ -1219,6 +1268,11 @@ function summaryOf(output: Output) {
     playPicturesPerSecond: stat(pick((x) => [x.playback.picturesPerSecond])),
     playDropped: stat(pick((x) => [x.playback.dropped])),
     playGapP95: stat(pick((x) => [x.playback.gapP95])),
+    playGapMax: stat(pick((x) => [x.playback.gapMax])),
+    playLaterPicturesPerSecond: stat(
+      pick((x) => [x.playbackLater?.picturesPerSecond]),
+    ),
+    playLaterGapMax: stat(pick((x) => [x.playbackLater?.gapMax])),
     playLateGaps: stat(pick((x) => [x.playback.lateGaps])),
     playEditorFrameP95: stat(pick((x) => [x.playback.editorFrameP95])),
     zoomFrameP95: stat(pick((x) => [x.zoom?.frameP95])),

@@ -42,7 +42,29 @@ export function previewRuntimeScript() {
     throw new Error(
       "Cutroom's scene variable adapter no longer matches HyperFrames 0.9.26. Review the runtime adapter before upgrading.",
     );
-  const gradeChanges = [
+  const runtimeChanges = [
+    // At rest the bridge polls for duration changes. Each element.getAnimations() can
+    // flush style across the composition, even when the element is far from the playhead.
+    // Take one animation snapshot for both adapters, then look up effects by their target.
+    [
+      'dt=(u=!1)=>{let p=0;for(let h of e.deterministicAdapters){let b=u?h.getAnimationCycleEndSeconds:h.getInferredDurationSeconds;if(typeof b!=="function")continue;let v=null;try{v=b()}',
+      'dt=(u=!1)=>{let p=0,animations=a3();for(let h of e.deterministicAdapters){let b=u?h.getAnimationCycleEndSeconds:h.getInferredDurationSeconds;if(typeof b!=="function")continue;let v=null;try{v=b(animations)}',
+    ],
+    [
+      "getInferredDurationSeconds:()=>{let m=0;for(let g of t){if(!g.el.isConnected)continue;let x=i(g.el);for(let y of n(g.el)){let E=l(y,x);E.endSeconds!=null&&(m=Math.max(m,E.endSeconds))}}return m>0?m:null}",
+      "getInferredDurationSeconds:(pageAnimations)=>{if(!t.length)return null;" +
+        "let byTarget=new Map;for(let animation of n(document,pageAnimations)){" +
+        "let effect=animation.effect,target=effect?.target;if(!target||effect.pseudoElement)continue;" +
+        "let list=byTarget.get(target);if(list)list.push(animation);else byTarget.set(target,[animation])}" +
+        "let m=0;for(let g of t){if(!g.el.isConnected)continue;let x=i(g.el);for(let y of byTarget.get(g.el)??[]){let E=l(y,x);E.endSeconds!=null&&(m=Math.max(m,E.endSeconds))}}return m>0?m:null}",
+    ],
+    [
+      "getInferredDurationSeconds:()=>{let A=0;for(let w of s())",
+      "getInferredDurationSeconds:(pageAnimations)=>{let A=0;for(let w of s(pageAnimations))",
+    ],
+    // Studio retains a fully buffered source after its clip leaves the preload window.
+    // On a long timeline those sources accumulate even after a jump to a distant clip.
+    ["Wy(u,!Yc||window.__HF_RELEASE_PASSED_MEDIA===!0)", "Wy(u,!0)"],
     // Video frame callbacks already redraw while playing. timeupdate would upload and shade
     // the same picture again, including the copy back from WebGL to the clip canvas.
     [
@@ -101,10 +123,10 @@ export function previewRuntimeScript() {
       '(!L.isConnected||window.__cutroomParkedMedia?.has(L)||V.source==="attribute"&&!F.has(L))',
     ],
   ] as const;
-  for (const [before] of gradeChanges)
+  for (const [before] of runtimeChanges)
     if (source.split(before).length !== 2)
       throw new Error(
-        "Cutroom's colour preview adapter no longer matches HyperFrames 0.9.26.",
+        "Cutroom's media preview adapters no longer match HyperFrames 0.9.26.",
       );
   const meter =
     "window.__hf.audioMeter={start:()=>M.startMetering(),stop:()=>M.stopMetering(),read:()=>M.readLevels()}";
@@ -125,7 +147,7 @@ export function previewRuntimeScript() {
       seed,
       '||o.unshift({kind:"set",time:n.scheduledAt,value:(r??_h)(rn(e,n.elapsed,t))}),i?.kind==="ramp"&&e.points[0].t>n.elapsed&&o.splice(1,0,{kind:"ramp",time:n.scheduledAt+(e.points[0].t-n.elapsed)/n.rate,value:(r??_h)(e.points[0].v)}),o}',
     );
-  for (const [before, after] of gradeChanges)
+  for (const [before, after] of runtimeChanges)
     script = script.replace(before, after);
   // A mixer fader is heard while it moves, before anything is saved: a bus's fader gain, or a
   // trim after the master chain for Main. Automated faders report where their lane holds them.

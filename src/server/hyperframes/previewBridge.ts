@@ -135,24 +135,26 @@ export function liveUpdatePlan(
   const added = next.filter((clip) => !kept.has(clip.id));
   if ([...removed, ...added].some((clip) => clip.slot === null))
     return { refuse: "This clip is part of the document's structure." };
+  const retained = next.filter((clip) => kept.has(clip.id));
   if (
     current
       .filter((clip) => kept.has(clip.id))
-      .some(
-        (clip, index) =>
-          clip.id !== next.filter((clip) => kept.has(clip.id))[index]!.id,
-      )
+      .some((clip, index) => clip.id !== retained[index]!.id)
   )
     return { refuse: "The clips changed order." };
+  const firstInGap = new Map<string | null, number>();
+  for (const [index, clip] of next.entries())
+    if (kept.has(clip.id) && !firstInGap.has(clip.slot))
+      firstInGap.set(clip.slot, index);
   const after: { id: string; after: string; before: null }[] = [];
   const ahead: { id: string; after: null; before: string }[] = [];
   for (const [index, clip] of next.entries()) {
     if (kept.has(clip.id)) continue;
-    const gap = next.filter((other) => other.slot === clip.slot);
-    const first = gap.findIndex((other) => kept.has(other.id));
-    if (first < 0) return { refuse: "Added clips need a fresh document." };
+    const first = firstInGap.get(clip.slot);
+    if (first === undefined)
+      return { refuse: "Added clips need a fresh document." };
     // Clips in one gap are adjacent, so the neighbour in the list is the one in the page.
-    if (gap.indexOf(clip) > first)
+    if (index > first)
       after.push({ id: clip.id, after: next[index - 1]!.id, before: null });
     else ahead.push({ id: clip.id, after: null, before: next[index + 1]!.id });
   }
@@ -333,40 +335,28 @@ function installPreviewBridge(
   };
   const faders = (root: ParentNode) =>
     [...root.querySelectorAll(FADERS)].filter(isFader);
-  /** The copy of a live element in a clone of the document, found by its path from the root. */
-  const cloneOf = (root: Element, element: Element) => {
-    const path: number[] = [];
-    let node: Node | null = element;
-    while (node && node !== document.documentElement) {
-      const parentNode: ParentNode | null = node.parentNode;
-      if (!parentNode) break;
-      path.unshift([...parentNode.childNodes].indexOf(node as ChildNode));
-      node = parentNode;
-    }
-    if (node !== document.documentElement)
-      throw new Error("The live preview element changed.");
-    const clone = path.reduce<Node>(
-      (node, index) => node.childNodes[index]!,
-      root,
-    );
-    if (!(clone instanceof Element))
-      throw new Error("The live preview element changed.");
-    return clone;
-  };
   const liveStructure = () => {
     flushSeek();
     if (seekDiverged)
       throw new Error("The live preview changed between seeks.");
-    const root = document.documentElement.cloneNode(true);
-    if (!(root instanceof Element))
-      throw new Error("The preview document is unavailable.");
+    // An inert document cannot start media loads while copying a large preview.
+    const inert = document.implementation.createHTMLDocument();
+    const root = inert.importNode(document.documentElement, true);
+    const originals = document.documentElement.querySelectorAll("*");
+    const copies = root.querySelectorAll("*");
+    const clones = new Map<Element, Element>([
+      [document.documentElement, root],
+    ]);
+    for (const [index, element] of originals.entries())
+      if (gradeSaved.has(element) || seekAttributes.has(element))
+        clones.set(element, copies[index]!);
     // A grade draft shows in the page but is not saved yet: compare the saved grade.
     for (const [element, saved] of gradeSaved) {
       if (!element.isConnected) {
         gradeSaved.delete(element);
         continue;
       }
-      const clone = cloneOf(root, element);
+      const clone = clones.get(element)!;
       if (saved === null) clone.removeAttribute(GRADE_ATTRIBUTE);
       else clone.setAttribute(GRADE_ATTRIBUTE, saved);
     }
@@ -376,7 +366,7 @@ function installPreviewBridge(
         seekAttributes.delete(element);
         continue;
       }
-      const clone = cloneOf(root, element);
+      const clone = clones.get(element)!;
       for (const [name, { before, after }] of attributes) {
         if (element.getAttribute(name) !== after)
           throw new Error(`The live preview attribute ${name} changed.`);
@@ -402,7 +392,8 @@ function installPreviewBridge(
       media.setAttribute("preload", "none");
     // Gain checks and timing updates both set these faders in place.
     for (const group of faders(root)) group.removeAttribute("data-volume");
-    for (const element of [root, ...root.querySelectorAll("*")]) {
+    for (const element of [root, ...copies]) {
+      if (!root.contains(element)) continue;
       const attributes = [...element.attributes].sort((a, b) =>
         a.name.localeCompare(b.name),
       );
@@ -1924,7 +1915,9 @@ function installPreviewBridge(
         ? time
         : time + ((performance.now() - playedAt) / 1000) * media.playbackRate;
     // An element that already loaded gives its media back; its src stays in the DOM.
-    const released = media.readyState > HTMLMediaElement.HAVE_NOTHING;
+    const released =
+      media.readyState > HTMLMediaElement.HAVE_NOTHING ||
+      media.networkState === HTMLMediaElement.NETWORK_LOADING;
     if (released) {
       media.pause();
       media.srcObject = new MediaStream();
@@ -4288,13 +4281,7 @@ export function withPreviewClipIdentities(
         text: `${existing ? "" : " "}data-hf-cutroom-clip-id="${value}"`,
       });
     });
-    return edits
-      .sort((a, b) => b.at - a.at)
-      .reduce(
-        (html, edit) =>
-          html.slice(0, edit.at) + edit.text + html.slice(edit.end),
-        html,
-      );
+    return applyPreviewEdits(html, edits);
   };
   const marked = mark(source, (node) =>
     locations.get(node.sourceCodeLocation?.startOffset ?? -1),
@@ -4318,6 +4305,20 @@ export function withPreviewClipIdentities(
   );
 }
 
+function applyPreviewEdits(
+  html: string,
+  edits: { at: number; end: number; text: string }[],
+) {
+  const chunks: string[] = [];
+  let cursor = 0;
+  for (const { at, end, text } of edits.sort((a, b) => a.at - b.at)) {
+    chunks.push(html.slice(cursor, at), text);
+    cursor = end;
+  }
+  chunks.push(html.slice(cursor));
+  return chunks.join("");
+}
+
 export function previewDocument(
   html: string,
   composition = "index.html",
@@ -4337,7 +4338,15 @@ export function previewDocument(
   const location = head && "tagName" in head ? head.sourceCodeLocation : null;
   const offset = location?.startTag?.endOffset ?? html.length;
   const sourceTexts: [string, string[]][] = [];
-  const { sources, edits } = compositionScriptSources(document, composition);
+  const { sources, edits: scriptEdits } = compositionScriptSources(
+    document,
+    composition,
+  );
+  const edits = scriptEdits.map(({ offset, end, text }) => ({
+    at: offset,
+    end,
+    text,
+  }));
   const maybeAdjustment = html.includes("data-cutroom-adjustment");
   let hasAdjustment = false;
   // The opaque frame needs CORS media for Web Audio, including gain above unity and its level tap.
@@ -4405,36 +4414,40 @@ export function previewDocument(
             Number(timing.get(name)) !== value
           )
             edits.push({
-              offset: location.startOffset,
+              at: location.startOffset,
               end: location.endOffset,
               text: `${name}="${value}"`,
             });
         }
       }
-      if (
-        (node.tagName === "audio" || node.tagName === "video") &&
-        !node.attrs.some(({ name }) => name === "crossorigin")
-      ) {
-        const start = node.sourceCodeLocation?.startTag?.startOffset;
-        if (start !== undefined)
-          edits.push({
-            offset: start + node.tagName.length + 1,
-            end: start + node.tagName.length + 1,
-            text: ' crossorigin="anonymous"',
-          });
+      if (node.tagName === "audio" || node.tagName === "video") {
+        const tag = node.sourceCodeLocation?.startTag;
+        if (tag) {
+          let attributes = timing.has("crossorigin")
+            ? ""
+            : ' crossorigin="anonymous"';
+          // Chromium can select media before the runtime's preload window is installed.
+          // The runtime raises preload for the active and upcoming clips itself.
+          if (
+            start >= 0 &&
+            Number.isFinite(end) &&
+            end > start &&
+            !timing.has("preload") &&
+            !timing.has("autoplay")
+          )
+            attributes += ' preload="none"';
+          if (attributes) {
+            const at = tag.startOffset + node.tagName.length + 1;
+            edits.push({ at, end: at, text: attributes });
+          }
+        }
       }
       visit(node.childNodes, nodeFps);
       if ("content" in node) visit(node.content.childNodes, nodeFps);
     }
   };
   visit(document.childNodes);
-  const normalized = edits
-    .sort((a, b) => b.offset - a.offset)
-    .reduce(
-      (source, edit) =>
-        source.slice(0, edit.offset) + edit.text + source.slice(edit.end),
-      html,
-    );
+  const normalized = applyPreviewEdits(html, edits);
   const timing =
     dependencies === null ? null : previewTiming(normalized, dependencies);
   // Escape '<' so authored words cannot terminate the bridge's script element.

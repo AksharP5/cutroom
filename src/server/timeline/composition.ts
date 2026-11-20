@@ -2674,6 +2674,23 @@ export function declareTrackLayer(html: string): string {
   ]);
 }
 
+/** Cutroom's default stacking order for one composition's picture tracks. */
+export function trackStackingStyle(
+  compositionId: string,
+  tracks: Iterable<number>,
+) {
+  const scope = `[data-composition-id=${cssString(compositionId)}]`;
+  const nested = `${scope} :is([data-start],[data-composition-id],[data-composition-src]) *`;
+  const rules = [...new Set(tracks)]
+    .sort((a, b) => a - b)
+    .map(
+      (index) =>
+        `:where(${scope} [data-start][data-track-index="${index}"]:not(audio):not(${nested})){z-index:${index}}`,
+    )
+    .join("");
+  return `<style data-cutroom-track-stacking="${escapeAttribute(compositionId)}">@layer cutroom-tracks{${rules}}</style>`;
+}
+
 /** Owns the defaults' scope and cascade order. */
 function stackingEdits(
   parsed: ParsedComposition,
@@ -2699,21 +2716,12 @@ function stackingEdits(
   });
   if (!blocks.length && !placed) return null;
 
-  const scope = `[data-composition-id=${cssString(compositionId)}]`;
-  const nested = `${scope} :is([data-start],[data-composition-id],[data-composition-src]) *`;
-  const tracks = new Set(
+  const text = trackStackingStyle(
+    compositionId,
     after.clips
       .filter((clip) => !isAudioKind(clip.kind))
       .map((clip) => clip.track),
   );
-  const rules = [...tracks]
-    .sort((a, b) => a - b)
-    .map(
-      (index) =>
-        `:where(${scope} [data-start][data-track-index="${index}"]:not(audio):not(${nested})){z-index:${index}}`,
-    )
-    .join("");
-  const text = `<style data-cutroom-track-stacking="${escapeAttribute(compositionId)}">@layer cutroom-tracks{${rules}}</style>`;
   const { at, needsHead } = stylesheetLocation(parsed.roots, parsed.scope);
   if (blocks.length === 1 && blocks[0]!.start === at && !needsHead)
     return html.slice(at, blocks[0]!.end) === text
