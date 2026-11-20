@@ -307,6 +307,9 @@ export function registerRenderIsolation(
   const rampSource = JSON.stringify(
     new URL("./rampSource.ts", import.meta.url).href,
   );
+  const audioClock = JSON.stringify(
+    new URL("./audioClock.ts", import.meta.url).href,
+  );
   let producerLoaded = false;
   let audioMixerLoaded = false;
   let captureLoaded = false;
@@ -316,13 +319,11 @@ export function registerRenderIsolation(
     load(url, context, nextLoad) {
       const loaded = nextLoad(url, context);
       if (url.endsWith("/@hyperframes/engine/dist/services/audioMixer.js")) {
-        audioMixerLoaded = true;
-        return {
-          ...loaded,
-          source: replaceOnce(
-            String(loaded.source),
-            "    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);",
-            `    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);
+        let source = `import { AUDIO_SAMPLE_RATE } from ${audioClock};\n${String(loaded.source)}`;
+        source = replaceOnce(
+          source,
+          "    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);",
+          `    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);
     if (typeof normalizedPlaybackRate === "object" && !options?.loop && !isHttpUrl(srcPath)) {
         const { prepareLocalRamp } = await import(${rampSource});
         const prepared = await prepareLocalRamp(srcPath, outputPath, mediaStart, duration, normalizedPlaybackRate, signal, ffmpegProcessTimeout)
@@ -332,9 +333,46 @@ export function registerRenderIsolation(
             });
         if (prepared?.success) return prepared;
     }`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "            let audioSrcPath = srcPath;",
+          `            const { samples } = element;
+            const duration = samples ? (samples.end - samples.start) / AUDIO_SAMPLE_RATE : element.end - element.start;
+            let audioSrcPath = srcPath;`,
+          url,
+        );
+        for (const stage of ['"extract"', '"prepare"'])
+          source = replaceOnce(
+            source,
+            `${stage}, element.mediaStart, element.end - element.start, element.playbackRate,`,
+            `${stage}, element.mediaStart, duration, element.playbackRate,`,
             url,
-          ),
-        };
+          );
+        source = replaceOnce(
+          source,
+          "                srcPath: audioSrcPath,",
+          "                srcPath: audioSrcPath,\n                samples,",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    const delayMs = Math.round(track.start * 1000);",
+          "    const delay = track.samples ? `${track.samples.start}S` : Math.round(track.start * 1000);",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    const filters = `[${index}:a]atrim=0:${formatFilterNumber(trimDuration)},${volumeFilter}${buildFadeFilters(track)},adelay=${delayMs}|${delayMs}`;",
+          `    const trim = track.samples
+        ? "end_sample=" + (track.samples.end - track.samples.start + Math.round((track.tailSeconds ?? 0) * AUDIO_SAMPLE_RATE))
+        : "0:" + formatFilterNumber(trimDuration);
+    const filters = \`[\${index}:a]atrim=\${trim},\${volumeFilter}\${buildFadeFilters(track)},adelay=\${delay}|\${delay}\`;`,
+          url,
+        );
+        audioMixerLoaded = true;
+        return { ...loaded, source };
       }
       // Standalone templates keep the parent shell's styles and scripts. Its
       // render canvas, like its duration, belongs to the selected scene.
@@ -435,7 +473,7 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nimport { AUDIO_SAMPLE_RATE, audioFrameSample, sampleGridAudio } from ${audioClock};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
         source = replaceOnce(
           source,
           "return resolveVerifiedHyperframeRuntime().runtimeSource;",
@@ -446,6 +484,25 @@ export function registerRenderIsolation(
           source,
           "function runAudioStage(input) {",
           "cutroomProvideAudioStage(runAudioStage);\nfunction runAudioStage(input) {",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          '  const pcmSourcePath = join24(input.workDir, "audio-source.wav");\n  const duration = input.totalFrames * input.fps.den / input.fps.num;',
+          '  const pcmSourcePath = join24(input.workDir, "audio-source.wav");\n  const duration = audioFrameSample(input.totalFrames, input.fps) / AUDIO_SAMPLE_RATE;',
+          url,
+        );
+        // Apply authored sample placement after runtime media discovery and before either mix.
+        source = replaceOnce(
+          source,
+          "  try {\n    if (needsBrowser) {\n      const reasons = [];",
+          "  const cutroomAudioBeforeProbe = needsBrowser ? composition.audios.map((audio) => ({ ...audio })) : undefined;\n  try {\n    if (needsBrowser) {\n      const reasons = [];",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "  const browserProbeMs = Date.now() - probeStart;",
+          "  composition.audios = sampleGridAudio(composition.audios, compiled.html, input.compiled.subCompositions, cutroomAudioBeforeProbe);\n  const browserProbeMs = Date.now() - probeStart;",
           url,
         );
         source = replaceOnce(

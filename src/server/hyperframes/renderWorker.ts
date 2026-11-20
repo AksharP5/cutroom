@@ -14,6 +14,7 @@ import {
 } from "../../shared/export.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import { FpsSchema } from "../../shared/timeline/schema.ts";
+import { sampleGridAudio } from "./audioClock.ts";
 import { ExportStageError } from "./renderFailure.ts";
 
 const Input = z.object({
@@ -152,7 +153,8 @@ try {
       projectDir: request.projectDir,
       outputPath: request.outputPath,
       audioStage: directAudioStage(),
-      collectAudio: (html) => collectRenderMedia(html).audios,
+      collectAudio: (html) =>
+        sampleGridAudio(collectRenderMedia(html).audios, html),
       progress: (event) => send({ type: "progress", ...event }),
     }));
   } else if (range) {

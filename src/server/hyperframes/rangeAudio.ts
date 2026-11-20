@@ -1,23 +1,21 @@
 import { copyFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { runFfmpeg } from "@hyperframes/engine";
-import type { AudioElement } from "@hyperframes/engine";
 import type { ExportOptions } from "../../shared/export.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
+import { AUDIO_SAMPLE_RATE, audioFrameSample } from "./audioClock.ts";
+import type { AudioMixElement } from "./audioClock.ts";
 
 type Frames = NonNullable<ExportOptions["range"]>;
 
-/** Every prepared track and mix the HyperFrames mixer writes is 48 kHz. */
-const SAMPLE_RATE = 48000;
 /** Mixed on each side of the range, so the delivery true-peak limiter (3 ms
  * look-ahead, 80 ms release) sees the same neighbourhood as in the full mix. */
-const CONTEXT_SECONDS = 1;
+const CONTEXT_SAMPLES = AUDIO_SAMPLE_RATE;
 
 type RangeMix = {
-  /** Composition time the mix starts at. */
-  startSeconds: number;
-  durationSeconds: number;
-  audios: AudioElement[];
+  startSample: number;
+  sampleCount: number;
+  audios: AudioMixElement[];
 };
 
 /**
@@ -26,21 +24,21 @@ type RangeMix = {
  * Clips heard within a second of the range are kept whole and moved earlier by
  * the same whole number of seconds. The mixer prepares each clip from its own
  * start (source offset, loop, rate, fades, gain automation and FX all read clip
- * time), places it at its start in whole milliseconds, and sums tracks in
+ * time), places it at its start sample, and sums tracks in
  * authored order. Every other clip is silence at these samples, so the window
  * holds the full mix's samples. A master or group bus effect and group
  * automation run on the whole composition's clock; those mix in full.
  */
 export function rangeMix(input: {
-  audios: AudioElement[];
+  audios: AudioMixElement[];
   masterFxChain?: string;
-  durationSeconds: number;
-  startSeconds: number;
-  endSeconds: number;
+  durationSamples: number;
+  startSample: number;
+  endSample: number;
 }): RangeMix {
   const full = {
-    startSeconds: 0,
-    durationSeconds: input.durationSeconds,
+    startSample: 0,
+    sampleCount: input.durationSamples,
     audios: input.audios,
   };
   if (
@@ -48,41 +46,47 @@ export function rangeMix(input: {
     input.audios.some((audio) => audio.groupFxChain || audio.groupAutomation)
   )
     return full;
-  const from = input.startSeconds - CONTEXT_SECONDS;
-  const to = Math.min(
-    input.durationSeconds,
-    input.endSeconds + CONTEXT_SECONDS,
-  );
+  const from = input.startSample - CONTEXT_SAMPLES;
+  const to = Math.min(input.durationSamples, input.endSample + CONTEXT_SAMPLES);
   // An FX tail can outlast its clip, and an unknown end is read from the file
   // during the mix, so those clips count from their start.
-  const heard = input.audios.filter(
-    (audio) =>
-      audio.start < to &&
-      (audio.fxChain || audio.end <= audio.start || audio.end > from),
-  );
-  // Whole seconds subtract exactly from every later time. The mixer rounds a
-  // clip's start to milliseconds, and float error can round a half
-  // millisecond (an NTSC frame boundary) differently after the shift.
+  const startOf = (audio: AudioMixElement) =>
+    audio.samples?.start ?? audio.start * AUDIO_SAMPLE_RATE;
+  const heard = input.audios.filter((audio) => {
+    const start = startOf(audio);
+    const end = audio.samples?.end ?? audio.end * AUDIO_SAMPLE_RATE;
+    return start < to && (audio.fxChain || end <= start || end > from);
+  });
+  // Browser-only or unbounded tracks still use the producer's millisecond
+  // placement. Keep its rounding stable when shifting by whole seconds.
   const placed = (seconds: number) => Math.round(seconds * 1000);
   let shift = Math.max(
     0,
-    Math.floor(Math.min(from, ...heard.map((audio) => audio.start))),
+    Math.floor(Math.min(from, ...heard.map(startOf)) / AUDIO_SAMPLE_RATE),
   );
   while (
     shift > 0 &&
     heard.some(
       (audio) =>
+        !audio.samples &&
         placed(audio.start - shift) !== placed(audio.start) - shift * 1000,
     )
   )
     shift -= 1;
+  const startSample = shift * AUDIO_SAMPLE_RATE;
   return {
-    startSeconds: shift,
-    durationSeconds: to - shift,
+    startSample,
+    sampleCount: to - startSample,
     audios: heard.map((audio) => ({
       ...audio,
       start: audio.start - shift,
       end: audio.end - shift,
+      ...(audio.samples && {
+        samples: {
+          start: audio.samples.start - startSample,
+          end: audio.samples.end - startSample,
+        },
+      }),
       ...(audio.volumeKeyframes && {
         volumeKeyframes: audio.volumeKeyframes.map((keyframe) => ({
           ...keyframe,
@@ -94,7 +98,7 @@ export function rangeMix(input: {
 }
 
 let planned:
-  { startSeconds: number; pcmPath?: string; silent: boolean } | undefined;
+  { startSample: number; pcmPath?: string; silent: boolean } | undefined;
 
 /** Runs the planner's audio stage over the range's mix and keeps its PCM for
  * `alignRangeAudio`. */
@@ -102,7 +106,7 @@ export async function mixRangeAudio<
   Result extends { deliverySourcePath?: string },
 >(
   plan: {
-    composition: { audios: AudioElement[]; masterFxChain?: string };
+    composition: { audios: AudioMixElement[]; masterFxChain?: string };
     totalFrames: number;
     workDir: string;
   },
@@ -110,22 +114,21 @@ export async function mixRangeAudio<
   run: (stage: {
     totalFrames: number;
     fps: Fps;
-    audios: AudioElement[];
+    audios: AudioMixElement[];
     keepDeliverySource: true;
   }) => Promise<Result>,
 ) {
-  const { num, den } = range.fps;
   const mix = rangeMix({
     audios: plan.composition.audios,
     masterFxChain: plan.composition.masterFxChain,
-    durationSeconds: (plan.totalFrames * den) / num,
-    startSeconds: (range.frames.start * den) / num,
-    endSeconds: (range.frames.end * den) / num,
+    durationSamples: audioFrameSample(plan.totalFrames, range.fps),
+    startSample: audioFrameSample(range.frames.start, range.fps),
+    endSample: audioFrameSample(range.frames.end, range.fps),
   });
   // The audio stage reads fps only to turn totalFrames into seconds.
   const result = await run({
-    totalFrames: mix.durationSeconds,
-    fps: { num: 1, den: 1 },
+    totalFrames: mix.sampleCount,
+    fps: { num: AUDIO_SAMPLE_RATE, den: 1 },
     audios: mix.audios,
     keepDeliverySource: true,
   });
@@ -137,7 +140,7 @@ export async function mixRangeAudio<
     await rename(result.deliverySourcePath, pcmPath);
   }
   planned = {
-    startSeconds: mix.startSeconds,
+    startSample: mix.startSample,
     pcmPath,
     silent: mix.audios.length === 0 && plan.composition.audios.length > 0,
   };
@@ -162,10 +165,8 @@ export async function alignRangeAudio(input: {
     await copyFile(input.videoPath, input.outputPath);
     return;
   }
-  const { num, den } = input.fps;
   const sample = (frame: number) =>
-    Math.round((frame * den * SAMPLE_RATE) / num) -
-    (planned?.startSeconds ?? 0) * SAMPLE_RATE;
+    audioFrameSample(frame, input.fps) - (planned?.startSample ?? 0);
   const webm = input.outputPath.toLowerCase().endsWith(".webm");
   const first = sample(input.frames.start);
   const end = sample(input.frames.end);
@@ -176,7 +177,7 @@ export async function alignRangeAudio(input: {
       // No clip is heard in the range, though the full mix has audio there.
       ...(source
         ? ["-i", source]
-        : ["-f", "lavfi", "-i", `anullsrc=r=${SAMPLE_RATE}:cl=stereo`]),
+        : ["-f", "lavfi", "-i", `anullsrc=r=${AUDIO_SAMPLE_RATE}:cl=stereo`]),
       "-map",
       "0:v:0",
       "-map",
@@ -187,10 +188,10 @@ export async function alignRangeAudio(input: {
       ...(webm
         ? ["-c:a", "libopus", "-b:a", "128k"]
         : ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]),
+      // The video already contains the selected frames. A shared time limit
+      // can cut a sample when the two absolute edges round in opposite directions.
       "-af",
       `atrim=start_sample=${first}:end_sample=${end},asetpts=PTS-STARTPTS,apad=whole_len=${end - first}`,
-      "-t",
-      String(((input.frames.end - input.frames.start) * den) / num),
       "-y",
       input.outputPath,
     ],
