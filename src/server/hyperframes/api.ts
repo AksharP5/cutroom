@@ -1387,7 +1387,11 @@ export function createHyperframesApi(
       headers.delete("ETag");
       headers.set("Cache-Control", "no-store");
     }
-    const mix = trackGainPreview(ramp?.html ?? html, activeCompositionPath);
+    const mix = trackGainPreview(
+      ramp?.html ?? html,
+      activeCompositionPath,
+      Boolean(audition),
+    );
     if (url.searchParams.get("cutroom-mix") === "1") {
       headers.set("Content-Type", "application/json");
       return new Response(JSON.stringify(mix), {

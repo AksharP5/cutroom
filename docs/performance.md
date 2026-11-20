@@ -994,3 +994,18 @@ Switching a clip's versions in the viewer posts one message to the shown documen
 Headed, that is the one frame the document needs to draw at 60 Hz. Hovering the version already shown sends nothing.
 
 Only one clip's versions are loaded at a time, and a clip holds at most 12, so the extra work is bounded by one clip's scenes, never the project's length. With the list open on that title, Chromium's processes held 1,204 MB against 1,130 MB before it opened (four scenes, three of them standing by), and the next document without them gives that back. The active version is the compiled one, so the viewer's picture with the list open matched the picture without it byte for byte in the e2e test.
+
+### Footage and audio versions
+
+An open list prepares only the takes on that slot. The native preview uses one media element per eligible picture and sound. GPU playback warms one WebCodecs decoder per alternate picture and releases those decoders on close. Sound stays in the preview's existing audio graph, with a 10 ms gain ramp between takes. Media versions do not warm just because a clip is selected.
+
+Nine localhost `setVersion` requests over the timeline command endpoint took 34.1 to 89.6 ms, with a 43.2 ms median. Each request saved the picture and its linked sound in one history step. This measurement ends at the server response.
+
+The first browser pass used headless Chromium 155 at 1720 × 1050 and four playable 1080p takes, including two In points from the same source file. A fifth take was too short and skipped warming. The timings start at the pointer event and end at the first Chromium screencast frame whose picture has the selected take's colour. PSS is the sum across Chromium processes.
+
+| Playback | Hover median |    Hover range | PSS before opening | PSS with list open |
+| -------- | -----------: | -------------: | -----------------: | -----------------: |
+| Native   |      53.9 ms |   33.9–71.1 ms |            747 MiB |          1,124 MiB |
+| GPU      |     128.1 ms | 111.3–310.4 ms |            793 MiB |          1,506 MiB |
+
+Both headless results exceeded the design's headed one-frame target. The GPU run exposed a gap in warm-up. It stopped fetching frames when a decoder could reach the requested frame, even if it had no pictures ready at that position. The decoder now advances its short window as the playhead moves, and uses low latency mode for alternate takes.

@@ -112,3 +112,74 @@
   border: 0;
   background: var(--line);
 }
+/* Versions on footage and audio: the existing list, plus where each version comes from. */
+
+.versions-menu.with-source {
+  min-width: 248px;
+}
+.versions-menu.with-source button {
+  grid-template-columns: var(--icon-sm) minmax(0, 1fr) auto;
+  column-gap: var(--space-2);
+}
+.versions-menu .versions-source {
+  display: flex;
+  gap: var(--space-1);
+  max-width: 132px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--type-xs);
+  font-stretch: var(--stretch-condensed);
+  white-space: nowrap;
+}
+.versions-menu .versions-source b {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--type-2xs);
+  font-weight: var(--weight-medium);
+  font-stretch: var(--stretch-mono);
+}
+.versions-menu button:disabled .versions-source b {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-regular);
+}
+
+/* The count follows the name, as on a title. */
+.tl-label .tl-versions[data-media] {
+  margin-left: var(--space-1);
+}
+
+/* On an audio clip the count sits after the name, on the name's own backing. */
+.tl-label.on-audio .tl-versions {
+  margin-left: var(--space-1);
+  background: var(--clip-name-backing);
+}
+
+.versions-menu.with-source {
+  left: anchor(left);
+  right: auto;
+  transform-origin: top left;
+  border: var(--stroke-hair) solid var(--line);
+}
+.versions-menu button[data-hovered],
+.versions-menu button:not(:disabled):hover {
+  background: var(--surface-active);
+}
+.versions-menu .versions-source b[data-offline] {
+  color: var(--danger);
+}
+.versions-rename {
+  display: grid;
+  grid-template-columns: var(--icon-sm) minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-2);
+  min-height: var(--size-row);
+  padding: var(--space-1) var(--space-2);
+}
+.versions-rename input {
+  width: 100%;
+  min-width: 0;
+}
+
+.tl-label.on-audio.selected .tl-versions {
+  background: var(--selection);
+}

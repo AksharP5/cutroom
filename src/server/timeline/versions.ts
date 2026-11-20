@@ -18,7 +18,7 @@ import {
   fitsVersion,
   mediaVersions,
 } from "../../shared/timeline/versions";
-import { projectPath } from "../projects/path";
+import { resolveProjectPath } from "../projects/path";
 import type { AttributeChange, HostedComposition } from "./composition";
 
 /** The clip's versions as JSON: the list a scene or image clip can switch between. */
@@ -193,10 +193,13 @@ export async function versionFiles(
         "unsupported",
         `Version "${src}" must be a file in this project, outside hidden folders.`,
       );
-    const found = await projectPath(project, path)
-      .then(async (absolute) => (await stat(absolute)).isFile())
-      .catch(() => false);
-    if (!found)
+    const found = await resolveProjectPath(project, path).catch(() => null);
+    if (found?.path.split("/").some((part) => part.startsWith(".")))
+      throw new TimelineError(
+        "unsupported",
+        `Version "${src}" must be a file in this project, outside hidden folders.`,
+      );
+    if (!found || !(await stat(found.absolute).catch(() => null))?.isFile())
       throw new TimelineError(
         "not_found",
         `Version "${src}" is not a file in this project.`,

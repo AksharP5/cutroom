@@ -401,13 +401,14 @@ const cycleVersion =
     const clip = versionTarget(timeline, target);
     if (!clip?.versions) return [];
     const count = clip.versions.length;
-    return [
-      {
-        type: "setVersion",
-        clipId: clip.id,
-        version: (activeVersion(clip) + by + count) % count,
-      },
-    ];
+    const active = activeVersion(clip);
+    for (let step = 1; step < count; step++) {
+      const version = (active + by * step + count) % count;
+      const candidate = clip.versions[version]!;
+      if (candidate.fits !== false && !candidate.offline)
+        return [{ type: "setVersion", clipId: clip.id, version }];
+    }
+    return [];
   };
 
 /** The timeline edits bound to keys. Each press is one batch, so one undo step. */

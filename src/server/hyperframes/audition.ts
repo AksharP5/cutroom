@@ -3,7 +3,15 @@ import type { DefaultTreeAdapterTypes } from "parse5";
 import { localMediaPath } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
-import { activeVersion } from "../../shared/timeline/versions";
+import {
+  activeVersion,
+  consumedSource,
+  mediaVersions,
+  versionPartners,
+  versionStart,
+} from "../../shared/timeline/versions";
+import { framesBefore } from "../../shared/timeline/transition";
+import { compositionMediaFacts } from "../timeline/media";
 import { readSource } from "../projects/store";
 import {
   attributeMarkup,
@@ -11,7 +19,11 @@ import {
   parseComposition,
 } from "../timeline/composition";
 import type { AttributeChange } from "../timeline/composition";
-import { VERSIONS_ATTRIBUTE } from "../timeline/versions";
+import {
+  VERSION_INDEX_ATTRIBUTE,
+  VERSION_SILENT_ATTRIBUTE,
+  VERSIONS_ATTRIBUTE,
+} from "../timeline/versions";
 
 /** The preview query naming the clip whose versions a document carries, for instant switching. */
 export const AUDITION_PARAM = "cutroom-audition";
@@ -31,6 +43,8 @@ const OWN_ATTRIBUTES = new Set([
   "data-label",
   "data-timeline-label",
   VERSIONS_ATTRIBUTE,
+  VERSION_INDEX_ATTRIBUTE,
+  VERSION_SILENT_ATTRIBUTE,
 ]);
 
 /*
@@ -38,8 +52,70 @@ const OWN_ATTRIBUTES = new Set([
  * a clip's own visibility inline, so the rule also reaches every descendant, and opacity covers
  * descendants an animation makes visible again.
  */
-const AUDITION_STYLE = `<style data-cutroom-audition>[data-cutroom-version]:not([data-cutroom-shown]),[data-cutroom-version]:not([data-cutroom-shown]) *{visibility:hidden!important;opacity:0!important;pointer-events:none!important}</style>`;
-const AUDITION_SCRIPT = `<script data-cutroom-audition>addEventListener("message",(event)=>{if(event.source!==parent)return;const data=event.data;if(!data||data.source!==${JSON.stringify(AUDITION_MESSAGE)}||!Number.isInteger(data.version))return;const hosts=document.querySelectorAll("[data-cutroom-version]");if(![...hosts].some((host)=>host.getAttribute("data-cutroom-version")===String(data.version)))return;for(const host of hosts){const shown=host.getAttribute("data-cutroom-version")===String(data.version);host.toggleAttribute("data-cutroom-shown",shown);for(const media of host.querySelectorAll("video,audio"))media.muted=!shown||media.hasAttribute("muted");}requestAnimationFrame(()=>parent.postMessage({source:${JSON.stringify(AUDITION_MESSAGE)},shown:data.version},"*"));});</script>`;
+const AUDITION_STYLE = `<style data-cutroom-audition>[data-cutroom-version]:not([data-cutroom-shown]),[data-cutroom-version]:not([data-cutroom-shown]) *,video[data-cutroom-version]:not([data-cutroom-shown]) + canvas[data-cutroom-video-hold]{visibility:hidden!important;opacity:0!important;pointer-events:none!important}</style>`;
+function installAudition(source: string) {
+  const win = window as Window & {
+    __cutroomAuditionGains?: WeakMap<HTMLMediaElement, GainNode>;
+    __cutroomShowAudition?: (
+      video: HTMLVideoElement,
+      show: () => boolean,
+    ) => void;
+  };
+  win.__cutroomAuditionGains = new WeakMap();
+  let request = 0;
+  addEventListener("message", (event) => {
+    if (event.source !== parent) return;
+    const data = event.data;
+    if (!data || data.source !== source || !Number.isInteger(data.version))
+      return;
+    const hosts = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-cutroom-version]"),
+    );
+    const selected = String(data.version);
+    const incoming = hosts.find(
+      (host) => host.dataset.cutroomVersion === selected,
+    );
+    if (!incoming) return;
+    const mine = ++request;
+    for (const host of hosts) {
+      const shown = host.dataset.cutroomVersion === selected;
+      if (host instanceof HTMLMediaElement) {
+        const node = win.__cutroomAuditionGains?.get(host);
+        if (node) {
+          const at = node.context.currentTime;
+          node.gain.cancelAndHoldAtTime(at);
+          node.gain.linearRampToValueAtTime(shown ? 1 : 0, at + 0.01);
+        }
+      } else {
+        for (const media of host.querySelectorAll<HTMLMediaElement>(
+          "video,audio",
+        ))
+          media.muted = !shown || media.hasAttribute("muted");
+      }
+    }
+    const show = () => {
+      if (request !== mine) return false;
+      for (const host of hosts)
+        host.toggleAttribute(
+          "data-cutroom-shown",
+          host.dataset.cutroomVersion === selected,
+        );
+      requestAnimationFrame(() =>
+        parent.postMessage({ source, shown: data.version }, "*"),
+      );
+      return true;
+    };
+    const video = hosts.find(
+      (host): host is HTMLVideoElement =>
+        host instanceof HTMLVideoElement &&
+        host.dataset.cutroomVersion === selected,
+    );
+    if (video && win.__cutroomShowAudition)
+      win.__cutroomShowAudition(video, show);
+    else show();
+  });
+}
+const AUDITION_SCRIPT = `<script data-cutroom-audition>(${installAudition.toString()})(${JSON.stringify(AUDITION_MESSAGE)})</script>`;
 
 type Element = DefaultTreeAdapterTypes.Element;
 
@@ -77,12 +153,22 @@ export async function auditionDocument(
   clipId: string,
 ): Promise<string> {
   const source = await readSource(project, composition);
+  const facts = await compositionMediaFacts(
+    project,
+    composition,
+    source.content,
+  );
   const parsed = parseComposition(source.content, emptyTimelineSettings(), {
     scope: compositionScope(composition),
+    mediaLengths: facts.lengths,
+    silentMedia: facts.silent,
+    mediaFiles: facts.files,
   });
   const clip = parsed.timeline.clips.find(({ id }) => id === clipId);
   const element = parsed.elements.get(clipId);
   if (!clip?.versions || !element) return html;
+  if (mediaVersions(clip.kind))
+    return mediaAudition(html, composition, parsed, clipId);
   const active = activeVersion(clip);
   const standby: string[] = [];
   for (const [index, version] of clip.versions.entries()) {
@@ -149,4 +235,102 @@ export async function auditionDocument(
     standby.join("") +
     html.slice(location.endOffset)
   );
+}
+
+/** Alternate takes share the compiled clip's layout, timing, colour and audio routing. */
+function mediaAudition(
+  html: string,
+  composition: string,
+  parsed: ReturnType<typeof parseComposition>,
+  clipId: string,
+) {
+  const { clips, fps } = parsed.timeline;
+  const picture = clips.find(({ id }) => id === clipId);
+  if (!picture?.versions) return html;
+  const document = parse(html, { sourceCodeLocationInfo: true });
+  const headEnd = findByName(document.childNodes, "head")?.sourceCodeLocation
+    ?.endTag?.startOffset;
+  if (headEnd === undefined) return html;
+  const active = activeVersion(picture);
+  const edits = [{ at: headEnd, html: AUDITION_STYLE + AUDITION_SCRIPT }];
+  for (const clip of [picture, ...versionPartners(clips, picture)]) {
+    const host = findById(document.childNodes, clip.id);
+    const loc = host?.sourceCodeLocation;
+    if (
+      !host ||
+      !loc?.startTag ||
+      (host.tagName !== "video" && host.tagName !== "audio")
+    )
+      continue;
+    const attrs = Object.fromEntries(
+      host.attrs.map(({ name, value }) => [name, value]),
+    );
+    const group: AttributeChange[] = [
+      ["data-cutroom-version-owner", clip.id],
+      ["data-cutroom-version", String(active)],
+      ["data-cutroom-shown", ""],
+    ];
+    edits.push({
+      at: loc.startTag.endOffset - 1,
+      html: attributeMarkup(group),
+    });
+    const keep = Object.entries(attrs).filter(
+      ([name]) =>
+        !OWN_ATTRIBUTES.has(name) &&
+        ![
+          "data-media-start",
+          "data-playback-start",
+          "data-hf-render-id",
+          "data-hf-cutroom-clip-id",
+          "preload",
+        ].includes(name) &&
+        !(
+          clip.versionSilent &&
+          attrs[VERSION_SILENT_ATTRIBUTE] !== "muted" &&
+          name === "muted"
+        ),
+    );
+    for (const [index, version] of picture.versions.entries()) {
+      if (index === active || version.offline || version.fits === false)
+        continue;
+      if (host.tagName === "audio" && clip !== picture && version.silent)
+        continue;
+      const path = localMediaPath(composition, version.src);
+      if (
+        !path ||
+        path.startsWith("../") ||
+        path.split("/").some((part) => part.startsWith("."))
+      )
+        continue;
+      const url = path.split("/").map(encodeURIComponent).join("/");
+      const start =
+        versionStart(version, fps) +
+        (clip.mediaStart ?? 0) -
+        (picture.mediaStart ?? 0) -
+        consumedSource(
+          clip,
+          clip.transitionIn ? framesBefore(clip.transitionIn) : 0,
+          fps,
+        );
+      const alternate: AttributeChange[] = [
+        ["id", `cutroom-version-${clip.id}-${index}`],
+        ["data-cutroom-version-owner", clip.id],
+        ["data-cutroom-version", String(index)],
+        ["src", url],
+        ["preload", "auto"],
+        ["data-media-start", String(Math.max(0, start))],
+        ...keep,
+      ];
+      edits.push({
+        at: loc.endOffset,
+        html: `<${host.tagName}${attributeMarkup(alternate)}></${host.tagName}>`,
+      });
+    }
+  }
+  return edits
+    .toSorted((a, b) => b.at - a.at)
+    .reduce(
+      (page, { at, html }) => page.slice(0, at) + html + page.slice(at),
+      html,
+    );
 }

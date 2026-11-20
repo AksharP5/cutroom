@@ -1,6 +1,13 @@
 import { PipelineResponseSchema } from "../../shared/pipeline";
 import type { FootageColour, PipelinePlan } from "../../shared/pipeline";
-import type { TimelineView } from "../../shared/timeline/schema";
+import type { Clip, TimelineView, Version } from "../../shared/timeline/schema";
+import {
+  activeVersion,
+  consumedSource,
+  versionStart,
+} from "../../shared/timeline/versions";
+import { framesBefore } from "../../shared/timeline/transition";
+import { useVersions } from "../edit/versions";
 import { localMediaPath } from "../../shared/media";
 import { useGradeBypass, usePreviewGrade } from "../edit/preview";
 import { previewGrades } from "./grades";
@@ -88,8 +95,8 @@ async function openSource(
   signal: AbortSignal,
   {
     colour,
-    scrubProxy = false,
-  }: { colour?: FootageColour; scrubProxy?: boolean } = {},
+    window = false,
+  }: { colour?: FootageColour; window?: "scrub" | "audition" | false } = {},
 ) {
   const { read, size } = await openRanges(url, signal);
   const track = await readVideoTrack(read, size);
@@ -102,7 +109,7 @@ async function openSource(
       read,
       size,
       colourOf(track, colour),
-      scrubProxy,
+      window,
     ),
     intrinsic: {
       width: turned ? track.height : track.width,
@@ -214,7 +221,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         if (found.proxy || asking || performance.now() - askedAt < 2000)
           return asking;
         askedAt = performance.now();
-        asking = openSource(proxyUrl, closing.signal, { scrubProxy: true })
+        asking = openSource(proxyUrl, closing.signal, { window: "scrub" })
           .then(({ createDecoder }) => {
             if (!closing.signal.aborted) found.proxy = createDecoder();
           })
@@ -227,6 +234,160 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     return found;
   });
   const source = sources.get;
+
+  type Prepared = {
+    decoder: SourceDecoder;
+    intrinsic: { width: number; height: number };
+    grid: FrameGrid;
+  };
+  let audition: {
+    key: string;
+    clip: Clip;
+    controller: AbortController;
+    takes: Map<number, Promise<Prepared>>;
+  } | null = null;
+  const disposeAudition = () => {
+    if (!audition) return;
+    audition.controller.abort();
+    for (const take of audition.takes.values())
+      void take.then(
+        ({ decoder }) => decoder.close(),
+        () => {},
+      );
+    audition = null;
+  };
+  const auditionTime = (
+    clip: Clip,
+    version: Version,
+    frame: number,
+    view: TimelineView,
+  ) =>
+    versionStart(version, view.timeline.fps) +
+    consumedSource(clip, frame - clip.start, view.timeline.fps) +
+    1e-5;
+  function prepareAudition(
+    view: TimelineView,
+    frame: number,
+    playing: boolean,
+  ) {
+    const { open, hovered } = useVersions.getState();
+    const clip = open
+      ? view.timeline.clips.find(({ id }) => id === open)
+      : undefined;
+    if (clip?.kind !== "video" || !clip.versions || !plan?.drawable[clip.id]) {
+      if (audition) {
+        const used = new Set(view.timeline.clips.map(({ src }) => src));
+        for (const { src } of audition.clip.versions ?? []) {
+          if (used.has(src)) continue;
+          void sources.remove(src)?.then(closeSource, () => {});
+        }
+        disposeAudition();
+      }
+      return null;
+    }
+    const key = JSON.stringify([
+      open,
+      clip.versions.map(({ src, sourceIn, fits, offline }) => [
+        src,
+        sourceIn,
+        fits,
+        offline,
+      ]),
+    ]);
+    if (audition?.key !== key) {
+      disposeAudition();
+      const controller = new AbortController();
+      const signal = AbortSignal.any([controller.signal, closing.signal]);
+      const takes = new Map<number, Promise<Prepared>>();
+      audition = { key, clip, controller, takes };
+      for (const [index, version] of clip.versions.entries()) {
+        if (
+          version.offline ||
+          version.fits === false ||
+          index === activeVersion(clip)
+        )
+          continue;
+        const path = localMediaPath(view.composition, version.src);
+        if (!path) continue;
+        const prepared = Promise.all([
+          openSource(mediaUrl(projectId, path), signal, {
+            colour: sourceColours[version.src],
+            window: "audition",
+          }),
+          fetch(
+            `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/frames?path=${encodeURIComponent(path)}`,
+            { signal },
+          ).then(async (response) =>
+            response.ok ? FrameGridSchema.parse(await response.json()) : null,
+          ),
+        ]).then(([{ createDecoder, intrinsic }, grid]) => ({
+          decoder: createDecoder(),
+          intrinsic,
+          grid,
+        }));
+        prepared.catch(() => {});
+        takes.set(index, prepared);
+      }
+    }
+    const warming = audition;
+    const selected = hovered ?? activeVersion(clip);
+    const first =
+      clip.start - (clip.transitionIn ? framesBefore(clip.transitionIn) : 0);
+    const warmAt = playing
+      ? Math.max(first, Math.min(frame, clip.start + clip.duration - 1))
+      : clip.start;
+    for (const [index, pending] of warming.takes) {
+      const version = clip.versions[index]!;
+      void pending.then(
+        ({ decoder, grid }) => {
+          if (warming !== audition) return;
+          const seconds = auditionTime(clip, version, warmAt, view);
+          const sourceFrame = decoder.indexAt(
+            grid ? frameSeek(grid, seconds) : seconds,
+          );
+          const end = Math.min(
+            decoder.frameCount - 1,
+            sourceFrame + decoder.room(5) - 1,
+          );
+          if (!decoder.has(sourceFrame) || !decoder.has(end))
+            decoder.prefetch(sourceFrame, end);
+        },
+        () => {},
+      );
+    }
+    // The version that was shown when the list opened borrows its ordinary source decoder.
+    // Keep its next pictures available even when an alternate is playing.
+    if (
+      hovered !== null &&
+      !warming.takes.has(activeVersion(warming.clip)) &&
+      warming.clip.src
+    ) {
+      const src = warming.clip.src;
+      const original = clip.versions[activeVersion(warming.clip)]!;
+      void source(src).then(
+        (found) => {
+          if (warming !== audition) return;
+          const index = indexAt(
+            found,
+            auditionTime(clip, original, warmAt, view),
+          );
+          const lane = laneFor(found, index);
+          const end = Math.min(lane.frameCount - 1, index + lane.room(5) - 1);
+          if (!lane.has(index) || !lane.has(end)) lane.prefetch(index, end);
+        },
+        () => {},
+      );
+    }
+    const version = clip.versions[selected];
+    return version && !version.offline && version.fits !== false
+      ? { clip, version, decoder: warming.takes.get(selected) }
+      : null;
+  }
+
+  const closeSource = ({ lanes, proxy }: Source) => {
+    for (const lane of lanes) lane.close();
+    proxy?.close();
+  };
 
   let drawing = false;
   let wanted = false;
@@ -281,6 +442,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const view = useTimeline.getState().view;
     const { frame, state } = useTransport.getState();
     if (!view || view.composition !== "index.html") return;
+    const alternate = prepareAudition(view, frame, state.kind === "playing");
     const shown = visibleAt(view.timeline, drawingPlan, frame);
     if (!shown) {
       stop("the layers at the playhead need to be composited together");
@@ -303,9 +465,37 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     );
     const pictures = await Promise.all(
       shown.map(async (layer) => {
-        const found = await source(layer.clip.src!);
+        const selected =
+          alternate?.clip.id === layer.clip.id ? alternate : null;
+        if (selected?.decoder) {
+          const { decoder, intrinsic, grid } = await selected.decoder;
+          const seconds = auditionTime(
+            layer.clip,
+            selected.version,
+            frame,
+            view,
+          );
+          const index = decoder.indexAt(
+            grid ? frameSeek(grid, seconds) : seconds,
+          );
+          return {
+            layer,
+            found: { intrinsic, proxy: null },
+            index,
+            lane: decoder,
+            decoder,
+            cold: false,
+            request: decoder.frame(index, playing),
+          };
+        }
+        const found = await source(selected?.version.src ?? layer.clip.src!);
         if (!found.proxy) void found.askProxy();
-        const index = indexAt(found, layer.time);
+        const index = indexAt(
+          found,
+          selected
+            ? auditionTime(layer.clip, selected.version, frame, view)
+            : layer.time,
+        );
         const lane = laneFor(found, index);
         // Moving seeks draw the proxy, whose frame N is the source's frame N.
         const decoder = (moving ? found.proxy : null) ?? lane;
@@ -408,7 +598,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     if (plan !== drawingPlan || closing.signal.aborted) return;
     for (const { found, lane, index } of pictures) {
       if (moving) continue;
-      found.playing = lane;
+      if ("playing" in found) found.playing = lane;
       if (playing) lane.prefetch(index + 1, index + lane.room(8));
     }
     if (playing) prepare(view, frame, LOOKAHEAD, OPENING);
@@ -531,6 +721,10 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   void refresh();
 
   const unsubscribe = [
+    useVersions.subscribe((state, previous) => {
+      if (state.open !== previous.open || state.hovered !== previous.hovered)
+        queueMicrotask(() => void draw());
+    }),
     usePreviewGrade.subscribe(() => void draw()),
     useGradeBypass.subscribe(() => void draw()),
     useTransport.subscribe((state, previous) => {
@@ -556,6 +750,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     },
     dispose() {
       closing.abort();
+      disposeAudition();
       compositor.dispose();
       grades.dispose();
       for (const stop of unsubscribe) stop();

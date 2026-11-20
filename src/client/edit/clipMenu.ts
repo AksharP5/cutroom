@@ -2,6 +2,9 @@ import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
 import type { MenuItem } from "../components/menu";
 import { isAudioKind } from "../../shared/timeline/schema";
+import { addClipVersion, canAddVersion } from "./versions";
+import { useTimeline } from "./timeline";
+import { mediaVersions, versionOwner } from "../../shared/timeline/versions";
 import { isTitle } from "../../shared/timeline/title";
 import { takesGrade } from "../../shared/timeline/grade";
 
@@ -74,6 +77,9 @@ export function clipMenuItems({
         : pictures.length === 1
           ? pictures[0]
           : undefined;
+  const versioned = clicked ?? (clips.length === 1 ? clips[0] : undefined);
+  const versionClip = versioned && versionOwner(timeline.clips, versioned);
+  const view = useTimeline.getState().view;
   const bed = sound.find((clip) => clip.id === clicked?.id) ?? sound[0];
   const voices = sound.filter((clip) => clip !== bed);
   return [
@@ -102,6 +108,15 @@ export function clipMenuItems({
     { action: "editBackspace", disabled: none },
     { action: "editDelete", disabled: none },
     { action: "editClipEnabled", disabled: none },
+    ...(versionClip && mediaVersions(versionClip.kind)
+      ? [
+          {
+            label: "Add version",
+            run: () => addClipVersion(versionClip),
+            disabled: !view || !canAddVersion(versionClip, view),
+          },
+        ]
+      : []),
     {
       action: "editLink",
       disabled: clips.length < 2 && !clips.some((clip) => clip.link),

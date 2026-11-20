@@ -63,6 +63,10 @@ interface PreviewWindow extends DiagnosticWindow {
     };
   };
   __cutroomParkedMedia?: ReadonlyMap<HTMLMediaElement, unknown>;
+  __cutroomShowAudition?: (
+    video: HTMLVideoElement,
+    show: () => boolean,
+  ) => void;
   __player?: {
     play(): void;
     pause(): void;
@@ -1742,7 +1746,9 @@ function installPreviewBridge(
   let pipelineDrawn = new Set<string>();
   /** A video's timeline id: its id, or HyperFrames' own when it has none. */
   const clipId = (media: HTMLMediaElement) =>
-    media.getAttribute("id") ?? media.getAttribute("data-hf-id");
+    media.getAttribute("data-cutroom-version-owner") ??
+    media.getAttribute("id") ??
+    media.getAttribute("data-hf-id");
   const drawnByPipeline = (media: HTMLMediaElement) =>
     pipelineDrawn.has(clipId(media) ?? "");
   const writePipelineSheet = () => {
@@ -1750,6 +1756,7 @@ function installPreviewBridge(
     const drawn = [...pipelineDrawn].flatMap((id) => [
       `[id="${CSS.escape(id)}"]`,
       `:not([id])[data-hf-id="${CSS.escape(id)}"]`,
+      `[data-cutroom-version-owner="${CSS.escape(id)}"]`,
     ]);
     // A frame whose document's colour scheme differs from the dark editor's gets an opaque white
     // backdrop. The scheme only picks system colours, so the default text colour stays black.
@@ -2176,6 +2183,25 @@ function installPreviewBridge(
       ([media, facts]) => facts.browserHostile && path.endsWith(media),
     );
   };
+  document.addEventListener(
+    "loadedmetadata",
+    (event) => {
+      const video = event.target;
+      if (
+        !(video instanceof HTMLVideoElement) ||
+        !video.hasAttribute("data-cutroom-version-owner") ||
+        video.hasAttribute("data-cutroom-shown") ||
+        parked.has(video) ||
+        win.__player?.isPlaying()
+      )
+        return;
+      const start = Number(video.getAttribute("data-media-start") ?? 0);
+      const at = expectedMediaTime(video) ?? start;
+      if (Math.abs(video.currentTime - at) > 1e-4)
+        video.currentTime = at + 1e-5;
+    },
+    true,
+  );
   const visibleVideos = () => {
     const hidden = new Set([
       ...holds.keys(),
@@ -2905,6 +2931,62 @@ function installPreviewBridge(
       frameStatus("The preview did not supply a playback frame in time.");
     }, FRAME_TIMEOUT);
   };
+  /**
+   * A warm decoder can show immediately. While a new decoder seeks, the first picture of
+   * the slot can come from the same all-intra proxy that scrubbing uses.
+   */
+  win.__cutroomShowAudition = (video, show) => {
+    const ready = () => video.readyState >= 2 && !video.seeking;
+    if (retired || drawAuditionWithoutHold(video)) {
+      show();
+      return;
+    }
+    if (ready()) {
+      show();
+      releasePlaying(video);
+      return;
+    }
+    let shown = false;
+    const reveal = () => {
+      if (retired || shown) return false;
+      shown = true;
+      video.removeEventListener("seeked", exact);
+      video.removeEventListener("loadeddata", exact);
+      video.removeEventListener("error", reveal);
+      return show();
+    };
+    const exact = () => {
+      if (ready()) reveal();
+    };
+    video.addEventListener("seeked", exact);
+    video.addEventListener("loadeddata", exact);
+    video.addEventListener("error", reveal, { once: true });
+    void proxyFor(video)
+      .then((proxy) => {
+        if (!proxy || retired || shown) return;
+        const start = Number(video.getAttribute("data-media-start") ?? "0");
+        const at = framePosition(video, start + 1e-5);
+        const draw = () => {
+          if (ready()) return exact();
+          if (proxy.error || retired || shown) return;
+          try {
+            if (reveal()) {
+              showHold(video, new VideoFrame(proxy), true);
+              releasePlaying(video);
+            }
+          } catch {}
+        };
+        if (Math.abs(proxy.currentTime - at) <= 1e-4) draw();
+        else {
+          proxy.addEventListener("seeked", draw, { once: true });
+          proxy.currentTime = at;
+        }
+      })
+      .catch(() => {});
+  };
+  const drawAuditionWithoutHold = (video: HTMLVideoElement) =>
+    parked.has(video) || video.hasAttribute("data-cutroom-shown");
+
   document.addEventListener(
     "play",
     (event) => {

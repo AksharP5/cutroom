@@ -123,12 +123,12 @@ export class SourceDecoder {
     sample: ReturnType<typeof blockReader>,
     indexOf: ReadonlyMap<number, number>,
     colour: VideoColorSpaceInit,
-    scrubProxy: boolean,
+    shortWindow: "scrub" | "audition" | false,
   ) {
     this.#track = track;
-    // Every scrub proxy picture is a keyframe. Re-decoding one is cheap, and
-    // random access gains nothing from keeping a frame-threaded decoder full.
-    this.#keep = scrubProxy ? 4 : KEPT;
+    // Scrubbing can decode its keyframes again. A warmed take follows only the current window.
+    this.#keep =
+      shortWindow === "scrub" ? 4 : shortWindow === "audition" ? 8 : KEPT;
     this.#sample = sample;
     this.#indexOf = indexOf;
     this.#config = {
@@ -141,7 +141,7 @@ export class SourceDecoder {
       hardwareAcceleration: "prefer-software",
       // Frame threading, as the editor's <video> decodes: low-latency decoding kept up with 4K60
       // only 1.5 times over, and playback fell behind it to 2 pictures a second.
-      optimizeForLatency: scrubProxy,
+      optimizeForLatency: Boolean(shortWindow),
     };
     this.#decoder = this.#create();
   }
@@ -152,13 +152,13 @@ export class SourceDecoder {
     read: ReadRange,
     size: number,
     colour: VideoColorSpaceInit,
-    scrubProxy: boolean,
+    shortWindow: "scrub" | "audition" | false,
   ) {
     const sample = blockReader(read, size);
     const indexOf = new Map<number, number>();
     for (const [index, sampleIndex] of track.shown.entries())
       indexOf.set(Math.round(track.samples[sampleIndex]!.time * 1e6), index);
-    return () => new SourceDecoder(track, sample, indexOf, colour, scrubProxy);
+    return () => new SourceDecoder(track, sample, indexOf, colour, shortWindow);
   }
 
   static supported(track: VideoTrack) {

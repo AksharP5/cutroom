@@ -1,9 +1,115 @@
 import { create } from "zustand";
+import { mediaKind, sourceUrl } from "../../shared/media";
+import { clipName } from "../../shared/timeline/labels";
+import { MAX_VERSIONS } from "../../shared/timeline/schema";
 import type { Clip } from "../../shared/timeline/schema";
-import { activeVersion } from "../../shared/timeline/versions";
+import {
+  activeVersion,
+  mediaVersions,
+  versionOwner,
+  versionPartners,
+} from "../../shared/timeline/versions";
 import { auditionPicture } from "./preview";
-import { useTimeline } from "./timeline";
+import { editTimeline, useTimeline } from "./timeline";
 import { transport, useTransport } from "./transport";
+import { api } from "../api";
+import { SourceViewSchema } from "../../shared/timeline/view";
+import { showToast } from "../workspace";
+import type { MediaDrag } from "../timeline/mediaDrag";
+
+export function canAddVersion(
+  clip: Clip,
+  view: NonNullable<ReturnType<typeof useTimeline.getState>["view"]>,
+) {
+  const { clips, tracks } = view.timeline;
+  return Boolean(
+    clip.src &&
+    mediaVersions(clip.kind) &&
+    versionOwner(clips, clip) === clip &&
+    (clip.versions?.length ?? 0) < MAX_VERSIONS &&
+    !tracks.some(
+      (track) =>
+        track.locked &&
+        [clip, ...versionPartners(clips, clip)].some(
+          ({ track: index }) => index === track.index,
+        ),
+    ),
+  );
+}
+
+export function versionMediaTarget(
+  state: ReturnType<typeof useTimeline.getState>,
+  kind: MediaDrag["kind"],
+) {
+  if (!state.view || kind === "image") return undefined;
+  const { clips } = state.view.timeline;
+  const ofKind = clips.filter(
+    (clip) =>
+      state.selection.ids.has(clip.id) &&
+      (kind === "video"
+        ? clip.kind === "video"
+        : clip.kind === "audio" || clip.kind === "voiceover") &&
+      versionOwner(clips, clip) === clip,
+  );
+  return ofKind.length === 1 &&
+    state.selection.ids.size ===
+      1 +
+        versionPartners(clips, ofKind[0]!).filter(({ id }) =>
+          state.selection.ids.has(id),
+        ).length
+    ? ofKind[0]
+    : undefined;
+}
+
+export function addClipVersion(
+  clip: Clip,
+  file?: Pick<MediaDrag, "path" | "start">,
+) {
+  const { projectId, view } = useTimeline.getState();
+  if (!projectId || !view || !canAddVersion(clip, view)) return;
+  const leaf = file?.path.split("/").at(-1);
+  const name = leaf
+    ?.slice(0, leaf.lastIndexOf("."))
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+  void editTimeline(projectId, `Added a version to ${clipName(clip)}`, () => [
+    {
+      type: "addVersion",
+      clipId: clip.id,
+      ...(file && {
+        version: {
+          name: name || leaf || "Take",
+          src: sourceUrl(view.composition, file.path),
+        },
+        sourceSeconds: file.start ?? 0,
+      }),
+    },
+  ]);
+}
+
+export async function addMediaVersion(
+  projectId: string,
+  clip: Clip,
+  path: string,
+) {
+  try {
+    const marks = await api(
+      `/projects/${encodeURIComponent(projectId)}/source-marks?path=${encodeURIComponent(path)}`,
+      SourceViewSchema,
+    );
+    const state = useTimeline.getState();
+    const kind = mediaKind(path)?.kind;
+    if (
+      state.projectId === projectId &&
+      kind &&
+      versionMediaTarget(state, kind)?.id === clip.id
+    )
+      addClipVersion(clip, { path, start: marks.in ?? 0 });
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error));
+  }
+}
 
 /**
  * A clip's versions in the editor. The preview document can carry every version of one clip,
@@ -34,7 +140,8 @@ export function auditionClip(): string | null {
   const { selection } = useTimeline.getState();
   if (selection.ids.size !== 1) return null;
   const [id = null] = selection.ids;
-  return findClip(id)?.versions ? id : null;
+  const clip = findClip(id);
+  return clip?.versions && !mediaVersions(clip.kind) ? id : null;
 }
 
 /** The preview query that asks for a document carrying `clipId`'s versions. */
@@ -58,23 +165,31 @@ useVersions.subscribe(showVersion);
 useTimeline.subscribe(showVersion);
 
 /** Where the playhead was before the list started playing a clip, to return to. */
-let returnTo: number | null = null;
+let returnTo: { frame: number; playing: boolean } | null = null;
+
+function stopAudition() {
+  useVersions.setState({ hovered: null });
+  if (!returnTo) return;
+  const prior = returnTo;
+  returnTo = null;
+  transport.loopSpan(null);
+  if (!prior.playing) transport.dispatch({ type: "stop" });
+  transport.seek(prior.frame);
+}
 
 /** Plays `clip` in a loop showing version `index`, or with null stops and returns. */
 export function hoverVersion(clip: Clip, index: number | null) {
-  useVersions.setState({ hovered: index });
   if (index === null) {
-    if (returnTo === null) return;
-    transport.loopSpan(null);
-    transport.seek(returnTo);
-    returnTo = null;
+    stopAudition();
     return;
   }
+  useVersions.setState({ hovered: index });
   if (returnTo !== null) return;
-  returnTo = useTransport.getState().frame;
+  const { frame, state } = useTransport.getState();
+  returnTo = { frame, playing: state.kind === "playing" };
   transport.loopSpan({ first: clip.start, end: clip.start + clip.duration });
   transport.seek(clip.start);
-  transport.dispatch({ type: "toggle" });
+  if (!returnTo.playing) transport.dispatch({ type: "toggle" });
 }
 
 export function openVersions(clipId: string) {
@@ -82,7 +197,6 @@ export function openVersions(clipId: string) {
 }
 
 export function closeVersions() {
-  const clip = findClip(useVersions.getState().open);
-  if (clip) hoverVersion(clip, null);
+  stopAudition();
   useVersions.setState({ open: null, hovered: null });
 }

@@ -296,18 +296,19 @@ function name(commands: Command[], timeline: Timeline, composition: string) {
   return { commands: named, creates, origins, timeline: current };
 }
 
-function createsAudioGroup(commands: readonly Command[]) {
+function needsServerProjection(commands: readonly Command[]) {
   return commands.some(
     (command) =>
-      command.type === "routeAudioGroup" &&
-      command.group !== null &&
-      typeof command.group !== "string",
+      (command.type === "routeAudioGroup" &&
+        command.group !== null &&
+        typeof command.group !== "string") ||
+      (command.type === "addVersion" && command.version !== undefined),
   );
 }
 
 /**
- * Reapply pending edits that still fit the server's last answer. A new audio group
- * appears once the server returns its ID, so another edit can safely name it.
+ * Reapply pending edits that still fit the server's last answer. New groups need their saved
+ * IDs, and a take from a new file needs its measured length before it can be shown.
  */
 function shown(projectId: string): TimelineView | null {
   if (confirmed?.projectId !== projectId) return null;
@@ -319,7 +320,7 @@ function shown(projectId: string): TimelineView | null {
     )
     .reduce((current, edit) => {
       if (
-        createsAudioGroup(edit.commands) ||
+        needsServerProjection(edit.commands) ||
         anchorsChanged(edit.anchors, current)
       )
         return current;
@@ -716,9 +717,8 @@ export async function editTimeline(
     const feedback =
       overwriteFeedback(view.timeline, timeline, commands) ||
       rippleFeedback(view.timeline, timeline, commands, clipboards);
-    // Other edits can look up this bus as soon as it appears in the inspector.
-    // Publish only the persisted ID from the server.
-    if (!createsAudioGroup(commands))
+    // Keep the shown view until a new group has its ID or a new file has been measured.
+    if (!needsServerProjection(commands))
       useTimeline.setState({ view: { ...view, timeline } });
     pending.push(made);
     onApply?.(timeline, commands, named.origins);
