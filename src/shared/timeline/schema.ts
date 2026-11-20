@@ -1332,6 +1332,9 @@ export const TimelineViewSchema = z.object({
     .optional(),
   agentChanges: z.array(z.string()).optional(),
   clipEdits: z.array(ClipEditSchema).optional(),
+  /** Active review entry keys for attributing outside edits without the full ledger. */
+  reviewEntries: z.array(z.string()).optional(),
+  historyId: z.string().optional(),
   composition: z.string(),
   revision: z.string(),
   timeline: TimelineSchema,

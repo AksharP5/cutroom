@@ -5,6 +5,13 @@ import {
   TimelineViewSettingsSchema,
 } from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
+import {
+  ChangeDetailsInputSchema,
+  ledgerChanges,
+  pendingEdit,
+  reviewRows,
+} from "../../shared/timeline/reviewChanges";
+import type { InspectorChange } from "../../shared/timeline/reviewChanges";
 import type { ClipSourcesSchema } from "../../shared/code";
 import { destinationTracks, shownTracks } from "../../shared/timeline/tracks";
 import { projectViews } from "../projects/view";
@@ -649,8 +656,66 @@ export function createTimelineRoutes(
           };
         }
       },
+      c.req.query("clipEdits") === "1",
     );
     return c.json(snapshot, snapshot.error === undefined ? 200 : 422);
+  });
+  api.post("/projects/:id/timeline/changes", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(ChangeDetailsInputSchema, await c.req.json());
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
+    if (input.view === "review") {
+      const edits = await reviews.changeDetails(project, composition);
+      const pending = edits.filter(pendingEdit);
+      return c.json({
+        hasChanges: pending.length > 0,
+        compositionChanges: reviewRows(
+          input.includeClips
+            ? pending
+            : pending.filter((edit) => edit.clipId === null),
+        ),
+      });
+    }
+    const snapshot = await reviews.readComposition(
+      project,
+      composition,
+      async () => {
+        try {
+          return {
+            timeline: (await read(project, composition)).parsed.timeline,
+          };
+        } catch (error) {
+          if (!(error instanceof TimelineError)) throw error;
+          return { error };
+        }
+      },
+    );
+    if (snapshot.error) return refused(c, snapshot.error);
+    const { clipEdits = [], timeline } = snapshot;
+    const selected =
+      input.clipIds === undefined ? undefined : new Set(input.clipIds);
+    const order = new Map(
+      timeline.clips
+        .toSorted((a, b) => a.start - b.start)
+        .map((clip, index) => [clip.id, index]),
+    );
+    const rows: InspectorChange[] = ledgerChanges(clipEdits, selected).map(
+      ({ members, ...row }) => {
+        let revealClipId: string | undefined;
+        let earliest = Infinity;
+        for (const { clipId } of members) {
+          if (clipId === null) continue;
+          const index = order.get(clipId);
+          if (index === undefined || index >= earliest) continue;
+          earliest = index;
+          revealClipId = clipId;
+        }
+        return { ...row, revealClipId };
+      },
+    );
+    return c.json({ rows });
   });
   // The code panel follows the selection to each clip's element in the composition's source.
   api.get("/projects/:id/timeline/sources", async (c) => {
@@ -931,6 +996,7 @@ export function createTimelineRoutes(
       const {
         view: { detectAnimation, ...result },
         encodedSummary,
+        historyId,
       } = await reviews.editComposition(
         project,
         batch.composition,
@@ -941,6 +1007,8 @@ export function createTimelineRoutes(
             batch,
             !!c.req.header(AGENT_HEADER),
           );
+          const history = await store.history(project);
+          const previous = history.list().at(-1)?.id;
           const result = await store.mutate(
             project,
             prepared.label,
@@ -960,8 +1028,10 @@ export function createTimelineRoutes(
                 }
               : undefined,
           );
+          const committed = history.list().at(-1)?.id;
           return {
             view: result,
+            historyId: committed !== previous ? committed : undefined,
             summary: prepared.summary,
             encodedSummary: prepared.encodedSummary,
             batchLabels: prepared.batchLabels,
@@ -975,9 +1045,10 @@ export function createTimelineRoutes(
       );
       const response = {
         ...result,
-        ...(await reviews.clipChanges(project, batch.composition)),
+        ...(await reviews.changeSummary(project, batch.composition)),
+        historyId,
       };
-      // Beside the view, not in it: an edit answers with exactly what a read returns.
+      // The committed history ID lets Undo target this edit's ripple feedback.
       c.header(EDIT_SUMMARY_HEADER, encodedSummary);
       const followup = async () => {
         // Give the committed edit's response a turn to flush before running source inspection.

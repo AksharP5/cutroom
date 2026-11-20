@@ -67,7 +67,7 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
   const api = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await request.get(`${api}/timeline`)).json(),
+      await (await request.get(`${api}/timeline?clipEdits=1`)).json(),
     );
   const sound = async () =>
     (await read()).timeline.clips.find((clip) => clip.id === "sound")!;
@@ -416,7 +416,7 @@ test("linked Changes has one row per history entry and keeps review and session 
   const path = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await request.get(`${path}/timeline`)).json(),
+      await (await request.get(`${path}/timeline?clipEdits=1`)).json(),
     );
   await page.goto(`/#project/${project.id}`);
   await page.locator('[data-clip="picture"]').click();

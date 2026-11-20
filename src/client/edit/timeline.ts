@@ -68,8 +68,8 @@ export const useTimeline = create(() => ({
   parents: [] as readonly string[],
   /** The engine's last answer with the edits it has not answered yet applied on top. */
   view: null as TimelineView | null,
-  /** Edits still available to review when the current source cannot produce a timeline. */
-  recoveryEdits: null as NonNullable<TimelineView["clipEdits"]> | null,
+  /** Review can still show pending edits when authored source cannot produce a timeline. */
+  failedRead: null as ApiError | null,
   history: { canUndo: false, canRedo: false },
   /** Selected clip ids. A clip id names one clip for good, so an id is that clip or gone. */
   selection: emptySelection as Selection,
@@ -169,7 +169,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
     composition: ROOT_COMPOSITION,
     parents: [],
     view: null,
-    recoveryEdits: null,
+    failedRead: null,
     history: { canUndo: false, canRedo: false },
     selection: emptySelection,
   });
@@ -183,7 +183,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
       useTimeline.setState({
         projectId: null,
         view: null,
-        recoveryEdits: null,
+        failedRead: null,
         history: { canUndo: false, canRedo: false },
         selection: emptySelection,
       });
@@ -362,7 +362,7 @@ function settle(
   useTimeline.setState({
     view: shown(projectId),
     history,
-    recoveryEdits: null,
+    failedRead: null,
   });
   // The engine read this timeline, so an earlier refusal no longer stands.
   reportEditorError("timeline", null);
@@ -390,14 +390,13 @@ async function read(
         const history = await historyRead.catch(() => null);
         if (!signal?.aborted) select?.(null);
         if (!signal?.aborted && isOpen(projectId, composition)) {
-          const edits = TimelineEditsSchema.safeParse(error.body);
           if (history)
             historyHead = history.entries.findLast(
               (entry) => !entry.undone,
             )?.id;
           useTimeline.setState({
             ...(history && { history }),
-            recoveryEdits: edits.success ? (edits.data.clipEdits ?? []) : [],
+            failedRead: error,
           });
         }
       }
@@ -414,8 +413,20 @@ async function read(
     confirmed?.view.composition === view.composition &&
     confirmed.view.revision !== view.revision &&
     notify
-  )
-    noticeOutside(confirmed.view, view);
+  ) {
+    const before = confirmed.view;
+    const known = new Set(before.reviewEntries);
+    const entries =
+      view.reviewEntries?.filter((entry) => !known.has(entry)) ?? [];
+    const details = entries.length
+      ? await api(`${project(projectId)}/review/changes`, TimelineEditsSchema, {
+          ...json("POST", { composition, entries }),
+          signal,
+        }).catch(() => null)
+      : null;
+    if (signal?.aborted || !isOpen(projectId, composition)) return view;
+    noticeOutside(before, { ...view, clipEdits: details?.clipEdits });
+  }
   confirmed = { projectId, view };
   settle(projectId, view, history);
   return view;
@@ -445,7 +456,7 @@ export function showComposition(
       parents,
       selection,
       view: shown(projectId),
-      recoveryEdits: null,
+      failedRead: null,
     });
     if (view) reportEditorError("timeline", null);
   };
@@ -731,9 +742,7 @@ export async function editTimeline(
       try {
         const result = await send(made);
         revision = result?.revision;
-        historyId = result?.clipEdits
-          ?.filter((edit) => edit.label === made.label)
-          .at(-1)?.historyId;
+        historyId = result?.historyId;
         if (result?.skippedClips?.length) {
           const current = new Map(
             result.timeline.clips.map((clip) => [clip.id, clip]),

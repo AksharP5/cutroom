@@ -25,7 +25,7 @@ async function setup(name = "Card") {
   const base = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await fixture.request(`${base}/timeline`)).json(),
+      await (await fixture.request(`${base}/timeline?clipEdits=1`)).json(),
     );
   return {
     ...fixture,
