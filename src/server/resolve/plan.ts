@@ -5,7 +5,7 @@ import {
   parseAutomation,
   sampleAutomationLane,
 } from "@hyperframes/core/audio-automation";
-import { clampFadesToDuration, fadeGain } from "@hyperframes/core/audio-fade";
+import { clampFadesToDuration } from "@hyperframes/core/audio-fade";
 import { getAudioFxDef } from "@hyperframes/core/audio-fx";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import type { FxNode } from "../../shared/timeline/fx";
@@ -43,7 +43,7 @@ import { oneLine } from "./text";
 
 /**
  * A clip's media as the planner reads it: a probed video or audio file, or a still image. `sound`
- * stands in for a file's sound where Resolve can't decode it.
+ * stands in for a file's sound when Resolve needs a WAV copy.
  */
 export type ClipMedia =
   | { kind: "file"; facts: MediaFacts; sound?: MediaFacts }
@@ -88,6 +88,15 @@ interface RetimeTarget extends ClipTarget {
   percent: number;
 }
 
+interface FadeTarget extends ClipTarget {
+  fadeIn: number;
+  fadeOut: number;
+}
+
+interface StereoTarget extends ClipTarget {
+  source: string;
+}
+
 interface TrackTarget {
   kind: ClipTarget["kind"];
   index: number;
@@ -100,6 +109,8 @@ export interface Plan {
   grades: GradeTarget[];
   transitions: TransitionTarget[];
   retimes: RetimeTarget[];
+  fades: FadeTarget[];
+  stereo: StereoTarget[];
   links: ClipTarget[][];
   tracks: TrackTarget[];
   timelineMarkers: Marker[];
@@ -624,11 +635,6 @@ function gainCurve(context: Context, clip: Clip) {
     })),
   ];
   const seconds = (frames: number) => (frames * fps.den) / fps.num;
-  const duration = seconds(clip.duration);
-  const fades = clampFadesToDuration(
-    { fadeIn: seconds(clip.fadeIn), fadeOut: seconds(clip.fadeOut) },
-    duration,
-  );
   return (frame: number) => {
     const time = seconds(frame);
     const level = lane
@@ -640,13 +646,7 @@ function gainCurve(context: Context, clip: Clip) {
         : Number(entry.effect.params.gain ?? 0);
       return sum + gain;
     }, 0);
-    return (
-      level *
-      fadeGain(time, duration, fades) *
-      trackGain *
-      groupGain *
-      10 ** (fxDb / 20)
-    );
+    return level * trackGain * groupGain * 10 ** (fxDb / 20);
   };
 }
 
@@ -1324,6 +1324,22 @@ export function planResolveTimeline(input: PlanInput): Plan {
     mediaPaths: [...context.mediaPaths],
     transitions,
     retimes,
+    fades: audible.flatMap((clip) =>
+      clip.fadeIn || clip.fadeOut
+        ? [
+            {
+              ...soundTarget(clip),
+              ...clampFadesToDuration(clip, clip.duration),
+            },
+          ]
+        : [],
+    ),
+    stereo: audible.flatMap((clip) => {
+      const sound = soundOf(media(clip) as FileMedia).facts;
+      return sound.audio?.channels === 2
+        ? [{ ...soundTarget(clip), source: fileUrl(sound.path) }]
+        : [];
+    }),
     links,
     tracks: targetTracks,
     notes: context.notes,
