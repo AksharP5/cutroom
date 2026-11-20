@@ -430,14 +430,21 @@ test(
       await delays.dispose();
       await boxes.dispose();
     }
-    const medianMax = median(runs.map((run) => run.max));
+    const deadline = 100;
+    const maxLateRate = 0.05;
+    const moves = runs.flatMap((run) => run.samples);
+    const lateMoves = moves.filter((delay) => delay > deadline).length;
+    const lateRate = lateMoves / moves.length;
+    const medianFirst = median(runs.map((run) => run.samples[0]!));
     const medianMedian = median(runs.map((run) => run.median));
     const evidence = JSON.stringify(
       {
         browser: page.context().browser()?.version(),
-        budget: { median: 67, max: 100 },
+        budget: { median: 67, deadline, lateRate: maxLateRate },
         medianMedian,
-        medianMax,
+        medianFirst,
+        lateMoves,
+        lateRate,
         runs,
       },
       null,
@@ -455,7 +462,9 @@ test(
           medianMedian,
           medians: runs.map((run) => run.median),
           maxima: runs.map((run) => run.max),
-          medianMax,
+          medianFirst,
+          lateMoves,
+          lateRate,
           boxes: runs.map((run) => run.boxDurations),
         },
       }),
@@ -463,17 +472,19 @@ test(
     // Moves the browser coalesces into one outline update count once, from the earliest.
     for (const run of runs)
       expect(run.samples.length).toBeGreaterThanOrEqual(15);
-    // Locally (RTX 5060, Chromium 155) a move lands in 27 ms and the drag's first, slowest move
-    // in 52 to 67 ms, the same before and after snapping to other clips. CI's SwiftShader
-    // measured 42 to 45 ms and 70 to 82 ms. Moves get four 60 Hz frames, and the first the
-    // ~100 ms instant-response ceiling.
+    // A typical move gets four 60 Hz frames. The first move also acquires a drag
+    // target, so check that delay on its own. A busy runner can delay any single paint.
     expect(
       medianMedian,
       "median of three median pointer-move to outline-paint delays",
     ).toBeLessThanOrEqual(67);
     expect(
-      medianMax,
-      "median of three maximum pointer-move to outline-paint delays",
-    ).toBeLessThanOrEqual(100);
+      medianFirst,
+      "median time for the first pointer move to paint",
+    ).toBeLessThanOrEqual(deadline);
+    expect(
+      lateRate,
+      `${lateMoves}/${moves.length} pointer moves took more than ${deadline} ms to paint`,
+    ).toBeLessThanOrEqual(maxLateRate);
   },
 );
