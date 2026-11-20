@@ -39,6 +39,100 @@ const clip = (path: string, colour: string) =>
     ...["-c:a", "aac", "-shortest", path],
   ]);
 
+test.skipIf(!Bun.which("ffmpeg"))(
+  "Resolve gets full-level stereo from a mono microphone and keeps native stereo media",
+  async () => {
+    const f = await projectFixture();
+    f.app.route("/api", createHyperframesApi(f.store, f.review));
+    try {
+      const project = await f.store.create({
+        name: "Dialogue",
+        width: 320,
+        height: 240,
+        duration: 2,
+      });
+      const mono = join(project.path, "mic.wav");
+      const stereo = join(project.path, "music.wav");
+      await Promise.all([
+        run([
+          "ffmpeg",
+          ...["-v", "error", "-f", "lavfi", "-i", "sine=f=440:d=1:r=48000"],
+          ...["-c:a", "pcm_s24le", mono],
+        ]),
+        run([
+          "ffmpeg",
+          ...[
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc=0.25|0.125:s=48000:d=1",
+          ],
+          ...["-c:a", "pcm_s24le", stereo],
+        ]),
+      ]);
+      await writeFile(
+        join(project.path, "index.html"),
+        `<main data-composition-id="main" data-width="320" data-height="240" data-fps="24" data-duration="2">
+          <audio id="mic" src="mic.wav" data-start="0" data-duration="1" data-track-index="0" data-volume="0.5" data-fade-in="0.25"></audio>
+          <audio id="music" src="music.wav" data-start="1" data-duration="1" data-track-index="0"></audio>
+        </main>`,
+      );
+      const response = await f.app.request(
+        `/api/projects/${project.id}/export`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ format: "resolve" }),
+        },
+      );
+      const body: unknown = await response.json();
+      expect(response.ok, JSON.stringify(body)).toBe(true);
+      const exported = ResolveExportSchema.parse(body);
+      const sound = join(exported.outputPath, "Sound");
+      expect(await readdir(sound)).toEqual(["mic sound.wav"]);
+      const xml = await readFile(exported.timeline, "utf8");
+      expect(xml).toContain("Sound/mic%20sound.wav");
+      expect(xml).toContain("music.wav");
+      expect(xml).toContain('<adjust-volume amount="-6.0206dB"/>');
+      expect(await readFile(exported.summary, "utf8")).toContain(
+        "use the audio fade handles in Resolve to add a 6-frame fade-in",
+      );
+
+      const samples = async (path: string) => {
+        const child = Bun.spawn(
+          [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-i",
+            path,
+            "-t",
+            "0.02",
+            "-f",
+            "s32le",
+            "-",
+          ],
+          { stdout: "pipe" },
+        );
+        const raw = await new Response(child.stdout).arrayBuffer();
+        expect(await child.exited).toBe(0);
+        return new Int32Array(raw);
+      };
+      const [source, copied] = await Promise.all([
+        samples(mono),
+        samples(join(sound, "mic sound.wav")),
+      ]);
+      expect(source.length).toBe(960);
+      expect(copied.filter((_, index) => index % 2 === 0)).toEqual(source);
+      expect(copied.filter((_, index) => index % 2 === 1)).toEqual(source);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
 test.skipIf(!Bun.which("ffprobe"))(
   "Resolve names a clip with authored speed automation before writing an export",
   async () => {
@@ -207,24 +301,17 @@ test.skipIf(!Bun.which("ffmpeg"))(
         "untouched",
       );
       const files = (await readdir(result.outputPath)).sort();
-      expect(files).toEqual(
-        process.platform === "linux"
-          ? [
-              "Import Cutroom Timeline.py",
-              "Night-shoot.fcpxml",
-              "Sound",
-              "Summary.txt",
-            ]
-          : ["Import Cutroom Timeline.py", "Night-shoot.fcpxml", "Summary.txt"],
-      );
+      expect(files).toEqual([
+        "Import Cutroom Timeline.py",
+        "Night-shoot.fcpxml",
+        "Sound",
+        "Summary.txt",
+      ]);
       const fcpxml = await readFile(result.timeline, "utf8");
-      if (process.platform === "linux") {
-        // Resolve on Linux can't decode AAC, so the sound that plays comes as a WAV Resolve won't swap back.
-        expect(
-          (await readdir(join(result.outputPath, "Sound"))).sort(),
-        ).toEqual(["blue sound.wav"]);
-        expect(fcpxml).toContain("Sound/blue%20sound.wav");
-      }
+      expect(await readdir(join(result.outputPath, "Sound"))).toEqual([
+        "blue sound.wav",
+      ]);
+      expect(fcpxml).toContain("Sound/blue%20sound.wav");
       const sources = [...fcpxml.matchAll(/src="file:\/\/([^"]+)"/g)].map(
         ([, path]) => decodeURIComponent(path!),
       );

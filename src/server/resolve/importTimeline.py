@@ -228,6 +228,14 @@ def import_into_project(project, plan, path, luts, installed, fusion_grades):
             if abs(item.GetSourceStartTime() - source_in) > 0.001:
                 raise RuntimeError(f"Resolve changed the source in-point while retiming {label!r}.")
         clip_at = clip_lookup(imported)
+        for fade in plan["fades"]:
+            item = clip_at(fade)
+            lengths = {"FadeIn": fade["fadeIn"], "FadeOut": fade["fadeOut"]}
+            if not item.SetFades(lengths):
+                raise RuntimeError(f"Could not restore the fade handles on {fade['label']!r}. See Summary.txt.")
+            actual = item.GetFades() or {}
+            if any(abs(actual.get(key, -1) - frames) > 0.001 for key, frames in lengths.items()):
+                raise RuntimeError(f"Resolve changed the fade lengths on {fade['label']!r}. See Summary.txt.")
         for cut in plan["transitions"]:
             kind, track, label, name, alignment, duration = (
                 cut[k] for k in ("kind", "track", "label", "name", "alignment", "duration")

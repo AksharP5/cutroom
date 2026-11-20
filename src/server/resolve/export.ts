@@ -162,30 +162,32 @@ async function copyMedia(folder: string, media: Map<string, ClipMedia>) {
 const SILENT_ON_LINUX = new Set(["aac"]);
 
 /**
- * Decodes each file whose sound Resolve can't play into a WAV in `folder`, aligned so a second
- * into the WAV is a second into the file. The pictures keep linking the original files.
+ * Gives Resolve stereo WAVs for mono sound and decodes AAC on Linux, where Resolve plays it silent.
+ * The WAV keeps the original's timing, and pictures still link the original files.
  */
-async function decodeSound(
+async function prepareSound(
   folder: string,
   media: Map<string, ClipMedia>,
   heard: ReadonlySet<string>,
 ) {
-  const files = new Map<string, MediaFacts>();
-  for (const [id, entry] of media)
+  const files = new Map<string, NonNullable<MediaFacts["audio"]>>();
+  for (const [id, entry] of media) {
+    if (!heard.has(id) || entry.kind !== "file") continue;
+    const { audio, path } = entry.facts;
     if (
-      heard.has(id) &&
-      entry.kind === "file" &&
-      entry.facts.audio &&
-      SILENT_ON_LINUX.has(entry.facts.audio.codec)
+      audio &&
+      (audio.channels === 1 ||
+        (process.platform === "linux" && SILENT_ON_LINUX.has(audio.codec)))
     )
-      files.set(entry.facts.path, entry.facts);
+      files.set(path, audio);
+  }
   if (!files.size) return [];
   const ffmpeg = findFfBinary("ffmpeg", { configuredMustExist: true });
   if (!ffmpeg) throw new Error("FFmpeg is needed to read media.");
   await mkdir(folder);
   const taken = new Set<string>();
   const decoded = new Map<string, MediaFacts>();
-  for (const [path, facts] of files) {
+  for (const [path, audio] of files) {
     // Resolve swaps a WAV named like its video (a.wav, a.mp4) back to the video's silent sound.
     const stem = `${safeName(basename(path, extname(path)), "Media")} sound`;
     let name = `${stem}.wav`;
@@ -193,12 +195,15 @@ async function decodeSound(
       name = `${stem} ${number}.wav`;
     taken.add(name);
     const target = join(folder, name);
+    // Cutroom's MP4 plays mono at full level on both sides. Resolve's mono pan reduces each side by 3 dB.
+    const filters = ["aresample=async=1:first_pts=0"];
+    if (audio.channels === 1) filters.push("pan=stereo|FL=c0|FR=c0");
     const child = Bun.spawn(
       [
         ffmpeg,
         ...["-nostdin", "-v", "error", ...localMediaInputOptions, "-i", path],
-        ...["-map", "0:a:0", "-af", "aresample=async=1:first_pts=0"],
-        ...["-c:a", "pcm_s24le", "-ar", String(facts.audio!.sampleRate)],
+        ...["-map", "0:a:0", "-af", filters.join(",")],
+        ...["-c:a", "pcm_s24le", "-ar", String(audio.sampleRate)],
         ...["-f", "wav", "-n", target],
       ],
       { stdout: "ignore", stderr: "pipe" },
@@ -212,7 +217,9 @@ async function decodeSound(
         `The sound of ${basename(path)} could not be decoded: ${error.trim()}`,
       );
     const probed = await probeMedia(target);
-    if (probed) decoded.set(path, probed);
+    if (!probed?.audio)
+      throw new Error(`The WAV for ${basename(path)} could not be read back.`);
+    decoded.set(path, probed);
   }
   for (const [id, entry] of media)
     if (entry.kind === "file" && decoded.has(entry.facts.path))
@@ -314,18 +321,15 @@ async function writePackage(
   folder: string,
   { media, offline, unreachable }: Awaited<ReturnType<typeof clipMedia>>,
 ): Promise<ResolveExport> {
-  const decoded =
-    process.platform === "linux"
-      ? await decodeSound(
-          join(folder, "Sound"),
-          media,
-          new Set(
-            source.timeline.clips
-              .filter((clip) => clip.hasAudio && clip.enabled)
-              .map((clip) => clip.id),
-          ),
-        )
-      : [];
+  const decoded = await prepareSound(
+    join(folder, "Sound"),
+    media,
+    new Set(
+      source.timeline.clips
+        .filter((clip) => clip.hasAudio && clip.enabled)
+        .map((clip) => clip.id),
+    ),
+  );
   if (options.copyMedia) await copyMedia(join(folder, "Media"), media);
 
   // What Resolve can't open renders with transparency, a MOV per track, each clip its own cut of it.
@@ -389,7 +393,7 @@ async function writePackage(
     ...offline.map((path) => `${path} is offline, so its clips are left out.`),
     ...(decoded.length
       ? [
-          `Resolve on Linux plays AAC sound silent, so the sound of ${decoded.join(", ")} is a WAV in the Sound folder; the pictures still link the original files.`,
+          `Sound from ${decoded.join(", ")} uses WAV copies in the Sound folder. Keep it with the timeline. Video clips still link to their original picture.`,
         ]
       : []),
     ...plan.notes,

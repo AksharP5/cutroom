@@ -21,6 +21,7 @@ export async function writeResolveImporter(
     grades,
     transitions,
     retimes,
+    fades,
     links,
     tracks,
     timelineMarkers,
@@ -88,6 +89,7 @@ export async function writeResolveImporter(
       duration: transition.duration,
     })),
     retimes,
+    fades,
     links,
     tracks,
   };
@@ -133,6 +135,15 @@ import_cutroom_timeline(resolve, json.loads(${quote(
         ({ kind, track, start, end, label, percent }) =>
           `If you import the FCPXML by hand, "${label}" on ${kind === "video" ? "V" : "A"}${track} at ${formatTimecode(start, fps)} plays at 100%. Set Change Clip Speed to ${percent}% with Ripple Timeline off. Leave Stretch Keyframes to Fit off. Keep the source in-point and trim or extend the end to ${formatTimecode(end, fps)}.`,
       ),
+      ...fades.map(({ track, start, label, fadeIn, fadeOut }) => {
+        const lengths = [
+          ...(fadeIn ? [`a ${Number(fadeIn.toFixed(2))}-frame fade-in`] : []),
+          ...(fadeOut
+            ? [`a ${Number(fadeOut.toFixed(2))}-frame fade-out`]
+            : []),
+        ];
+        return `If you import the FCPXML by hand, use the audio fade handles in Resolve to add ${lengths.join(" and ")} to "${label}" on A${track} at ${formatTimecode(start, fps)}.`;
+      }),
       ...importPlan.transitions.map(
         ({ kind, track, end, name, duration, alignment }) =>
           `If you import the FCPXML by hand, add a ${duration}-frame ${name} on ${kind === "video" ? "V" : "A"}${track} at ${formatTimecode(end, fps)}. ${{ right: "Start it at the cut.", center: "Center it on the cut.", left: "End it at the cut." }[alignment]}`,
