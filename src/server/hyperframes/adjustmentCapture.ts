@@ -104,8 +104,9 @@ export function adjustmentCapture() {
   const read = () =>
     [...document.querySelectorAll<HTMLElement>(selector)].flatMap((element) => {
       if (element.closest("[data-hidden]")) return [];
+      // The compiler puts mounted scene tracks inside an inner layout root.
       const root = element.parentElement?.closest<HTMLElement>(
-        "[data-composition-id]",
+        "[data-hf-inner-root], [data-composition-id]",
       );
       const track = Number(element.dataset.trackIndex);
       const value = element.getAttribute(attribute);

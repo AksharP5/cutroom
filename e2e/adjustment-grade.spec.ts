@@ -91,7 +91,9 @@ async function projectWithAdjustment(
   return project;
 }
 
-async function viewerPixels(page: Page) {
+type SamplePoints = readonly (readonly [number, number])[];
+
+async function viewerPixels(page: Page, samplePoints: SamplePoints = points) {
   const png = await page.locator(".edit-picture").screenshot();
   return page.evaluate(
     async ({ source, points }) => {
@@ -113,7 +115,7 @@ async function viewerPixels(page: Page) {
           .data.slice(0, 3),
       ]);
     },
-    { source: png.toString("base64"), points },
+    { source: png.toString("base64"), points: samplePoints },
   );
 }
 
@@ -144,30 +146,17 @@ test.use({
   },
 });
 
-test("grades the dissolve and lower title in native preview and MP4", async ({
-  page,
-  request,
-}) => {
-  const project = await projectWithAdjustment(request);
-  await page.addInitScript(() => {
-    if (self === top) localStorage.setItem("cutroom.footagePipeline", "false");
-  });
-  await page.goto("/#project/" + project.id);
-  await waitForPreview(page, { timing: true });
-  await seekFrame(page, at);
-  await expect
-    .poll(async () => (await viewerPixels(page))[1])
-    .toEqual([72, 104, 24]);
-  const graded = await viewerPixels(page);
-  expect(graded[0]![0]).toBeGreaterThan(35);
-  expect(graded[0]![2]).toBeGreaterThan(35);
-  expect(graded[1]).toEqual([72, 104, 24]);
-  expect(graded[2]).toEqual([236, 64, 160]);
+async function exportedPixels(
+  request: APIRequestContext,
+  project: { id: string; path: string },
+  frame: number,
+  samplePoints: SamplePoints,
+) {
   const result = await request.post("/api/projects/" + project.id + "/export", {
     data: {
       format: "mp4",
       quality: "high",
-      range: { start: at, end: at + 1 },
+      range: { start: frame, end: frame + 1 },
       directory: project.path,
       filename: "grade.mp4",
     },
@@ -196,18 +185,133 @@ test("grades the dissolve and lower title in native preview and MP4", async ({
     ],
     { encoding: "buffer", maxBuffer: 1024 ** 2 },
   );
-  const errors = points.flatMap(([x, y], i) => {
+  return samplePoints.map(([x, y]) => {
     const offset = (Math.round(y * height) * width + Math.round(x * width)) * 3;
-    return graded[i]!.map((value, channel) =>
-      Math.abs(value - stdout[offset + channel]!),
-    );
+    return [...stdout.subarray(offset, offset + 3)];
   });
+}
+
+test("grades the dissolve and lower title in native preview and MP4", async ({
+  page,
+  request,
+}) => {
+  const project = await projectWithAdjustment(request);
+  await page.addInitScript(() => {
+    if (self === top) localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  await page.goto("/#project/" + project.id);
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, at);
+  await expect
+    .poll(async () => (await viewerPixels(page))[1])
+    .toEqual([72, 104, 24]);
+  const graded = await viewerPixels(page);
+  expect(graded[0]![0]).toBeGreaterThan(35);
+  expect(graded[0]![2]).toBeGreaterThan(35);
+  expect(graded[1]).toEqual([72, 104, 24]);
+  expect(graded[2]).toEqual([236, 64, 160]);
+  const exported = await exportedPixels(request, project, at, points);
+  const errors = graded.flatMap((pixel, i) =>
+    pixel.map((value, channel) => Math.abs(value - exported[i]![channel]!)),
+  );
   const mean = errors.reduce((sum, error) => sum + error, 0) / errors.length;
   console.log("Adjustment layer RGB error", {
     mean,
     max: Math.max(...errors),
   });
   expect(mean).toBeLessThanOrEqual(3);
+  expect(Math.max(...errors)).toBeLessThanOrEqual(6);
+});
+
+test("a grade in a mounted scene composes with a parent grade", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Nested adjustment", width, height, duration: 2 },
+      })
+    ).json(),
+  );
+  await Promise.all([
+    writeFile(
+      join(project.path, "index.html"),
+      `<!doctype html><html><body style="margin:0">
+<main data-composition-id="main" data-no-timeline data-duration="2" data-fps="30" data-width="640" data-height="360" style="position:relative;width:640px;height:360px">
+  <div id="base" class="clip" data-start="0" data-duration="2" data-track-index="0" style="position:absolute;inset:0;background:#40a0c0"></div>
+  <div id="mount" class="clip" data-composition-id="nested" data-composition-src="nested.html" data-start="0.5" data-duration="1.5" data-track-index="1" data-width="320" data-height="180" style="position:absolute;top:0;left:0;width:320px;height:180px"></div>
+  <div id="parent-look" class="clip" data-cutroom-adjustment data-start="0.8" data-duration="0.8" data-track-index="2" data-color-grading='{"adjust":{"exposure":-1}}'></div>
+  <div id="top" class="clip" data-start="0" data-duration="2" data-track-index="3" style="position:absolute;top:0;right:0;width:130px;height:90px;background:#f0c050"></div>
+</main></body></html>`,
+    ),
+    writeFile(
+      join(project.path, "nested.html"),
+      `<template><div data-composition-id="nested" data-no-timeline data-duration="1.5" data-fps="30" data-width="320" data-height="180" style="position:relative;width:320px;height:180px">
+  <div id="nested-base" class="clip" data-start="0" data-duration="1.5" data-track-index="0" style="position:absolute;inset:0;background:#90d030"></div>
+  <div id="nested-look" class="clip" data-cutroom-adjustment data-start="0.2" data-duration="0.6" data-track-index="1" data-color-grading='{"adjust":{"exposure":-1}}'></div>
+  <div id="nested-top" class="clip" data-start="0" data-duration="1.5" data-track-index="2" style="position:absolute;top:0;right:0;width:115px;height:85px;background:#ec40a0"></div>
+</div></template>`,
+    ),
+  ]);
+  await page.addInitScript(() => {
+    if (self === top) localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  await page.goto("/#project/" + project.id);
+  await waitForPreview(page, { timing: true });
+
+  const samples = [
+    [0.1, 0.32],
+    [0.42, 0.18],
+    [0.75, 0.6],
+    [0.85, 0.12],
+  ] as const;
+  const cases = [
+    {
+      frame: 20,
+      pixels: [
+        [144, 208, 48],
+        [236, 64, 160],
+        [64, 160, 192],
+        [240, 192, 80],
+      ],
+    },
+    {
+      frame: 23,
+      pixels: [
+        [72, 104, 24],
+        [236, 64, 160],
+        [64, 160, 192],
+        [240, 192, 80],
+      ],
+    },
+    {
+      frame: 30,
+      pixels: [
+        [36, 52, 12],
+        [118, 32, 80],
+        [32, 80, 96],
+        [240, 192, 80],
+      ],
+    },
+    {
+      frame: 44,
+      pixels: [
+        [72, 104, 24],
+        [118, 32, 80],
+        [32, 80, 96],
+        [240, 192, 80],
+      ],
+    },
+  ];
+  for (const { frame, pixels } of cases) {
+    await seekFrame(page, frame);
+    await expect.poll(() => viewerPixels(page, samples)).toEqual(pixels);
+  }
+  const exported = await exportedPixels(request, project, 30, samples);
+  const errors = cases[2]!.pixels.flatMap((pixel, i) =>
+    pixel.map((value, channel) => Math.abs(value - exported[i]![channel]!)),
+  );
   expect(Math.max(...errors)).toBeLessThanOrEqual(6);
 });
 
