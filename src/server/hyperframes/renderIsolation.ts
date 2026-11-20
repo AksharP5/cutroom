@@ -456,7 +456,10 @@ export function registerRenderIsolation(
           const audio = JSON.stringify(
             new URL("./rangeAudio.ts", import.meta.url).href,
           );
-          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { renameSync as cutroomRename } from "node:fs";\nimport { publishRangeProgress, spanParts as cutroomSpanParts, capturedFrame as cutroomCapturedFrame, capturesList as cutroomCapturesList, encodeCaptured as cutroomEncodeCaptured } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
+          const failure = JSON.stringify(
+            new URL("./renderFailure.ts", import.meta.url).href,
+          );
+          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { renameSync as cutroomRename } from "node:fs";\nimport { publishRangeProgress, spanParts as cutroomSpanParts, capturedFrame as cutroomCapturedFrame, capturesList as cutroomCapturesList, encodeCaptured as cutroomEncodeCaptured } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nimport { ExportStageError } from ${failure};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
           // The planner materializes source links before its HTTP server sees
           // them. Apply the same project boundary before copying their bytes.
           source = replaceOnce(
@@ -530,7 +533,7 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "    log: c.log\n  });\n}\nasync function extractPlanVideos",
-            "    log: c.log,\n    ...cutroomStage\n  }));\n}\nasync function extractPlanVideos",
+            "    log: c.log,\n    ...cutroomStage\n  })).catch((error) => { throw new ExportStageError('process_audio', error); });\n}\nasync function extractPlanVideos",
             url,
           );
           // Cutroom writes the range's audio itself. Chunks muxing the plan mix
@@ -610,15 +613,19 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "    await writeStitchedMp4(parts, outputPath);",
-            `    const cutroomVideo = join45(workDir, \`range.\${config.format}\`);
-    if (config.format === "mp4") await writeStitchedMp4(parts, cutroomVideo);
-    else if (parts.length === 1) cutroomRename(parts[0], cutroomVideo);
-    else throw new Error(\`A \${config.format} range rendered \${parts.length} parts; it should render one.\`);
-    await alignRangeAudio({
-      videoPath: cutroomVideo, audioPath: resolvePlanAudioPath(planDir), outputPath,
-      fps: cutroomRangeFps, frames: { start: startFrame, end: endFrame },
-      signal: config.abortSignal
-    });`,
+            `    try {
+      const cutroomVideo = join45(workDir, \`range.\${config.format}\`);
+      if (config.format === "mp4") await writeStitchedMp4(parts, cutroomVideo);
+      else if (parts.length === 1) cutroomRename(parts[0], cutroomVideo);
+      else throw new Error(\`A \${config.format} range rendered \${parts.length} parts; it should render one.\`);
+      await alignRangeAudio({
+        videoPath: cutroomVideo, audioPath: resolvePlanAudioPath(planDir), outputPath,
+        fps: cutroomRangeFps, frames: { start: startFrame, end: endFrame },
+        signal: config.abortSignal
+      });
+    } catch (error) {
+      throw new ExportStageError("assemble", error);
+    }`,
             url,
           );
         }
