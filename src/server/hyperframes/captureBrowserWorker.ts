@@ -48,7 +48,7 @@ try {
   const executablePath = browserExecutable();
   if (!executablePath)
     throw new Error(
-      "Chromium is required for frame captures. Install Chromium or set HYPERFRAMES_BROWSER_PATH.",
+      "Chromium is required for frame captures. Set HYPERFRAMES_BROWSER_PATH to the Chromium executable.",
     );
   const temporaryRoot = browserTempRoot();
   profile = await createOwnedDirectory(temporaryRoot, "cutroom-capture");
@@ -67,6 +67,7 @@ try {
       "--remote-debugging-port=0",
       "--no-sandbox",
       "--disable-dev-shm-usage",
+      "--disable-extensions",
       "--mute-audio",
       "--autoplay-policy=no-user-gesture-required",
       "--use-gl=angle",
