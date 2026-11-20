@@ -2446,7 +2446,10 @@ function installPreviewBridge(
   >();
   const scrubPath = (video: HTMLVideoElement) => {
     if (!capability) return null;
-    const url = new URL(video.currentSrc || video.src, location.href);
+    const url = new URL(
+      video.dataset.cutroomVersionSrc || video.currentSrc || video.src,
+      document.baseURI,
+    );
     const preview = `${capability}preview/`;
     if (url.origin !== location.origin || !url.pathname.startsWith(preview))
       return null;

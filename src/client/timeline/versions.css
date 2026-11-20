@@ -138,9 +138,16 @@
   font-weight: var(--weight-medium);
   font-stretch: var(--stretch-mono);
 }
+.versions-menu .versions-source span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .versions-menu button:disabled .versions-source b {
   font-family: var(--font-sans);
+  font-size: inherit;
   font-weight: var(--weight-regular);
+  font-stretch: inherit;
 }
 
 /* The count follows the name, as on a title. */

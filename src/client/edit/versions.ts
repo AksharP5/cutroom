@@ -92,10 +92,9 @@ export async function addMediaVersion(
 }
 
 /**
- * A clip's versions in the editor. The preview document can carry every version of one clip,
- * hidden but loaded, so the picture switches between them within a frame: that clip is the one
- * whose list is open, or else the one selected clip with versions. Its active version is the
- * one the compiler built, so it draws exactly as export does.
+ * The preview can audition the versions of one clip. Media loads only the current and next
+ * playable take while its list is open. A selected title or scene can also be prepared before
+ * its list opens. The compiler builds the active version the same way it builds it for export.
  */
 export const useVersions = create(() => ({
   /** The clip whose versions list is open. */
