@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import type { HistoryEntry } from "@hyperframes/studio-server";
+import type { HistoryEntry } from "../history/historyLog";
 import {
   FREEZE_EXPORT_DIR,
   MEDIA_TRASH,

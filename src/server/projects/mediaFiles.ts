@@ -6,7 +6,8 @@ import {
   affectsProjectSignature,
   fileContentVersion,
 } from "@hyperframes/studio-server";
-import type { FileMutationInput, HistoryWho } from "@hyperframes/studio-server";
+import type { FileMutationInput } from "@hyperframes/studio-server";
+import type { HistoryWho } from "../history/historyLog";
 import type { z } from "zod";
 import { HttpError } from "../../shared/errors";
 import {

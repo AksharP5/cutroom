@@ -1,9 +1,6 @@
-import { HISTORY_START } from "@hyperframes/studio-server";
-import type {
-  HistoryEntry,
-  HistoryFileChange,
-  ProjectHistoryOptions,
-} from "@hyperframes/studio-server";
+import { START } from "../history/historyLog";
+import type { HistoryEntry, HistoryFileChange } from "../history/historyLog";
+import type { ProjectHistoryOptions } from "../history/projectHistory";
 import { HttpError } from "../../shared/errors";
 import {
   freezeExportPath,
@@ -38,7 +35,7 @@ function exemptRecordedRemovals(
     undoes,
   }: Pick<HistoryEntry, "undoes" | "restoredTo">) => {
     if (restoredTo !== undefined)
-      return restoredTo === HISTORY_START ? -1 : offsets.get(restoredTo);
+      return restoredTo === START ? -1 : offsets.get(restoredTo);
     const reversed = undoes === undefined ? undefined : offsets.get(undoes);
     return reversed === undefined ? undefined : reversed - 1;
   };

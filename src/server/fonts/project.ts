@@ -1,5 +1,5 @@
 import { mkdir, unlink, writeFile } from "node:fs/promises";
-import type { HistoryWho } from "@hyperframes/studio-server";
+import type { HistoryWho } from "../history/historyLog";
 import { HttpError } from "../../shared/errors";
 import { PROJECT_FONT_DIR } from "../../shared/fonts";
 import type { FontsAdded } from "../../shared/fonts";

@@ -8,7 +8,7 @@ import {
   applyFileMutations,
   fileContentVersion,
 } from "@hyperframes/studio-server";
-import type { HistoryWho } from "@hyperframes/studio-server";
+import type { HistoryWho } from "../history/historyLog";
 import {
   AnnotationInputSchema,
   AnnotationPatchSchema,
