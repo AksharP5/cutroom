@@ -467,8 +467,15 @@ test("linked Changes has one row per history entry and keeps review and session 
   await expect(rows).toHaveCount(2);
   await expect(summary).toHaveText("Changes 2");
   // Another review surface can accept one partner before this grouped row is accepted.
-  const edits = (await read()).clipEdits!.filter((edit) => edit.by === "agent");
-  expect(edits).toHaveLength(2);
+  const changes = (await read()).clipEdits!.filter(
+    (edit) => edit.by === "agent",
+  );
+  expect(changes.map((edit) => edit.clipId)).toEqual([
+    "picture",
+    "sound",
+    null,
+  ]);
+  const edits = changes.filter((edit) => edit.clipId !== null);
   expect(
     (
       await request.post(`${path}/review/changes/accept`, {
@@ -485,7 +492,9 @@ test("linked Changes has one row per history entry and keeps review and session 
   await expect
     .poll(async () =>
       (await read())
-        .clipEdits!.filter((edit) => edit.by === "agent")
+        .clipEdits!.filter(
+          (edit) => edit.by === "agent" && edit.clipId !== null,
+        )
         .every((edit) => edit.accepted),
     )
     .toBe(true);
