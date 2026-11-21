@@ -488,6 +488,7 @@ test("a 1,000-clip MCP read gives track spans and its ripple returns every affec
     const delta = edit.parse(
       await mcp.result("timeline_edit", {
         expectedRevision: summary.revision,
+        replyFormat: "compact",
         commands,
       }),
     );
@@ -533,6 +534,47 @@ test("a 1,000-clip MCP read gives track spans and its ripple returns every affec
         { id: "shot-999", start: 2940 },
       ]),
     });
+  } finally {
+    await mcp.close();
+  }
+});
+
+test("a project of a few hundred clips reads and ripples in the original shape by default", async () => {
+  const mcp = await connect();
+  try {
+    // About 530 bytes a clip, as on a real dialogue edit, so 300 clips stay under the summary limit.
+    const html = Array.from(
+      { length: 300 },
+      (_, index) =>
+        `<video id="shot-${index}" class="clip" src="assets/talk-${index % 4}.mp4" data-start="${index}" data-duration="1" data-track-index="0" data-media-start="${index}"></video>`,
+    ).join("");
+    await writeFile(
+      join(mcp.project.path, "index.html"),
+      `<main data-composition-id="main" data-fps="30" data-duration="300">${html}</main>`,
+    );
+    const read = await mcp.read();
+    expect(read.timeline.clips).toHaveLength(300);
+    expect(read.timeline.clips[0]).toMatchObject({
+      id: "shot-0",
+      playbackRate: 1,
+      opacity: null,
+      fx: [],
+    });
+    const edit = z
+      .object({
+        changes: z.object({
+          clips: z.looseObject({ changed: z.array(z.looseObject({})) }),
+        }),
+      })
+      .parse(
+        await mcp.result("timeline_edit", {
+          expectedRevision: read.revision,
+          commands: [{ type: "remove", clipIds: ["shot-0"], ripple: true }],
+        }),
+      );
+    expect(edit.changes.clips).not.toHaveProperty("shifted");
+    expect(edit.changes.clips.changed).toHaveLength(299);
+    expect(edit.changes.clips.changed[0]).toEqual({ id: "shot-1", start: 0 });
   } finally {
     await mcp.close();
   }

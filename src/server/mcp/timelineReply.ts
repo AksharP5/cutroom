@@ -12,8 +12,13 @@ export const TimelineReplyFormatSchema = z.enum(["auto", "compact", "legacy"]);
 type ReplyFormat = z.infer<typeof TimelineReplyFormatSchema>;
 type TimelineFilters = { from?: number; to?: number; tracks?: number[] };
 
-// MCP sends both text and structured content, roughly doubling the clip JSON.
-const CLIP_DETAIL_BUDGET = 16 * 1024;
+/**
+ * Replies keep their original shape until the clip JSON passes this size. A clip is about 530 bytes
+ * (measured on a dialogue edit of linked picture and sound, b-roll and titles), so this is about
+ * 490 clips: ordinary projects read as before and a 1,000-clip timeline answers with a summary.
+ * MCP sends both text and structured content, so the reply is about twice this.
+ */
+const CLIP_DETAIL_BUDGET = 256 * 1024;
 const fitsClipBudget = (detail: unknown) =>
   Buffer.byteLength(JSON.stringify(detail)) <= CLIP_DETAIL_BUDGET;
 
@@ -110,11 +115,12 @@ export function readTimelineReply(
   const { clips, ...details } = timeline;
   const compact = clips.map(compactClip);
   const { from, to, tracks } = filters;
+  // An unfiltered read past the budget summarizes rather than dropping fields from every clip.
   if (
     from !== undefined ||
     to !== undefined ||
     tracks !== undefined ||
-    fitsClipBudget(compact)
+    (format === "compact" && fitsClipBudget(compact))
   )
     return { ...details, clips: compact };
 
