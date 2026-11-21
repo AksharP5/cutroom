@@ -498,12 +498,12 @@ test("linked Changes has one row per history entry and keeps review and session 
         .every((edit) => edit.accepted),
     )
     .toBe(true);
-  // Changes leads the inspector for any clip, open, above the clip's own sections.
+  // Changes follows the audio controls and is open on the selected clip.
   await page.locator('[data-clip="sound"]').click();
   await expect(history).toBeVisible();
   const [changesTop, audioTop] = await Promise.all([
     history.boundingBox(),
     inspector.locator("summary", { hasText: "Audio" }).boundingBox(),
   ]);
-  expect(changesTop!.y).toBeLessThan(audioTop!.y);
+  expect(changesTop!.y).toBeGreaterThan(audioTop!.y);
 });

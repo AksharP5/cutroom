@@ -101,15 +101,35 @@ test("500 clips: position scrubs paint live, cancel cleanly and commit one undo 
   await page.mouse.up();
   await expect(field).toHaveValue("120 px");
   await expect.poll(() => commands.length).toBe(1);
-  await page.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect(field).toHaveValue("0 px");
-  await expect.poll(x).toBe(60);
-  await page.mouse.move(box.x + 10, box.y + 5);
-  await page.mouse.down();
-  await page.mouse.move(box.x + 50, box.y + 5);
-  await expect.poll(x).toBe(100);
-  await page.keyboard.press("Escape");
-  await page.mouse.up();
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  await undo.hover();
+  const changes = inspector.getByRole("heading", { name: "Changes 1" });
+  await expect(changes).toBeVisible();
+  // Hold the Inspector refresh while Undo restores the picture and fields.
+  const refresh = Promise.withResolvers<void>();
+  await page.route("**/timeline/changes?*", async (route) => {
+    if (route.request().postDataJSON().view === "inspector")
+      await refresh.promise;
+    await route.continue();
+  });
+  try {
+    await undo.click();
+    await expect(field).toHaveValue("0 px");
+    await expect.poll(x).toBe(60);
+    await expect(changes).toBeVisible();
+
+    const afterUndo = await label.boundingBox();
+    if (!afterUndo) throw new Error("Position label missing after Undo");
+    expect(afterUndo.y).toBe(box.y);
+    await label.hover({ position: { x: 10, y: 5 } });
+    await page.mouse.down();
+    await page.mouse.move(afterUndo.x + 50, afterUndo.y + 5);
+    await expect.poll(x).toBe(100);
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+  } finally {
+    refresh.resolve();
+  }
   await expect.poll(x).toBe(60);
   expect(commands).toHaveLength(1);
   await field.focus();

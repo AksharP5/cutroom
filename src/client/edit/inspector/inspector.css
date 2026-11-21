@@ -103,6 +103,7 @@
 .inspector-content {
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .inspector-motion-tween h4 {
