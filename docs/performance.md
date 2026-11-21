@@ -534,6 +534,23 @@ Measured on November 15, 2026 with Chromium 1720x1050 on a shared machine: five 
 
 The interview workload shows the same counts, with read time falling from 28 to 5 ms per edit and 16 to 5 ms per agent edit. An outside edit now shows about 70 ms later (median 153 to 225 ms from the request to the last read on the interview workload), the cost of waiting for the rest of its burst. The editor's own edits are unaffected: they show before the server answers. `e2e/timeline-reads.spec.ts` fails when an edit, an undo or an agent edit reads more than this.
 
+## Saving linked timelines
+
+On November 20, 2026, the local server handled 12 saves of each edit on the numbered 1080p60 dialogue fixture. The 1,000-clip project runs 15 minutes and contains 486 linked picture and sound pairs, a music bed, titles and dissolves. Each edit was followed by Undo and the next revision was read from the server. The round trip includes receiving and parsing the JSON in the local benchmark client. Times are medians, compared with `5f20f8d4`.
+
+| Clips | Edit          | Server before | Server after | API round trip before | API round trip after |
+| ----: | ------------- | ------------: | -----------: | --------------------: | -------------------: |
+|   100 | Ripple delete |         42 ms |        26 ms |                 42 ms |                27 ms |
+|   100 | W             |         38 ms |        27 ms |                 39 ms |                28 ms |
+|   100 | Razor         |         37 ms |        31 ms |                 38 ms |                31 ms |
+| 1,000 | Ripple delete |        255 ms |       121 ms |                257 ms |               123 ms |
+| 1,000 | W             |        258 ms |       120 ms |                261 ms |               122 ms |
+| 1,000 | Razor         |        255 ms |       117 ms |                257 ms |               119 ms |
+
+At 1,000 clips, median Undo server time was 10–11 ms before and 9–10 ms after. All 72 edits and their undo steps produced identical composition, project settings and clip ID ledger bytes when replayed with the same piece IDs.
+
+Review indexes linked sound by link ID and uses the timeline's clip ownership rules to find authored byte ranges. It skips editor-only fields such as style and source restrictions, and still checks the referenced files on disk. The editor uses one HTML tree for media discovery and timeline projection. It parses each distinct inline clip style once per projection and still projects saved HTML to verify the edit before writing it. In a separate run, sharing the saved HTML tree with review changed the 1,000-clip medians to 132 ms, 111 ms and 114 ms for ripple delete, W and razor. The change did not consistently help across edits, so review keeps its independent source read.
+
 ## Trim preview
 
 The 400-clip roll check sends 540 pointer updates over 180 displayed frames per run, with all clips mounted at Fit. Each run must send more than ten seeks, send no more seeks than displayed frames, and keep at most one seek in flight. These assertions gate seek coalescing independently of runner speed.

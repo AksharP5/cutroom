@@ -451,23 +451,37 @@ export function scopeElements(
   return template ? [...descendants(template.content)] : live;
 }
 
+/** Read a composition's source tree once for media discovery and timeline projection. */
+export function compositionMarkup(
+  html: string,
+  scope: CompositionScope = "document",
+) {
+  const tree = parseElements(html);
+  const all = scopeElements(tree.roots, scope);
+  const sources = (images = false) => {
+    const urls = new Set<string>();
+    for (const element of all) {
+      const { tag } = element;
+      if (tag !== "video" && tag !== "audio" && !(images && tag === "img"))
+        continue;
+      const src = sourceOf(element);
+      if (src !== null) urls.add(src);
+    }
+    return [...urls];
+  };
+  return { ...tree, html, scope, all, sources };
+}
+
 /** Local or remote media references, as authored `src` values. */
 export function mediaSources(
   html: string,
   scope: CompositionScope,
   { images = false }: { images?: boolean } = {},
 ): string[] {
-  return [
-    ...new Set(
-      scopeElements(parseElements(html).roots, scope)
-        .filter(
-          ({ tag }) =>
-            tag === "video" || tag === "audio" || (images && tag === "img"),
-        )
-        .flatMap((element) => sourceOf(element) ?? []),
-    ),
-  ];
+  return compositionMarkup(html, scope).sources(images);
 }
+
+type CompositionMarkup = ReturnType<typeof compositionMarkup>;
 
 /**
  * Reads `data-fps` the way HyperFrames does: absent means 30, and anything `parseFps` rejects,
@@ -494,20 +508,17 @@ function compositionFps(raw: string | undefined): Fps {
 
 /** Shared source-to-clip projection for the timeline and isolated picture bridge. */
 function projectComposition(
-  html: string,
+  { scope, all }: CompositionMarkup,
   {
-    scope = "document",
     mediaLengths = new Map(),
     rootId,
   }: {
-    scope?: CompositionScope;
     /** A bundled scene instance whose tracks are mixed independently of its parent. */
     rootId?: string;
     /** Measured source lengths in seconds, by `src`. */
     mediaLengths?: ReadonlyMap<string, number>;
   } = {},
 ) {
-  const { roots, nodes, owned } = parseElements(html);
   const rootOf = (elements: SourceElement[]) =>
     elements.find(
       (element) =>
@@ -517,7 +528,6 @@ function projectComposition(
     elements.find(
       (element) => element.attrs["data-composition-id"] !== undefined,
     );
-  const all = scopeElements(roots, scope);
   const root =
     rootId === undefined
       ? rootOf(all)
@@ -629,10 +639,6 @@ function projectComposition(
   }
 
   return {
-    roots,
-    nodes,
-    owned,
-    all,
     root,
     fps,
     byId,
@@ -644,6 +650,40 @@ function projectComposition(
   };
 }
 
+function withDuration<
+  Row extends { element: SourceElement; end: number | null },
+>(row: Row) {
+  const { element, end } = row;
+  if (end === null) {
+    const name = element.attrs.id || element.attrs["data-hf-id"] || "clip";
+    throw new TimelineError(
+      "unsupported",
+      element.tag === "video" || element.tag === "audio"
+        ? `Clip ${name} has no data-duration and its media length could not be measured.`
+        : `Clip ${name} has no data-duration. Add one to edit it on the timeline.`,
+    );
+  }
+  return { ...row, end };
+}
+
+/** Only authored clip owners and their byte ranges are needed to attribute source changes. */
+export function compositionSourceOwners(html: string, scope: CompositionScope) {
+  const markup = compositionMarkup(html, scope);
+  const { rows, anonymous } = projectComposition(markup);
+  const clips = [];
+  for (const row of rows) {
+    const { id, element } = withDuration(row);
+    if (!anonymous.has(id))
+      clips.push({
+        id,
+        element,
+        kind: clipKind(element),
+        link: element.attrs["data-link"] || null,
+      });
+  }
+  return { roots: markup.roots, clips };
+}
+
 /** Timeline identities keyed by source offset; the preview never invents its own clip names. */
 export function compositionClipLocations(
   html: string,
@@ -651,9 +691,9 @@ export function compositionClipLocations(
   mediaLengths: ReadonlyMap<string, number> = new Map(),
 ) {
   return new Map(
-    projectComposition(html, { scope, mediaLengths }).rows.map(
-      ({ id, element }) => [element.start, id],
-    ),
+    projectComposition(compositionMarkup(html, scope), {
+      mediaLengths,
+    }).rows.map(({ id, element }) => [element.start, id]),
   );
 }
 
@@ -666,9 +706,9 @@ export function inspectLayerText(
   staticSource: boolean,
 ) {
   const scope = compositionScope(composition);
-  const { all, roots, rows, nodes, owned } = projectComposition(html, {
-    scope,
-  });
+  const markup = compositionMarkup(html, scope);
+  const { all, roots, nodes, owned } = markup;
+  const { rows } = projectComposition(markup);
   const owner = rows.find(({ id }) => id === clipId);
   if (!owner) throw new TimelineError("not_found", `No clip ${clipId}.`);
   const locked = lockedTracks.has(owner.read.trackIndex);
@@ -850,33 +890,35 @@ function readTextLayout(
   return textLayout;
 }
 
+type ProjectionOptions = {
+  /** A bundled scene instance whose tracks are mixed independently of its parent. */
+  rootId?: string;
+  /** Font faces available from this composition and the project's entry document. */
+  fonts?: ReadonlySet<string>;
+  /** Measured source lengths in seconds, by `src`. */
+  mediaLengths?: ReadonlyMap<string, number>;
+};
+
 /** Projects composition HTML and its sidecar settings onto the frames the runtime shows. */
 export function parseComposition(
   html: string,
   settings: TimelineSettings,
-  {
-    scope = "document",
-    mediaLengths = new Map(),
-    rootId,
-    fonts = new Set(declaredFonts(html)),
-    sourceAttribution = false,
-  }: {
-    scope?: CompositionScope;
-    /** A bundled scene instance whose tracks are mixed independently of its parent. */
-    rootId?: string;
-    /** Font faces available from this composition and the project's entry document. */
-    fonts?: ReadonlySet<string>;
-    /** Source history needs clip identities and byte ranges even when an envelope is invalid. */
-    sourceAttribution?: boolean;
-    /** Measured source lengths in seconds, by `src`. */
-    mediaLengths?: ReadonlyMap<string, number>;
-  } = {},
+  { scope, ...options }: ProjectionOptions & { scope?: CompositionScope } = {},
 ): ParsedComposition {
+  return projectTimeline(compositionMarkup(html, scope), settings, options);
+}
+
+export function projectTimeline(
+  markup: CompositionMarkup,
+  settings: TimelineSettings,
+  {
+    mediaLengths,
+    rootId,
+    fonts = new Set(declaredFonts(markup.html)),
+  }: ProjectionOptions = {},
+): ParsedComposition {
+  const { html, scope, roots, nodes, owned, all } = markup;
   const {
-    roots,
-    nodes,
-    owned,
-    all,
     root,
     fps,
     byId,
@@ -885,18 +927,8 @@ export function parseComposition(
     clipIds,
     timing,
     lengthOf,
-  } = projectComposition(html, { scope, mediaLengths, rootId });
-  const rows = projected.map(({ id, element, read, start, end, edges }) => {
-    const name = element.attrs.id || element.attrs["data-hf-id"] || "clip";
-    if (end === null)
-      throw new TimelineError(
-        "unsupported",
-        element.tag === "video" || element.tag === "audio"
-          ? `Clip ${name} has no data-duration and its media length could not be measured.`
-          : `Clip ${name} has no data-duration. Add one to edit it on the timeline.`,
-      );
-    return { id, element, read, start, end, edges };
-  });
+  } = projectComposition(markup, { mediaLengths, rootId });
+  const rows = projected.map(withDuration);
 
   const textLayout = readTextLayout(
     html,
@@ -908,6 +940,18 @@ export function parseComposition(
     managedAudioGroups(root).map((bus) => bus.attrs.id),
   );
   const authoredMembers = new Set<SourceElement>();
+  const styles = new Map<
+    string | undefined,
+    ReturnType<typeof readClipStyle>
+  >();
+  const styleOf = ({ attrs }: SourceElement) => {
+    let style = styles.get(attrs.style);
+    if (!style) {
+      style = readClipStyle(attrs.style);
+      styles.set(attrs.style, style);
+    }
+    return style;
+  };
   const clips = rows.map(({ id, element, read, start, end, edges }): Clip => {
     const kind = clipKind(element);
     const title =
@@ -920,7 +964,7 @@ export function parseComposition(
     const referenced = reference && clipIds.get(reference);
     const referencedEnd = reference && timing(reference).finish;
     const volume = parseNumeric(element.attrs["data-volume"]);
-    const style = readClipStyle(element.attrs.style);
+    const style = styleOf(element);
     // Stored at element-local frames; the element starts before the clip under a transition.
     const keyframes = isAudioKind(kind)
       ? null
@@ -956,11 +1000,10 @@ export function parseComposition(
         );
       } catch (error) {
         if (!(error instanceof AudioAutomationError)) throw error;
-        if (!sourceAttribution)
-          throw new TimelineError(
-            "unsupported",
-            `Clip ${id} has invalid audio automation. ${error.message}`,
-          );
+        throw new TimelineError(
+          "unsupported",
+          `Clip ${id} has invalid audio automation. ${error.message}`,
+        );
       }
     }
     const clip: Clip = {
@@ -1137,7 +1180,13 @@ export function parseComposition(
     ...timeline,
     ...(fonts.size > 0 && { fonts: [...fonts] }),
     clips: timeline.clips.map((clip) => {
-      const restrictions = sourceRestrictions(parsed, clip);
+      const element = parsed.elements.get(clip.id)!;
+      const restrictions = sourceRestrictions(
+        parsed,
+        clip,
+        element,
+        styleOf(element).restriction,
+      );
       return restrictions
         ? { ...clip, sourceRestrictions: restrictions }
         : clip;
@@ -1146,13 +1195,20 @@ export function parseComposition(
   return parsed;
 }
 
+export function authoredAudioGroupContent({
+  sourceRestriction,
+  ...group
+}: NonNullable<Timeline["authoredAudioGroups"]>[number]) {
+  return group;
+}
+
 /** Source restrictions describe the current document; they are not authored timeline content. */
 export function timelineContent(timeline: Timeline) {
   return {
     ...timeline,
     ...(timeline.authoredAudioGroups && {
       authoredAudioGroups: timeline.authoredAudioGroups.map(
-        ({ sourceRestriction, ...group }) => group,
+        authoredAudioGroupContent,
       ),
     }),
     clips: timeline.clips.map(
@@ -2112,16 +2168,15 @@ function fxRestriction(attribute: string | undefined) {
 function sourceRestrictions(
   parsed: ParsedComposition,
   clip: Clip,
+  element: SourceElement,
+  transformRestriction: string | undefined,
 ): Clip["sourceRestrictions"] {
-  const element = parsed.elements.get(clip.id)!;
   const restrictions = cutAndTextRestrictions(parsed, clip);
   const read =
     clip.kind === "element"
       ? readElementTitle(element, parsed.timeline.fps, parsed.fonts)
       : null;
-  const transform = isAudioKind(clip.kind)
-    ? undefined
-    : readClipStyle(element.attrs.style).restriction;
+  const transform = isAudioKind(clip.kind) ? undefined : transformRestriction;
   const fx = fxRestriction(element.attrs["data-fx-chain"]);
   const graded = readGrade(element.attrs[GRADE_ATTRIBUTE]);
   const grade = gradedKind(clip.kind)
@@ -2668,26 +2723,28 @@ function dissolveLayers(
   after: Timeline,
   origins: ReadonlyMap<string, ClipOrigin>,
 ) {
-  const existing = new Set(parsed.timeline.clips.map((clip) => clip.id));
   const position = (id: string): number => {
+    const element = parsed.elements.get(id);
+    if (element) return element.start;
     const origin = origins.get(id);
-    if (existing.has(id)) return parsed.elements.get(id)!.start;
     const anchor = origin && sourceAnchor(origin, origins);
-    return anchor && existing.has(anchor) ? position(anchor) + 0.5 : Infinity;
+    const source = anchor ? parsed.elements.get(anchor) : undefined;
+    return source ? source.start + 0.5 : Infinity;
   };
   const above = (a: Clip, b: Clip) =>
     position(a.id) - position(b.id) || a.start - b.start;
   const under = new Map<string, { in: boolean; out: boolean }>();
   const flag = (id: string, edge: "in" | "out") =>
     under.set(id, { in: false, out: false, ...under.get(id), [edge]: true });
+  const outgoingByCut = new Map<string, Clip>();
+  for (const clip of after.clips) {
+    if (!clip.transitionOut) continue;
+    const cut = `${clip.track}:${clipEnd(clip)}`;
+    if (!outgoingByCut.has(cut)) outgoingByCut.set(cut, clip);
+  }
   for (const incoming of after.clips) {
     if (incoming.transitionIn?.kind !== "dissolve") continue;
-    const outgoing = after.clips.find(
-      (clip) =>
-        clip.track === incoming.track &&
-        clipEnd(clip) === incoming.start &&
-        clip.transitionOut !== null,
-    );
+    const outgoing = outgoingByCut.get(`${incoming.track}:${incoming.start}`);
     if (!outgoing) continue;
     if (above(incoming, outgoing) > 0) flag(outgoing.id, "out");
     else flag(incoming.id, "in");
