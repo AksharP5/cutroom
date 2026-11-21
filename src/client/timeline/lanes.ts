@@ -127,6 +127,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const hoveredMix = useRef<HTMLElement | null>(null);
   /** A mixer bus strip a clip move would route to on release. */
   const busDrop = useRef<HTMLElement | null>(null);
+  /** Whether a bus strip was on screen when this drag began; null before its first move. */
+  const busTargets = useRef<boolean | null>(null);
   const hovered = useRef<string | null>(null);
   const hoverTransform = useRef("");
   const hoverBox = useRef<HTMLElement>(null);
@@ -696,6 +698,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const bus = busDrop.current?.dataset.busDrop;
     busDrop.current?.removeAttribute("data-drop");
     busDrop.current = null;
+    busTargets.current = null;
     const alone = kept.current;
     const edit = pointClick.current;
     drag.current = null;
@@ -1034,12 +1037,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   /** A clip move over a mixer bus strip offers to route its clips there instead. */
   function aimBus(x: number, y: number) {
-    const target =
-      drag.current?.intent.kind === "move"
-        ? (document
-            .elementFromPoint(x, y)
-            ?.closest<HTMLElement>("[data-bus-drop]") ?? null)
-        : null;
+    if (drag.current?.intent.kind !== "move") return;
+    // With the mixer closed a move never hit-tests outside the lanes.
+    busTargets.current ??= document.querySelector("[data-bus-drop]") !== null;
+    const target = busTargets.current
+      ? (document
+          .elementFromPoint(x, y)
+          ?.closest<HTMLElement>("[data-bus-drop]") ?? null)
+      : null;
     if (target === busDrop.current) return;
     busDrop.current?.removeAttribute("data-drop");
     busDrop.current = target;

@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type {
   KeyboardEvent,
   MouseEvent,
@@ -24,7 +30,7 @@ import type { FxInput, FxNode } from "../../shared/timeline/fx";
 import { mixSilences, trackMix } from "../../shared/timeline/tracks";
 import { openContextMenu } from "../components/ContextMenu";
 import type { MenuItem } from "../components/menu";
-import { parseGain } from "../edit/inspector/fields";
+import { SILENCE_DB, parseGain } from "../edit/inspector/fields";
 import { FxRack } from "../edit/inspector/FxRack";
 import { audioLevels } from "../edit/levels";
 import { previewMix } from "../edit/preview";
@@ -32,11 +38,14 @@ import type { MixScope } from "../edit/preview";
 import { editTimeline, useTimeline } from "../edit/timeline";
 import { openFile } from "../edit/code/code";
 import { showToast, useWorkspace } from "../workspace";
-import { meterSample, emptyMeter, meterHeight } from "./meters";
+import { meterPainter } from "./meters";
 import type { Row } from "./math";
 import "./mixer.css";
 
-/** Where a gain sits on the fader, from the top: +12 dB at 0, silence at 1. */
+/**
+ * Where a gain sits on the fader, from the top: +12 dB at 0, and at 1 -60 dB, which reads as
+ * silence everywhere else gain is typed or dragged.
+ */
 const SCALE = [
   [12, 0],
   [6, 0.14],
@@ -45,7 +54,7 @@ const SCALE = [
   [-12, 0.54],
   [-24, 0.71],
   [-48, 0.9],
-  [-90, 1],
+  [SILENCE_DB, 1],
 ] as const;
 const TICKS = [12, 6, 0, -6, -12, -24, -48] as const;
 const BOTTOM_DB = SCALE.at(-1)![0];
@@ -155,6 +164,7 @@ export function Mixer({
     open?: string;
   } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const closeRack = useCallback(() => setRack(null), []);
   useEffect(() => {
     audioLevels.setStripMetering(true);
     return () => audioLevels.setStripMetering(false);
@@ -429,7 +439,7 @@ export function Mixer({
           open={rack.open}
           disabled={!!open.locked}
           onChange={open.onFx}
-          onClose={() => setRack(null)}
+          onClose={closeRack}
         />
       )}
     </div>
@@ -620,31 +630,30 @@ function Fader({ model, scope }: { model: StripModel; scope: MixScope }) {
 
   const shownVolume = useRef(volume);
   shownVolume.current = volume;
-  const drafted = useRef(false);
-  // A saved or undone gain lands where the props put the cap, with no easing. A bus or track
-  // the preview played at a drafted level follows the saved one; Main's document reloads.
+  /** The level this strip last sent the preview, or null while it plays the saved one. */
+  const sent = useRef<number | null>(null);
+  const send = (level: number) => {
+    sent.current = level;
+    previewMix(scope, model.key, level);
+  };
+  // A saved, undone or refused gain lands where the props put the cap, with no easing, and the
+  // preview plays it whatever was sent before.
   useLayoutEffect(() => {
     if (cap.current) cap.current.style.transform = "";
     if (value.current) value.current.textContent = valueText(volume);
-    if (drafted.current && model.kind !== "main")
-      previewMix(scope, model.key, volume);
-    drafted.current = false;
-  }, [volume, model.key, model.kind]);
+    if (sent.current !== null && sent.current !== volume) send(volume);
+  }, [volume, model.key]);
 
-  // The live gain the preview plays: Main is a trim after its saved gain.
+  /** The level the preview plays while the fader moves, before anything is saved. */
   const draft = (next: number) => {
     if (cap.current && travel.current) {
       const height = travel.current.clientHeight;
       cap.current.style.transform = `translateY(${(faderAt(next) - faderAt(volume)) * height}px)`;
     }
     if (value.current) value.current.textContent = valueText(next);
-    previewMix(scope, model.key, model.kind === "main" ? next / volume : next);
-    drafted.current = true;
+    send(next);
   };
-  const reset = () => {
-    draft(volume);
-    drafted.current = false;
-  };
+  const reset = () => draft(volume);
   const commit = (next: number) => {
     const open = useTimeline.getState();
     if (
@@ -654,9 +663,10 @@ function Fader({ model, scope }: { model: StripModel; scope: MixScope }) {
     )
       return reset();
     model.onVolume(next);
-    // The editor shows an edit it takes at once; one it refused leaves the saved gain.
+    // The editor shows an edit it takes at once; one it refused leaves the saved gain. A refusal
+    // from the server later changes the props, which sends the saved gain again.
     requestAnimationFrame(() => {
-      if (shownVolume.current !== next && drafted.current) reset();
+      if (shownVolume.current !== next) reset();
     });
   };
 
@@ -671,13 +681,8 @@ function Fader({ model, scope }: { model: StripModel; scope: MixScope }) {
       end();
       window.clearTimeout(keys.current?.timer);
       keys.current = null;
-      if (drafted.current)
-        previewMix(
-          scope,
-          model.key,
-          model.kind === "main" ? 1 : shownVolume.current,
-        );
-      drafted.current = false;
+      if (sent.current !== null && sent.current !== shownVolume.current)
+        previewMix(scope, model.key, shownVolume.current);
     },
     [],
   );
@@ -685,6 +690,9 @@ function Fader({ model, scope }: { model: StripModel; scope: MixScope }) {
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || off || !travel.current) return;
+    // The clip marks sit over the travel and take their own clicks.
+    if (event.target instanceof Element && event.target.closest(".mixer-clip"))
+      return;
     event.preventDefault();
     cap.current?.focus();
     if (event.altKey) {
@@ -806,15 +814,22 @@ function Fader({ model, scope }: { model: StripModel; scope: MixScope }) {
           onKeyDown={step}
           onDoubleClick={() => !off && commit(1)}
         />
-        <div className="mixer-meter" aria-hidden>
-          <i>
-            <span />
-            <b hidden />
-          </i>
-          <i>
-            <span />
-            <b hidden />
-          </i>
+        <div className="mixer-meter">
+          {["L", "R"].map((side) => (
+            <div key={side} className="mixer-channel">
+              <button
+                type="button"
+                className="mixer-clip"
+                aria-label={`Clear ${model.code ?? model.name} ${side} clipping indicator`}
+                title={`Clear ${side} clipping indicator`}
+                disabled
+              />
+              <i aria-hidden>
+                <span />
+                <b hidden />
+              </i>
+            </div>
+          ))}
         </div>
       </div>
       <div
@@ -905,52 +920,34 @@ function useMeters(
       ...(root.current?.querySelectorAll<HTMLElement>("[data-strip]") ?? []),
     ].map((strip) => ({
       key: strip.dataset.strip!,
-      channels: [...strip.querySelectorAll<HTMLElement>(".mixer-meter i")].map(
-        (bar) => ({
-          bar,
-          lit: bar.querySelector<HTMLElement>("span")!,
-          peak: bar.querySelector<HTMLElement>("b")!,
-          state: emptyMeter,
-          shown: -1,
-        }),
+      painter: meterPainter(
+        [...strip.querySelectorAll<HTMLElement>(".mixer-channel")].map(
+          (element) => ({
+            element,
+            lit: element.querySelector<HTMLElement>("i > span")!,
+            peak: element.querySelector<HTMLElement>("i > b")!,
+            clip: element.querySelector<HTMLButtonElement>(".mixer-clip")!,
+          }),
+        ),
+        { draw: "slide" },
       ),
     }));
-    // Bars move whole segments (2px lit, 1px gap) on the compositor, so nothing repaints.
-    let travel = 0;
-    const measure = () => {
-      travel = meters[0]?.channels[0]?.bar.clientHeight ?? 0;
-      for (const { channels } of meters)
-        for (const channel of channels) channel.shown = -1;
-    };
-    measure();
-    const resized = new ResizeObserver(measure);
+    const resized = new ResizeObserver(() => {
+      for (const { painter } of meters) painter.measure();
+    });
     if (root.current) resized.observe(root.current);
     const unsubscribe = audioLevels.subscribe((level) => {
       const now = performance.now();
-      for (const { key, channels } of meters) {
+      for (const { key, painter } of meters) {
         const sample =
           key === "main" ? level : (level.strips?.[key] ?? { l: 0, r: 0 });
-        channels.forEach((channel, index) => {
-          const value = index === 0 ? sample.l : sample.r;
-          const segments = Math.ceil(travel / 3);
-          const lit = Math.round(meterHeight(value) * segments);
-          channel.state = meterSample(channel.state, value, level.playing, now);
-          // Unchanged bars cost nothing; at rest every bar is empty.
-          if (lit !== channel.shown) {
-            channel.shown = lit;
-            channel.lit.style.transform = `translateY(${(segments - lit) * 3}px)`;
-          }
-          const peak = channel.state.peak;
-          if (channel.peak.hidden !== (peak === 0))
-            channel.peak.hidden = peak === 0;
-          if (peak)
-            channel.peak.style.transform = `translateY(${Math.round((1 - peak) * travel)}px)`;
-        });
+        painter.paint([sample.l, sample.r], level.playing, now);
       }
     });
     return () => {
       unsubscribe();
       resized.disconnect();
+      for (const { painter } of meters) painter.dispose();
     };
   }, [root, keys]);
 }
@@ -974,6 +971,8 @@ function Rack({
   onClose(): void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
   useLayoutEffect(() => {
     const element = panel.current;
     if (!element || !anchor) return;
@@ -982,19 +981,38 @@ function Rack({
     const mixer = anchor.closest(".mixer")?.getBoundingClientRect() ?? box;
     element.style.left = `${Math.max(0, box.left - element.offsetWidth)}px`;
     element.style.top = `${mixer.top}px`;
-    const close = (event: ToggleEvent) => {
-      if (event.newState === "closed") onClose();
+    // A manual popover, so choosing from the rack's own menus, which float outside it, keeps it
+    // open. A press anywhere else or Esc closes it.
+    const menu = ".select-menu, .context-menu";
+    const press = (event: globalThis.PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !element.contains(event.target) &&
+        !(event.target instanceof Element && event.target.closest(menu))
+      )
+        close.current();
     };
-    element.addEventListener("toggle", close);
-    return () => element.removeEventListener("toggle", close);
-  }, [anchor, onClose]);
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.key === "Escape" &&
+        !document.querySelector(`:is(${menu}):popover-open`)
+      )
+        close.current();
+    };
+    document.addEventListener("pointerdown", press, true);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("pointerdown", press, true);
+      document.removeEventListener("keydown", key);
+    };
+  }, [anchor]);
   return (
     <div
       ref={panel}
       className="mixer-rack"
       role="dialog"
       aria-label={`${name} effects`}
-      popover="auto"
+      popover="manual"
     >
       <h2>{name}</h2>
       <FxRack fx={fx} disabled={disabled} open={open} onChange={onChange} />

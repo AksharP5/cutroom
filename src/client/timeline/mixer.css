@@ -229,18 +229,22 @@ input.mixer-rename {
 .main .mixer-meter {
   right: 8px;
 }
-.mixer-meter i {
+.mixer-channel {
   position: relative;
   width: 4px;
+}
+.main .mixer-channel {
+  width: 6px;
+}
+.mixer-meter i {
+  position: absolute;
+  inset: 0;
   overflow: clip;
   background: repeating-linear-gradient(
     to top,
     var(--meter-off) 0 2px,
     transparent 2px 3px
   );
-}
-.main .mixer-meter i {
-  width: 6px;
 }
 /* Slide the gradient by whole segments so the LEDs keep their height. */
 .mixer-meter span {
@@ -258,6 +262,22 @@ input.mixer-rename {
   inset: 0;
   transform: translateY(100%);
   background: linear-gradient(var(--meter-peak) 0 1px, transparent 1px);
+}
+/* The meter column's clip mark, latched above its bar until clicked or playback restarts. */
+.mixer-clip {
+  position: absolute;
+  top: -6px;
+  right: 0;
+  left: 0;
+  height: 4px;
+  padding: 0;
+  border: 0;
+  background: var(--meter-clip);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.mixer-clip:disabled {
+  visibility: hidden;
 }
 .mixer-strip:is([data-muted], [data-quiet]) .mixer-meter span {
   background: repeating-linear-gradient(

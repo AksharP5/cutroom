@@ -351,8 +351,9 @@ export function createViewport(
     grid.style.setProperty("--view", `${width}px`);
     fit = fitPpf(extent.frames, width, extent.fps);
     if (opened || (fitted && sameLength && !gesturing && !holding)) write(fit);
+    // A held view keeps whether it was fitted, so a later resize of the window still refits it.
+    if (!holding) fitted = ppf === fit;
     holding = false;
-    fitted = ppf === fit;
     if (owed !== null && !sameLength) centre(owed);
     onChange(false);
   }

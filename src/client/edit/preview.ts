@@ -283,7 +283,7 @@ export async function commitGradePreview(commit: () => Promise<boolean>) {
 }
 
 export type MixScope = { projectId: string; composition: string };
-/** Main drafts trim its saved gain. Track and bus drafts use absolute gain. */
+/** A strip's whole gain while its fader moves, Main's included; the preview makes up the rest. */
 type MixDraft = MixScope & { strip: string; volume: number };
 const mixTargets = new Set<(draft: MixDraft) => void>();
 /** Heard in the playing and incoming previews of the composition being edited. */

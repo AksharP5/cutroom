@@ -11,6 +11,7 @@ import {
 } from "@hyperframes/parsers/media-duration";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
+import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { compositionClipLocations } from "../timeline/composition";
 import type { CompositionScope } from "../timeline/composition";
 import { TimelineError } from "../../shared/timeline/apply";
@@ -164,8 +165,11 @@ export function liveUpdatePlan(
 function installPreviewBridge(
   plan: typeof liveUpdatePlan,
   seekInFrame: typeof frameSeek,
-  /** The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does. */
-  [minRate, maxRate]: [number, number],
+  /**
+   * The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does, and one
+   * gain stage's ceiling, which a fader set in place must stay under.
+   */
+  [minRate, maxRate, maxGain]: [number, number, number],
   texts: [string, string[]][],
   initialTiming:
     | (Pick<
@@ -315,12 +319,12 @@ function installPreviewBridge(
   /** Faders a saved gain sets in place: Cutroom's track buses and buses without automation. */
   const FADERS =
     "hf-audio-group[id]:is([data-cutroom-track], :not([data-automation]))";
-  /** Matches the server's choice: a bus's level must be within one gain stage, +12 dB. */
+  /** Matches `trackGainPreview`: a bus's level must be within one gain stage, +12 dB. */
   const isFader = (element: Element) => {
     if (!element.matches(FADERS)) return false;
     if (element.hasAttribute("data-cutroom-track")) return true;
     const level = Number(element.getAttribute("data-volume") ?? 1);
-    return level >= 0 && level <= 3.9810717055349722;
+    return level >= 0 && level <= maxGain;
   };
   const faders = (root: ParentNode) =>
     [...root.querySelectorAll(FADERS)].filter(isFader);
@@ -3046,8 +3050,37 @@ function installPreviewBridge(
           : kind === "bus"
             ? key
             : null;
-      if (kind === "main" || group)
-        win.__hf?.audioMeter?.fade(group ?? null, data.volume);
+      if (group) win.__hf?.audioMeter?.fade(group, data.volume);
+      if (kind !== "main") return;
+      // Main's draft is its whole gain. This document already plays its saved Main gain, the
+      // last gain on the root's chain that `data-cutroom-main-gain` names (`readMain`), so the
+      // trim after the chain makes up the difference.
+      let saved = 1;
+      const root = document.querySelector("[data-composition-id]");
+      try {
+        const nodes: unknown = JSON.parse(
+          root?.getAttribute("data-fx-chain") ?? "",
+        ).nodes;
+        const last: unknown = Array.isArray(nodes) ? nodes.at(-1) : null;
+        if (
+          last &&
+          typeof last === "object" &&
+          Reflect.get(last, "id") ===
+            root?.getAttribute("data-cutroom-main-gain") &&
+          Reflect.get(last, "type") === "gain" &&
+          Reflect.get(last, "enabled") !== false
+        )
+          saved =
+            10 **
+            (Number(
+              Reflect.get(Reflect.get(last, "params") ?? {}, "gain") ?? 0,
+            ) /
+              20);
+      } catch {
+        // No readable chain: no saved Main gain either.
+      }
+      if (Number.isFinite(saved) && saved > 0)
+        win.__hf?.audioMeter?.fade(null, data.volume / saved);
       return;
     }
     const scrub =
@@ -4373,7 +4406,7 @@ export function previewDocument(
     rampPending,
     rampWindows,
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE, MAX_AUDIO_GAIN])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

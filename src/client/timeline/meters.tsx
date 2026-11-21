@@ -40,6 +40,96 @@ export function meterSample(
   };
 }
 
+/** One meter channel: where its clip state shows, its lit level, its peak line and clip mark. */
+export interface MeterChannel {
+  element: HTMLElement;
+  lit: HTMLElement;
+  peak: HTMLElement;
+  clip: HTMLButtonElement;
+}
+
+/**
+ * Paints meter channels from runtime samples, for the meter column, the microphone meter and
+ * every mixer strip. Peaks hold and fall during playback; a clip mark latches until it is
+ * clicked or playback restarts. `slide` moves the lit segments by whole 3 px LEDs inside a
+ * clipping bar and the peak by pixels, all transforms, which a bank of strips needs; `clip`
+ * clips the lit segments in place. Nothing changes between samples, and unchanged bars are not
+ * written.
+ */
+export function meterPainter(
+  channels: readonly MeterChannel[],
+  { axis = "vertical", draw = "clip" } = {} as {
+    axis?: "vertical" | "horizontal";
+    draw?: "clip" | "slide";
+  },
+) {
+  const items = channels.map((parts) => ({
+    ...parts,
+    state: emptyMeter,
+    shown: -1,
+    clipped: false,
+  }));
+  let length = 0;
+  const measure = () => {
+    const bar = items[0]?.lit.parentElement;
+    length = bar
+      ? axis === "vertical"
+        ? bar.clientHeight
+        : bar.clientWidth
+      : 0;
+    for (const item of items) item.shown = -1;
+  };
+  measure();
+  const showClip = (item: (typeof items)[number]) => {
+    if (item.clipped === item.state.clipped) return;
+    item.clipped = item.state.clipped;
+    item.element.dataset.clipping = String(item.clipped);
+    item.clip.disabled = !item.clipped;
+  };
+  for (const item of items)
+    item.clip.onclick = () => {
+      item.state = { ...item.state, clipped: false };
+      showClip(item);
+    };
+  return {
+    measure,
+    paint(values: readonly number[], playing: boolean, now: number) {
+      items.forEach((item, index) => {
+        const value = values[index] ?? 0;
+        item.state = meterSample(item.state, value, playing, now);
+        const height = meterHeight(value);
+        if (draw === "slide") {
+          const segments = Math.ceil(length / 3);
+          const lit = Math.round(height * segments);
+          if (lit !== item.shown) {
+            item.shown = lit;
+            item.lit.style.transform = `translateY(${(segments - lit) * 3}px)`;
+          }
+        } else if (height !== item.shown) {
+          item.shown = height;
+          item.lit.style.clipPath =
+            axis === "horizontal"
+              ? `inset(0 ${(1 - height) * 100}% 0 0)`
+              : `inset(${(1 - height) * 100}% 0 0 0)`;
+        }
+        const { peak } = item.state;
+        if (item.peak.hidden !== (peak === 0)) item.peak.hidden = peak === 0;
+        if (peak)
+          item.peak.style.transform =
+            axis === "horizontal"
+              ? `translateX(calc(${peak * 100}% - var(--stroke-hair)))`
+              : draw === "slide"
+                ? `translateY(${Math.round((1 - peak) * length)}px)`
+                : `translateY(${(1 - peak) * 100}%)`;
+        showClip(item);
+      });
+    },
+    dispose() {
+      for (const item of items) item.clip.onclick = null;
+    },
+  };
+}
+
 /** One bounded paint per runtime sample. No clock, React updates, or animation while idle. */
 export function AudioMeters({
   source = audioLevels,
@@ -55,49 +145,29 @@ export function AudioMeters({
 } = {}) {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const channels = [
-      ...(root.current?.querySelectorAll<HTMLElement>(".tl-meter-channel") ??
-        []),
-    ].map((channel) => ({
-      channel,
-      level: channel.querySelector<HTMLElement>(".tl-meter-level")!,
-      peak: channel.querySelector<HTMLElement>(".tl-meter-peak")!,
-      clip: channel.querySelector<HTMLButtonElement>(".tl-meter-clip")!,
-      state: emptyMeter,
-    }));
-    for (const item of channels)
-      item.clip.onclick = () => {
-        item.state = { ...item.state, clipped: false };
-        item.channel.dataset.clipping = "false";
-        item.clip.disabled = true;
-      };
+    const painter = meterPainter(
+      [
+        ...(root.current?.querySelectorAll<HTMLElement>(".tl-meter-channel") ??
+          []),
+      ].map((element) => ({
+        element,
+        lit: element.querySelector<HTMLElement>(".tl-meter-level")!,
+        peak: element.querySelector<HTMLElement>(".tl-meter-peak")!,
+        clip: element.querySelector<HTMLButtonElement>(".tl-meter-clip")!,
+      })),
+      { axis: compact ? "horizontal" : "vertical" },
+    );
     const unsubscribe = source.subscribe((level) => {
       if (compact)
         root.current?.setAttribute(
           "aria-valuenow",
           String(Math.round(Math.min(1, level.l) * 100)),
         );
-      const now = performance.now();
-      channels.forEach((item, index) => {
-        const { channel, level: bar, peak, clip } = item;
-        const value = index === 0 ? level.l : level.r;
-        const current = meterHeight(value);
-        item.state = meterSample(item.state, value, level.playing, now);
-        // Clipping the lit segments keeps each LED its size; the peak line moves on the compositor.
-        bar.style.clipPath = compact
-          ? `inset(0 ${(1 - current) * 100}% 0 0)`
-          : `inset(${(1 - current) * 100}% 0 0 0)`;
-        peak.style.transform = compact
-          ? `translateX(calc(${item.state.peak * 100}% - var(--stroke-hair)))`
-          : `translateY(${(1 - item.state.peak) * 100}%)`;
-        peak.hidden = item.state.peak === 0;
-        channel.dataset.clipping = String(item.state.clipped);
-        clip.disabled = !item.state.clipped;
-      });
+      painter.paint([level.l, level.r], level.playing, performance.now());
     });
     return () => {
       unsubscribe();
-      for (const item of channels) item.clip.onclick = null;
+      painter.dispose();
     };
   }, [source, compact]);
   return (

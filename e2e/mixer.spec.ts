@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { z } from "zod";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
@@ -53,22 +53,33 @@ async function openMixer(page: Page, id: string) {
   return page.getByRole("region", { name: "Mixer" });
 }
 
-/** The post-fader peak HyperFrames measures for a bus, as the strip's meter shows it. */
-const busPeak = (page: Page, id: string) =>
+/**
+ * The post-fader level HyperFrames measures for a bus, or for Main without an id, in dB against
+ * the tones' level: what the strip's meter shows.
+ */
+const level = (page: Page, id?: string) =>
   page
     .frameLocator("iframe[data-live]")
     .locator("main")
     .first()
-    .evaluate((_, id) => {
-      const runtime = window as Window & {
-        __hf?: {
-          audioMeter?: {
-            read(): { groups: Record<string, { l: number; r: number }> };
+    .evaluate(
+      (_, [id, amplitude]) => {
+        const runtime = window as Window & {
+          __hf?: {
+            audioMeter?: {
+              read(): {
+                master: { r: number };
+                groups: Record<string, { l: number; r: number }>;
+              };
+            };
           };
         };
-      };
-      return runtime.__hf?.audioMeter?.read().groups[id]?.r ?? 0;
-    }, id);
+        const read = runtime.__hf?.audioMeter?.read();
+        const peak = (id ? read?.groups[id]?.r : read?.master.r) ?? 0;
+        return peak > 0 ? 20 * Math.log10(peak / amplitude) : -Infinity;
+      },
+      [id, amplitude] as const,
+    );
 
 test("the mixer shows each track and bus, and a bus fader is heard while it moves and saves once on release", async ({
   page,
@@ -88,7 +99,7 @@ test("the mixer shows each track and bus, and a bus fader is heard while it move
   await seekFrame(page, 60);
   await page.getByRole("button", { name: "Play forward", exact: true }).click();
   // While B plays, Voices carries it at unity.
-  await expect.poll(() => busPeak(page, "voices")).toBeCloseTo(amplitude, 2);
+  await expect.poll(() => level(page, "voices")).toBeCloseTo(0, 1);
 
   const live = page.frameLocator("iframe[data-live]").locator("main").first();
   const origin = await live.evaluate(() => performance.timeOrigin);
@@ -103,9 +114,7 @@ test("the mixer shows each track and bus, and a bus fader is heard while it move
   });
   await expect(voices.locator(".mixer-value")).toHaveText("-6.0");
   // Heard before anything is saved.
-  await expect
-    .poll(() => busPeak(page, "voices"))
-    .toBeCloseTo(amplitude * 10 ** (-6 / 20), 2);
+  await expect.poll(() => level(page, "voices")).toBeCloseTo(-6, 1);
   expect(await readFile(join(project.path, "index.html"), "utf8")).toBe(source);
   await page.mouse.up();
   await page.keyboard.up("Shift");
@@ -173,7 +182,7 @@ test("bus solo and Main gain are saved, named in the export notice and heard in 
   // A1 plays on a track only the solo silences; B plays through Voices and Main at -6 dB.
   expect(await encodedPeak(outputPath, 0.5)).toBeLessThan(0.001);
   const db = 20 * Math.log10((await encodedPeak(outputPath, 2.5)) / amplitude);
-  expect(db).toBeCloseTo(-6, 0);
+  expect(db).toBeCloseTo(-6, 1);
 });
 
 test("switching compositions discards a pending keyboard fader change", async ({
@@ -311,6 +320,186 @@ test("New bus routes the selection, a clip dropped on a strip joins it, and Dele
       ),
     )
     .toEqual([undefined, undefined]);
+});
+
+/** Presses a fader's cap and moves it down with Shift held: 0.1 dB a pixel. */
+async function grab(page: Page, strip: Locator, pixels: number) {
+  const box = (await strip.getByRole("slider").boundingBox())!;
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.keyboard.down("Shift");
+  await page.mouse.down();
+  await page.mouse.move(x, y + pixels, { steps: 6 });
+  return async () => {
+    await page.mouse.up();
+    await page.keyboard.up("Shift");
+  };
+}
+
+test("Main's fader is heard while it moves, Esc puts a drag back, and a refused save restores what plays", async ({
+  page,
+  request,
+}) => {
+  const { project, source, read } = await bench(request, "Mixer refusals");
+  const index = join(project.path, "index.html");
+  const mixer = await openMixer(page, project.id);
+  const main = mixer.getByRole("group", { name: "Main" });
+  const voices = mixer.getByRole("group", { name: "Voices" });
+  await seekFrame(page, 60);
+  await page.getByRole("button", { name: "Play forward", exact: true }).click();
+  await expect.poll(() => level(page)).toBeCloseTo(0, 1);
+
+  // Main is heard at -6 dB as it moves, and Esc returns it to 0 dB without saving.
+  const release = await grab(page, main, 60);
+  await expect(main.locator(".mixer-value")).toHaveText("-6.0");
+  await expect.poll(() => level(page)).toBeCloseTo(-6, 1);
+  await page.keyboard.press("Escape");
+  await expect(main.locator(".mixer-value")).toHaveText("0.0");
+  await expect.poll(() => level(page)).toBeCloseTo(0, 1);
+  await release();
+  expect(await readFile(index, "utf8")).toBe(source);
+
+  // The server refuses the save: the strip and what plays both go back to the saved 0 dB.
+  await page.route("**/api/cutroom/projects/*/commands", (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: "The timeline changed. Read it again.",
+        code: "stale_revision",
+      }),
+    }),
+  );
+  const drop = await grab(page, voices, 60);
+  await expect.poll(() => level(page, "voices")).toBeCloseTo(-6, 1);
+  await drop();
+  await expect(voices.locator(".mixer-value")).toHaveText("0.0");
+  await expect.poll(() => level(page, "voices")).toBeCloseTo(0, 1);
+  await page.unroute("**/api/cutroom/projects/*/commands");
+  expect((await read()).authoredAudioGroups?.[0]?.volume).toBe(1);
+
+  // A saved Main drag is what the next document plays, with nothing left over from the drag.
+  const save = await grab(page, main, 60);
+  await save();
+  await expect
+    .poll(async () => (await read()).main?.volume)
+    .toBeCloseTo(10 ** (-6 / 20), 4);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await seekFrame(page, 60);
+  await page.getByRole("button", { name: "Play forward", exact: true }).click();
+  await expect.poll(() => level(page)).toBeCloseTo(-6, 1);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+});
+
+test("a strip's rack stays open while an effect is chosen from its menu, and closes on a press outside", async ({
+  page,
+  request,
+}) => {
+  const { project, read } = await bench(request, "Mixer rack");
+  const mixer = await openMixer(page, project.id);
+  const voices = mixer.getByRole("group", { name: "Voices" });
+  await voices.hover();
+  await voices.getByRole("button", { name: "Add effect" }).click();
+  const rack = page.getByRole("dialog", { name: "Voices effects" });
+  await expect(rack).toBeVisible();
+  await page.getByRole("menuitem", { name: "Compressor", exact: true }).click();
+  await expect(voices.locator(".mixer-fx")).toHaveText("Compressor");
+  await expect(rack).toBeVisible();
+  await expect
+    .poll(async () =>
+      (await read()).authoredAudioGroups?.[0]?.fx.map(({ type }) => type),
+    )
+    .toEqual(["compressor"]);
+  // Opening the effect's knobs keeps the rack too; a press on the timeline closes it.
+  await rack.getByRole("button", { name: "Compressor", exact: true }).click();
+  await expect(rack.getByText("Threshold")).toBeVisible();
+  await page.locator(".tl-lanes").click({ position: { x: 5, y: 5 } });
+  await expect(rack).toBeHidden();
+});
+
+test("track solo and bus solo add together, and the strips they silence dim", async ({
+  page,
+  request,
+}) => {
+  const { project, source } = await bench(request, "Mixer solos");
+  // C plays on A3 with track mixing, beside A1's track and A2's bus.
+  await writeFile(
+    join(project.path, "index.html"),
+    source.replace(
+      "</main>",
+      '<audio id="c" src="a.wav" data-start="0" data-duration="2" data-track-index="3"></audio></main>',
+    ),
+  );
+  const mixer = await openMixer(page, project.id);
+  const strip = (name: string) => mixer.getByRole("group", { name });
+  const quiet = async () =>
+    Object.fromEntries(
+      await Promise.all(
+        ["A1 Audio 1", "A2 Audio 2", "A3 Audio 3", "Voices"].map(
+          async (name) =>
+            [
+              name,
+              (await strip(name).getAttribute("data-quiet")) !== null,
+            ] as const,
+        ),
+      ),
+    );
+  await strip("A1 Audio 1").getByRole("button", { name: "Solo A1" }).click();
+  await strip("Voices").getByRole("button", { name: "Solo Voices" }).click();
+  // A1's track and A2's clip through Voices sound; only A3 is silenced.
+  await expect.poll(quiet).toEqual({
+    "A1 Audio 1": false,
+    "A2 Audio 2": false,
+    "A3 Audio 3": true,
+    Voices: false,
+  });
+  await strip("A1 Audio 1").getByRole("button", { name: "Solo A1" }).click();
+  await expect.poll(quiet).toEqual({
+    "A1 Audio 1": true,
+    "A2 Audio 2": false,
+    "A3 Audio 3": true,
+    Voices: false,
+  });
+});
+
+test("a strip that reaches 0 dBFS lights its clip mark until it is clicked", async ({
+  page,
+  request,
+}) => {
+  const { project } = await bench(request, "Mixer clipping");
+  const { revision } = TimelineViewSchema.parse(
+    await (
+      await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+    ).json(),
+  );
+  // +12 dB on Voices and on Main take B's -18 dBFS tone past full scale.
+  const response = await request.post(
+    `/api/cutroom/projects/${project.id}/commands`,
+    {
+      data: {
+        expectedRevision: revision,
+        commands: [
+          { type: "setAudioGroup", group: "voices", volume: 10 ** (12 / 20) },
+          { type: "setMaster", volume: 10 ** (12 / 20) },
+        ],
+      },
+    },
+  );
+  expect(response.ok(), await response.text()).toBe(true);
+  const mixer = await openMixer(page, project.id);
+  const main = mixer.getByRole("group", { name: "Main" });
+  // Unlit, the mark is hidden, so it is found by its place rather than its name.
+  const mark = main.locator(".mixer-clip").first();
+  await expect(mark).toBeDisabled();
+  await seekFrame(page, 60);
+  await page.getByRole("button", { name: "Play forward", exact: true }).click();
+  await expect(mark).toBeEnabled();
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  // It stays lit after a stop, as the meter column's does, until it is clicked.
+  await expect(mark).toBeEnabled();
+  await mark.click();
+  await expect(mark).toBeDisabled();
 });
 
 async function encodedPeak(path: string, time: number) {
