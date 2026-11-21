@@ -25,6 +25,7 @@ async function projectWithAdjustment(
   request: APIRequestContext,
   lowerTitle = true,
   dissolve = true,
+  adjustment = { start: 0.5, duration: 2 },
 ) {
   const response = await request.post("/api/cutroom/projects", {
     data: { name: "Adjustment grade", width, height, duration: 3 },
@@ -63,7 +64,7 @@ async function projectWithAdjustment(
       (lowerTitle
         ? '<div id="lower" class="clip" data-start="0" data-duration="3" data-track-index="1" style="position:absolute;top:0;left:0;width:140px;height:90px;background:#90d030">Lower title</div>'
         : "") +
-      '<div id="look" class="clip" data-cutroom-adjustment data-start="0.5" data-duration="2" data-track-index="2" data-color-grading=\'{"adjust":{"exposure":-1}}\'></div>' +
+      `<div id="look" class="clip" data-cutroom-adjustment data-start="${adjustment.start}" data-duration="${adjustment.duration}" data-track-index="2" data-color-grading='{"adjust":{"exposure":-1}}'></div>` +
       '<div id="upper" class="clip" data-start="0" data-duration="3" data-track-index="3" style="position:absolute;top:0;right:0;width:140px;height:90px;background:#ec40a0">Upper title</div>' +
       "</main></body></html>",
   );
@@ -229,7 +230,11 @@ test("uses CSS pixels while playing and restores the paused grade at full resolu
   page,
   request,
 }) => {
-  const project = await projectWithAdjustment(request, true, false);
+  // Keep every frame the Stop click can land on inside the adjustment.
+  const project = await projectWithAdjustment(request, true, false, {
+    start: 0,
+    duration: 3,
+  });
   await page.addInitScript(() => {
     if (self === top) localStorage.setItem("cutroom.footagePipeline", "false");
     // The sandboxed preview has its own device scale on Chromium.
@@ -252,10 +257,16 @@ test("uses CSS pixels while playing and restores the paused grade at full resolu
     `^(?:${Math.floor(full / 2)}|${Math.ceil(full / 2)})$`,
   );
 
+  await page.getByRole("button", { name: "Loop", exact: true }).click();
   await page.getByRole("button", { name: "Play forward" }).click();
   await expect(canvas).toHaveAttribute("width", cssWidth);
-  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  const stop = page.getByRole("button", { name: "Stop", exact: true });
+  await stop.click();
+  await expect(stop).toHaveAttribute("aria-pressed", "true");
   await expect(canvas).toHaveAttribute("width", String(full));
+  await expect
+    .poll(async () => (await viewerPixels(page))[1])
+    .toEqual([72, 104, 24]);
 
   await seekFrame(page, 25);
   await expect.poll(() => viewerPixels(page)).toEqual(paused);
