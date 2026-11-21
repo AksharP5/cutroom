@@ -10,7 +10,8 @@ import type { Fps } from "./schema.ts";
 export type ExactTime = Readonly<{ n: bigint; d: bigint }>;
 
 const MICROS = 1_000_000n;
-const SAMPLES = 48_000n;
+export const AUDIO_SAMPLE_RATE = 48_000;
+const SAMPLES = BigInt(AUDIO_SAMPLE_RATE);
 const FRAME_TOLERANCE = 1000n;
 const abs = (n: bigint) => (n < 0n ? -n : n);
 

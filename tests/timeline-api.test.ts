@@ -10,6 +10,7 @@ import { ProjectSummarySchema } from "../src/shared/project";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import {
   ClipboardSchema,
+  EDIT_HISTORY_HEADER,
   TimelineViewSchema,
 } from "../src/shared/timeline/schema";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
@@ -149,7 +150,9 @@ test("a command batch is atomic, one undo step, and refuses stale revisions", as
     const original = await fixture.files();
     const history = async () =>
       z
-        .object({ entries: z.array(z.object({ label: z.string() })) })
+        .object({
+          entries: z.array(z.object({ id: z.string(), label: z.string() })),
+        })
         .parse(
           await (
             await fixture.request(`/projects/${project.id}/history`)
@@ -205,6 +208,7 @@ test("a command batch is atomic, one undo step, and refuses stale revisions", as
       ],
     });
     expect(edited.status).toBe(200);
+    const historyId = edited.headers.get(EDIT_HISTORY_HEADER);
     const view = TimelineViewSchema.parse(await edited.json());
     expect(view.timeline.duration).toBe(180);
     expect(view.timeline.clips.map((clip) => clip.duration)).toEqual([
@@ -214,16 +218,13 @@ test("a command batch is atomic, one undo step, and refuses stale revisions", as
       "Beat",
     ]);
     expect(view.timeline.markers[0]?.color).toBe("green");
-    expect(
-      TimelineViewSchema.parse(
-        await (
-          await fixture.request(`/projects/${project.id}/timeline`)
-        ).json(),
-      ),
-    ).toEqual(view);
-    expect((await history()).map((entry) => entry.label)).toEqual([
-      "Tighten intro",
-    ]);
+    const saved = await (
+      await fixture.request(`/projects/${project.id}/timeline`)
+    ).json();
+    expect(TimelineViewSchema.parse(saved)).toEqual(view);
+    const entries = await history();
+    expect(entries.map(({ label }) => label)).toEqual(["Tighten intro"]);
+    expect(historyId).toBe(entries[0]?.id);
 
     const stale = await post({
       expectedRevision: read.revision,

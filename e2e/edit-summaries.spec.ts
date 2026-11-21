@@ -27,7 +27,7 @@ test("Review and chat keep factual outcomes beside literal agent labels and coun
   const base = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await request.get(`${base}/timeline`)).json(),
+      await (await request.get(`${base}/timeline?clipEdits=1`)).json(),
     );
   const client = new Client({ name: "edit-summary-test", version: "1" });
   await client.connect(
@@ -75,7 +75,7 @@ test("Review and chat keep factual outcomes beside literal agent labels and coun
       `${factual}, 2 times`,
     ]);
     await expect(
-      page.getByRole("button", { name: "Accept agent changes" }),
+      page.getByRole("button", { name: "Accept all agent changes" }),
     ).toBeVisible();
     expect(await rows.locator("img,script").count()).toBe(0);
     expect((await read()).clipEdits?.every((edit) => !edit.accepted)).toBe(
@@ -83,10 +83,12 @@ test("Review and chat keep factual outcomes beside literal agent labels and coun
     );
     await page.screenshot({ path: info.outputPath("attributed-labels.png") });
 
-    await page.getByRole("button", { name: "Accept agent changes" }).click();
+    await page
+      .getByRole("button", { name: "Accept all agent changes" })
+      .click();
     await expect(rows).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Accept agent changes" }),
+      page.getByRole("button", { name: "Accept all agent changes" }),
     ).toHaveCount(0);
   } finally {
     await client.close();
