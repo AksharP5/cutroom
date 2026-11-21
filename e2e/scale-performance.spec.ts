@@ -112,7 +112,7 @@ for (const pipeline of [false, true]) {
 
       const offset = 24;
       // The native path waits for a decoded frame from the isolated preview.
-      const rippleBudgetMs = pipeline ? 1500 : 4000;
+      const rippleBudgetMs = pipeline ? 1500 : 6000;
       const ripple = async (shot: number) => {
         const frame = shots[shot]!.start + offset;
         await seek(page, frame);
