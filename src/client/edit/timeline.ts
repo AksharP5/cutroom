@@ -57,6 +57,13 @@ const HistorySchema = z.object({
   canRedo: z.boolean(),
   entries: z.array(z.object({ id: z.string(), undone: z.boolean() })),
 });
+const emptyHistory = { canUndo: false, canRedo: false };
+const pendingEditHistory = { canUndo: true, canRedo: false };
+let confirmedHistory = emptyHistory;
+const historyControls = (projectId: string) =>
+  pending.some((edit) => edit.projectId === projectId)
+    ? pendingEditHistory
+    : confirmedHistory;
 const TimelineEditsSchema = TimelineViewSchema.pick({ clipEdits: true });
 
 /** The engine's timeline for the open composition, shared by the viewer, transport, and timeline. */
@@ -71,7 +78,7 @@ export const useTimeline = create(() => ({
   view: null as TimelineView | null,
   /** Review can still show pending edits when authored source cannot produce a timeline. */
   failedRead: null as ApiError | null,
-  history: { canUndo: false, canRedo: false },
+  history: emptyHistory,
   /** Selected clip ids. A clip id names one clip for good, so an id is that clip or gone. */
   selection: emptySelection as Selection,
   /** Dragged edges snap to clip edges, the playhead, markers, and in and out. Session state. */
@@ -98,6 +105,8 @@ interface Edit {
   anchors: ReturnType<typeof editAnchors>;
   gesture: boolean;
   failure: string | null;
+  /** Resolves when this save has left the queue, including when it was refused. */
+  saved: Promise<void>;
   /** Set when an edit that made a clip this one names was refused; it is taken back with that one. */
   dropped: boolean;
 }
@@ -113,6 +122,7 @@ let confirmed: { projectId: string; view: TimelineView } | null = null;
 const answers = new Map<string, TimelineView>();
 /** Edits shown already and not yet answered, oldest first. */
 let pending: Edit[] = [];
+const pendingHistory = new Map<string, Set<Promise<void>>>();
 /** The header toast this queue last showed, cleared by the next edit that lands. */
 let lastToast = "";
 let dismissRipple = () => {};
@@ -165,13 +175,14 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
   dismissOutside();
   rippleRevision = null;
   historyHead = undefined;
+  confirmedHistory = emptyHistory;
   useTimeline.setState({
     projectId,
     composition: ROOT_COMPOSITION,
     parents: [],
     view: null,
     failedRead: null,
-    history: { canUndo: false, canRedo: false },
+    history: emptyHistory,
     selection: emptySelection,
   });
   signal?.addEventListener(
@@ -185,7 +196,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
         projectId: null,
         view: null,
         failedRead: null,
-        history: { canUndo: false, canRedo: false },
+        history: emptyHistory,
         selection: emptySelection,
       });
     },
@@ -205,6 +216,18 @@ function enqueue<T>(step: () => Promise<T>) {
     () => {},
   );
   return run;
+}
+
+/** A preview of an intermediate save would compete with the remaining writes in a burst. */
+export function afterEditBurst(projectId: string, composition: string) {
+  const saves = pending.filter(
+    (edit) => edit.projectId === projectId && edit.composition === composition,
+  );
+  const history = pendingHistory.get(projectId);
+  const writes: Promise<void>[] = [];
+  if (saves.length > 1) writes.push(...saves.map((edit) => edit.saved));
+  if (history && history.size > 1) writes.push(...history);
+  return Promise.allSettled(writes);
 }
 
 /** Runs a source operation or export only after the edits shown before it have landed. */
@@ -360,9 +383,10 @@ function settle(
     dismissRipple();
     rippleRevision = null;
   }
+  confirmedHistory = history;
   useTimeline.setState({
     view: shown(projectId),
-    history,
+    history: historyControls(projectId),
     failedRead: null,
   });
   // The engine read this timeline, so an earlier refusal no longer stands.
@@ -391,12 +415,14 @@ async function read(
         const history = await historyRead.catch(() => null);
         if (!signal?.aborted) select?.(null);
         if (!signal?.aborted && isOpen(projectId, composition)) {
-          if (history)
+          if (history) {
             historyHead = history.entries.findLast(
               (entry) => !entry.undone,
             )?.id;
+            confirmedHistory = history;
+          }
           useTimeline.setState({
-            ...(history && { history }),
+            history: historyControls(projectId),
             failedRead: error,
           });
         }
@@ -688,6 +714,7 @@ export async function editTimeline(
   const followed = lastToast;
   let edit: Edit | null = null;
   let accepted = false;
+  const saved = Promise.withResolvers<void>();
   try {
     const from = basis ?? view.timeline;
     const input = z.array(CommandSchema).parse(build(from));
@@ -724,6 +751,7 @@ export async function editTimeline(
       anchors,
       gesture: basis !== undefined,
       failure: null,
+      saved: saved.promise,
       dropped: false,
     };
     const made = edit;
@@ -734,9 +762,11 @@ export async function editTimeline(
       rippleFeedback(view.timeline, timeline, commands, clipboards);
     // Other edits can look up this bus as soon as it appears in the inspector.
     // Publish only the persisted ID from the server.
-    if (!createsAudioGroup(commands))
-      useTimeline.setState({ view: { ...view, timeline } });
     pending.push(made);
+    useTimeline.setState({
+      ...(!createsAudioGroup(commands) && { view: { ...view, timeline } }),
+      history: pendingEditHistory,
+    });
     onApply?.(timeline, commands, named.origins);
     let report = "";
     let revision: string | undefined;
@@ -783,10 +813,19 @@ export async function editTimeline(
         throw error;
       }
       pending = pending.filter((item) => item !== made);
-      // The answer is the view a read would return; only the undo history is still to read.
-      // Later writes, by anyone, announce themselves as project file events.
+      // The next saved edit can already use this answer's revision. The visible timeline
+      // has the rest of the burst applied, so only its last edit needs a history read and
+      // a new projection. Read immediately if the server differed from the optimistic edit.
+      const more = () =>
+        pending.some(
+          (item) =>
+            item.projectId === projectId &&
+            item.composition === made.composition,
+        );
+      const reconcile = report || createsAudioGroup(made.commands);
+      if (more() && !reconcile) return;
       const history = await readHistory(projectId);
-      if (confirmed?.projectId === projectId)
+      if (confirmed?.projectId === projectId && (!more() || reconcile))
         settle(projectId, confirmed.view, history);
     });
     if (!made.dropped && useTimeline.getState().projectId === projectId) {
@@ -836,22 +875,27 @@ export async function editTimeline(
     if (edit) pending = pending.filter((item) => item !== edit);
     if (useTimeline.getState().projectId !== projectId) return false;
     const shownView = shown(projectId);
-    if (shownView) useTimeline.setState({ view: shownView });
+    useTimeline.setState({
+      ...(shownView && { view: shownView }),
+      history: historyControls(projectId),
+    });
     lastToast = humanReason(
       error instanceof Error ? error.message : String(error),
       view.timeline,
     );
     showToast(lastToast);
     return accepted;
+  } finally {
+    saved.resolve();
   }
 }
 
-export const stepHistory = (
+export function stepHistory(
   projectId: string,
   step: "undo" | "redo",
   expectedHistoryId?: string,
-) =>
-  queueNoteChange(projectId, () =>
+) {
+  const run = queueNoteChange(projectId, () =>
     clipboardTask.then(() =>
       enqueue(async () => {
         if (expectedHistoryId) {
@@ -914,6 +958,19 @@ export const stepHistory = (
       }),
     ),
   );
+  let history = pendingHistory.get(projectId);
+  if (!history) {
+    history = new Set();
+    pendingHistory.set(projectId, history);
+  }
+  history.add(run);
+  const settle = () => {
+    history.delete(run);
+    if (!history.size) pendingHistory.delete(projectId);
+  };
+  void run.then(settle, settle);
+  return run;
+}
 
 /** Whether clips have been copied in this project, so a paste has something to place. */
 export const hasClipboard = (projectId: string) => clipboardIds.has(projectId);
