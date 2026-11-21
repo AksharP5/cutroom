@@ -158,3 +158,109 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   // Encodes three sources, captures 30 Chromium frames, and decodes one.
   90_000,
 );
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "whole and marked MP4 capture preserve hard chroma edges",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-chroma-"));
+    const project = join(root, "project");
+    const workers = createRenderWorkers({
+      scratchDir: join(root, "scratch"),
+      directExport: false,
+    });
+    const width = 320;
+    const height = 192;
+    const rate = { num: 30, den: 1 };
+    const bars = [
+      [240, 15, 20],
+      [22, 219, 35],
+      [25, 31, 238],
+      [215, 216, 32],
+      [224, 218, 207],
+      [20, 21, 25],
+    ];
+    try {
+      await Bun.write(
+        join(project, "index.html"),
+        `<!doctype html>
+        <html><head><style>body { margin: 0; }</style></head><body>
+        <main data-composition-id="main" data-width="${width}" data-height="${height}" data-duration="0.4">
+          <video id="picture" src="source.mp4" muted class="clip" data-start="0" data-duration="0.4" data-track-index="0"
+            style="position:absolute;inset:0;width:100%;height:100%"></video>
+        </main></body></html>`,
+      );
+      const rgb = Buffer.alloc(width * height * 3);
+      for (let y = 0; y < height; y++)
+        for (let x = 0; x < width; x++) {
+          const colour =
+            bars[(Math.floor(x / 40) + Math.floor(y / 31)) % bars.length]!;
+          rgb.set(colour, (y * width + x) * 3);
+        }
+      const ppm = join(root, "chart.ppm");
+      await writeFile(
+        ppm,
+        Buffer.concat([Buffer.from(`P6\n${width} ${height}\n255\n`), rgb]),
+      );
+      const source = join(project, "source.mp4");
+      await command([
+        "ffmpeg",
+        ...["-v", "error", "-loop", "1", "-framerate", "30", "-i", ppm],
+        "-vf",
+        "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv",
+        ...[
+          "-frames:v",
+          "12",
+          "-c:v",
+          "libx264",
+          "-preset",
+          "ultrafast",
+          "-crf",
+          "8",
+        ],
+        source,
+      ]);
+      const readFrame = (path: string) =>
+        command([
+          "ffmpeg",
+          ...["-v", "error", "-i", path, "-frames:v", "1"],
+          "-vf",
+          "scale=flags=bicubic+accurate_rnd+full_chroma_int",
+          ...["-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+        ]);
+      const reference = await readFrame(source);
+      for (const range of [null, { start: 1, end: 8 }]) {
+        const jobId = range ? "marked" : "whole";
+        const filename = jobId + ".mp4";
+        const outputPath = join(root, filename);
+        const state = workers.start(
+          {
+            project: { id: "chroma", dir: project },
+            outputPath,
+            format: "mp4",
+            fps: rate,
+            quality: "standard",
+            jobId,
+          },
+          { filename, directory: root, range },
+        );
+        const deadline = Date.now() + 20_000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(25);
+        expect(state.error).toBeUndefined();
+        expect(state.status).toBe("complete");
+        const frame = await readFrame(outputPath);
+        expect(frame.length).toBe(reference.length);
+        // Track the tail of the RGB errors so large, narrow colour fringes cannot
+        // pass just because interior pixels match.
+        let errors = 0;
+        for (let i = 0; i < frame.length; i++)
+          if (Math.abs(frame[i]! - reference[i]!) > 35) errors++;
+        expect(errors / frame.length, jobId).toBeLessThan(0.001);
+      }
+    } finally {
+      await workers.cancelAll();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  60_000,
+);

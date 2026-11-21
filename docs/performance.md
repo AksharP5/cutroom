@@ -871,6 +871,36 @@ Transparent formats capture PNG screenshots instead of JPEG, and GIF adds a ProR
 
 Encode on the GPU, on a 20-second 1080p30 clip under film grain drawn wholly from its source (RTX 5060): 3.8 s and 3.8 s with NVENC (43.1 MB), 22.4 s and 24.5 s with libx264 (410.5 MB, which keeps grain at CRF 18; see [GPU encoding](#gpu-encoding) for quality at each tier).
 
+### Chroma in MP4 frame capture
+
+A browser-captured MP4 on main `786b0519` passed SDR footage through a 4:2:0 JPEG before drawing any overlays. A second chroma reduction in capture and MP4 encoding spread saturated colours across hard edges. Decoding the extraction files confirmed `yuvj420p` on main and `yuvj444p` with this change. Cutroom keeps the original source chroma sample boundaries when it expands the frame and preserves that picture as 4:4:4 JPEG until Chromium draws it. The comparison holds the screenshot and MP4 encoder settings fixed.
+
+The chart has moving saturated edges, smooth gradients, six skin-tone patches and seeded grain. Four versions were encoded as BT.709 limited-range H.264 4:2:0 at 1920 × 1080 or 3840 × 2160, 8- or 10-bit. Each source was exported at 60 fps (90 frames), Standard quality, CPU encoding, on Chromium 155 and FFmpeg 9.0.2. All 90 frames were compared with the matching decoded source frames in RGB, using the same bicubic chroma reconstruction for the source and delivered video. Values below are absolute RGB-channel errors out of 255, in order of maximum, 99.9th percentile and mean. The bit depth in the table is the input's. MP4 delivery uses 8-bit 4:2:0.
+
+| SDR source   |                              Hard edges |                              Gradients |                     Skin-tone patches |                                   Grain |
+| ------------ | --------------------------------------: | -------------------------------------: | ------------------------------------: | --------------------------------------: |
+| 1080p 8-bit  | 87.9 / 36.5 / 1.84 → 55.4 / 17.8 / 1.12 | 24.7 / 11.8 / 1.00 → 16.4 / 4.6 / 0.93 | 19.5 / 5.8 / 0.86 → 19.5 / 4.8 / 0.85 | 27.6 / 14.5 / 3.59 → 26.5 / 14.9 / 3.64 |
+| 1080p 10-bit | 94.3 / 37.0 / 1.63 → 50.5 / 17.8 / 0.91 | 28.0 / 11.4 / 0.90 → 10.9 / 4.4 / 0.87 | 19.9 / 5.3 / 0.90 → 18.9 / 4.6 / 0.87 | 26.7 / 14.6 / 3.66 → 25.7 / 14.6 / 3.65 |
+| 4K 8-bit     |  83.3 / 29.2 / 1.34 → 31.0 / 9.0 / 1.02 |  41.1 / 8.4 / 0.92 → 11.3 / 4.2 / 0.88 | 18.3 / 4.9 / 0.83 → 19.5 / 4.6 / 0.84 | 27.2 / 13.5 / 3.23 → 25.4 / 13.4 / 3.21 |
+| 4K 10-bit    | 89.7 / 29.6 / 1.14 → 45.5 / 10.2 / 0.84 |  38.2 / 8.6 / 0.90 → 26.4 / 4.2 / 0.86 | 17.2 / 4.9 / 0.87 → 20.4 / 4.4 / 0.85 | 27.3 / 13.3 / 3.21 → 28.0 / 13.2 / 3.19 |
+
+The enlarged crop shows the decoded source and then the two decoded exports.
+
+![The same enlarged edge from the source, the original MP4 and the new MP4, left to right](measurements/export-chroma-edge.png)
+
+The benchmark forces browser capture with a cold extraction cache. Each pair was exported three times with the order alternated. Time includes the worker's startup, capture, encode and output publication. Memory is the median of each run's peak summed proportional set size for Cutroom's benchmark process, the render worker and its Chrome and FFmpeg children, sampled every 200 ms.
+
+| SDR source   | Export time, s | Peak memory, GiB | Extracted frames, MiB |
+| ------------ | -------------: | ---------------: | --------------------: |
+| 1080p 8-bit  |    5.54 → 6.09 |      2.61 → 2.62 |           16.1 → 19.3 |
+| 1080p 10-bit |    6.34 → 6.14 |      2.57 → 2.62 |           16.5 → 19.6 |
+| 4K 8-bit     |  13.10 → 13.11 |      5.65 → 5.61 |           57.2 → 66.6 |
+| 4K 10-bit    |  13.61 → 13.71 |      5.64 → 5.66 |           58.7 → 67.2 |
+
+The PNG extraction control kept the existing JPEG browser capture. On the 4K 8-bit input it used 415 MiB of temporary frames and took 20.27 s. On 4K 10-bit it used 857 MiB and took 23.46 s. Its peak memory was 6.26 and 6.82 GiB respectively. PNG lowered mean grain error on three of the four charts. The 4:4:4 JPEG kept extraction much smaller and lowered the 99.9th-percentile edge error on the 4K chart. The direct control on the 1080p 8-bit chart measured 54.9 / 6.7 / 0.72 on hard edges.
+
+[Individual runs and pixel measurements](measurements/export-chroma.json)
+
 ## Scrubbing
 
 A ruler drag asks for a new frame on every pointer move. [Scrub proxies](architecture.md#scrub-proxies) answer those seeks from an all-intra 540-line copy of each video and show the exact frame once the pointer rests. On November 15, 2026 the same drag ran against `main` and this change: 3 s across 900 px of ruler at Fit, about 60 pointer moves a second, headless installed Chromium 155 at 1720x1050, alternating the two builds. A CDP screencast recorded every composited frame, and each frame's number was read back from blocks burned into the footage, so a picture counts only when the viewer showed a new source frame. The interview is a 90 s 1080p30 H.264 file (8 Mbit/s, 1 s GOP) with a title; the 300-clip timeline is `timelineWorkload` over a 720p copy, with each 2.5 s clip its own element.

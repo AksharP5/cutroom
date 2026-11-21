@@ -1,0 +1,531 @@
+{
+  "baseline": "786b0519",
+  "frameRate": 60,
+  "frames": 90,
+  "quality": "standard",
+  "browserVersion": "155.0.8059.84",
+  "ffmpegVersion": "9.0.2",
+  "chromaFormats": {
+    "base": "yuvj420p",
+    "next": "yuvj444p"
+  },
+  "modes": {
+    "base": "original JPEG extraction",
+    "next": "4:4:4 JPEG extraction",
+    "png": "PNG extraction and JPEG screenshots",
+    "direct": "direct FFmpeg export"
+  },
+  "errorFields": ["max", "p99.9", "mean"],
+  "captureRuns": [
+    {
+      "fixture": "1920x1080-8",
+      "mode": "base",
+      "rep": "6",
+      "seconds": 5.544934875,
+      "pssMiB": 2674.96484375,
+      "minAvailableGiB": 18.649517059326172,
+      "renderer": "capture",
+      "mp4Bytes": 6870425,
+      "extractionMiB": 16.141469955444336,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-b3853a36915aff42/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-8",
+      "mode": "next",
+      "rep": "6",
+      "seconds": 6.094333290000001,
+      "pssMiB": 2698.791015625,
+      "minAvailableGiB": 17.971370697021484,
+      "renderer": "capture",
+      "mp4Bytes": 6786031,
+      "extractionMiB": 19.340083122253418,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-2bf157af9a939c3d/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-10",
+      "mode": "base",
+      "rep": "6",
+      "seconds": 5.486325631,
+      "pssMiB": 2637.6728515625,
+      "minAvailableGiB": 18.97644805908203,
+      "renderer": "capture",
+      "mp4Bytes": 6869727,
+      "extractionMiB": 16.538743019104004,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-f3639c2280cc1bfe/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-10",
+      "mode": "next",
+      "rep": "6",
+      "seconds": 5.938781522,
+      "pssMiB": 2683.7021484375,
+      "minAvailableGiB": 18.476707458496094,
+      "renderer": "capture",
+      "mp4Bytes": 6909760,
+      "extractionMiB": 19.60770606994629,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-0a31e94c034de148/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-8",
+      "mode": "base",
+      "rep": "6",
+      "seconds": 14.529243387000001,
+      "pssMiB": 5833.2666015625,
+      "minAvailableGiB": 15.782512664794922,
+      "renderer": "capture",
+      "mp4Bytes": 31446919,
+      "extractionMiB": 57.179654121398926,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-1051e7c954a25a5c/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-8",
+      "mode": "next",
+      "rep": "6",
+      "seconds": 12.994734244,
+      "pssMiB": 5802.62890625,
+      "minAvailableGiB": 15.654449462890625,
+      "renderer": "capture",
+      "mp4Bytes": 31839162,
+      "extractionMiB": 66.57020282745361,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-06ecf3578a882721/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-10",
+      "mode": "base",
+      "rep": "6",
+      "seconds": 14.913018248,
+      "pssMiB": 5769.205078125,
+      "minAvailableGiB": 14.483406066894531,
+      "renderer": "capture",
+      "mp4Bytes": 32505234,
+      "extractionMiB": 58.66564655303955,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-3c98b4715428012d/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-10",
+      "mode": "next",
+      "rep": "6",
+      "seconds": 12.847538043999998,
+      "pssMiB": 5792.5224609375,
+      "minAvailableGiB": 15.818084716796875,
+      "renderer": "capture",
+      "mp4Bytes": 32903480,
+      "extractionMiB": 67.21729755401611,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-adea78015c8692e1/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-8",
+      "mode": "next",
+      "rep": "7",
+      "seconds": 7.835105771,
+      "pssMiB": 2611.23046875,
+      "minAvailableGiB": 17.211715698242188,
+      "renderer": "capture",
+      "mp4Bytes": 6786031,
+      "extractionMiB": 19.340083122253418,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-2bf157af9a939c3d/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-8",
+      "mode": "base",
+      "rep": "7",
+      "seconds": 7.455836988,
+      "pssMiB": 2664.0078125,
+      "minAvailableGiB": 17.233745574951172,
+      "renderer": "capture",
+      "mp4Bytes": 6870425,
+      "extractionMiB": 16.141469955444336,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-b3853a36915aff42/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-10",
+      "mode": "next",
+      "rep": "7",
+      "seconds": 7.449135476,
+      "pssMiB": 2728.74609375,
+      "minAvailableGiB": 17.121501922607422,
+      "renderer": "capture",
+      "mp4Bytes": 6909760,
+      "extractionMiB": 19.60770606994629,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-0a31e94c034de148/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-10",
+      "mode": "base",
+      "rep": "7",
+      "seconds": 7.233014664000001,
+      "pssMiB": 2578.54296875,
+      "minAvailableGiB": 16.53234100341797,
+      "renderer": "capture",
+      "mp4Bytes": 6869727,
+      "extractionMiB": 16.538743019104004,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-f3639c2280cc1bfe/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-8",
+      "mode": "next",
+      "rep": "7",
+      "seconds": 16.933095496,
+      "pssMiB": 5694.6123046875,
+      "minAvailableGiB": 13.53976821899414,
+      "renderer": "capture",
+      "mp4Bytes": 31839162,
+      "extractionMiB": 66.57020282745361,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-06ecf3578a882721/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-8",
+      "mode": "base",
+      "rep": "7",
+      "seconds": 12.555106766000002,
+      "pssMiB": 5724.345703125,
+      "minAvailableGiB": 15.270973205566406,
+      "renderer": "capture",
+      "mp4Bytes": 31446919,
+      "extractionMiB": 57.179654121398926,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-1051e7c954a25a5c/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-10",
+      "mode": "next",
+      "rep": "7",
+      "seconds": 13.713397316999998,
+      "pssMiB": 5798.587890625,
+      "minAvailableGiB": 15.656864166259766,
+      "renderer": "capture",
+      "mp4Bytes": 32903480,
+      "extractionMiB": 67.21729755401611,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-adea78015c8692e1/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-10",
+      "mode": "base",
+      "rep": "7",
+      "seconds": 13.605333699,
+      "pssMiB": 5837.96484375,
+      "minAvailableGiB": 15.687206268310547,
+      "renderer": "capture",
+      "mp4Bytes": 32505234,
+      "extractionMiB": 58.66564655303955,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-3c98b4715428012d/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-8",
+      "mode": "base",
+      "rep": "8",
+      "seconds": 5.542298863,
+      "pssMiB": 2671.751953125,
+      "minAvailableGiB": 18.256362915039062,
+      "renderer": "capture",
+      "mp4Bytes": 6870425,
+      "extractionMiB": 16.141469955444336,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-b3853a36915aff42/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-8",
+      "mode": "next",
+      "rep": "8",
+      "seconds": 6.019872533999999,
+      "pssMiB": 2682.994140625,
+      "minAvailableGiB": 18.480541229248047,
+      "renderer": "capture",
+      "mp4Bytes": 6786031,
+      "extractionMiB": 19.340083122253418,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-2bf157af9a939c3d/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-10",
+      "mode": "base",
+      "rep": "8",
+      "seconds": 6.338863330000001,
+      "pssMiB": 2626.6787109375,
+      "minAvailableGiB": 18.113330841064453,
+      "renderer": "capture",
+      "mp4Bytes": 6869727,
+      "extractionMiB": 16.538743019104004,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-f3639c2280cc1bfe/frame_00001.jpg"
+    },
+    {
+      "fixture": "1920x1080-10",
+      "mode": "next",
+      "rep": "8",
+      "seconds": 6.140090821,
+      "pssMiB": 2659.8779296875,
+      "minAvailableGiB": 17.88892364501953,
+      "renderer": "capture",
+      "mp4Bytes": 6909760,
+      "extractionMiB": 19.60770606994629,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-0a31e94c034de148/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-8",
+      "mode": "base",
+      "rep": "8",
+      "seconds": 13.103607123,
+      "pssMiB": 5786.830078125,
+      "minAvailableGiB": 15.210258483886719,
+      "renderer": "capture",
+      "mp4Bytes": 31446919,
+      "extractionMiB": 57.179654121398926,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-1051e7c954a25a5c/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-8",
+      "mode": "next",
+      "rep": "8",
+      "seconds": 13.11399452,
+      "pssMiB": 5744.4921875,
+      "minAvailableGiB": 15.615974426269531,
+      "renderer": "capture",
+      "mp4Bytes": 31839162,
+      "extractionMiB": 66.57020282745361,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-06ecf3578a882721/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-10",
+      "mode": "base",
+      "rep": "8",
+      "seconds": 13.243460013,
+      "pssMiB": 5780.134765625,
+      "minAvailableGiB": 15.529361724853516,
+      "renderer": "capture",
+      "mp4Bytes": 32505234,
+      "extractionMiB": 58.66564655303955,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-3c98b4715428012d/frame_00001.jpg"
+    },
+    {
+      "fixture": "3840x2160-10",
+      "mode": "next",
+      "rep": "8",
+      "seconds": 14.04582063,
+      "pssMiB": 5816.1630859375,
+      "minAvailableGiB": 15.814640045166016,
+      "renderer": "capture",
+      "mp4Bytes": 32903480,
+      "extractionMiB": 67.21729755401611,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-adea78015c8692e1/frame_00001.jpg"
+    }
+  ],
+  "pngControlRuns": [
+    {
+      "fixture": "1920x1080-8",
+      "mode": "png",
+      "rep": "3",
+      "seconds": 7.3719447559999995,
+      "pssMiB": 2900.9306640625,
+      "minAvailableGiB": 17.19251251220703,
+      "mp4Bytes": 7216843,
+      "extractionMiB": 112.02364826202393,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-429cef80e8678fe2/frame_00001.png"
+    },
+    {
+      "fixture": "3840x2160-8",
+      "mode": "png",
+      "rep": "4",
+      "seconds": 20.266081971,
+      "pssMiB": 6407.4345703125,
+      "minAvailableGiB": 13.994579315185547,
+      "renderer": "capture",
+      "mp4Bytes": 28259663,
+      "extractionMiB": 415.20621490478516,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-fb4fe1550a0e4dbe/frame_00001.png"
+    },
+    {
+      "fixture": "3840x2160-10",
+      "mode": "png",
+      "rep": "4",
+      "seconds": 23.459173576999998,
+      "pssMiB": 6979.5576171875,
+      "minAvailableGiB": 14.365325927734375,
+      "renderer": "capture",
+      "mp4Bytes": 33552052,
+      "extractionMiB": 856.7926406860352,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-07971fca68353c0e/frame_00001.png"
+    },
+    {
+      "fixture": "1920x1080-10",
+      "mode": "png",
+      "rep": "4",
+      "seconds": 8.626420086999998,
+      "pssMiB": 3202.6181640625,
+      "minAvailableGiB": 18.20218276977539,
+      "renderer": "capture",
+      "mp4Bytes": 7315503,
+      "extractionMiB": 220.7249937057495,
+      "extractedFrames": 90,
+      "sample": "hfcache-v8-8a6ead7baa8aece8/frame_00001.png"
+    }
+  ],
+  "mp4Errors": [
+    {
+      "id": "direct-1920x1080-8-direct-9",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [54.92, 6.67, 0.718],
+        "gradient": [10.87, 3.88, 0.54],
+        "skin": [16.42, 3.53, 0.427],
+        "grain": [23.58, 12.84, 3.085]
+      }
+    },
+    {
+      "id": "1920x1080-8-base-6",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [87.89, 36.52, 1.836],
+        "gradient": [24.71, 11.8, 0.998],
+        "skin": [19.51, 5.8, 0.861],
+        "grain": [27.62, 14.53, 3.594]
+      }
+    },
+    {
+      "id": "1920x1080-8-next-6",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [55.36, 17.84, 1.117],
+        "gradient": [16.35, 4.57, 0.925],
+        "skin": [19.51, 4.84, 0.855],
+        "grain": [26.46, 14.86, 3.636]
+      }
+    },
+    {
+      "id": "1920x1080-10-base-6",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [94.28, 36.97, 1.627],
+        "gradient": [28.03, 11.36, 0.901],
+        "skin": [19.86, 5.32, 0.902],
+        "grain": [26.73, 14.63, 3.66]
+      }
+    },
+    {
+      "id": "1920x1080-10-next-6",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [50.51, 17.75, 0.91],
+        "gradient": [10.93, 4.37, 0.868],
+        "skin": [18.92, 4.64, 0.872],
+        "grain": [25.67, 14.63, 3.649]
+      }
+    },
+    {
+      "id": "3840x2160-8-base-6",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [83.34, 29.21, 1.341],
+        "gradient": [41.1, 8.43, 0.923],
+        "skin": [18.34, 4.89, 0.828],
+        "grain": [27.21, 13.52, 3.23]
+      }
+    },
+    {
+      "id": "3840x2160-8-next-6",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [31.01, 8.96, 1.022],
+        "gradient": [11.28, 4.25, 0.884],
+        "skin": [19.51, 4.64, 0.837],
+        "grain": [25.38, 13.45, 3.215]
+      }
+    },
+    {
+      "id": "3840x2160-10-base-6",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [89.71, 29.61, 1.137],
+        "gradient": [38.23, 8.58, 0.902],
+        "skin": [17.18, 4.91, 0.868],
+        "grain": [27.33, 13.29, 3.209]
+      }
+    },
+    {
+      "id": "3840x2160-10-next-6",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [45.51, 10.16, 0.836],
+        "gradient": [26.36, 4.17, 0.862],
+        "skin": [20.37, 4.42, 0.85],
+        "grain": [27.97, 13.21, 3.188]
+      }
+    },
+    {
+      "id": "1920x1080-8-png-3",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [56.87, 15.71, 1.424],
+        "gradient": [13.6, 4.82, 1.258],
+        "skin": [19.72, 4.63, 1.295],
+        "grain": [24.28, 13.92, 3.34]
+      }
+    },
+    {
+      "id": "1920x1080-10-png-4",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [50.3, 18.95, 1.17],
+        "gradient": [19.97, 7.36, 0.798],
+        "skin": [16.89, 4.11, 0.766],
+        "grain": [23.91, 13.36, 3.229]
+      }
+    },
+    {
+      "id": "3840x2160-8-png-4",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [29.54, 10.89, 1.347],
+        "gradient": [10.05, 4.22, 1.236],
+        "skin": [17.79, 4.53, 1.284],
+        "grain": [26.46, 13.92, 3.344]
+      }
+    },
+    {
+      "id": "3840x2160-10-png-4",
+      "stage": "mp4",
+      "metrics": {
+        "frames": 90,
+        "edges": [43.03, 16.6, 0.966],
+        "gradient": [34.04, 5.29, 0.783],
+        "skin": [16.89, 3.98, 0.78],
+        "grain": [25.37, 12.14, 2.825]
+      }
+    }
+  ]
+}
