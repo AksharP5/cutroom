@@ -4,7 +4,8 @@ import { z } from "zod";
 import { FootageColourSchema } from "../../shared/pipeline";
 import type { FootageColour } from "../../shared/pipeline";
 import type { Project } from "../../shared/project";
-import { fileFingerprint, localMediaPath } from "../../shared/media";
+import { fileFingerprint, localMediaPath, mediaKind } from "../../shared/media";
+import type { MediaFileDetails } from "../../shared/media";
 import { projectPath, unavailableProjectFile } from "../projects/path";
 import { compositionScope, mediaSources } from "./composition";
 import { localMediaInputOptions } from "../media/input";
@@ -16,6 +17,10 @@ const ProbeSchema = z.object({
         codec_type: z.string().optional(),
         width: z.number().optional(),
         height: z.number().optional(),
+        avg_frame_rate: z.string().optional(),
+        disposition: z
+          .object({ attached_pic: z.number().optional() })
+          .optional(),
         pix_fmt: z.string().optional(),
         color_primaries: z.string().optional(),
         color_space: z.string().optional(),
@@ -32,6 +37,8 @@ interface Probe {
   seconds: number | null;
   /** The file was read and holds no audio stream. */
   silent: boolean;
+  /** The first moving picture stream, leaving out cover art. */
+  picture: { width: number; height: number; fps: number | null } | null;
   footageRefusal?: string;
   colour?: FootageColour;
 }
@@ -51,7 +58,7 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       "error",
       ...localMediaInputOptions,
       "-show_entries",
-      "format=duration:stream=codec_type,width,height,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode",
+      "format=duration:stream=codec_type,width,height,avg_frame_rate,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode:stream_disposition=attached_pic",
       "-of",
       "json",
       path,
@@ -88,7 +95,20 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   );
   const matrix = FootageColourSchema.shape.matrix.safeParse(video?.color_space);
   const range = video?.color_range;
+  const picture = streams.find(
+    (stream) =>
+      stream.codec_type === "video" && !stream.disposition?.attached_pic,
+  );
+  const [num, den] = (picture?.avg_frame_rate ?? "").split("/").map(Number);
   return {
+    picture:
+      picture?.width && picture.height
+        ? {
+            width: picture.width,
+            height: picture.height,
+            fps: num && den ? Math.round((num / den) * 1000) / 1000 : null,
+          }
+        : null,
     colour: video && {
       primaries: primaries.data,
       transfer: transfer.data,
@@ -101,6 +121,50 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
         : null,
     silent: !streams.some((stream) => stream.codec_type === "audio"),
     footageRefusal,
+  };
+}
+
+/** A project file's cached probe and its size in bytes; null when it is missing or not a file. */
+async function probeFile(
+  project: Project,
+  relative: string,
+  ffprobe: string | undefined,
+) {
+  const path = await projectPath(project, relative).catch(() => null);
+  if (path === null) return null;
+  const info = await stat(path).catch(() => null);
+  if (!info?.isFile()) return null;
+  const version = fileFingerprint(path, info);
+  let cached = probes.get(path);
+  if (cached?.version !== version) {
+    if (!ffprobe) return { bytes: info.size, result: null };
+    cached = { version, result: await probe(ffprobe, path) };
+    probes.delete(path);
+    probes.set(path, cached);
+    if (probes.size > 256) probes.delete(probes.keys().next().value!);
+  }
+  return { bytes: info.size, result: cached.result };
+}
+
+/** Length, size, picture and sound of a project media file; null when it is missing. */
+export async function mediaFileDetails(
+  project: Project,
+  path: string,
+): Promise<MediaFileDetails | null> {
+  const ffprobe = findFfBinary("ffprobe", { configuredMustExist: true });
+  const probed = await probeFile(project, path, ffprobe);
+  if (!probed) return null;
+  const { bytes, result } = probed;
+  const still = mediaKind(path)?.kind === "image";
+  return {
+    bytes,
+    ...(!still && result?.seconds && { duration: result.seconds }),
+    ...(result?.picture && {
+      width: result.picture.width,
+      height: result.picture.height,
+    }),
+    ...(!still && result?.picture?.fps && { fps: result.picture.fps }),
+    ...(!still && result && { audio: !result.silent }),
   };
 }
 
@@ -130,20 +194,7 @@ export async function mediaFacts(
     [...new Set(sources)].map(async (src) => {
       const relative = localMediaPath(composition, src);
       if (relative === null) return;
-      const path = await projectPath(project, relative).catch(() => null);
-      if (path === null) return;
-      const info = await stat(path).catch(() => null);
-      if (!info?.isFile()) return;
-      const version = fileFingerprint(path, info);
-      let cached = probes.get(path);
-      if (cached?.version !== version) {
-        if (!ffprobe) return;
-        cached = { version, result: await probe(ffprobe, path) };
-        probes.delete(path);
-        probes.set(path, cached);
-        if (probes.size > 256) probes.delete(probes.keys().next().value!);
-      }
-      const result = cached.result;
+      const result = (await probeFile(project, relative, ffprobe))?.result;
       if (!result) return;
       if (result.seconds) facts.lengths.set(src, result.seconds);
       if (result.silent) facts.silent.add(src);

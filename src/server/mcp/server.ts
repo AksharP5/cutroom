@@ -21,6 +21,7 @@ import {
   TranscriptImportSchema,
 } from "../../shared/project";
 import {
+  MediaFileDetailsSchema,
   MediaRemoveSchema,
   MediaRenameSchema,
   mediaKind,
@@ -48,7 +49,7 @@ type LocalFetch = (
 export interface RequestOptions {
   /** Streams the edit's animation inspection after the committed result. */
   followup?: (data: AnimationFeedback) => Promise<void>;
-  /** Shapes the parsed answer before it becomes the tool's result. */
+  /** Shapes the parsed answer before it becomes the tool's result; it may read more from the server. */
   reply?: (result: unknown) => unknown;
 }
 interface McpOptions {
@@ -136,7 +137,7 @@ export function createMcpServer(options: McpOptions = {}) {
             "Timeline edit did not acknowledge its committed result.",
           );
         }
-        const result = reply(first.value.result);
+        const result = await reply(first.value.result);
         const summary = response.headers.get(EDIT_SUMMARY_HEADER);
         setTimeout(() => {
           void (async () => {
@@ -177,7 +178,7 @@ export function createMcpServer(options: McpOptions = {}) {
           ],
           isError: true,
         };
-      const result = reply(text ? JSON.parse(text) : null);
+      const result = await reply(text ? JSON.parse(text) : null);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result) }],
         structuredContent: { result },
@@ -274,7 +275,7 @@ export function createMcpServer(options: McpOptions = {}) {
     "media_files",
     {
       description:
-        "Find video, audio, and image files in the project's Media panel, including files unused on any timeline. Search by file name or project-relative path. Use path for source_marks, and pass src and kind to timeline_edit insertion. Specify the same composition as the insert so src is relative to the right folder. Returns 100 files at a time. Pass nextOffset as offset to read the next page.",
+        "Find video, audio, and image files in the project's Media panel, including files unused on any timeline. Search by file name or project-relative path. Use path for source_marks, and pass src and kind to timeline_edit insertion. Specify the same composition as the insert so src is relative to the right folder. Each file has its size in bytes; video and audio files also have duration in seconds and whether they hold audio, and video has width, height and fps. Stills and files that cannot be read have only their size. Returns 100 files at a time. Pass nextOffset as offset to read the next page.",
       inputSchema: {
         ...project,
         query: z.string().max(255).default(""),
@@ -289,7 +290,7 @@ export function createMcpServer(options: McpOptions = {}) {
       outputSchema: {
         result: z.object({
           files: z.array(
-            z.object({
+            MediaFileDetailsSchema.partial().extend({
               path: z.string(),
               kind: z.enum(["audio", "image", "video"]),
               src: z.string(),
@@ -302,7 +303,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     ({ projectId, query, composition, offset }) =>
       requestApi(`/projects/${id(projectId)}`, "GET", undefined, {
-        reply: (result) => {
+        reply: async (result) => {
           const { files, fileVersions } = z
             .object({
               files: z.array(z.string()),
@@ -321,10 +322,26 @@ export function createMcpServer(options: McpOptions = {}) {
             })
             .sort((a, b) => a.path.localeCompare(b.path));
           const end = offset + 100;
+          const page = assets.slice(offset, end);
+          const details = await Promise.all(
+            page.map(async ({ path }) => {
+              const response = await requestLocal(
+                `/api/cutroom/projects/${id(projectId)}/media/details?path=${id(path)}`,
+              );
+              // A file that went between the listing and this read keeps its path and kind.
+              if (response.status === 404) return {};
+              if (!response.ok)
+                throw new Error(
+                  `Cutroom returned ${response.status}: ${await response.text()}`,
+                );
+              return MediaFileDetailsSchema.parse(await response.json());
+            }),
+          );
           return {
-            files: assets.slice(offset, end).map((asset) => ({
+            files: page.map((asset, index) => ({
               ...asset,
               src: sourceUrl(composition, asset.path),
+              ...details[index],
             })),
             nextOffset: end < assets.length ? end : null,
           };
