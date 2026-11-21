@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { freemem } from "node:os";
+import { freemem, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { encoderJobOptions } from "@hyperframes/studio-server/encoder-options";
@@ -26,10 +26,10 @@ import { planDirectExport } from "./directPlan";
 import { useFreezeExportSources } from "./freezeSources";
 import { placeStills } from "./directStill";
 import {
-  browserTempRoot,
   createOwnedDirectory,
   sweepOwnedDirectories,
 } from "./ownedDirectories";
+import { pruneFrameCache } from "./renderCache";
 import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
 import type { ExportFormat, ExportOptions } from "../../shared/export";
@@ -102,8 +102,7 @@ async function diagnostics(stream: ReadableStream<Uint8Array>) {
 
 /** Each export writes into a folder with this prefix beside its destination. */
 export const STAGING_PREFIX = ".cutroom-render-";
-const BROWSER_TEMP_PREFIX = "cutroom-render";
-/** Extracted frames and range work, which reach gigabytes, go in the configured scratch folder on disk. */
+const LEGACY_TEMP_PREFIX = "cutroom-render";
 const SCRATCH_PREFIX = "render";
 
 async function removeRenderScratch(path: string) {
@@ -192,8 +191,9 @@ async function directPlan(
 
 /** Producer runs in Node because its HTTP adapter changes globals that Bun's API server owns. */
 export function createRenderWorkers(configuration: {
-  /** Holds each export's extracted frames and range work. Keep it off RAM-backed /tmp. */
+  /** Holds each export's working files. Keep it off RAM-backed /tmp. */
   scratchDir: string;
+  legacyScratchDir?: string;
   /** Frames extracted for one export, kept for the next. Without it they go with the export's scratch. */
   frameCache?: { dir: string; maxBytes: number };
   workerPath?: string;
@@ -220,13 +220,26 @@ export function createRenderWorkers(configuration: {
   const jobs = new Map<string, RenderState>();
   let gpu: Promise<boolean> | undefined;
   const remove = configuration.removeScratch ?? removeRenderScratch;
-  const temporaryRoot = browserTempRoot(BROWSER_TEMP_PREFIX);
   /** Scratch whose browsers outlived the cleanup wait. The next export removes it. */
   const leftovers = new Set<string>();
+  async function pruneFrames() {
+    const cache = configuration.frameCache;
+    if (cache)
+      await pruneFrameCache(cache.dir, cache.maxBytes).catch((error: unknown) =>
+        console.warn("Could not prune the export frame cache:", error),
+      );
+  }
   // A crashed or killed server leaves its scratch behind; reclaim it when the next one starts.
-  void Promise.all([
-    sweepOwnedDirectories(temporaryRoot, BROWSER_TEMP_PREFIX),
+  const legacyTemps = new Set([tmpdir()]);
+  if (process.platform === "linux") legacyTemps.add("/tmp");
+  const startup = Promise.all([
+    ...[...legacyTemps].map((root) =>
+      sweepOwnedDirectories(root, LEGACY_TEMP_PREFIX),
+    ),
+    configuration.legacyScratchDir &&
+      sweepOwnedDirectories(configuration.legacyScratchDir, SCRATCH_PREFIX),
     sweepOwnedDirectories(configuration.scratchDir, SCRATCH_PREFIX),
+    pruneFrames(),
   ]).catch((error: unknown) =>
     console.warn(
       "Could not remove an earlier export's temporary files:",
@@ -284,7 +297,6 @@ export function createRenderWorkers(configuration: {
       const outputPath = output
         ? join(output.directory, output.filename)
         : options.outputPath;
-      let temporary: string | undefined;
       let scratch: string | undefined;
       let staging: string | undefined;
       /** From the moment the file is linked into place the export has happened; a late cancel can't undo it. */
@@ -467,11 +479,9 @@ export function createRenderWorkers(configuration: {
                 error instanceof Error ? error.message : error,
               ),
           );
+        await startup;
+        if (isCancelling()) return;
         // The worker's temporary files stay outside the project, which the producer copies.
-        temporary = await createOwnedDirectory(
-          temporaryRoot,
-          BROWSER_TEMP_PREFIX,
-        );
         scratch = await createOwnedDirectory(
           configuration.scratchDir,
           SCRATCH_PREFIX,
@@ -515,16 +525,13 @@ export function createRenderWorkers(configuration: {
               HYPERFRAMES_NO_TELEMETRY: "1",
               DO_NOT_TRACK: "1",
               ...(chromium ? { PRODUCER_HEADLESS_SHELL_PATH: chromium } : {}),
-              TMPDIR: temporary,
-              HYPERFRAMES_EXTRACT_CACHE_DIR:
-                configuration.frameCache?.dir ?? join(scratch, "frames"),
-              ...(configuration.frameCache
-                ? {
-                    HYPERFRAMES_EXTRACT_CACHE_MAX_MB: String(
-                      configuration.frameCache.maxBytes / 1024 ** 2,
-                    ),
-                  }
+              TMPDIR: scratch,
+              ...(process.platform === "win32"
+                ? { TEMP: scratch, TMP: scratch }
                 : {}),
+              PUPPETEER_TMP_DIR: scratch,
+              PRODUCER_TMP_PROJECT_DIR: scratch,
+              HYPERFRAMES_EXTRACT_CACHE_DIR: join(scratch, "frames"),
               ...(browsers
                 ? {
                     PRODUCER_MAX_WORKERS: String(browsers),
@@ -547,6 +554,9 @@ export function createRenderWorkers(configuration: {
             range: output?.range,
             scopedMedia: workload?.timedMedia !== undefined,
             scratchDir: scratch,
+            frameCacheDir: configuration.frameCache?.maxBytes
+              ? configuration.frameCache.dir
+              : undefined,
             gpu: (await nvenc) ?? false,
             direct: direct && {
               ...direct,
@@ -669,7 +679,7 @@ export function createRenderWorkers(configuration: {
             if (worker && process.platform !== "win32")
               await processGroupExited(worker.pid, 5000).catch(
                 (error: unknown) => {
-                  for (const path of [temporary, scratch, staging])
+                  for (const path of [scratch, staging])
                     if (path) leftovers.add(path);
                   throw error;
                 },
@@ -687,8 +697,8 @@ export function createRenderWorkers(configuration: {
                   { force: true },
                 ),
               );
-            if (temporary) cleanup.push(remove(temporary));
             if (scratch) cleanup.push(remove(scratch));
+            if (worker) cleanup.push(pruneFrames());
             // A folder moved mid-export takes staging with it; say so rather than claim it was removed.
             if (staging)
               cleanup.push(
@@ -747,6 +757,7 @@ export function createRenderWorkers(configuration: {
     },
     async cancelAll() {
       closing = true;
+      await startup;
       const results = await Promise.allSettled(
         [...jobs.values()]
           .filter((state) => state.status === "rendering")

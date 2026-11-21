@@ -6,6 +6,7 @@ import { COLOR_GRADING_SOURCE_HIDDEN_ATTR } from "@hyperframes/core/color-gradin
 import { MEDIA_TRASH } from "../../shared/media.ts";
 import { previewPolicy } from "./isolation.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
+import { chromiumSocketPathFits } from "./ownedDirectories.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportOptions } from "../../shared/export.ts";
@@ -306,6 +307,10 @@ export function registerRenderIsolation(
   const rampSource = JSON.stringify(
     new URL("./rampSource.ts", import.meta.url).href,
   );
+  const browserCwd =
+    range && !chromiumSocketPathFits(range.scratchDir)
+      ? range.scratchDir
+      : undefined;
   let producerLoaded = false;
   let audioMixerLoaded = false;
   let captureLoaded = false;
@@ -355,22 +360,37 @@ export function registerRenderIsolation(
       // Puppeteer starts each Chromium in its own session. Keeping it in the worker's
       // process group lets a stopped export take its browsers with it, even when the
       // worker is killed before Puppeteer's exit handlers can run.
-      if (url.endsWith("/@puppeteer/browsers/lib/launch.js"))
-        return {
-          ...loaded,
-          source: replaceOnce(
-            String(loaded.source),
-            "opts.detached ??= process.platform !== 'win32';",
-            "opts.detached ??= false;",
+      if (url.endsWith("/@puppeteer/browsers/lib/launch.js")) {
+        let source = replaceOnce(
+          String(loaded.source),
+          "opts.detached ??= process.platform !== 'win32';",
+          "opts.detached ??= false;",
+          url,
+        );
+        // Linux gives the browser a short name for the same on-disk scratch directory.
+        if (browserCwd)
+          source = replaceOnce(
+            source,
+            "            env,\n            stdio,\n        });",
+            `            env: { ...env, TMPDIR: "/proc/self/cwd" },\n            cwd: ${JSON.stringify(browserCwd)},\n            stdio,\n        });`,
             url,
-          ),
-        };
+          );
+        return { ...loaded, source };
+      }
       if (
         url.endsWith(
           "/@hyperframes/engine/dist/services/videoFrameExtractor.js",
         )
       ) {
         let source = `import { chromeSdrColourFilters as cutroomColour } from ${colour};\n${String(loaded.source)}`;
+        // The server prunes under an exclusive lease. An age-based sweep during capture can
+        // remove files the current render still needs.
+        source = replaceOnce(
+          source,
+          "    const sweepDue = breakdown.cacheMisses > 0 ||\n        (cacheRootDir !== undefined && gcSweepDue(cacheRootDir, GC_STALENESS_MS));",
+          "    const sweepDue = false;",
+          url,
+        );
         source = replaceOnce(
           source,
           "return [...chromeGuessForUntaggedMatrix(metadata), SDR_CANVAS_PASSTHROUGH_FILTER];",
@@ -435,6 +455,14 @@ export function registerRenderIsolation(
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
         source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = replaceOnce(
+          `import { utimesSync as cutroomTouchGif } from "node:fs";\n${source}`,
+          "  if (resolve5(input.outputPath) !== resolve5(input.cachePath) && !isUsableFile(input.outputPath)) {",
+          `  const cutroomNow = new Date();
+  try { cutroomTouchGif(input.cachePath, cutroomNow, cutroomNow); } catch {}
+  if (resolve5(input.outputPath) !== resolve5(input.cachePath) && !isUsableFile(input.outputPath)) {`,
+          url,
+        );
         source = replaceOnce(
           source,
           "return resolveVerifiedHyperframeRuntime().runtimeSource;",

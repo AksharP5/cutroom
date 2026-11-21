@@ -6,6 +6,7 @@ import {
   readFile,
   readdir,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -518,7 +519,7 @@ test.each(["trash", ".cutroom/cache"])(
 );
 
 test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
-  "a repeated marked export reuses the frames the first extracted, in a cache trimmed before each export",
+  "a repeated marked export reuses frames and finishes within the cache budget",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "export-frames-"));
     const project = join(root, "project");
@@ -548,8 +549,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
         join(project, "index.html"),
         `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;overflow:hidden}video{position:absolute;inset:0;width:160px;height:120px}</style></head><body><main data-composition-id="main" data-width="160" data-height="120" data-fps="30" data-duration="2" style="position:relative;width:160px;height:120px"><video id="picture" class="clip" src="source.mp4" muted data-start="0" data-duration="2" data-media-start="0" data-track-index="0"></video></main></body></html>`,
       );
-      // An entry from a recent export, over the limit on its own. HyperFrames' own sweep spares
-      // entries used within the hour; Cutroom trims before each export, when no render reads them.
+      // A recent entry is over the limit on its own. The export can evict it after reading.
       const stale = join(cache, "hfcache-v8-0123456789abcdef");
       await mkdir(stale, { recursive: true });
       await writeFile(
@@ -560,6 +560,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       const entries = async () =>
         (await readdir(cache)).filter((name) => name.startsWith("hfcache-"));
       const kept: string[][] = [];
+      const firstFrameTimes: number[] = [];
       for (const name of ["first", "second"]) {
         const state = workers.start(
           {
@@ -581,12 +582,25 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
           await Bun.sleep(20);
         expect(state.error).toBeUndefined();
         expect(state.status).toBe("complete");
-        kept.push(await entries());
+        const cached = await entries();
+        kept.push(cached);
+        const retained = cached.find(
+          (entry) => entry !== "hfcache-v8-0123456789abcdef",
+        );
+        if (!retained) throw new Error("The rendered frames were not cached.");
+        const frame = (await readdir(join(cache, retained))).find((name) =>
+          name.startsWith("frame_"),
+        );
+        if (!frame) throw new Error("The retained entry has no frames.");
+        firstFrameTimes.push(
+          (await stat(join(cache, retained, frame))).mtimeMs,
+        );
       }
       const [first, second] = kept;
       expect(first).not.toContain("hfcache-v8-0123456789abcdef");
       expect(first?.length).toBeGreaterThan(0);
       expect(second).toEqual(first);
+      expect(firstFrameTimes[1]).toBe(firstFrameTimes[0]);
     } finally {
       await workers.cancelAll();
       await rm(root, { recursive: true, force: true });
