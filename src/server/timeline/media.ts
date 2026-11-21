@@ -158,7 +158,7 @@ async function probeFile(
   const version = `${fileFingerprint(path, info)}:${info.ino}:${info.ctimeMs}`;
   let cached = probes.get(path);
   if (cached?.version !== version) {
-    if (!ffprobe) return { bytes: info.size, result: null };
+    if (!ffprobe) return { bytes: info.size, result: Promise.resolve(null) };
     const entry = { version, result: probe(ffprobe, path) };
     entry.result.catch(() => {
       if (probes.get(path) === entry) probes.delete(path);
@@ -169,10 +169,10 @@ async function probeFile(
     if (probes.size > PROBE_CACHE_SIZE)
       probes.delete(probes.keys().next().value!);
   }
-  return { bytes: info.size, result: await cached.result };
+  return { bytes: info.size, result: cached.result };
 }
 
-/** Length, size, picture and sound of a project media file; null when it is missing. Throws when ffprobe stalls. */
+/** Length, size, picture and sound of a project media file; null when it is missing. */
 export async function mediaFileDetails(
   project: Project,
   path: string,
@@ -180,7 +180,12 @@ export async function mediaFileDetails(
   const ffprobe = findFfBinary("ffprobe", { configuredMustExist: true });
   const probed = await probeFile(project, path, ffprobe);
   if (!probed) return null;
-  const { bytes, result } = probed;
+  const { bytes } = probed;
+  // A file ffprobe stalls on or cannot read still has its size.
+  const result = await probed.result.catch((error: unknown) => {
+    console.warn("Could not probe media:", error);
+    return null;
+  });
   const still = mediaKind(path)?.kind === "image";
   return {
     bytes,
@@ -220,14 +225,12 @@ export async function mediaFacts(
     [...new Set(sources)].map(async (src) => {
       const relative = localMediaPath(composition, src);
       if (relative === null) return;
-      const probed = await probeFile(project, relative, ffprobe).catch(
-        (error: unknown) => {
-          // The timeline still opens; this file's length and sound stay unknown until a later read.
-          console.warn("Could not probe media:", error);
-          return null;
-        },
-      );
-      const result = probed?.result;
+      const probed = await probeFile(project, relative, ffprobe);
+      // The timeline still opens; this file's length and sound stay unknown until a later read.
+      const result = await probed?.result.catch((error: unknown) => {
+        console.warn("Could not probe media:", error);
+        return null;
+      });
       if (!result) return;
       if (result.seconds) facts.lengths.set(src, result.seconds);
       if (result.silent) facts.silent.add(src);

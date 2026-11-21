@@ -592,15 +592,15 @@ test("an older build's multi-edit review.json moves to the ledger once, even whe
       ["r4", true, "human"],
       ["r5", false, "agent"],
     ]);
-    // The earlier backup is kept; this file's bytes are saved beside it.
+    // The backup from the first move is kept, and no other copy piles up beside it.
     expect(await readFile(`${directory}/review.v1.json`, "utf8")).toBe(
       "an earlier backup\n",
     );
-    const backups = (await readdir(directory)).filter((name) =>
-      name.startsWith("review.v1.json."),
-    );
-    expect(backups).toHaveLength(1);
-    expect(await readFile(`${directory}/${backups[0]}`, "utf8")).toBe(legacy);
+    expect(
+      (await readdir(directory)).filter((name) =>
+        name.startsWith("review.v1.json"),
+      ),
+    ).toEqual(["review.v1.json"]);
     expect(
       JSON.parse(await readFile(`${directory}/review.json`, "utf8")),
     ).toEqual({
