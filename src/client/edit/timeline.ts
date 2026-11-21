@@ -98,6 +98,8 @@ interface Edit {
   anchors: ReturnType<typeof editAnchors>;
   gesture: boolean;
   failure: string | null;
+  /** Resolves when this save has left the queue, including when it was refused. */
+  saved: Promise<void>;
   /** Set when an edit that made a clip this one names was refused; it is taken back with that one. */
   dropped: boolean;
 }
@@ -215,7 +217,7 @@ export function afterEditBurst(projectId: string, composition: string) {
   );
   const history = pendingHistory.get(projectId);
   const writes: Promise<void>[] = [];
-  if (saves.length > 1) writes.push(queue);
+  if (saves.length > 1) writes.push(...saves.map((edit) => edit.saved));
   if (history && history.size > 1) writes.push(...history);
   return Promise.allSettled(writes);
 }
@@ -701,6 +703,7 @@ export async function editTimeline(
   const followed = lastToast;
   let edit: Edit | null = null;
   let accepted = false;
+  const saved = Promise.withResolvers<void>();
   try {
     const from = basis ?? view.timeline;
     const input = z.array(CommandSchema).parse(build(from));
@@ -737,6 +740,7 @@ export async function editTimeline(
       anchors,
       gesture: basis !== undefined,
       failure: null,
+      saved: saved.promise,
       dropped: false,
     };
     const made = edit;
@@ -865,6 +869,8 @@ export async function editTimeline(
     );
     showToast(lastToast);
     return accepted;
+  } finally {
+    saved.resolve();
   }
 }
 

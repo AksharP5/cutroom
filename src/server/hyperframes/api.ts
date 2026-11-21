@@ -1297,8 +1297,8 @@ export function createHyperframesApi(
       c.req.header("sec-fetch-site") === "same-origin" &&
       !timingDocuments.has(documentId);
     // Preview variants still use the compiler, which applies their requested values.
-    const sourceTimingNavigation =
-      navigation &&
+    const sourceTimingRequest =
+      (navigation || timingOnly) &&
       path === "preview" &&
       !url.searchParams.has("variables") &&
       !url.searchParams.has(AUDITION_PARAM) &&
@@ -1322,9 +1322,9 @@ export function createHyperframesApi(
       });
     const [sourceBefore, dependenciesBefore, mixStampBefore] =
       await Promise.all([
-        timingOnly || sourceTimingNavigation ? readEntry() : null,
+        timingOnly || sourceTimingRequest ? readEntry() : null,
         timingOnly ? previewDependencies(project.path, "index.html") : null,
-        sourceTimingNavigation || (timingOnly && prior) ? readMixStamp() : null,
+        sourceTimingRequest ? readMixStamp() : null,
       ]);
     if (
       timingOnly &&
@@ -1501,6 +1501,37 @@ export function createHyperframesApi(
         window.duration,
       ]),
     );
+    const rememberSourceTiming = async (
+      id: string,
+      compiled: PreviewTiming,
+      dependencies: string,
+      sourceVersion: string,
+    ) => {
+      if (
+        !sourceTimingRequest ||
+        !sourceBefore ||
+        sourceVersion !== sourceBefore.version ||
+        mixStampBefore === null ||
+        !response.ok ||
+        !response.headers.has("ETag") ||
+        mixStampBefore !== (await readMixStamp())
+      )
+        return;
+      const ids = new Set(compiled.clips.map(({ id }) => id));
+      const authored = previewSourceTiming(sourceBefore.content, ids);
+      if (authored?.clips.length !== ids.size) return;
+      sourceTimings.delete(id);
+      sourceTimings.set(id, {
+        ids,
+        dependencies,
+        mixStamp: mixStampBefore,
+        authored,
+        compiled,
+        mix,
+      });
+      if (sourceTimings.size > 8)
+        sourceTimings.delete(sourceTimings.keys().next().value!);
+    };
     if (timingOnly) {
       c.header("Cache-Control", "no-store");
       const sourceAfter = await readEntry();
@@ -1529,6 +1560,13 @@ export function createHyperframesApi(
           { error: "The preview changed while reading timing." },
           409,
         );
+      if (documentId)
+        await rememberSourceTiming(
+          documentId,
+          document.timing,
+          dependencies,
+          sourceAfter.version,
+        );
       return c.json({
         version: sourceBefore.version,
         timing: document.timing,
@@ -1540,18 +1578,16 @@ export function createHyperframesApi(
     }
     if (navigation && documentId && !timingDocuments.has(documentId)) {
       const compiled = document.timing;
-      const ids = new Set(compiled?.clips.map(({ id }) => id));
-      const authored =
-        sourceTimingNavigation &&
-        compiled &&
-        sourceBefore &&
-        dependencies &&
-        response.ok &&
-        response.headers.has("ETag") &&
-        sourceBefore.version === (await readEntry())?.version &&
-        mixStampBefore === (await readMixStamp())
-          ? previewSourceTiming(sourceBefore.content, ids)
-          : null;
+      if (sourceTimingRequest && compiled && dependencies) {
+        const version = (await readEntry())?.version;
+        if (version)
+          await rememberSourceTiming(
+            documentId,
+            compiled,
+            dependencies,
+            version,
+          );
+      }
       if (!timingDocuments.has(documentId)) {
         timingDocuments.set(documentId, {
           projectId,
@@ -1564,23 +1600,6 @@ export function createHyperframesApi(
           const oldest = timingDocuments.keys().next().value!;
           timingDocuments.delete(oldest);
           sourceTimings.delete(oldest);
-        }
-        if (
-          authored?.clips.length === ids.size &&
-          compiled &&
-          dependencies &&
-          mixStampBefore !== null
-        ) {
-          sourceTimings.set(documentId, {
-            ids,
-            dependencies,
-            mixStamp: mixStampBefore,
-            authored,
-            compiled,
-            mix,
-          });
-          if (sourceTimings.size > 8)
-            sourceTimings.delete(sourceTimings.keys().next().value!);
         }
       }
     }

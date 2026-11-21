@@ -10,13 +10,12 @@ import {
   MIN_PLAYBACK_RATE,
 } from "@hyperframes/parsers/media-duration";
 import type { DefaultTreeAdapterTypes } from "parse5";
-import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
 import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { compositionClipLocations } from "../timeline/composition";
 import type { CompositionScope } from "../timeline/composition";
 import { TimelineError } from "../../shared/timeline/apply";
 import { canonicalText } from "../../shared/timeline/schema";
-import { previewTiming } from "./previewTiming";
+import { previewTiming, snappedPreviewWindow } from "./previewTiming";
 import type { PreviewTiming } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
 import { adjustmentCapture } from "./adjustmentCapture";
@@ -4354,12 +4353,6 @@ export function previewDocument(
   const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[], fps = 30) => {
     for (const node of nodes) {
       if (!("tagName" in node)) continue;
-      const rate = node.attrs.find(({ name }) => name === "data-fps");
-      const parsed = rate && parseFpsWithDefault(rate.value);
-      const nodeFps = parsed?.ok ? parsed.value.num / parsed.value.den : fps;
-      // The runtime snaps visibility to frames, but seeks media using raw seconds.
-      // Align those windows in served documents so rounded edit times cannot show
-      // a piece that the seek still considers to be in the future.
       const timing = new Map(
         node.attrs.map(({ name, value }) => [name, value]),
       );
@@ -4394,31 +4387,20 @@ export function previewDocument(
           ],
         ]);
       }
-      const start = Number(timing.get("data-start"));
-      const duration = Number(timing.get("data-duration"));
-      const end = timing.has("data-duration")
-        ? start + duration
-        : Number(timing.get("data-end"));
-      if (Number.isFinite(start)) {
-        const window = exportClipWindow(start, end, nodeFps);
-        for (const [name, value] of [
-          ["data-start", window.start],
-          ["data-duration", window.end - window.start],
-          ["data-end", window.end],
-        ] as const) {
-          const location = node.sourceCodeLocation?.attrs?.[name];
-          if (
-            location &&
-            Number.isFinite(value) &&
-            (window.start !== start || window.end !== end) &&
-            Number(timing.get(name)) !== value
-          )
-            edits.push({
-              at: location.startOffset,
-              end: location.endOffset,
-              text: `${name}="${value}"`,
-            });
-        }
+      const {
+        fps: nodeFps,
+        start,
+        end,
+        changes,
+      } = snappedPreviewWindow(timing, fps);
+      for (const [name, value] of changes) {
+        const location = node.sourceCodeLocation?.attrs?.[name];
+        if (location)
+          edits.push({
+            at: location.startOffset,
+            end: location.endOffset,
+            text: `${name}="${value}"`,
+          });
       }
       if (node.tagName === "audio" || node.tagName === "video") {
         const tag = node.sourceCodeLocation?.startTag;

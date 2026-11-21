@@ -25,45 +25,55 @@ const attributes = (entries: [string, string | null][]) =>
 export async function makeScaleProject(
   directory: string,
   count: ScaleClipCount,
+  { cameraMedia = false }: { cameraMedia?: boolean } = {},
 ) {
   await mkdir(directory, { recursive: true });
-  await encode("ffmpeg", [
-    "-v",
-    "error",
-    "-filter_complex_threads",
-    "2",
-    "-f",
-    "lavfi",
-    "-i",
-    "testsrc2=size=1920x1080:rate=60:duration=30",
-    "-f",
-    "lavfi",
-    "-i",
-    "nullsrc=size=16x1:rate=60:duration=30",
-    "-f",
-    "lavfi",
-    "-i",
-    "sine=frequency=330:sample_rate=48000:duration=30",
-    "-filter_complex",
-    "[1:v]format=gray,geq=lum='255*mod(floor(N/pow(2\\,X))\\,2)',scale=1920:54:flags=neighbor[bar];[0:v][bar]overlay,format=yuv420p",
-    "-c:v",
-    "libx264",
-    "-threads",
-    "3",
-    "-preset",
-    "ultrafast",
-    "-crf",
-    "25",
-    "-g",
-    "60",
-    "-c:a",
-    "aac",
-    "-movflags",
-    "+faststart",
-    "-y",
-    join(directory, "footage.mp4"),
-  ]);
-  const duration = scaleShots(count).at(-1)!.end / scaleFps;
+  const files = cameraMedia
+    ? ["camera-a.mp4", "camera-b.mp4"]
+    : ["footage.mp4"];
+  const sourceSeconds = cameraMedia ? 75 : 30;
+  const width = cameraMedia ? 1280 : 1920;
+  const height = cameraMedia ? 720 : 1080;
+  for (const [camera, file] of files.entries()) {
+    await encode("ffmpeg", [
+      "-v",
+      "error",
+      "-filter_complex_threads",
+      "2",
+      "-f",
+      "lavfi",
+      "-i",
+      `testsrc2=size=${width}x${height}:rate=60:duration=${sourceSeconds}`,
+      "-f",
+      "lavfi",
+      "-i",
+      `nullsrc=size=16x1:rate=60:duration=${sourceSeconds}`,
+      "-f",
+      "lavfi",
+      "-i",
+      `sine=frequency=${330 + camera * 110}:sample_rate=48000:duration=${sourceSeconds}`,
+      "-filter_complex",
+      `[1:v]format=gray,geq=lum='255*mod(floor(N/pow(2\\,X))\\,2)',scale=${width}:${height / 20}:flags=neighbor[bar];[0:v][bar]overlay,format=yuv420p`,
+      "-c:v",
+      "libx264",
+      "-threads",
+      "3",
+      "-preset",
+      "ultrafast",
+      "-crf",
+      "25",
+      "-g",
+      cameraMedia ? "120" : "60",
+      "-c:a",
+      "aac",
+      "-movflags",
+      "+faststart",
+      "-y",
+      join(directory, file),
+    ]);
+  }
+  const shots = scaleShots(count, sourceSeconds * scaleFps);
+  const duration = shots.at(-1)!.end / scaleFps;
   const musicCount = count === 1000 ? 4 : 2;
   const musicLength = duration / musicCount;
   await encode("ffmpeg", [
@@ -80,7 +90,6 @@ export async function makeScaleProject(
     "-y",
     join(directory, "music.m4a"),
   ]);
-  const shots = scaleShots(count);
   const dissolve = new Set(
     [0.56, 0.76, 0.96].map((fraction) => Math.floor(shots.length * fraction)),
   );
@@ -103,9 +112,10 @@ export async function makeScaleProject(
         ? ";transform:scale(1.35)"
         : "";
     const link = `data-link="pair-${index}"`;
+    const footage = files[Math.floor(index / 24) % files.length]!;
     return [
-      `<video id="shot-${index}" src="footage.mp4" muted ${link} data-start="${(start - lead) / scaleFps}" data-duration="${(end - start + lead + tail) / scaleFps}" data-media-start="${(source - lead) / scaleFps}" data-track-index="0"${edges} style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover${crop}"></video>`,
-      `<audio id="voice-${index}" src="footage.mp4" ${link} data-start="${start / scaleFps}" data-duration="${(end - start) / scaleFps}" data-media-start="${source / scaleFps}" data-track-index="1"></audio>`,
+      `<video id="shot-${index}" src="${footage}" muted ${link} data-start="${(start - lead) / scaleFps}" data-duration="${(end - start + lead + tail) / scaleFps}" data-media-start="${(source - lead) / scaleFps}" data-track-index="0"${edges} style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover${crop}"></video>`,
+      `<audio id="voice-${index}" src="${footage}" ${link} data-start="${start / scaleFps}" data-duration="${(end - start) / scaleFps}" data-media-start="${source / scaleFps}" data-track-index="1"></audio>`,
     ];
   });
   const music = Array.from(
@@ -132,6 +142,7 @@ ${[...media, ...music, ...titles].join("\n")}
 </main></body></html>
 `,
   );
+  return shots;
 }
 
 if (import.meta.main) {
