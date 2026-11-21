@@ -507,6 +507,8 @@ test.skipIf(
       await source(path, "30000/1001", 75, [
         "-video_track_timescale",
         "30000",
+        "-movie_timescale",
+        "30000",
         "-output_ts_offset",
         "0.3003",
         "-g",
@@ -623,6 +625,8 @@ test.skipIf(!ready)(
     await fixture(async (root, render) => {
       await source(join(root, "late.mp4"), "30000/1001", 75, [
         "-video_track_timescale",
+        "30000",
+        "-movie_timescale",
         "30000",
         "-output_ts_offset",
         "0.3003",
