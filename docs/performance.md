@@ -579,6 +579,8 @@ Measured on November 15, 2026 with Chromium 1720x1050 on a shared machine: five 
 
 The interview workload shows the same counts, with read time falling from 28 to 5 ms per edit and 16 to 5 ms per agent edit. An outside edit now shows about 70 ms later (median 153 to 225 ms from the request to the last read on the interview workload), the cost of waiting for the rest of its burst. The editor's own edits are unaffected: they show before the server answers. `e2e/timeline-reads.spec.ts` fails when an edit, an undo or an agent edit reads more than this.
 
+Project file events for the notebook use a 100 ms quiet period and a 500 ms limit from the first unanswered event. A review ledger update keeps the existing note file when its bytes are unchanged.
+
 ## Saving linked timelines
 
 On November 20, 2026, the local server handled 12 saves of each edit on the numbered 1080p60 dialogue fixture. The 1,000-clip project runs 15 minutes and contains 486 linked picture and sound pairs, a music bed, titles and dissolves. Each edit was followed by Undo and the next revision was read from the server. The round trip includes receiving and parsing the JSON in the local benchmark client. Times are medians, compared with `5f20f8d4`.

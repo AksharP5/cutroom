@@ -298,7 +298,9 @@ export function App() {
     );
     useWorkspace.setState({ fileChanges: {} });
     if (!projectId) return;
-    return subscribeProjectEvents(projectId, "message", (event) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let deadline = 0;
+    const stop = subscribeProjectEvents(projectId, "message", (event) => {
       try {
         const payload = z
           .object({ changed: z.string(), version: z.string().nullable() })
@@ -322,8 +324,21 @@ export function App() {
       } catch {
         return;
       }
-      void refreshDocument().catch(() => {});
+      const now = performance.now();
+      if (timer === undefined) deadline = now + 500;
+      clearTimeout(timer);
+      timer = setTimeout(
+        () => {
+          timer = undefined;
+          void refreshDocument().catch(() => {});
+        },
+        Math.max(0, Math.min(100, deadline - now)),
+      );
     });
+    return () => {
+      clearTimeout(timer);
+      stop();
+    };
   }, [projectId, refreshDocument]);
 
   useEffect(() => {
