@@ -125,6 +125,11 @@ try {
         .find((p) => p.url().startsWith(base)),
     "the editor",
   );
+  // This check exercises Chromium's native video uploads and the desktop colour switch.
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
   for (const source of sources) {
     const response = await fetch(`${base}/api/cutroom/projects`, {
       method: "POST",

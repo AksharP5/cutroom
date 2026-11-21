@@ -406,6 +406,8 @@ export async function openRanges(url: string, signal: AbortSignal) {
   };
   const probe = await fetch(url, { headers: { range: "bytes=0-0" }, signal });
   await probe.body?.cancel();
+  if (probe.status !== 206 && probe.status !== 200)
+    throw new Error(`The media route answered ${probe.status}.`);
   const total = Number(
     /\/(\d+)$/.exec(probe.headers.get("content-range") ?? "")?.[1] ??
       probe.headers.get("content-length"),

@@ -14,6 +14,7 @@ import {
 } from "../../shared/export.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import { FpsSchema } from "../../shared/timeline/schema.ts";
+import { ExportStageError } from "./renderFailure.ts";
 
 const Input = z.object({
   projectDir: z.string(),
@@ -21,6 +22,7 @@ const Input = z.object({
   options: z.looseObject({ fps: FpsSchema, format: ExportFormatSchema }),
   sources: z.record(z.string(), z.string()).default({}),
   range: ExportRangeSchema.nullish(),
+  scopedMedia: z.boolean().default(false),
   scratchDir: z.string(),
   /** Frames drawn wholly from the sources encode with NVENC, which the server's probe found working. */
   gpu: z.boolean(),
@@ -66,6 +68,7 @@ try {
     progress,
     scratchDir: input.scratchDir,
     projectDir: input.projectDir,
+    scopedMedia: input.scopedMedia,
   });
   const {
     createConsoleLogger,
@@ -159,6 +162,9 @@ try {
         capture,
         encodeSourceParts({ ...encoding, gpu: false, onFrames: () => {} }).then(
           ({ parts }) => parts,
+          (error: unknown) => {
+            throw new ExportStageError("encode", error);
+          },
         ),
       );
     const options = request.options;
@@ -208,7 +214,12 @@ try {
     audioLoweredDb = job.audioLoweredDb;
   }
   if (gif) {
-    send({ type: "progress", progress: 99, stage: "Encoding GIF" });
+    send({
+      type: "progress",
+      progress: 99,
+      stage: "Encoding GIF",
+      stageProgress: { code: "encode" },
+    });
     const { encodeGif } = await import("./gif.ts");
     await encodeGif({
       videoPath: request.outputPath,
@@ -230,6 +241,7 @@ try {
     type: "error",
     cancelled: abort.signal.aborted,
     message: error instanceof Error ? error.message : String(error),
+    stage: error instanceof ExportStageError ? error.stage : undefined,
   });
   process.exitCode = 1;
 }

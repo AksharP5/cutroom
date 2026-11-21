@@ -100,9 +100,13 @@ export function Viewer({
     if (!pipelineEnabled || !canvas) return;
     // Loaded only once the setting is on.
     let gone = false;
-    void import("../pipeline/pipeline").then(({ attachPipeline }) => {
-      if (!gone) pipeline.current = attachPipeline(projectId, canvas);
-    });
+    void import("../pipeline/pipeline")
+      .then(({ attachPipeline }) => {
+        if (!gone) pipeline.current = attachPipeline(projectId, canvas);
+      })
+      .catch((error: unknown) => {
+        if (!gone) console.warn("GPU footage playback is unavailable:", error);
+      });
     return () => {
       gone = true;
       pipeline.current?.dispose();

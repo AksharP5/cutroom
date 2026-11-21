@@ -273,3 +273,24 @@ test("Settings copies both named folder paths and keeps the external agent comma
   );
   await expect(dialog.getByText(`Cutroom ${status.version}`)).toBeVisible();
 });
+
+test("GPU footage playback defaults on and remembers each choice", async ({
+  page,
+}) => {
+  const settings = page.getByRole("button", { name: "Settings", exact: true });
+  const toggle = page.getByRole("checkbox", { name: "GPU footage playback" });
+
+  await page.goto("/");
+  await settings.click();
+  await expect(toggle).toBeChecked();
+  await toggle.uncheck();
+
+  await page.reload();
+  await settings.click();
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+
+  await page.reload();
+  await settings.click();
+  await expect(toggle).toBeChecked();
+});
