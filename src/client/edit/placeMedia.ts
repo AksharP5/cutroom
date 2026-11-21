@@ -10,57 +10,15 @@ import type { ExactTime } from "../../shared/timeline/piece";
 import { clipEnd } from "../../shared/timeline/apply";
 import { TimelineError } from "../../shared/timeline/errors";
 import { isAudioKind } from "../../shared/timeline/schema";
-import type {
-  CommandInput,
-  Timeline,
-  Track,
-} from "../../shared/timeline/schema";
-import {
-  destinationTracks,
-  newTrack,
-  nextTrackIndex,
-  shownTracks,
-} from "../../shared/timeline/tracks";
+import type { CommandInput, Track } from "../../shared/timeline/schema";
+import { destinationTracks } from "../../shared/timeline/tracks";
 import { dropPreview, placedMedia } from "../timeline/gesture";
 import type { MediaDrag } from "../timeline/mediaDrag";
 import { useViewSettings } from "../timeline/viewSettings";
+import { higherPlacementTrack } from "./placement";
 import { editTimeline, useTimeline } from "./timeline";
 import { transport, useTransport } from "./transport";
 import { showToast } from "../workspace";
-
-/** Find an enabled track above the destination with the entire new range free. */
-export function higherPlacementTrack(
-  timeline: Timeline,
-  destination: Track,
-  at: number,
-  duration: number,
-) {
-  const tracks = shownTracks(timeline.tracks);
-  const free = tracks.find(
-    (track) =>
-      track.kind === destination.kind &&
-      track.index > destination.index &&
-      track.enabled &&
-      !track.locked &&
-      !timeline.clips.some(
-        (clip) =>
-          clip.track === track.index &&
-          clip.start < at + duration &&
-          clipEnd(clip) > at,
-      ),
-  );
-  if (free) return { track: free, create: [] };
-  const existing = timeline.tracks.some(
-    ({ index }) => index === destination.index,
-  )
-    ? []
-    : [destination];
-  const track = newTrack(
-    nextTrackIndex([...timeline.tracks, destination]),
-    destination.kind,
-  );
-  return { track, create: [...existing, track] };
-}
 
 export type SourcePlacement = "insert" | "overwrite" | "replace" | "top";
 

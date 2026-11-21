@@ -4,7 +4,7 @@ import type {
   Timeline,
   Track,
 } from "../../shared/timeline/schema";
-import { higherPlacementTrack } from "./placeMedia";
+import { higherPlacementTrack } from "./placement";
 
 const TITLE_SECONDS = 5;
 /** The placeholder a new title opens with, selected so typing replaces it. */

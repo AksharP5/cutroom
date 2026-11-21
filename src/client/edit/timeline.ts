@@ -259,6 +259,7 @@ function name(commands: Command[], timeline: Timeline, composition: string) {
       command.type !== "split" &&
       command.type !== "insert" &&
       command.type !== "trim" &&
+      command.type !== "trimPlayhead" &&
       command.type !== "remove" &&
       command.type !== "move"
     ) {

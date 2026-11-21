@@ -787,9 +787,10 @@ export const CommandSchema = z.discriminatedUnion("type", [
       at: frame,
       ripple: z.boolean().default(false),
       linked: z.boolean().default(true),
+      ids: pieceIds,
     })
     .describe(
-      "Trim one edge of each named clip at the playhead. In ripple mode close the trimmed time on the affected tracks.",
+      "Trim one edge of each named clip at the playhead. Equal ripple trims close time on all unlocked auto-select tracks.",
     ),
   z
     .object({
@@ -810,7 +811,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       linked: z.boolean().default(true),
     })
     .describe(
-      "Swap two adjacent clips, with linked partners by default. Refuses overlaps and locked tracks.",
+      "Swap two adjacent clips, with linked partners by default. Remove transitions touching the clips first.",
     ),
   z
     .object({

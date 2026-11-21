@@ -7,7 +7,7 @@ import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
 import { seekFrame } from "./position-helpers";
 
-async function linkedShots(request: APIRequestContext) {
+async function linkedShots(request: APIRequestContext, overlay = "") {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -53,7 +53,7 @@ async function linkedShots(request: APIRequestContext) {
     .join("");
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><head><style>body{margin:0;background:black}video{position:absolute;inset:0;width:100%;height:100%}</style></head><body><main data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="6" style="position:relative;width:320px;height:240px">${clips}</main></body></html>`,
+    `<!doctype html><html><head><style>body{margin:0;background:black}video{position:absolute;inset:0;width:100%;height:100%}</style></head><body><main data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="6" style="position:relative;width:320px;height:240px">${clips}${overlay}</main></body></html>`,
   );
   const read = async () =>
     TimelineViewSchema.parse(
@@ -90,6 +90,13 @@ test("V and U trim the selected edit point with linked sound and one undo per pr
   const { project, path } = await linkedShots(request);
   await page.goto(`/#project/${project.id}`);
   await seekFrame(page, 60);
+  await page.keyboard.press("Control+Shift+l");
+  await page.keyboard.press("Alt+9");
+  await page.keyboard.press("v");
+  await expect(page.locator("[data-edit-edge]")).toHaveCount(2);
+  await expect(page.locator('[data-edit-edge="a1:start"]')).toBeVisible();
+  await page.keyboard.press("Alt+9");
+  await page.keyboard.press("Control+Shift+l");
   await page.keyboard.press("v");
   await expect(page.locator("[data-edit-edge]")).toHaveCount(4);
   await expect(page.locator('[data-edit-edge="v1:start"]')).toBeVisible();
@@ -108,6 +115,9 @@ test("V and U trim the selected edit point with linked sound and one undo per pr
   await page.keyboard.press("u");
   await expect(page.locator("[data-edit-edge]")).toHaveCount(2);
   await expect(page.locator('[data-edit-edge="v1:start"]')).toHaveCount(0);
+  await page.keyboard.press("Period");
+  await expect(page.getByRole("alert")).toContainText("overlap");
+  await page.keyboard.press("t");
   const end = await pressEdit(page, path, "Period");
   expect(readClip(end, "v0")).toMatchObject({ duration: 62 });
   expect(readClip(end, "v1")).toMatchObject({ start: 62 });
@@ -156,6 +166,25 @@ test("Alt+V applies the copied attributes and Shift+R holds the whole picture cl
             box: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
           },
         },
+        {
+          type: "setClip",
+          clipId: "v1",
+          rotation: 10,
+          fadeIn: 10,
+          fadeOut: 8,
+          region: {
+            effect: "zoom",
+            box: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+            in: 10,
+            out: 8,
+          },
+          keyframes: {
+            opacity: [
+              { frame: 0, value: 1, ease: "linear" },
+              { frame: 30, value: 0.6, ease: "linear" },
+            ],
+          },
+        },
         { type: "setClip", clipId: "a0", volume: 0.5, fx: [{ type: "gain" }] },
         { type: "setTiming", clipId: "v0", playbackRate: 0.75 },
       ],
@@ -188,16 +217,27 @@ test("Alt+V applies the copied attributes and Shift+R holds the whole picture cl
   const speed = page.getByRole("textbox", { name: "Speed", exact: true });
   await expect(speed).toHaveValue("75%");
   const undone = await pressEdit(page, path, "Control+z", "history/undo");
-  expect(undone.timeline.clips.find(({ id }) => id === "v1")).toMatchObject({
+  const beforeFreeze = undone.timeline.clips.find(({ id }) => id === "v1")!;
+  expect(beforeFreeze).toMatchObject({
     x: null,
     grade: null,
-    region: null,
     playbackRate: 1,
   });
   await expect(speed).toHaveValue("100%");
   const frozen = await pressEdit(page, path, "Shift+r");
   const still = frozen.timeline.clips.find(({ kind }) => kind === "image");
-  expect(still).toMatchObject({ start: 60, duration: 60, link: "l1" });
+  expect(still).toMatchObject({
+    start: 60,
+    duration: 60,
+    link: "l1",
+    rotation: 10,
+    fadeIn: 10,
+    fadeOut: 8,
+    region: beforeFreeze.region,
+    keyframes: beforeFreeze.keyframes,
+  });
+  expect(still?.region).toMatchObject({ in: 10, out: 8 });
+  expect(still?.keyframes?.opacity).toHaveLength(2);
   expect(frozen.timeline.clips).toHaveLength(6);
   expect(frozen.timeline.clips.find(({ id }) => id === "a1")).toMatchObject({
     start: 60,
@@ -268,7 +308,10 @@ test("swap, trim to playhead and linked selection use their preset keys", async 
   page,
   request,
 }) => {
-  const { project, path } = await linkedShots(request);
+  const { project, path } = await linkedShots(
+    request,
+    '<div id="later-title" class="clip" data-start="5" data-duration="1" data-track-index="2">Later title</div>',
+  );
   await page.goto(`/#project/${project.id}`);
   await seekFrame(page, 30);
   await page.keyboard.press("Shift+v");
@@ -309,6 +352,9 @@ test("swap, trim to playhead and linked selection use their preset keys", async 
       55,
     );
   }
+  expect(
+    rippled.timeline.clips.find(({ id }) => id === "later-title"),
+  ).toMatchObject({ start: 145, duration: 30 });
 
   await page.keyboard.press("Control+Shift+l");
   await expect(

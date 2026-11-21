@@ -1,5 +1,7 @@
 import { clipEnd, gapAt } from "../../shared/timeline/apply";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
+import { destinationTracks } from "../../shared/timeline/tracks";
+import type { TimelineViewSettings } from "../../shared/timeline/view";
 import type { FrameRange } from "./math";
 
 export interface Selection {
@@ -24,28 +26,31 @@ export function clipsAtEditPoint(timeline: Timeline, point: EditPoint) {
   const from =
     point.from && timeline.clips.find((clip) => clip.id === point.from);
   const to = point.to && timeline.clips.find((clip) => clip.id === point.to);
-  if ((point.from && !from) || (point.to && !to)) return null;
-  if (from && to && (clipEnd(from) !== to.start || from.track !== to.track))
-    return null;
-  return { from: from || undefined, to: to || undefined };
+  if (from && to && clipEnd(from) === to.start && from.track === to.track)
+    return { from, to };
+  // A one-sided trim can leave a gap. Keep the chosen side selected for the next press.
+  if (point.mode === "end" && from) return { from, to: undefined };
+  if (point.mode === "start" && to) return { from: undefined, to };
+  return null;
 }
 
-/** Find the nearest edge on the lowest eligible picture track, or the first eligible sound track. */
+/** Find the nearest edge on the enabled picture destination, or on the sound destination. */
 export function nearestEditPoint(
   timeline: Timeline,
   frame: number,
+  chosen: TimelineViewSettings["destinations"],
 ): EditPoint | null {
-  const populated = new Set(timeline.clips.map(({ track }) => track));
-  const track = timeline.tracks
-    .filter(
-      ({ autoSelect, locked, index }) =>
-        autoSelect && !locked && populated.has(index),
-    )
-    .toSorted(
-      (a, b) =>
-        Number(a.kind === "audio") - Number(b.kind === "audio") ||
-        a.index - b.index,
-    )[0];
+  const { video, audio, videoEnabled, audioEnabled } = destinationTracks(
+    timeline.tracks,
+    chosen,
+  );
+  const track = [
+    ...(videoEnabled ? [video] : []),
+    ...(audioEnabled ? [audio] : []),
+  ].find(
+    ({ locked, index }) =>
+      !locked && timeline.clips.some((clip) => clip.track === index),
+  );
   if (!track) return null;
   let nearest: {
     distance: number;

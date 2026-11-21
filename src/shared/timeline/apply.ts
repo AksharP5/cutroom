@@ -435,6 +435,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         command.type === "split" ||
         command.type === "insert" ||
         command.type === "trim" ||
+        command.type === "trimPlayhead" ||
         command.type === "remove" ||
         command.type === "move"
         ? (command.ids ?? {})
@@ -541,33 +542,27 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         };
       });
       if (!command.ripple) return { ...timeline, clips: trimmed };
-      const edges = new Map(members.map((clip) => [clip.track, edge(clip)]));
-      const editPoint = (track: number) => edges.get(track) ?? at;
       const change = command.edge === "start" ? -delta : delta;
-      const tracks = rippleTracks(
-        timeline,
-        members.map((clip) => clip.track),
+      const edits = new Map(
+        members.map((clip) => [clip.track, { at: edge(clip), change }]),
       );
-      const next =
-        change < 0
-          ? removeTime(
-              trimmed,
-              tracks,
-              (track) =>
-                editPoint(track) + (command.edge === "end" ? change : 0),
-              -change,
-              timeline,
-              mint,
-              ids,
-            )
-          : insertTime(trimmed, tracks, editPoint, change, timeline, mint, ids);
-      assertRippleSync(timeline, next, tracks, copies);
-      return { ...timeline, clips: next };
+      return {
+        ...timeline,
+        clips: rippleTrim(timeline, trimmed, {
+          edge: command.edge,
+          at,
+          edits,
+          fixed: ids,
+          mint,
+          copies,
+        }),
+      };
     }
     case "trimPlayhead": {
       const named = command.clipIds.map(find);
       const { at, edge, ripple, linked } = command;
       const deltas = new Map<string, number>();
+      const linkedStarts = new Map<string, number>();
       for (const clip of named) {
         if (
           at < clip.start ||
@@ -579,51 +574,59 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             `The playhead must be inside ${clipName(clip)} to trim its ${edge}.`,
           );
         const delta = at - (edge === "start" ? clip.start : clipEnd(clip));
-        if (linked && clip.link !== null)
+        if (linked && clip.link !== null) {
+          if (ripple && edge === "start") {
+            const previous = linkedStarts.get(clip.link);
+            if (previous !== undefined && previous !== delta)
+              throw new TimelineError(
+                "unsupported",
+                "Ripple trimming these starts would move linked content by different amounts.",
+              );
+            linkedStarts.set(clip.link, delta);
+          }
           for (const partner of clips)
             if (partner.link === clip.link && !deltas.has(partner.id))
               deltas.set(partner.id, delta);
+        }
         deltas.set(clip.id, delta);
       }
-      const followers = new Map<number, { after: number; by: number }>();
+      const edits = new Map<number, RippleTrimEdit>();
       const trimmed = new Map<string, Clip>();
       for (const [id, delta] of deltas) {
-        if (!delta) continue;
         const clip = find(id);
         const start = edge === "start" ? clip.start + delta : clip.start;
         const end = edge === "end" ? clipEnd(clip) + delta : clipEnd(clip);
-        const next = windowClip(clip, start, end, fps, "trim");
-        trimmed.set(id, ripple ? { ...next, start: clip.start } : next);
+        if (delta) {
+          const next = windowClip(clip, start, end, fps, "trim");
+          trimmed.set(id, ripple ? { ...next, start: clip.start } : next);
+        }
         if (!ripple) continue;
-        if (followers.has(clip.track))
+        if (edits.has(clip.track))
           throw new TimelineError(
             "unsupported",
             "Ripple trim needs one edit per affected track.",
           );
-        followers.set(clip.track, {
-          after: clipEnd(clip),
-          by: next.duration - clip.duration,
+        edits.set(clip.track, {
+          at: edge === "start" ? clip.start : clipEnd(clip),
+          change: edge === "start" ? -delta : delta,
         });
       }
       if (!trimmed.size) return timeline;
-      const shifts = new Map<string, number>();
+      const next = clips.map((clip) => trimmed.get(clip.id) ?? clip);
+      const first = named[0]!;
+      const primaryAt = edge === "start" ? first.start : clipEnd(first);
       return {
         ...timeline,
-        clips: clips.map((clip) => {
-          if (trimmed.has(clip.id)) return trimmed.get(clip.id)!;
-          const follow = followers.get(clip.track);
-          const by = follow && clip.start >= follow.after ? follow.by : 0;
-          if (linked && ripple && clip.link !== null) {
-            const previous = shifts.get(clip.link);
-            if (previous !== undefined && previous !== by)
-              throw new TimelineError(
-                "unsupported",
-                `Ripple trim would move linked clips of ${clipName(clip)} by different amounts.`,
-              );
-            shifts.set(clip.link, by);
-          }
-          return by ? { ...clip, start: clip.start + by } : clip;
-        }),
+        clips: ripple
+          ? rippleTrim(timeline, next, {
+              edge,
+              at: primaryAt,
+              edits,
+              fixed: new Set(deltas.keys()),
+              mint,
+              copies,
+            })
+          : next,
       };
     }
     case "roll":
@@ -777,7 +780,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             typeof sourceTime === "number" ? sourceTime : secondsOf(sourceTime),
         },
       });
-      const held = holdKeyframes(video, at - video.start);
+      const transform = replace
+        ? video
+        : holdKeyframes(video, at - video.start);
       const image: Clip = {
         id,
         track: video.track,
@@ -792,25 +797,27 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         link: replace ? video.link : null,
         label: "Freeze",
         volume: null,
-        opacity: held.opacity,
-        x: held.x,
-        y: held.y,
-        scaleX: held.scaleX,
-        scaleY: held.scaleY,
-        rotation: held.rotation,
-        crop: held.crop,
-        keyframes: null,
+        opacity: transform.opacity,
+        x: transform.x,
+        y: transform.y,
+        scaleX: transform.scaleX,
+        scaleY: transform.scaleY,
+        rotation: transform.rotation,
+        crop: transform.crop,
+        keyframes: replace ? video.keyframes : null,
         text: null,
         title: null,
-        // A clip's own zoom holds on the still, at full strength.
-        region: video.region && { ...video.region, in: 0, out: 0 },
+        region:
+          replace || !video.region
+            ? video.region
+            : { ...video.region, in: 0, out: 0 },
         adjustment: false,
         style: video.style,
         ...(video.variableBindings && {
           variableBindings: video.variableBindings,
         }),
-        fadeIn: 0,
-        fadeOut: 0,
+        fadeIn: replace ? video.fadeIn : 0,
+        fadeOut: replace ? video.fadeOut : 0,
         transitionIn: replace ? video.transitionIn : null,
         transitionOut: replace ? video.transitionOut : null,
         automation: null,
@@ -2688,6 +2695,97 @@ function refuseRippleCut(clip: Clip, timeline: Timeline): never {
   );
 }
 
+interface RippleTrimEdit {
+  at: number;
+  change: number;
+}
+
+/** Ripple the time opened or removed by one or more trimmed edges. */
+function rippleTrim(
+  timeline: Timeline,
+  clips: Clip[],
+  {
+    edge,
+    at,
+    edits,
+    fixed,
+    mint,
+    copies,
+  }: {
+    edge: "start" | "end";
+    at: number;
+    edits: ReadonlyMap<number, RippleTrimEdit>;
+    fixed: ReadonlySet<string>;
+    mint: Minting;
+    copies: ReadonlyMap<string, string>;
+  },
+): Clip[] {
+  const tracks = rippleTracks(timeline, [...edits.keys()]);
+  const groups = new Map<number, Set<number>>();
+  for (const [track, { change }] of edits) {
+    const group = groups.get(change) ?? new Set<number>();
+    if (tracks.has(track)) group.add(track);
+    groups.set(change, group);
+  }
+  const mixed = groups.size > 1;
+  const cutStart = ({ at, change }: RippleTrimEdit) =>
+    edge === "end" ? at + change : at;
+  if (mixed) {
+    const earliest = Math.min(
+      ...[...edits.values()].filter(({ change }) => change).map(cutStart),
+    );
+    if (
+      timeline.clips.some(
+        (clip) =>
+          tracks.has(clip.track) &&
+          !edits.has(clip.track) &&
+          clipEnd(clip) > earliest,
+      )
+    )
+      throw new TimelineError(
+        "unsupported",
+        "These trims remove different lengths. Turn off auto-select on the other tracks to ripple them independently.",
+      );
+  }
+  let next = clips;
+  for (const [change, group] of groups) {
+    if (change === 0) continue;
+    const participating = mixed ? group : tracks;
+    const editPoint = (track: number) => edits.get(track) ?? { at, change };
+    const before = next;
+    next =
+      change < 0
+        ? removeTime(
+            next,
+            participating,
+            (track) => cutStart(editPoint(track)),
+            -change,
+            timeline,
+            mint,
+            fixed,
+          )
+        : insertTime(
+            next,
+            participating,
+            (track) => editPoint(track).at,
+            change,
+            timeline,
+            mint,
+            fixed,
+          );
+    if (mixed)
+      assertRippleSync(
+        { ...timeline, clips: before },
+        next,
+        participating,
+        copies,
+        "independent trims",
+      );
+  }
+  assertRippleSync(timeline, next, tracks, copies);
+  return next;
+}
+
 /** Remove an interval on participating tracks, refusing cuts the source cannot represent. */
 function removeTime(
   clips: Clip[],
@@ -2807,6 +2905,7 @@ function assertRippleSync(
   clips: Clip[],
   tracks: ReadonlySet<number>,
   copies: ReadonlyMap<string, string>,
+  mode?: "independent trims",
 ) {
   const protectedTracks = new Map(
     before.tracks
@@ -2846,9 +2945,15 @@ function assertRippleSync(
         .get(clip.link)
         ?.some(
           (partner) =>
-            partner.start < clipEnd(clip) && clipEnd(partner) > clip.start,
+            mode === "independent trims" ||
+            (partner.start < clipEnd(clip) && clipEnd(partner) > clip.start),
         );
     if (!changed && !outOfSync) continue;
+    if (mode === "independent trims" && track.autoSelect && !track.locked)
+      throw new TimelineError(
+        "unsupported",
+        `Rippling these trims would move linked clips of ${clipName(clip)} by different amounts.`,
+      );
     throw new TimelineError(
       track.locked && !clip.link ? "locked" : "unsupported",
       `Clip ${clip.id} is on ${track.locked ? "a locked" : "an auto-select-off"} track, so the ripple cannot preserve sync.`,

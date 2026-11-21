@@ -176,7 +176,7 @@ function trimEditPoint(
   timeline: Timeline,
   point: EditPoint,
   by: number,
-  linked?: boolean,
+  { linked, trim }: EditTarget,
 ): CommandInput[] {
   const cut = clipsAtEditPoint(timeline, point);
   const alone = linked === false ? { linked: false } : {};
@@ -200,7 +200,7 @@ function trimEditPoint(
       clipId: clip.id,
       edge: point.mode,
       to,
-      ripple: true,
+      ripple: trim !== undefined,
       ...alone,
     },
   ];
@@ -305,7 +305,7 @@ const nudge =
   (by: number) =>
   (timeline: Timeline, target: EditTarget): CommandInput[] => {
     if (target.editPoint)
-      return trimEditPoint(timeline, target.editPoint, by, target.linked);
+      return trimEditPoint(timeline, target.editPoint, by, target);
     const selected = selectedIn(timeline, target);
     // The selection slides as one block, so clips next to each other move together.
     if (target.trim === "slide")

@@ -45,6 +45,7 @@ import type { TimelineClock, TimelinePin, TimelineProps } from "./Timeline";
 import {
   clickSelection,
   emptySelection,
+  clipsAtEditPoint,
   nearestEditPoint,
   pruneSelection,
   selectAll,
@@ -347,25 +348,32 @@ export function ProjectTimeline({
     ...(Object.fromEntries(edits) as Partial<Record<Action, () => void>>),
     editSelectEditPoint: () => {
       const current = useTimeline.getState().view?.timeline;
-      const editPoint = current && nearestEditPoint(current, clock.frame());
+      const editPoint =
+        current &&
+        nearestEditPoint(
+          current,
+          clock.frame(),
+          useViewSettings.getState().destinations,
+        );
       if (editPoint) {
         revealTimeline();
         setSelection({ ...emptySelection, editPoint });
       } else
-        showToast("No edit point on an unlocked auto-select track.", null, {
+        showToast("No edit point on an unlocked destination track.", null, {
           tone: "info",
           transient: true,
         });
     },
     editToggleEditPointType: () => {
-      const { selection } = useTimeline.getState();
+      const { selection, view } = useTimeline.getState();
       const { editPoint } = selection;
       if (!editPoint)
         return void showToast("Press V to select an edit point.", null, {
           tone: "info",
           transient: true,
         });
-      if (!editPoint.from || !editPoint.to) return;
+      const cut = view && clipsAtEditPoint(view.timeline, editPoint);
+      if (!cut?.from || !cut.to) return;
       const mode =
         editPoint.mode === "roll"
           ? "end"

@@ -2744,6 +2744,7 @@ test("Shift brackets trim every eligible clip and close gaps only in Trim mode",
       clip("high", 1, 10, 70),
       clip("high-next", 1, 80, 30),
       clip("disabled", 2, 0, 90),
+      clip("title", 3, 100, 30, { kind: "element", mediaStart: null }),
     ],
     [{ index: 2, autoSelect: false }],
   );
@@ -2755,38 +2756,120 @@ test("Shift brackets trim every eligible clip and close gaps only in Trim mode",
     high: [1, 30, 50],
     "high-next": [1, 80, 30],
     disabled: [2, 0, 90],
+    title: [3, 100, 30],
   });
-  expect(
-    positions(run(state, ...keys.commands(state, { ...target, trim: "slip" }))),
-  ).toEqual({
+  const ripple = keys.commands(state, { ...target, trim: "slip" });
+  expect(() => run(state, ...ripple)).toThrow("different lengths");
+  const isolated = run(state, {
+    type: "setTrack",
+    index: 3,
+    autoSelect: false,
+  });
+  expect(positions(run(isolated, ...ripple))).toEqual({
     low: [0, 0, 30],
     "low-next": [0, 30, 30],
     high: [1, 10, 50],
     "high-next": [1, 60, 30],
     disabled: [2, 0, 90],
+    title: [3, 100, 30],
   });
+  const linked = run(isolated, {
+    type: "link",
+    clipIds: ["low-next", "high-next"],
+  });
+  expect(() => run(linked, ...ripple)).toThrow("would move linked clips");
 });
 
-test("V prefers the lowest populated auto-select track over a closer edge above it", () => {
+test("Shift+] ripples later and overlapping clips on other auto-select tracks like W", () => {
+  const state = timeline([
+    clip("a", 0, 0, 60),
+    clip("b", 0, 60, 60),
+    clip("title", 1, 90, 30, { kind: "element", mediaStart: null }),
+    clip("overlay", 2, 45, 30),
+  ]);
+  const target = {
+    frame: 30,
+    selection: new Set<string>(),
+    trim: "slip",
+  } as const;
+  const bracket = run(
+    state,
+    ...editKeys.editNudgeTrimStepTrimEnd.commands(state, target),
+  );
+  expect(positions(bracket)).toEqual({
+    a: [0, 0, 30],
+    b: [0, 30, 60],
+    title: [1, 60, 30],
+    overlay: [2, 30, 15],
+  });
+  expect(bracket.clips.find(({ id }) => id === "overlay")?.mediaStart).toBe(
+    0.5,
+  );
+  expect(bracket).toEqual(
+    run(state, {
+      type: "trim",
+      clipId: "a",
+      edge: "end",
+      to: 30,
+      ripple: true,
+    }),
+  );
+});
+
+test("V follows the enabled destination selector independently of auto-select", () => {
   const state = timeline(
     [
       clip("lowest", 1, 0, 70),
       clip("nearest", 2, 29, 50),
       clip("sound", 3, 30, 90, { kind: "audio" }),
     ],
-    [{ index: 0 }],
+    [{ index: 0 }, { index: 1, autoSelect: false }],
   );
-  expect(nearestEditPoint(state, 30)).toEqual({
+  const destinations = { video: 1, audio: 3 };
+  expect(nearestEditPoint(state, 30, destinations)).toEqual({
     mode: "start",
     to: "lowest",
     from: undefined,
   });
-  const disabled = run(state, {
-    type: "setTrack",
-    index: 1,
-    autoSelect: false,
+  expect(nearestEditPoint(state, 30, { ...destinations, video: 2 })?.to).toBe(
+    "nearest",
+  );
+  expect(
+    nearestEditPoint(state, 30, { ...destinations, videoEnabled: false })?.to,
+  ).toBe("sound");
+  expect(nearestEditPoint(state, 30, { ...destinations, video: 0 })?.to).toBe(
+    "sound",
+  );
+  expect(
+    nearestEditPoint(state, 30, {
+      ...destinations,
+      videoEnabled: false,
+      audioEnabled: false,
+    }),
+  ).toBeNull();
+});
+
+test("one-sided nudges in Select refuse overlap and keep trimming their own edge", () => {
+  const state = timeline([clip("a", 0, 0, 60), clip("b", 0, 60, 60)]);
+  const target = {
+    frame: 60,
+    selection: new Set<string>(),
+    editPoint: { from: "a", to: "b", mode: "end" },
+  } as const;
+  const grow = editKeys.editNudgeTrimStepNudgeForward.commands;
+  const shorten = editKeys.editNudgeTrimStepNudgeReverse.commands;
+  expect(() => run(state, ...grow(state, target))).toThrow("would overlap");
+  const gap = run(state, ...shorten(state, target));
+  expect(positions(run(gap, ...shorten(gap, target)))).toEqual({
+    a: [0, 0, 58],
+    b: [0, 60, 60],
   });
-  expect(nearestEditPoint(disabled, 30)?.to).toBe("nearest");
+  expect(
+    positions(run(state, ...grow(state, { ...target, trim: "slip" }))),
+  ).toEqual({
+    a: [0, 0, 61],
+    b: [0, 61, 60],
+  });
 });
 
 test("Paste Attributes replaces the animation tracks and skips speed ramps on either side", () => {
