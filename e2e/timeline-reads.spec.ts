@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "./fixtures";
@@ -86,4 +87,81 @@ test("each change reads the timeline once, and outside edits still show", async 
       expect(response.ok()).toBe(true);
     }, 3),
   ).toEqual({ timeline: 1, history: 1 });
+});
+
+test("holding a slip key batches repeats and reads once after the saves", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Trim burst" },
+      })
+    ).json(),
+  );
+  execFileSync("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "anullsrc=r=48000:cl=mono",
+    "-t",
+    "3",
+    join(project.path, "sound.wav"),
+  ]);
+  const path = join(project.path, "index.html");
+  await writeFile(
+    path,
+    (await readFile(path, "utf8")).replace(
+      /(<main[^>]*>)[\s\S]*<\/main>/,
+      '$1\n<audio id="sound" src="sound.wav" data-start="0" data-duration="1" data-media-start="0.4" data-track-index="1"></audio>\n</main>',
+    ),
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  const sourceFrame = async () => {
+    const { timeline } = TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+    const mediaStart = timeline.clips.find(
+      ({ id }) => id === "sound",
+    )?.mediaStart;
+    return mediaStart === null || mediaStart === undefined
+      ? null
+      : Math.round((mediaStart * timeline.fps.num) / timeline.fps.den);
+  };
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="sound"]').click();
+  const initial = (await sourceFrame())!;
+  const saves: number[] = [];
+  let reads = 0;
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && path === `${api}/timeline`) reads++;
+    if (request.method() === "POST" && path === `${api}/commands`)
+      saves.push(request.postDataJSON().commands.length);
+  });
+  await page.evaluate(() => {
+    for (let i = 0; i < 6; i++)
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "Comma",
+          key: ",",
+          altKey: true,
+          repeat: i > 0,
+          cancelable: true,
+        }),
+      );
+  });
+  await expect.poll(sourceFrame).toBe(initial + 6);
+  await expect.poll(() => reads).toBe(1);
+  await page.waitForTimeout(250);
+  expect(reads).toBe(1);
+  expect(saves).toEqual([1, 5]);
+
+  await page.keyboard.press("Control+z");
+  await expect.poll(sourceFrame).toBe(initial + 1);
+  await page.keyboard.press("Control+z");
+  await expect.poll(sourceFrame).toBe(initial);
 });
