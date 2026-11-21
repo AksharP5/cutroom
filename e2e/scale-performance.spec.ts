@@ -27,31 +27,38 @@ async function seek(page: Page, frame: number) {
   await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
 }
 
-/** Read the frame stamped on the actual viewer, including the GPU canvas when enabled. */
-async function picture(page: Page) {
-  const png = await page.locator(".edit-picture").screenshot();
-  return page.evaluate(async (image) => {
-    const bytes = Uint8Array.from(atob(image), (char) => char.charCodeAt(0));
-    const bitmap = await createImageBitmap(new Blob([bytes]));
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
-    const stripe = ctx.getImageData(
-      0,
-      Math.floor(canvas.height / 40),
-      canvas.width,
-      1,
-    ).data;
-    let number = 0;
-    for (let bit = 0; bit < 16; bit++) {
-      const at = 4 * Math.floor((canvas.width * (bit + 0.5)) / 16);
-      const value = (stripe[at]! + stripe[at + 1]! + stripe[at + 2]!) / 3;
-      if (value > 60 && value < 190) return null;
-      if (value >= 190) number |= 1 << bit;
-    }
-    return number >= 120 && number < 4500 ? number : null;
-  }, png.toString("base64"));
+/** The fixture stamps the source frame on the viewer's top stripe. Read just that
+ * row so full-picture PNG encoding and decoding do not delay the measurement. */
+async function pictureReader(page: Page) {
+  const viewer = await page.locator(".edit-picture").boundingBox();
+  if (!viewer) throw new Error("The viewer has no visible picture.");
+  const x = Math.ceil(viewer.x);
+  const clip = {
+    x,
+    y: Math.floor(viewer.y + viewer.height / 40),
+    width: Math.floor(viewer.x + viewer.width) - x,
+    height: 1,
+  };
+  return async () => {
+    const png = await page.screenshot({ clip, scale: "css" });
+    return page.evaluate(async (image) => {
+      const bytes = Uint8Array.from(atob(image), (char) => char.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes]));
+      const canvas = new OffscreenCanvas(bitmap.width, 1);
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const stripe = ctx.getImageData(0, 0, canvas.width, 1).data;
+      let number = 0;
+      for (let bit = 0; bit < 16; bit++) {
+        const at = 4 * Math.floor((canvas.width * (bit + 0.5)) / 16);
+        const value = (stripe[at]! + stripe[at + 1]! + stripe[at + 2]!) / 3;
+        if (value > 60 && value < 190) return null;
+        if (value >= 190) number |= 1 << bit;
+      }
+      return number >= 120 && number < 4500 ? number : null;
+    }, png.toString("base64"));
+  };
 }
 
 for (const pipeline of [false, true]) {
@@ -81,10 +88,11 @@ for (const pipeline of [false, true]) {
       if (pipeline) await expect(stage).toHaveAttribute("data-pipeline", "on");
       const at = shots[259]!.start + 12;
       await seek(page, at);
-      await expect.poll(() => picture(page)).toBe(shots[259]!.source + 12);
+      const picture = await pictureReader(page);
+      await expect.poll(picture).toBe(shots[259]!.source + 12);
       await page.keyboard.press("Space");
       await expect.poll(() => playhead(page)).toBeGreaterThan(at + 8);
-      const firstPicture = await picture(page);
+      const firstPicture = await picture();
       const firstFrame = await playhead(page);
       const startedPlaying = Date.now();
       await page.waitForTimeout(1250);
@@ -92,7 +100,7 @@ for (const pipeline of [false, true]) {
       const elapsed = (Date.now() - startedPlaying) / 1000;
       expect((lastFrame - firstFrame) / elapsed).toBeGreaterThan(48);
       expect((lastFrame - firstFrame) / elapsed).toBeLessThan(72);
-      const lastPicture = await picture(page);
+      const lastPicture = await picture();
       expect(firstPicture).not.toBeNull();
       expect(lastPicture).not.toBeNull();
       expect(lastPicture).not.toBe(firstPicture);
@@ -116,14 +124,12 @@ for (const pipeline of [false, true]) {
       const ripple = async (shot: number) => {
         const frame = shots[shot]!.start + offset;
         await seek(page, frame);
-        await expect
-          .poll(() => picture(page))
-          .toBe(shots[shot]!.source + offset);
+        await expect.poll(picture).toBe(shots[shot]!.source + offset);
         await page.locator(`[data-clip="shot-${shot}"]`).click({ force: true });
         const started = Date.now();
         await page.keyboard.press("Delete");
         await expect
-          .poll(() => picture(page), {
+          .poll(picture, {
             timeout: Math.max(6000, rippleBudgetMs),
             intervals: [50, 100, 150],
           })
@@ -143,7 +149,7 @@ for (const pipeline of [false, true]) {
         ["Control+z", shots[lateShot]!.source],
       ] as const) {
         await page.keyboard.press(key);
-        await expect.poll(() => picture(page)).toBe(source + offset);
+        await expect.poll(picture).toBe(source + offset);
       }
 
       const shot = 8;
@@ -239,7 +245,7 @@ for (const pipeline of [false, true]) {
       )!;
       const number =
         Math.round(video.mediaStart! * scaleFps) + frame - video.start;
-      await expect.poll(() => picture(page)).toBe(number);
+      await expect.poll(picture).toBe(number);
       console.log(
         JSON.stringify({
           pipeline,
