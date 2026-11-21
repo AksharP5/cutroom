@@ -38,7 +38,7 @@ flock /tmp/cutroom-e2e.lock node scripts/bench-vs-studio.ts --editor cutroom --s
 
 The benchmark reads the numbered pictures from Chromium's tab screencast. It reports the playback clock rate separately, measures how long a source picture holds at two points on the timeline, and times a ruler drag at comparable zoom. It also records the first correct pixels after ripple delete and undo and reads proportional browser memory after closing the screencast decoder tab. Screencast JPEG capture can miss swaps at 60 fps. Compare captured picture rates and holds under the same settings.
 
-`e2e/scale-performance.spec.ts` runs in the performance gate with GPU playback on and off. It checks a numbered picture after a seek to about eight minutes, picture and clock movement during playback, the number of native media elements holding data, the expected picture after ripple delete, and ten persisted W trims followed by ten undos and ten redos. The headless gate catches stalls and lost edits with wider timing budgets than the headed target.
+`e2e/scale-performance.spec.ts` runs in the performance gate with GPU playback on and off. It uses two 75-second source files and checks the playback clock against 60 fps, at most 16 loaded native media elements, the numbered pictures after an early and late ripple delete, undo, redo and a ruler scrub, and ten persisted W trims followed by ten undos and ten redos. The headless gate catches stalls and lost edits with wider timing budgets than the headed target.
 
 Five distinct duration edits to the same saved shot measured the isolated timing response after opening each project. The request included parsing the response and checking the saved duration. The GPU playback switch uses this same server path.
 
@@ -47,7 +47,7 @@ Five distinct duration edits to the same saved shot measured the isolated timing
 | 100        | 60 ms (58 to 62)                | 6 ms (5 to 8)                 |
 | 1,000      | 637 ms (609 to 655)             | 29 ms (21 to 37)              |
 
-A CPU profile of the large preview attributed 15.8 seconds in an edit and history run to `getAnimations()`, mostly CSS duration inference. The runtime now lets both duration adapters share one document animation snapshot. Separately, the source timing check reuses the compiled layout for numeric timing changes on existing clips. A change that creates a clip, such as a W trim that splits the music bed, can still go through the compiler.
+A CPU profile of the large preview attributed 15.8 seconds in an edit and history run to `getAnimations()`, mostly CSS duration inference. The runtime now lets both duration adapters share one document animation snapshot. Separately, the source timing check reuses the compiled layout for numeric timing changes on existing clips. A change that creates a clip, such as a W trim that splits the music bed, goes through the compiler. The compiled answer establishes a new comparison for later numeric edits in the same tab.
 
 ## Cutroom vs HyperFrames Studio
 

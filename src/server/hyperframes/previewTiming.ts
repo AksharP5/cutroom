@@ -355,6 +355,39 @@ function timingOf(
   };
 }
 
+/** The runtime seeks in raw seconds even though its visibility changes on frame boundaries. */
+export function snappedPreviewWindow(
+  attributes: ReadonlyMap<string, string>,
+  inheritedFps: number,
+) {
+  const rate = attributes.get("data-fps");
+  const parsed = rate === undefined ? null : parseFpsWithDefault(rate);
+  const fps = parsed?.ok ? parsed.value.num / parsed.value.den : inheritedFps;
+  const start = Number(attributes.get("data-start"));
+  const end = attributes.has("data-duration")
+    ? start + Number(attributes.get("data-duration"))
+    : Number(attributes.get("data-end"));
+  const changes: [string, number][] = [];
+  if (Number.isFinite(start)) {
+    const window = exportClipWindow(start, end, fps);
+    if (window.start !== start || window.end !== end) {
+      for (const [name, value] of [
+        ["data-start", window.start],
+        ["data-duration", window.end - window.start],
+        ["data-end", window.end],
+      ] as const) {
+        if (
+          attributes.has(name) &&
+          Number.isFinite(value) &&
+          Number(attributes.get(name)) !== value
+        )
+          changes.push([name, value]);
+      }
+    }
+  }
+  return { fps, start, end, changes };
+}
+
 /**
  * An optional faster read for a single authored root with explicit clip IDs. Use the
  * same structural comparison as compiled timing, but mask only the clips the compiler
@@ -404,18 +437,21 @@ export function previewSourceTiming(
       attribute(node, "data-hf-cutroom-clip-id")
     )
       return null;
-    const time = Number(start.value);
-    const end = time + Number(duration.value);
-    const snapped = exportClipWindow(time, end, fps);
-    const authoredEnd = attribute(node, "data-end");
-    // HyperFrames fills the end of a media window when it compiles a known duration.
-    if (!authoredEnd && (node.tagName === "video" || node.tagName === "audio"))
-      node.attrs.push({ name: "data-end", value: String(snapped.end) });
-    if (snapped.start !== time || snapped.end !== end) {
-      start.value = String(snapped.start);
-      duration.value = String(snapped.end - snapped.start);
-      if (authoredEnd) authoredEnd.value = String(snapped.end);
-    }
+    // The compiler fills the end of a media window when it has an authored duration.
+    if (
+      !attribute(node, "data-end") &&
+      (node.tagName === "video" || node.tagName === "audio")
+    )
+      node.attrs.push({
+        name: "data-end",
+        value: String(Number(start.value) + Number(duration.value)),
+      });
+    const { changes } = snappedPreviewWindow(
+      new Map(node.attrs.map(({ name, value }) => [name, value])),
+      fps,
+    );
+    for (const [name, value] of changes)
+      attribute(node, name)!.value = String(value);
     node.attrs.push({ name: "data-hf-cutroom-clip-id", value: id });
   }
   return timingOf(document, html, "");

@@ -7,6 +7,7 @@ import {
   chmod,
 } from "node:fs/promises";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { previewDependencies } from "../src/server/hyperframes/previewTiming";
 import { test, expect, spyOn } from "bun:test";
@@ -67,6 +68,7 @@ test("concurrent timing readers share approval when the compiled cache cannot fi
       duration: 4,
     });
     const path = join(project.path, "index.html");
+    // A second body child keeps this document on the compiler path.
     const html =
       '<html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main><aside hidden></aside></body></html>';
     await writeFile(path, html);
@@ -683,6 +685,7 @@ test("media cache writes during a compile keep live timing for the opening tab a
       duration: 4,
     });
     const path = join(project.path, "index.html");
+    // A second body child keeps this document on the compiler path.
     const html =
       '<html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main><aside hidden></aside></body></html>';
     await writeFile(path, html);
@@ -760,7 +763,7 @@ test("media cache writes during a compile keep live timing for the opening tab a
   }
 });
 
-test("an approved root reads numeric clip edits without recompiling, then compiles CSS changes", async () => {
+test("an approved root resumes fast timing after a compiled structural edit", async () => {
   const root = await mkdtemp(join(tmpdir(), "cutroom-source-timing-"));
   const store = await createProjectStore({
     dataDir: root,
@@ -807,6 +810,110 @@ test("an approved root reads numeric clip edits without recompiling, then compil
     await writeFile(path, edited.replace("color:red", "color:blue"));
     expect((await readTiming()).structure).not.toBe(applied.structure);
     expect(signature).toHaveBeenCalled();
+
+    const split = edited
+      .replace("color:red", "color:blue")
+      .replace(
+        'data-duration="2">Words</div>',
+        'data-duration="1">Words</div><div id="right" class="clip" data-start="2" data-duration="1">Words</div>',
+      );
+    await writeFile(path, split);
+    signature.mockClear();
+    expect((await readTiming()).clips.map(({ id }) => id)).toEqual([
+      "words",
+      "right",
+    ]);
+    expect(signature).toHaveBeenCalled();
+
+    await writeFile(path, split.replace('data-start="2"', 'data-start="2.5"'));
+    signature.mockClear();
+    expect((await readTiming()).clips[1]?.values["data-start"]).toBe("2.5");
+    expect(signature).not.toHaveBeenCalled();
+  } finally {
+    signature.mockRestore();
+    await editor.dispose();
+    await store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("authored timing reads agree with a fresh compile on media windows", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cutroom-media-timing-"));
+  const store = await createProjectStore({
+    dataDir: root,
+    projectsDir: join(root, "projects"),
+  });
+  const editor = createHyperframesApi(store, createReviewService(store));
+  const app = new Hono().route("/api", editor);
+  const signature = spyOn(hyperframes, "createProjectSignatureAsync");
+  try {
+    const project = await store.create({
+      name: "Media timing",
+      width: 320,
+      height: 240,
+      duration: 6,
+    });
+    execFileSync("ffmpeg", [
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=black:size=16x16:rate=60",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=330:sample_rate=48000",
+      "-t",
+      "1",
+      "-c:v",
+      "libx264",
+      "-c:a",
+      "aac",
+      join(project.path, "media.mp4"),
+    ]);
+    const path = join(project.path, "index.html");
+    const html = `<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="240" data-fps="60" data-duration="6">
+      <audio id="past-source" src="media.mp4" data-start="0.112" data-duration="2.9" data-media-start="0.23" data-track-index="1"></audio>
+      <audio id="slow" src="media.mp4" data-start="0.112" data-duration="1.6" data-media-start="0.1" data-playback-rate="0.5" data-track-index="2"></audio>
+      <video id="off-grid" src="media.mp4" data-fps="24" data-start="0.112" data-duration="0.55" data-media-start="0.143" data-track-index="3"></video>
+      <video id="explicit-end" src="media.mp4" data-start="0.112" data-duration="0.48" data-end="1" data-track-index="4"></video>
+    </main></body></html>`;
+    const load = async (document: string) => {
+      const redirect = await app.request(
+        `/api/projects/${project.id}/isolated-preview?document=${document}`,
+      );
+      const url = redirect.headers.get("location")!;
+      const response = await app.request(url, {
+        headers: {
+          "sec-fetch-dest": "iframe",
+          "sec-fetch-site": "same-origin",
+        },
+      });
+      expect(response.status).toBe(200);
+      return url;
+    };
+    const read = async (url: string) => {
+      const response = await app.request(`${url}&cutroom-timing=1`);
+      expect(response.status).toBe(200);
+      return z
+        .object({ timing: PreviewTimingSchema })
+        .parse(await response.json()).timing;
+    };
+    await writeFile(path, html);
+    const loaded = await load("media-timing");
+
+    await writeFile(
+      path,
+      html.replaceAll('data-start="0.112"', 'data-start="0.223"'),
+    );
+    signature.mockClear();
+    const fast = await read(loaded);
+    expect(signature).not.toHaveBeenCalled();
+    const fresh = await read(await load("media-timing-fresh"));
+    expect(fast.clips.map(({ id, values }) => ({ id, values }))).toEqual(
+      fresh.clips.map(({ id, values }) => ({ id, values })),
+    );
   } finally {
     signature.mockRestore();
     await editor.dispose();
