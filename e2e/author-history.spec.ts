@@ -473,7 +473,7 @@ test("Skip leaves an outside edit in place and the next Undo targets the older o
   await page.keyboard.press("Control+z");
   await page.getByRole("button", { name: "Skip", exact: true }).click();
   await expect(page.locator(".toast")).toContainText(
-    /Left .*Owner title.* in place/,
+    /Kept .*Owner title.*Undo takes back .*Older owner edit/,
   );
   await expect(undo).toHaveAttribute("aria-description", /Older owner edit/);
   await page.reload();
@@ -665,4 +665,44 @@ test("author undo targets a saved timeline edit before history refreshes", async
   } finally {
     resume.resolve();
   }
+});
+
+test("a press refused for an edit the page has not seen leaves the next press working", async ({
+  page,
+  request,
+}) => {
+  const { project, read } = await rippleProject(request);
+  const api = `/api/cutroom/projects/${project.id}`;
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  const before = await read();
+  // Hold history reads so the page presses Undo before it has seen the edit.
+  const held = Promise.withResolvers<void>();
+  await page.route(
+    (url) => url.pathname === `${api}/history`,
+    async (route) => {
+      if (route.request().method() === "GET") await held.promise;
+      await route.continue();
+    },
+  );
+  const response = await request.post(`${api}/commands`, {
+    data: {
+      expectedRevision: before.revision,
+      label: "Unseen title",
+      commands: [{ type: "setClip", clipId: "last", text: "Unseen title" }],
+    },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  await page.keyboard.press("Control+z");
+  held.resolve();
+  await expect(page.locator(".toast")).toContainText(
+    "The next history action changed",
+  );
+  expect((await read()).timeline).not.toEqual(before.timeline);
+  await expect(undo).toHaveAttribute("aria-description", "Unseen title");
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(async () => (await read()).timeline)
+    .toEqual(before.timeline);
 });

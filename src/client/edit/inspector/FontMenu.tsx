@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { z } from "zod";
-import { ApiError, api, json } from "../../api";
+import { ApiError, api, json, reportCommittedEntry } from "../../api";
 import { Modal } from "../../components/Modal";
 import { SelectMenu } from "../../components/SelectMenu";
 import {
@@ -195,7 +195,9 @@ function AddFontDialog({
           z.object({ error: z.string() }).safeParse(value).data?.error ??
             `The import failed (${response.status}).`,
         );
-      return FontsAddedSchema.parse(value);
+      const added = FontsAddedSchema.parse(value);
+      reportCommittedEntry(`${project}/fonts/import`, response.headers);
+      return added;
     });
   };
 

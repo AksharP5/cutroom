@@ -330,6 +330,7 @@ let outsideStarted = 0;
 let outsideClips = new Map<string, string>();
 let outsideActors = new Set<string>();
 let outsideTarget: string | null | undefined;
+let outsideTargetAuthor: string | undefined;
 
 function clearOutsideNotice() {
   clearTimeout(outsideTimer);
@@ -337,6 +338,7 @@ function clearOutsideNotice() {
   outsideClips = new Map();
   outsideActors = new Set();
   outsideTarget = undefined;
+  outsideTargetAuthor = undefined;
 }
 
 const heldEditRefusal = "An agent changed those clips first.";
@@ -358,28 +360,30 @@ function noticeOutside(
   if (!outsideStarted) outsideStarted = Date.now();
   for (const [id, kind] of change.changes) outsideClips.set(id, kind);
   outsideActors.add(change.actor);
-  const added = new Set(
+  const added = new Map(
     after.clipEdits
       ?.filter(({ by }) => by === "agent")
-      .map(({ historyId }) => historyId),
+      .map(({ historyId, agentName }) => [historyId, agentName]),
   );
-  const [id] = added;
+  const [[id, author] = []] = added;
   outsideTarget =
     added.size === 1 &&
     id &&
     (outsideTarget === undefined || outsideTarget === id)
       ? id
       : null;
+  outsideTargetAuthor = author;
   clearTimeout(outsideTimer);
   // Wait for 700 ms of quiet, but report a continuous stream at least every two seconds.
   outsideTimer = setTimeout(
     () => {
       const id = outsideTarget;
+      const author = outsideTargetAuthor;
       dismissOutside = showToast(
         outsideMessage(outsideClips, outsideActors),
         id
           ? {
-              label: `Undo ${[...outsideActors][0] ?? "agent"}'s edit`,
+              label: `Undo ${author ?? "agent"}'s edit`,
               run: () => {
                 dismissOutside();
                 void stepHistory(projectId, "undo", id).catch(

@@ -18,8 +18,19 @@ import {
   realpathSync,
   rmSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { replaceFileAtomically } from "@hyperframes/core/atomic-file";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
+import {
+  isAtomicTempPath,
+  replaceFileAtomically,
+} from "@hyperframes/core/atomic-file";
 import {
   DELETED_VERSION,
   STUDIO_SIGNATURE_MANIFEST_PATHS,
@@ -1412,6 +1423,15 @@ class Engine {
             throw new HistoryRefusedError(
               "The recorded project path is invalid.",
             );
+          // A write cut off before its rename leaves its temp file beside the path.
+          const absolute = join(this.dir, path);
+          const temp = `${basename(absolute)}.hf`;
+          const folder = dirname(absolute);
+          for (const name of (existsSync(folder)
+            ? readdirSync(folder)
+            : []
+          ).filter((name) => name.startsWith(temp) && isAtomicTempPath(name)))
+            rmSync(join(folder, name), { force: true });
           const current = await this.projectFileHash(path);
           if (current === before) continue;
           if (current !== after)

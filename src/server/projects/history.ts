@@ -682,10 +682,14 @@ export async function replayHistory(
             skipEntryId = ordinaryOwnerUndo ? target.id : undefined;
             const skip = skipEntryId ? { skipEntryId } : {};
             if (input.skip) {
-              await recordHistorySkip(project, skipped, target.id);
+              await recordHistorySkip(project, skipped, target.id, entries);
+              skipped.add(target.id);
+              const after = historyCandidate(entries, "undo", who, skipped);
               skippedEdit = {
                 id: target.id,
-                label: `Left ${target.label} in place.`,
+                label: after
+                  ? `Kept ${target.label}. Undo takes back ${after.label} next.`
+                  : `Kept ${target.label}. Nothing older of yours to undo.`,
               };
               return;
             }

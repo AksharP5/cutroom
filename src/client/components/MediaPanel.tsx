@@ -670,21 +670,26 @@ export function MediaPanel({
       reportCommittedEntry(`${cutroomUrl}/media/remove`, response.headers);
       if (useSource.getState().file?.path === path) closeSource();
       if (keyboard) focusNext.current = neighbour ?? null;
-      const { historyId } = z.object({ historyId: z.string() }).parse(body);
+      // A remove history could not record still moved the file; it just has no Undo.
+      const { historyId } = z
+        .object({ historyId: z.string().optional() })
+        .parse(body);
       const dismiss = showToast(
         `Moved ${fileName(path)} to the project's ${MEDIA_TRASH} folder.`,
-        {
-          label: "Undo",
-          run: () => {
-            dismiss();
-            void stepHistory(projectId, "undo", historyId).catch(
-              (error: unknown) =>
-                showToast(
-                  error instanceof Error ? error.message : String(error),
-                ),
-            );
-          },
-        },
+        historyId
+          ? {
+              label: "Undo",
+              run: () => {
+                dismiss();
+                void stepHistory(projectId, "undo", historyId).catch(
+                  (error: unknown) =>
+                    showToast(
+                      error instanceof Error ? error.message : String(error),
+                    ),
+                );
+              },
+            }
+          : null,
         { tone: "info", transient: true },
       );
     }).catch(failed);

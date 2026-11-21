@@ -19,17 +19,23 @@ export async function readHistorySkips(project: Project) {
   );
 }
 
-/** The project mutation queue owns both updates and the selected undo entry. */
+/**
+ * The project mutation queue owns both updates and the selected undo entry. Skips of entries
+ * the log no longer holds are dropped, so the file stays as small as the history.
+ */
 export async function recordHistorySkip(
   project: Project,
-  entries: Set<string>,
+  skipped: ReadonlySet<string>,
   id: string,
+  log: readonly { id: string }[],
 ) {
   const file = await projectStatePath(project, path, true);
   await mkdir(dirname(file), { recursive: true });
+  const live = new Set(log.map((entry) => entry.id));
+  const entries = [...skipped, id].filter((entry) => live.has(entry));
   await replaceFileAtomically(
     file,
-    `${JSON.stringify({ entries: [...entries, id] })}\n`,
+    `${JSON.stringify({ entries: [...new Set(entries)] })}\n`,
     0o600,
   );
 }

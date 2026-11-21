@@ -85,6 +85,9 @@ test("a partial replay rolls back its own writes and preserves a later outside e
     pending,
     JSON.stringify({ id: "crashed", files: inverse(entry).files }),
   );
+  // The crash cut off a write before its rename.
+  await write("a.css.hf0a1b2c.tmp", "half written");
+  await write("a.css.notes", "kept");
 
   const warnings: string[] = [];
   const reopened = await open({
@@ -96,6 +99,10 @@ test("a partial replay rolls back its own writes and preserves a later outside e
     "Error: Skipped history recovery for b.css: It changed outside Cutroom.",
   ]);
   expect(await Bun.file(pending).exists()).toBe(false);
+  expect(await Bun.file(join(projectDir, "a.css.hf0a1b2c.tmp")).exists()).toBe(
+    false,
+  );
+  expect(await read("a.css.notes")).toBe("kept");
   const raw = await readFile(log, "utf8");
   expect(raw.endsWith("\n")).toBe(true);
   for (const line of raw.trimEnd().split("\n"))
