@@ -2910,6 +2910,7 @@ test("Paste Attributes replaces the animation tracks and skips speed ramps on ei
     expect(run(state, ...commands).clips[0]).toMatchObject({
       keyframes: source.keyframes,
       automation: to.automation,
+      duration: skip ? 90 : 120,
       playbackRate: skip ? 1 : 0.75,
       x: null,
       y: null,

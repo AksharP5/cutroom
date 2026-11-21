@@ -136,7 +136,7 @@ Shift+[ and Shift+] trim the start or end of every clip under the playhead on un
 
 Ctrl+Alt+[ shows the previous clip version and Ctrl+Alt+] shows the next. Both are free in the owner's Resolve preset. The bracket pair follows the direction of stepping, and keeps Alt+V available for Paste Attributes.
 
-Alt+V pastes the copied clip's transform and keyframes, grade, region, and constant speed. On audio it pastes gain and effects. Picture and sound can take their attributes from a copied linked pair in one undo step. If either clip uses a speed ramp, the paste keeps the destination speed and tells you.
+Alt+V pastes the copied clip's transform and keyframes, grade, region, and constant speed. Pasting a different speed resizes the linked clips and ripples following time on unlocked auto-select tracks, as in the inspector. On audio it also pastes gain and effects. Picture and sound can take their attributes from a copied linked pair in one undo step. If either clip uses a speed ramp, the paste keeps the destination speed and tells you.
 
 Shift+R holds the whole video clip on the current frame, keeping its original position, length, fades, and keyframes. Linked sound stays in place. Freeze frame in the clip menu still inserts a silent two-second freeze.
 

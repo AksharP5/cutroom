@@ -199,8 +199,8 @@ test("Alt+V applies the copied attributes and Shift+R holds the whole picture cl
   await page.keyboard.press("Shift+v");
   const pasted = await pressEdit(page, path, "Alt+v");
   expect(pasted.timeline.clips.find(({ id }) => id === "v1")).toMatchObject({
-    start: 60,
-    duration: 60,
+    start: 80,
+    duration: 80,
     src: "blue.mp4",
     x: 16,
     scaleX: 1.25,
@@ -209,16 +209,24 @@ test("Alt+V applies the copied attributes and Shift+R holds the whole picture cl
     playbackRate: 0.75,
   });
   expect(pasted.timeline.clips.find(({ id }) => id === "a1")).toMatchObject({
+    start: 80,
+    duration: 80,
     src: "blue.mp4",
     volume: 0.5,
     playbackRate: 0.75,
     fx: [{ type: "gain" }],
   });
+  for (const id of ["v2", "a2"])
+    expect(pasted.timeline.clips.find((clip) => clip.id === id)?.start).toBe(
+      160,
+    );
   const speed = page.getByRole("textbox", { name: "Speed", exact: true });
   await expect(speed).toHaveValue("75%");
   const undone = await pressEdit(page, path, "Control+z", "history/undo");
   const beforeFreeze = undone.timeline.clips.find(({ id }) => id === "v1")!;
   expect(beforeFreeze).toMatchObject({
+    start: 80,
+    duration: 60,
     x: null,
     grade: null,
     playbackRate: 1,
@@ -227,7 +235,7 @@ test("Alt+V applies the copied attributes and Shift+R holds the whole picture cl
   const frozen = await pressEdit(page, path, "Shift+r");
   const still = frozen.timeline.clips.find(({ kind }) => kind === "image");
   expect(still).toMatchObject({
-    start: 60,
+    start: 80,
     duration: 60,
     link: "l1",
     rotation: 10,
@@ -240,11 +248,11 @@ test("Alt+V applies the copied attributes and Shift+R holds the whole picture cl
   expect(still?.keyframes?.opacity).toHaveLength(2);
   expect(frozen.timeline.clips).toHaveLength(6);
   expect(frozen.timeline.clips.find(({ id }) => id === "a1")).toMatchObject({
-    start: 60,
+    start: 80,
     duration: 60,
     link: "l1",
   });
-  expect(frozen.timeline.clips.find(({ id }) => id === "v2")?.start).toBe(120);
+  expect(frozen.timeline.clips.find(({ id }) => id === "v2")?.start).toBe(140);
   await expect(
     page.locator(`.tl-clip[data-clip="${still?.id}"]`),
   ).toBeVisible();
