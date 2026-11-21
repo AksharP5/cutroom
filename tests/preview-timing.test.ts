@@ -300,24 +300,29 @@ test("a clip holding another clip or a composition is structure, not a movable c
 });
 
 test("generated HF ids change nothing, and a referenced one is added again with its clip", () => {
-  const generated = source.replace('id="v"', 'data-hf-id="hf-old" id="v"');
-  expect(snapshot(generated).structure).toBe(
-    snapshot(generated.replace("hf-old", "hf-new")).structure,
-  );
-  // A referenced id belongs to the clip's markup, so the clip is added again with the new one.
-  const referenced = generated.replace(
-    "</style>",
-    '[data-hf-id="hf-old"]{opacity:.5}</style>',
-  );
-  expect(
-    liveChange(
-      referenced,
-      referenced.replace(
-        'data-hf-id="hf-old" id="v"',
-        'data-hf-id="hf-new" id="v"',
+  for (const id of ["hf-abcd", "authored-id"]) {
+    const generated = source.replace('id="v"', `data-hf-id="${id}" id="v"`);
+    expect(snapshot(generated).structure).toBe(
+      snapshot(generated.replace(id, "hf-ef01")).structure,
+    );
+    // Even a substring in a longer string can be significant to authored code.
+    const referenced = generated.replace(
+      "</style>",
+      `[data-value="hf-xx${id}"]{opacity:.5}</style>`,
+    );
+    expect(
+      liveChange(
+        referenced,
+        referenced.replace(
+          `data-hf-id="${id}" id="v"`,
+          'data-hf-id="hf-ef01" id="v"',
+        ),
       ),
-    ),
-  ).toEqual({ remove: ["v"], insert: [{ id: "v", after: null, before: "a" }] });
+    ).toEqual({
+      remove: ["v"],
+      insert: [{ id: "v", after: null, before: "a" }],
+    });
+  }
 });
 
 test("a Cutroom track fader travels with the timing update, but an authored group's fader reloads", () => {
