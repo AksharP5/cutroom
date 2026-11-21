@@ -288,8 +288,8 @@ export function Inspector({
   const view = useTimeline((state) => state.view);
   const selection = useTimeline((state) => state.selection);
   const root = useRef<HTMLElement>(null);
-  // Changes holds its rows while the inspector is in use, so the fields below never move under
-  // the pointer or a field being typed in. A scrub or drag anywhere holds it until release.
+  // Keep Changes rows steady while the inspector is in use.
+  // A scrub or drag anywhere holds the list until release.
   const [pointerInside, setPointerInside] = useState(false);
   const [fieldFocused, setFieldFocused] = useState(false);
   const gesture = useWorkspace((state) => state.gesture);
@@ -527,15 +527,6 @@ export function Inspector({
             clips={timeline.clips.filter((clip) => selection.ids.has(clip.id))}
             fps={timeline.fps}
           />
-          <ChangeList
-            key={selection.anchor}
-            projectId={projectId}
-            timeline={timeline}
-            edits={changes}
-            clipIds={changeClips}
-            limit={3}
-            hold={holdChanges}
-          />
           {sound.length > 0 && (
             <details
               open={audioOpen}
@@ -587,6 +578,15 @@ export function Inspector({
               />
             </details>
           )}
+          <ChangeList
+            key={selection.anchor}
+            projectId={projectId}
+            timeline={timeline}
+            edits={changes}
+            clipIds={changeClips}
+            limit={3}
+            hold={holdChanges}
+          />
         </div>
       ) : selection.transition !== undefined && timeline ? (
         <TransitionSection
@@ -624,16 +624,6 @@ export function Inspector({
               </time>
             </span>
           </div>
-          <ChangeList
-            key={selection.anchor}
-            projectId={projectId}
-            timeline={timeline}
-            edits={changes}
-            clipIds={changeClips}
-            limit={3}
-            times={false}
-            hold={holdChanges}
-          />
           {clip.region && !isAudioKind(clip.kind) && (
             <RegionSection
               projectId={projectId}
@@ -1038,6 +1028,16 @@ export function Inspector({
               </FieldRow>
             )}
           </details>
+          <ChangeList
+            key={selection.anchor}
+            projectId={projectId}
+            timeline={timeline}
+            edits={changes}
+            clipIds={changeClips}
+            limit={3}
+            times={false}
+            hold={holdChanges}
+          />
         </div>
       )}
     </aside>
