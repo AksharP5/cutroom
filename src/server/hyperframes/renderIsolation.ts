@@ -252,6 +252,7 @@ export function registerRenderIsolation(
     progress: (job: RenderJob) => void;
     scratchDir: string;
     projectDir: string;
+    scopedMedia?: boolean;
   },
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
@@ -456,7 +457,10 @@ export function registerRenderIsolation(
           const audio = JSON.stringify(
             new URL("./rangeAudio.ts", import.meta.url).href,
           );
-          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { renameSync as cutroomRename } from "node:fs";\nimport { publishRangeProgress, spanParts as cutroomSpanParts, capturedFrame as cutroomCapturedFrame, capturesList as cutroomCapturesList, encodeCaptured as cutroomEncodeCaptured } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
+          const failure = JSON.stringify(
+            new URL("./renderFailure.ts", import.meta.url).href,
+          );
+          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { renameSync as cutroomRename } from "node:fs";\nimport { publishRangeProgress, spanParts as cutroomSpanParts, capturedFrame as cutroomCapturedFrame, capturesList as cutroomCapturesList, encodeCaptured as cutroomEncodeCaptured } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nimport { ExportStageError } from ${failure};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
           // The planner materializes source links before its HTTP server sees
           // them. Apply the same project boundary before copying their bytes.
           source = replaceOnce(
@@ -530,7 +534,7 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "    log: c.log\n  });\n}\nasync function extractPlanVideos",
-            "    log: c.log,\n    ...cutroomStage\n  }));\n}\nasync function extractPlanVideos",
+            "    log: c.log,\n    ...cutroomStage\n  })).catch((error) => { throw new ExportStageError('process_audio', error); });\n}\nasync function extractPlanVideos",
             url,
           );
           // Cutroom writes the range's audio itself. Chunks muxing the plan mix
@@ -538,13 +542,23 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "      { chunksCarryAudio: true }\n    );",
-            "      { chunksCarryAudio: false }\n    );",
+            `      { chunksCarryAudio: false${range.scopedMedia ? ", deferVideoExtraction: true" : ""} }\n    );`,
             url,
           );
           source = replaceOnce(
             source,
             "  job.progress = Math.max(job.progress, boundedProgress);",
             "  job.progress = Math.max(job.progress, boundedProgress);\n  publishRangeProgress(job);",
+            url,
+          );
+          source = replaceOnce(
+            source,
+            "      if (chunkWorkerCount === 1) {\n        const bootStarted = Date.now();",
+            `      if (chunkWorkerCount === 1) {
+        job.currentStage = "Starting Chromium";
+        job.stageProgress = { code: "start_browsers", done: 0, total: 1 };
+        publishRangeProgress(job);
+        const bootStarted = Date.now();`,
             url,
           );
           // Frames drawn from the sources are encoded beside the plan; only the rest are captured.
@@ -588,6 +602,54 @@ export function registerRenderIsolation(
             "const chunkFrameNumbers = Array.from({ length: framesInChunk }, (_, i) => cutroomCapturedFrame(range.startFrame + i));",
             url,
           );
+          if (range.scopedMedia) {
+            // FFmpeg has already mixed the audio. Browser audio requests can occupy every
+            // connection to the capture server before the first frame arrives.
+            const chunkServer = `    const fileServer = await createFileServer({
+      projectDir: compiledDir,
+      compiledDir,
+      port: 0,`;
+            source = replaceOnce(
+              source,
+              chunkServer,
+              `${chunkServer}\n      cutroomFramesOnly: true,`,
+              url,
+            );
+            // The decoder supplies every visible frame, as in a whole export. Leave the native
+            // video elements idle and give visible ones the decoder's intrinsic size.
+            source = replaceOnce(
+              source,
+              `      skipReadinessVideoIds: deferredVideos.filter(
+        (video) => !shownFrames.get(video.videoId)?.size || remoteVideoIds.has(video.videoId)
+      ).map((video) => video.videoId),
+      videoMetadataHints: collectVideoMetadataHints(
+        deferredVideos.filter((video) => remoteVideoIds.has(video.videoId))
+      )`,
+              `      skipReadinessVideoIds: collectVideoReadinessSkipIds(
+        planVideos?.videos.filter((video) => !shownFrames.get(video.id)?.size).map((video) => video.id) ?? [],
+        planVideos?.extracted ?? []
+      ),
+      videoMetadataHints: collectVideoMetadataHints(
+        planVideos?.extracted.filter((video) => shownFrames.get(video.videoId)?.size) ?? []
+      )`,
+              url,
+            );
+            // Seeking each frame just to size its extraction can time out on a long edit.
+            // Keep source dimensions, as the span did before it could defer extraction.
+            source = replaceOnce(
+              source,
+              `      const measureBoxes = async (page) => {
+        shownBoxes = await measureVideoShownBoxes(
+          page,
+          [...shownFrames.keys()],
+          chunkFrameNumbers.map((frame) => frame * chunkFps.den / chunkFps.num)
+        );
+        boxesMeasured();
+      };`,
+              "      const measureBoxes = async () => boxesMeasured();",
+              url,
+            );
+          }
           source = replaceOnce(
             source,
             "overlap.current = canEncodeWhileCapturing(encodeInput,",
@@ -610,15 +672,19 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "    await writeStitchedMp4(parts, outputPath);",
-            `    const cutroomVideo = join45(workDir, \`range.\${config.format}\`);
-    if (config.format === "mp4") await writeStitchedMp4(parts, cutroomVideo);
-    else if (parts.length === 1) cutroomRename(parts[0], cutroomVideo);
-    else throw new Error(\`A \${config.format} range rendered \${parts.length} parts; it should render one.\`);
-    await alignRangeAudio({
-      videoPath: cutroomVideo, audioPath: resolvePlanAudioPath(planDir), outputPath,
-      fps: cutroomRangeFps, frames: { start: startFrame, end: endFrame },
-      signal: config.abortSignal
-    });`,
+            `    try {
+      const cutroomVideo = join45(workDir, \`range.\${config.format}\`);
+      if (config.format === "mp4") await writeStitchedMp4(parts, cutroomVideo);
+      else if (parts.length === 1) cutroomRename(parts[0], cutroomVideo);
+      else throw new Error(\`A \${config.format} range rendered \${parts.length} parts; it should render one.\`);
+      await alignRangeAudio({
+        videoPath: cutroomVideo, audioPath: resolvePlanAudioPath(planDir), outputPath,
+        fps: cutroomRangeFps, frames: { start: startFrame, end: endFrame },
+        signal: config.abortSignal
+      });
+    } catch (error) {
+      throw new ExportStageError("assemble", error);
+    }`,
             url,
           );
         }
@@ -658,7 +724,9 @@ export function registerRenderIsolation(
     c.header("Access-Control-Allow-Origin", "null");
     c.header("X-Content-Type-Options", "nosniff");
   });
-  app.get("/*", async (c) => {`,
+  app.get("/*", async (c) => {
+    if (options.cutroomFramesOnly && c.req.header("sec-fetch-dest") === "audio")
+      return c.body(null, 204);`,
           url,
         );
         source = replaceOnce(

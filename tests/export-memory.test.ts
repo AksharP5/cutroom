@@ -1,7 +1,45 @@
 import { expect, test } from "bun:test";
 import { planCaptureBrowsers } from "../src/server/hyperframes/exportMemory";
+import {
+  countCaptureMedia,
+  timedCaptureMedia,
+} from "../src/server/hyperframes/captureWorkload";
 
 const GiB = 1024 ** 3;
+
+test("capture memory follows selected runs in export time, including transition handles", () => {
+  const html = `<!doctype html><html><head></head><body><main data-composition-id="main">
+  <video data-start="0" data-duration="2.2"></video>
+  <video data-start="1.8" data-duration="2.2"></video>
+  <audio data-start="8" data-duration="2"></audio>
+  <video data-start="16" data-duration="2"></video>
+  </main></body></html>`;
+  const workload = {
+    mediaClips: 4,
+    durationFrames: 540,
+    fps: { num: 30, den: 1 },
+    timedMedia: timedCaptureMedia(html),
+  };
+  const fps = { num: 60, den: 1 };
+  const runs = [
+    { start: 120, end: 125 },
+    { start: 970, end: 975 },
+  ];
+  expect(countCaptureMedia(workload, fps, runs)).toBe(3);
+  expect(countCaptureMedia(workload, fps, [{ start: 550, end: 575 }])).toBe(1);
+  expect(countCaptureMedia(workload, fps, undefined)).toBe(4);
+  const scripted = html.replace(
+    "</head>",
+    "<script>document.querySelector('video').play()</script></head>",
+  );
+  expect(
+    countCaptureMedia(
+      { ...workload, timedMedia: timedCaptureMedia(scripted) },
+      fps,
+      runs,
+    ),
+  ).toBe(4);
+});
 
 test("a 280-clip timeline starts one capture browser where HyperFrames started five", () => {
   // Five started with 14 GiB free and took the machine to 3 GiB within seconds.
@@ -41,6 +79,18 @@ test("browsers capturing beside FFmpeg's source encoders leave room for them", (
   expect(
     planCaptureBrowsers({ ...plan, sourcePixels: 1920 * 1080 }),
   ).toHaveProperty("refusal");
+});
+
+test("a long timeline with short captured runs accounts for its inactive media", () => {
+  expect(
+    planCaptureBrowsers({
+      available: 13 * GiB,
+      mediaClips: 60,
+      mediaClipsOutsideRange: 978,
+      frames: 720,
+      sourcePixels: 1920 * 1080,
+    }),
+  ).toEqual({ browsers: 1 });
 });
 
 test("a 4K export leaves room for its encoder, which ProRes needs most of", () => {

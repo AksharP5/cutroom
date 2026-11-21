@@ -8,6 +8,17 @@ import { probeNvenc } from "../src/server/hyperframes/nvenc";
 import type { Fps } from "../src/shared/timeline/schema";
 import { defaultTitle } from "../src/shared/timeline/title";
 import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
+import { planDirectExport } from "../src/server/hyperframes/directPlan";
+import {
+  parseComposition,
+  patchComposition,
+} from "../src/server/timeline/composition";
+import { applyAll } from "../src/shared/timeline/apply";
+import type { ClipOrigin } from "../src/shared/timeline/apply";
+import {
+  CommandSchema,
+  emptyTimelineSettings,
+} from "../src/shared/timeline/schema";
 
 const WIDTH = 640;
 const HEIGHT = 360;
@@ -397,6 +408,192 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   },
   // Fifteen exports, five of them capturing up to 105 frames in Chromium.
   300_000,
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "zoom, blur, highlight, a graded dissolve and a title capture only their own frames",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-effects-"));
+    const scratchDir = `${root}-scratch`;
+    const direct = createRenderWorkers({ scratchDir });
+    const capture = createRenderWorkers({ scratchDir, directExport: false });
+    const fps = { num: 60, den: 1 };
+    const range = { start: 0, end: 240 };
+    const settings = emptyTimelineSettings();
+    try {
+      await Promise.all([
+        source(join(root, "a.mp4"), "640x360", "60", BT709, true),
+        source(join(root, "b.mp4"), "640x360", "60", BT709),
+        command([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "aevalsrc=0.15*sin(2*PI*(180*t+30*t*t)):s=48000:c=stereo:d=4",
+          join(root, "bed.wav"),
+        ]),
+      ]);
+      const base = parseComposition(
+        project(
+          fps,
+          [
+            { src: "a.mp4", start: 0, frames: 120, mediaStart: 0 },
+            { src: "b.mp4", start: 120, frames: 120, mediaStart: 1 },
+          ],
+          { titles: [{ start: 170, frames: 15 }] },
+        )
+          .replace('data-duration="0"', 'data-duration="0" data-fps="60"')
+          .replace(
+            'data-track-index="2" data-volume=',
+            'data-track-index="4" data-volume=',
+          ),
+        settings,
+      );
+      const origins = new Map<string, ClipOrigin>();
+      const box = { x: 0.2, y: 0.2, width: 0.6, height: 0.6 };
+      const timeline = applyAll(
+        base.timeline,
+        CommandSchema.array().parse([
+          {
+            type: "setClip",
+            clipId: "v0",
+            grade: { adjust: { exposure: 0.2, contrast: 0.1 } },
+          },
+          {
+            type: "setTransition",
+            from: "v0",
+            to: "v1",
+            transition: { duration: 24 },
+          },
+          {
+            type: "insert",
+            track: 3,
+            at: 20,
+            clip: {
+              kind: "adjustment",
+              id: "zoom",
+              duration: 30,
+              region: { effect: "zoom", box, in: 6, out: 6 },
+            },
+          },
+          {
+            type: "insert",
+            track: 3,
+            at: 55,
+            clip: {
+              kind: "adjustment",
+              id: "blur",
+              duration: 15,
+              region: { effect: "blur", box, blur: 9 },
+            },
+          },
+          {
+            type: "insert",
+            track: 3,
+            at: 80,
+            clip: {
+              kind: "adjustment",
+              id: "highlight",
+              duration: 15,
+              region: { effect: "highlight", box, dim: 0.45 },
+            },
+          },
+        ]),
+        {
+          mediaLengths: new Map([
+            ["a.mp4", 5],
+            ["b.mp4", 5],
+            ["bed.wav", 4],
+          ]),
+          onCreate: (id, origin) => origins.set(id, origin),
+        },
+      );
+      const html = patchComposition(base, timeline, origins);
+      const plan = planDirectExport(html, fps, range);
+      if ("reason" in plan) throw new Error(plan.reason);
+      expect(plan.segments.filter(({ kind }) => kind === "capture")).toEqual([
+        { kind: "capture", start: 20, end: 50 },
+        { kind: "capture", start: 55, end: 70 },
+        { kind: "capture", start: 80, end: 95 },
+        { kind: "capture", start: 108, end: 132 },
+        { kind: "capture", start: 170, end: 185 },
+      ]);
+      expect(
+        planDirectExport(
+          html.replace("perspective:1000px", "perspective:900px"),
+          fps,
+          range,
+        ),
+      ).toHaveProperty("reason");
+      expect(
+        planDirectExport(
+          html.replace(
+            "</head>",
+            "<style>@keyframes cutroom-dissolve-in{to{opacity:.2}}</style></head>",
+          ),
+          fps,
+          range,
+        ),
+      ).toHaveProperty("reason");
+      await writeFile(join(root, "index.html"), html);
+      const outputs = [];
+      for (const [workers, renderer] of [
+        [capture, "capture"],
+        [direct, "mixed"],
+      ] as const) {
+        const filename = `${renderer}.mp4`;
+        const state = workers.start(
+          {
+            project: { id: "effects", dir: root },
+            outputPath: join(root, filename),
+            format: "mp4",
+            fps,
+            quality: "high",
+            jobId: renderer,
+          },
+          { filename, directory: root, range },
+        );
+        while (state.status === "rendering") await Bun.sleep(50);
+        expect(state.error).toBeUndefined();
+        expect(state.renderer).toBe(renderer);
+        outputs.push(state.outputPath);
+      }
+      const [reference, mixed] = await Promise.all(outputs.map(decode));
+      expect(reference!.length).toBe(range.end * WIDTH * HEIGHT * 3);
+      expect(mixed!.length).toBe(reference!.length);
+      const max = [0, 0, 0];
+      const mean = [0, 0, 0];
+      for (let i = 0; i < reference!.length; i++) {
+        const channel = i % 3;
+        const error = Math.abs(reference![i]! - mixed![i]!);
+        mean[channel]! += error;
+        max[channel] = Math.max(max[channel]!, error);
+      }
+      for (const error of mean)
+        expect(error / (reference!.length / 3)).toBeLessThan(4);
+      const [referenceAudio, mixedAudio] = await Promise.all(
+        outputs.map(sound),
+      );
+      expect(mixedAudio!.length).toBe(referenceAudio!.length);
+      const power = (samples: Float32Array) =>
+        samples.reduce((sum, sample) => sum + sample ** 2, 0);
+      const audioDb =
+        10 * Math.log10(power(mixedAudio!) / power(referenceAudio!));
+      expect(Math.abs(audioDb)).toBeLessThanOrEqual(0.1);
+      console.info("Effect export parity", {
+        meanRgb: mean.map((sum) => sum / (reference!.length / 3)),
+        maxRgb: max,
+        audioDb,
+      });
+    } finally {
+      await Promise.all([direct.cancelAll(), capture.cancelAll()]);
+      await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
+    }
+  },
+  120_000,
 );
 
 /** The browser's CSS: translate, then rotate, then scale, about the frame's centre. */
