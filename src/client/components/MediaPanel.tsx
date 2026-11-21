@@ -1,3 +1,7 @@
+import {
+  ProjectFormatSchema,
+  ProjectRateSchema,
+} from "../../shared/projectFormat";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { MagnifyingGlass, Plus, Waveform } from "@phosphor-icons/react";
@@ -174,7 +178,10 @@ function MediaRow({
       : 0,
   );
   const [duration, setDuration] = useState<number | null>(null);
-  const [hasAudio, setHasAudio] = useState<boolean | null>(null);
+  const [videoInfo, setVideoInfo] = useState<{
+    hasAudio: boolean;
+    format?: MediaDrag["format"];
+  } | null>(null);
   // Decoders start only for rows that have been on screen.
   const row = useRef<HTMLLIElement>(null);
   const [seen, setSeen] = useState(false);
@@ -195,7 +202,7 @@ function MediaRow({
   useEffect(() => {
     if (!seen || gone || kind !== "video") return;
     const closing = new AbortController();
-    setHasAudio(null);
+    setVideoInfo(null);
     const probe = async () => {
       for (;;) {
         const response = await fetch(
@@ -206,9 +213,27 @@ function MediaRow({
           if (!response.ok)
             throw new Error(`Cannot probe ${path} (${response.status}).`);
           const info = z
-            .object({ channels: z.number().positive().optional() })
+            .object({
+              channels: z.number().positive().optional(),
+              video: z
+                .object({
+                  width: z.number(),
+                  height: z.number(),
+                  exactFps: ProjectRateSchema.optional(),
+                })
+                .optional(),
+            })
             .parse(await response.json());
-          if (!closing.signal.aborted) setHasAudio(info.channels !== undefined);
+          if (!closing.signal.aborted) {
+            const format = ProjectFormatSchema.safeParse({
+              ...info.video,
+              fps: info.video?.exactFps,
+            });
+            setVideoInfo({
+              hasAudio: info.channels !== undefined,
+              format: format.data,
+            });
+          }
           return;
         }
         await response.body?.cancel();
@@ -229,12 +254,13 @@ function MediaRow({
   const placeable =
     !gone &&
     (kind === "image" ||
-      (duration !== null && (kind !== "video" || hasAudio !== null)));
+      (duration !== null && (kind !== "video" || videoInfo !== null)));
   const dragged = (): MediaDrag => ({
     kind,
     path,
     seconds: duration ?? STILL_SECONDS,
-    hasAudio: hasAudio ?? kind === "audio",
+    hasAudio: videoInfo?.hasAudio ?? kind === "audio",
+    format: videoInfo?.format,
   });
   // The source viewer needs a timeline: its playhead counts the timeline's frames.
   const open = () => {

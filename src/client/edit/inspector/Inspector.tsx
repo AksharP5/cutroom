@@ -593,11 +593,11 @@ export function Inspector({
           timeline={timeline}
           incoming={selection.transition}
         />
-      ) : !timeline ? null : !clip ? (
+      ) : !timeline || !view ? null : !clip ? (
         <TimelineOverview
           projectId={projectId}
           name={projectName}
-          timeline={timeline}
+          view={view}
           edits={changes}
           hold={holdChanges}
         />

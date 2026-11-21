@@ -1112,3 +1112,7 @@
   color: var(--text-secondary);
   font-size: var(--type-xs);
 }
+
+.inspector-format-edit {
+  margin-left: auto;
+}

@@ -1,3 +1,4 @@
+import { fpsToFfmpegArg } from "@hyperframes/core";
 import { projectEditedAt } from "./edited";
 import { randomUUID } from "node:crypto";
 import {
@@ -152,7 +153,7 @@ body { color: #ededed; background: #111111; font-family: "Instrument Sans", syst
   font-weight: 400; line-height: 1.5; color: #a8a8a8;
 }
 </style></head>
-<body><main id="main" data-composition-id="main" data-no-timeline data-width="${input.width}" data-height="${input.height}" data-duration="${input.duration}" class="stage">
+<body><main id="main" data-composition-id="main" data-no-timeline data-width="${input.width}" data-height="${input.height}" data-fps="${fpsToFfmpegArg(input.fps)}" data-duration="${input.duration}" class="stage">
 <div id="rule" class="clip background" data-start="0" data-duration="${input.duration}" data-track-index="0" data-label="Background"></div>
 <div id="headline" class="clip title" data-start="0" data-duration="${input.duration}" data-track-index="1" data-label="Project title">${escapeHtml(input.name)}</div>
 <div id="caption" class="clip caption" data-start="0" data-duration="${input.duration}" data-track-index="2" data-label="Getting started">Drop media in, or ask your agent to start.</div>

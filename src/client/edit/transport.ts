@@ -1,3 +1,5 @@
+import { sameRate } from "../../shared/projectFormat";
+import { frames, nearestFrame } from "../../shared/timeline/piece";
 import { create } from "zustand";
 import { frameTime } from "../../shared/timeline/apply";
 import type { Fps, Timeline } from "../../shared/timeline/schema";
@@ -272,6 +274,14 @@ export function createTransport() {
     },
     /** Takes the frame rate, length, and marks; keeps the playhead inside the new length. */
     setTimeline({ fps, duration, range }: Playable) {
+      const before = get();
+      if (!sameRate(before.fps, fps)) {
+        const snap = (frame: number) =>
+          Number(nearestFrame(frames(frame, before.fps), fps));
+        set({ fps, duration, range, span: null });
+        transport.seek(snap(before.frame));
+        return;
+      }
       set({ fps, duration, range });
       if (get().frame >= duration) transport.seek(duration - 1);
     },

@@ -131,6 +131,12 @@ export function editReply(
     ...(JSON.stringify(old.main) !== JSON.stringify(timeline.main) && {
       main: timeline.main,
     }),
+    ...(JSON.stringify(old.fps) !== JSON.stringify(timeline.fps) && {
+      fps: timeline.fps,
+    }),
+    ...(JSON.stringify(before.size) !== JSON.stringify(after.size) && {
+      size: after.size,
+    }),
     ...(old.duration !== timeline.duration && { duration: timeline.duration }),
   };
   return {
@@ -140,7 +146,11 @@ export function editReply(
     ...(after.skippedClips?.length && { skippedClips: after.skippedClips }),
     ...(warnings.length && { warnings }),
     // With the timeline, the reply holds everything a read returns.
-    ...(fullTimeline && { timeline, agentChanges: after.agentChanges }),
+    ...(fullTimeline && {
+      timeline,
+      size: after.size,
+      agentChanges: after.agentChanges,
+    }),
   };
 }
 

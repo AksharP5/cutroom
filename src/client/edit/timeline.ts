@@ -1,3 +1,4 @@
+import { sameRate } from "../../shared/projectFormat";
 import { z } from "zod";
 import { create } from "zustand";
 import {
@@ -87,6 +88,7 @@ interface Edit {
   label: string;
   /** Sent as they are, with every new piece named, so the server makes exactly what was shown. */
   commands: Command[];
+  fps: Timeline["fps"];
   /** Clip ids the commands name. */
   uses: ReadonlySet<string>;
   /** Ids of the pieces the commands make. */
@@ -321,6 +323,7 @@ function shown(projectId: string): TimelineView | null {
     .reduce((current, edit) => {
       if (
         createsAudioGroup(edit.commands) ||
+        !sameRate(edit.fps, current.fps) ||
         anchorsChanged(edit.anchors, current)
       )
         return current;
@@ -544,6 +547,8 @@ async function send(edit: Edit) {
         : await read(edit.projectId, undefined, true, edit.composition);
     // A cut at absolute frames only means the same cut while the clips it names are where the
     // user saw them; an agent may have moved them since, whether or not the revision is stale.
+    if (!sameRate(edit.fps, base.timeline.fps))
+      throw new Error("The frame rate changed. Make the edit again.");
     if (anchorsChanged(edit.anchors, base.timeline)) throw changed;
     try {
       let historyId: string | undefined;
@@ -681,6 +686,7 @@ export async function editTimeline(
     commands: readonly Command[],
     origins: ReadonlyMap<string, ClipOrigin>,
   ) => void,
+  onCommit?: (view: TimelineView) => void,
 ) {
   const { view, projectId: open } = useTimeline.getState();
   if (!view || open !== projectId) return false;
@@ -690,6 +696,8 @@ export async function editTimeline(
   let accepted = false;
   try {
     const from = basis ?? view.timeline;
+    if (!sameRate(from.fps, view.timeline.fps))
+      throw new Error("The frame rate changed. Make the edit again.");
     const input = z.array(CommandSchema).parse(build(from));
     if (!input.length) return false;
     const named = name(input, from, view.composition);
@@ -709,6 +717,7 @@ export async function editTimeline(
       composition: view.composition,
       label: editLabel(commands, from, label),
       commands,
+      fps: from.fps,
       uses: new Set(
         commands.flatMap((command) =>
           "clipIds" in command
@@ -788,6 +797,12 @@ export async function editTimeline(
       const history = await readHistory(projectId);
       if (confirmed?.projectId === projectId)
         settle(projectId, confirmed.view, history);
+      if (
+        confirmed &&
+        confirmed.projectId === projectId &&
+        confirmed.view.revision === revision
+      )
+        onCommit?.(confirmed.view);
     });
     if (!made.dropped && useTimeline.getState().projectId === projectId) {
       if (report) {

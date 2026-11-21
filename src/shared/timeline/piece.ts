@@ -68,6 +68,10 @@ export function decodeLocal(us: bigint, fps: Fps): ExactTime {
     : micros(us);
 }
 
+/** Move an edited edge to the nearest frame, with ties going to the later frame. */
+export const nearestFrame = (position: ExactTime, fps: Fps) =>
+  halfUp(position.n * BigInt(fps.num), position.d * BigInt(fps.den));
+
 export const sampleOf = (position: ExactTime) =>
   halfUp(position.n * SAMPLES, position.d);
 

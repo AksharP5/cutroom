@@ -3314,3 +3314,25 @@ option {
     display: none;
   }
 }
+
+.format-fields {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.format-fields > div {
+  min-width: 0;
+}
+.format-fields .select-trigger {
+  width: 100%;
+  height: 32px;
+}
+.format-preview {
+  min-height: var(--leading-body);
+  margin: var(--space-3) 0 0;
+  color: var(--text-secondary);
+}
+.format-preview[data-error] {
+  color: var(--danger);
+}
