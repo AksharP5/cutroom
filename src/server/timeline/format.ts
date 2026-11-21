@@ -1,10 +1,6 @@
 import { sameRate } from "../../shared/projectFormat";
 import type { ProjectFormat } from "../../shared/projectFormat";
-import {
-  canonicalSeconds,
-  normalizeTimeline,
-  toFrames,
-} from "../../shared/timeline/apply";
+import { normalizeTimeline, toFrames } from "../../shared/timeline/apply";
 import { TimelineError } from "../../shared/timeline/errors";
 import { clipName } from "../../shared/timeline/labels";
 import {
@@ -44,17 +40,16 @@ export function planFormat(
   const authored = (seconds: number | string) =>
     decodeLocal(attrMicros(seconds), oldRate);
   const windows = new Map(
-    formatWindows(parsed, lengths).map(({ el, start, end }) => {
-      if (el.clipId === undefined || end === null)
-        throw new TimelineError(
-          "unsupported",
-          `Cannot represent ${el.name} on the new frame grid.`,
-        );
-      return [
-        el.clipId,
-        { start, end, mediaStart: el.mediaStart, reference: "ref" in el.start },
-      ];
-    }),
+    formatWindows(parsed, lengths).map(
+      ({ clipId, name, start, end, reference }) => {
+        if (clipId === undefined || end === null)
+          throw new TimelineError(
+            "unsupported",
+            `Cannot represent ${name} on the new frame grid.`,
+          );
+        return [clipId, { start, end, reference }];
+      },
+    ),
   );
 
   function edge(time: ExactTime) {
@@ -129,17 +124,10 @@ export function planFormat(
         "unsupported",
         `Cannot preserve the referenced start on ${name}.`,
       );
-    const mediaStart =
-      clip.mediaStart === null
-        ? null
-        : canonicalSeconds(
-            window.mediaStart + secondsOf(handle) * clip.playbackRate,
-          );
     const next = {
       ...clip,
       start,
       duration: end - start,
-      mediaStart,
       fadeIn: local(clip.fadeIn),
       fadeOut: local(clip.fadeOut),
       transitionIn: retimeTransition(clip.transitionIn, oldStart, start, name),

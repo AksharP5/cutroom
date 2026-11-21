@@ -220,3 +220,57 @@ test("a rate change keeps cut, transition, marker and range times together", asy
     await fixture.close();
   }
 });
+
+test("regridding a speed ramp keeps its in-point and curve phase together", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  try {
+    const project = await fixture.store.create({ name: "Speed ramp" });
+    const automation = JSON.stringify({
+      version: 1,
+      lanes: [
+        {
+          target: "rate",
+          points: [
+            { t: 0, v: 0.5 },
+            { t: 4, v: 2 },
+          ],
+        },
+      ],
+    });
+    await writeFile(
+      join(project.path, "index.html"),
+      `<main data-composition-id="main" data-fps="30"><video id="ramp" src="ramp.mp4" muted data-start="0.02" data-duration="5" data-automation='${automation}'></video></main>`,
+    );
+    const path = `/projects/${project.id}`;
+    const before = TimelineViewSchema.parse(
+      await (await fixture.request(`${path}/timeline`)).json(),
+    );
+    const edit = await fixture.request(`${path}/commands`, "POST", {
+      expectedRevision: before.revision,
+      commands: [
+        {
+          type: "setFormat",
+          fps: { num: 60, den: 1 },
+          width: 1920,
+          height: 1080,
+        },
+      ],
+    });
+    const body = await edit.json();
+    expect(edit.status, JSON.stringify(body)).toBe(200);
+    const after = TimelineViewSchema.parse(body);
+    const { mediaStart, automation: projected } = before.timeline.clips[0]!;
+    expect(after.timeline.clips[0]).toMatchObject({
+      start: 1,
+      duration: 300,
+      mediaStart,
+      automation: projected,
+    });
+  } finally {
+    await fixture.close();
+  }
+});

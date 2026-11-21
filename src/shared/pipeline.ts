@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const FOOTAGE_PIXEL_LIMIT = 1920 * 1080;
+
 /**
  * Which of a composition's clips the footage pipeline may draw in the viewer, as the server's
  * classifier proved them. Everything else stays with HyperFrames, which draws it on top.
