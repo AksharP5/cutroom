@@ -50,6 +50,8 @@ const SourceSegmentSchema = z.object({
   placement: PlacementSchema.optional(),
   /** The clip's colour grade, drawn as a 3D LUT baked from it before placement. */
   grade: GradeSchema.optional(),
+  /** Lower-track composite grades, applied after placement, in track order. */
+  adjustments: z.array(GradeSchema).optional(),
 });
 /** A run of frames the browser draws. */
 const CaptureSegmentSchema = z.object({

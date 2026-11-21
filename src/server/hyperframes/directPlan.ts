@@ -5,6 +5,7 @@ import type { DefaultTreeAdapterTypes } from "parse5";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import { emptyTimelineSettings } from "../../shared/timeline/schema.ts";
 import { GRADE_ATTRIBUTE, readGrade } from "../../shared/timeline/grade.ts";
+import type { Grade } from "../../shared/timeline/grade.ts";
 import {
   ADJUSTMENT_ATTRIBUTE,
   REGION_ATTRIBUTE,
@@ -366,9 +367,21 @@ function regionFrames(
   }
 }
 
+/** The empty markup Cutroom writes for a colour-only adjustment. */
+const ADJUSTMENT_ATTRIBUTES = new Set([
+  "id",
+  "class",
+  "data-start",
+  "data-duration",
+  "data-track-index",
+  "data-timeline-label",
+  ADJUSTMENT_ATTRIBUTE,
+  GRADE_ATTRIBUTE,
+]);
+
 /**
- * Plans an export that FFmpeg can draw from the sources without a browser: every frame shows one
- * video clip, full frame, with nothing over it. Anything this cannot prove the browser would draw
+ * Plans the frames FFmpeg can draw directly from source, including colour-only adjustments on
+ * a composite this planner already knows how to draw. Anything this cannot prove the browser would draw
  * the same way returns a reason instead, and the export uses frame capture.
  */
 export function planDirectExport(
@@ -476,6 +489,7 @@ export function planDirectExport(
 
   type Clip = { element: Element; start: number; end: number };
   const visual: Clip[] = [];
+  const adjustments: (Frames & { track: number; grade: Grade })[] = [];
   const pictures: Element[] = [];
   const stacking: Stacking = {
     trackZ: new Map(),
@@ -511,7 +525,30 @@ export function planDirectExport(
       attribute(element, REGION_ATTRIBUTE) === undefined
     )
       continue;
-    if (adjustment) effects.push({ start: first, end: last });
+    if (adjustment) {
+      const grade = readGrade(attribute(element, GRADE_ATTRIBUTE));
+      const track = Number(attribute(element, "data-track-index"));
+      if (
+        "restriction" in grade ||
+        !Number.isInteger(track) ||
+        element.tagName !== "div" ||
+        element.childNodes.some(
+          (node) => !("value" in node) || node.value.trim(),
+        ) ||
+        element.attrs.some(({ name }) => !ADJUSTMENT_ATTRIBUTES.has(name))
+      ) {
+        effects.push({ start: first, end: last });
+      } else if (grade.grade) {
+        pictures.push(element);
+        adjustments.push({
+          start: first,
+          end: last,
+          track,
+          grade: grade.grade,
+        });
+      }
+      continue;
+    }
     visual.push({ element, start: first, end: last });
     if (transitions) {
       for (const edge of ["in", "out"] as const) {
@@ -595,7 +632,7 @@ export function planDirectExport(
       ...visual
         .flatMap((clip) => [clip.start, clip.end])
         .filter((at) => at > frames.start && at < frames.end),
-      ...effects
+      ...[...effects, ...adjustments]
         .flatMap(({ start, end }) => [start, end])
         .filter((at) => at > frames.start && at < frames.end),
     ]),
@@ -611,31 +648,36 @@ export function planDirectExport(
       (above, clip) => (above && level(above) > level(clip) ? above : clip),
       undefined,
     );
-    const drawn = effects.some(
-      (span) => span.start <= start && start < span.end,
-    )
-      ? { reason: `frame ${start} draws a Cutroom effect` }
-      : !top
-        ? { reason: `frame ${start} shows no clip` }
-        : showing.length > 1 && stacking.authored
-          ? {
-              reason: `frame ${start} shows ${showing.length} clips in an authored order`,
-            }
-          : placedClip(
-              {
-                ...top.element,
-                attrs: top.element.attrs.filter(
-                  ({ name }) =>
-                    !(regions && name === REGION_ATTRIBUTE) &&
-                    !(transitions && TRANSITION_ATTRIBUTE.test(name)),
-                ),
-              },
-              {
-                width,
-                height,
-                beneath: showing.length === 1 ? colour : null,
-              },
-            );
+    const activeAdjustments = adjustments.filter(
+      (layer) => layer.start <= start && start < layer.end,
+    );
+    const track = Number(top && attribute(top.element, "data-track-index"));
+    const drawn =
+      effects.some((span) => span.start <= start && start < span.end) ||
+      (activeAdjustments.length > 0 &&
+        (!Number.isInteger(track) || stacking.authored))
+        ? { reason: `frame ${start} draws a Cutroom effect` }
+        : !top
+          ? { reason: `frame ${start} shows no clip` }
+          : showing.length > 1 && stacking.authored
+            ? {
+                reason: `frame ${start} shows ${showing.length} clips in an authored order`,
+              }
+            : placedClip(
+                {
+                  ...top.element,
+                  attrs: top.element.attrs.filter(
+                    ({ name }) =>
+                      !(regions && name === REGION_ATTRIBUTE) &&
+                      !(transitions && TRANSITION_ATTRIBUTE.test(name)),
+                  ),
+                },
+                {
+                  width,
+                  height,
+                  beneath: showing.length === 1 ? colour : null,
+                },
+              );
     const previous = segments.at(-1);
     if ("reason" in drawn || !top) {
       reason ??= "reason" in drawn ? drawn.reason : undefined;
@@ -647,6 +689,14 @@ export function planDirectExport(
     const mediaStart = seconds(
       attribute(top.element, "data-media-start") ?? "0",
     )!;
+    // A fully covering top picture hides every lower grade. The eligible
+    // source run represents the whole visible lower composite for the grades above it.
+    const byTrack = new Map<number, Grade>();
+    for (const layer of activeAdjustments)
+      if (layer.track > track) byTrack.set(layer.track, layer.grade);
+    const grades = [...byTrack]
+      .sort(([a], [b]) => a - b)
+      .map(([, grade]) => grade);
     segments.push({
       kind: "source",
       start,
@@ -655,6 +705,7 @@ export function planDirectExport(
       mediaStart,
       ...(top.start !== start && { clipStart: top.start }),
       ...drawn,
+      ...(grades.length && { adjustments: grades }),
     });
   }
   if (!segments.some((segment) => segment.kind === "source"))
