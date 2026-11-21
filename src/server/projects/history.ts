@@ -643,7 +643,10 @@ export async function replayHistory(
                 "The selected history action is no longer available.",
               );
             const ordinaryOwnerUndo =
-              isOwner(who) && direction === "undo" && next?.id === target.id;
+              isOwner(who) &&
+              direction === "undo" &&
+              input.entryId === undefined &&
+              next?.id === target.id;
             skipEntryId = ordinaryOwnerUndo ? target.id : undefined;
             const skip = skipEntryId ? { skipEntryId } : {};
             if (input.skip) {
