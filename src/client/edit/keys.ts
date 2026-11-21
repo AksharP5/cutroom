@@ -282,22 +282,24 @@ export function addTransition(
   scope: "both" | "video" | "audio",
 ): { commands: CommandInput[]; note: string | null } {
   if (onePerLink(selectedIn(timeline, target)).length > 1) {
-    const { cuts, skipped, shortened } = planBatchTransitions(
+    const { cuts, kept, skipped, shortened } = planBatchTransitions(
       timeline,
       target.selection,
       scope,
     );
-    if (!cuts.length && !skipped)
+    if (!cuts.length && !skipped && !kept)
       throw new TimelineError(
         "not_found",
         "No cuts between selected clips on the requested tracks.",
       );
-    if (!cuts.length)
+    if (!cuts.length && !kept)
       throw new TimelineError(
         "out_of_bounds",
         `${skipped} selected ${skipped === 1 ? "cut had" : "cuts had"} too little media for a transition.`,
       );
     const note = [
+      kept &&
+        `Kept ${kept} existing ${kept === 1 ? "transition" : "transitions"}.`,
       skipped &&
         `${skipped} ${skipped === 1 ? "cut had" : "cuts had"} too little media for a transition.`,
       shortened &&
@@ -305,7 +307,10 @@ export function addTransition(
     ]
       .filter(Boolean)
       .join(" ");
-    return { commands: [{ type: "setTransitions", cuts }], note: note || null };
+    return {
+      commands: cuts.length ? [{ type: "setTransitions", cuts }] : [],
+      note: note || null,
+    };
   }
   const tracks = new Map(
     timeline.tracks

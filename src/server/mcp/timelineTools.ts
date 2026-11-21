@@ -281,7 +281,7 @@ export function registerTimelineTools(
     "timeline_add_transitions",
     {
       description:
-        "Add default centred transitions to every cut between two selected clips on the same unlocked track, as one undo step. Video and audio cuts are counted separately. The reply reports how many were added, skipped for lack of handles, or shortened to fit. If none fit, the timeline is left unchanged.",
+        "Add default centred transitions to every cut between two selected clips on the same unlocked track, as one undo step. Scope both includes the selected clips' linked partners. The reply counts picture and sound cuts separately and reports how many transitions were added, kept, skipped for lack of handles, or shortened to fit. If none fit, the timeline is left unchanged.",
       inputSchema: {
         ...input,
         clipIds: z.array(z.string().min(1)).min(2),
@@ -309,12 +309,12 @@ export function registerTimelineTools(
       const ids = new Set(before.view.timeline.clips.map(({ id }) => id));
       const missing = clipIds.find((id) => !ids.has(id));
       if (missing) return failed(404, `No clip has id ${missing}.`);
-      const { cuts, skipped, shortened } = planBatchTransitions(
+      const { cuts, kept, skipped, shortened } = planBatchTransitions(
         before.view.timeline,
         new Set(clipIds),
         scope,
       );
-      const measured = { added: cuts.length, skipped, shortened };
+      const measured = { added: cuts.length, kept, skipped, shortened };
       if (!cuts.length) {
         const reply = { measured, revision: before.view.revision };
         return {

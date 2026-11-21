@@ -2737,41 +2737,59 @@ export function planBatchTransitions(
       )
       .map((track) => track.index),
   );
+  const selectedIds =
+    scope === "both"
+      ? new Set(
+          withPartners(
+            clips,
+            clips.filter(
+              (clip) => enabled.has(clip.track) && selected.has(clip.id),
+            ),
+          ).map(({ id }) => id),
+        )
+      : selected;
   const requested = toFrames(1, fps);
   const ends = new Map<string, Clip>();
   const cuts: TransitionCut[] = [];
   let skipped = 0;
   let shortened = 0;
+  let kept = 0;
   for (const to of clips) {
-    if (!enabled.has(to.track) || !selected.has(to.id) || !takesTransition(to))
+    if (
+      !enabled.has(to.track) ||
+      !selectedIds.has(to.id) ||
+      !takesTransition(to)
+    )
       continue;
     const from = ends.get(`${to.track}:${to.start}`);
-    if (!from) {
-      ends.set(`${to.track}:${clipEnd(to)}`, to);
+    const end = `${to.track}:${clipEnd(to)}`;
+    if (!from || from.transitionOut || to.transitionIn) {
+      if (from) kept++;
+      ends.set(end, to);
       continue;
     }
     const room = transitionRoom(fps, from, to, "center");
     const duration = Math.min(requested, room.frames);
     if (duration <= 0) {
       skipped++;
-      ends.set(`${to.track}:${clipEnd(to)}`, to);
+      ends.set(end, to);
       continue;
     }
     if (duration < requested) shortened++;
     const transition = {
-      kind: to.transitionIn?.kind ?? "dissolve",
+      kind: "dissolve",
       duration,
       alignment: "center",
     } as const;
     cuts.push({ from: from.id, to: to.id, transition });
     // The following cut has to fit alongside this one on the shared clip.
-    ends.set(`${to.track}:${clipEnd(to)}`, {
+    ends.set(end, {
       ...to,
       transitionIn: transition,
       fadeIn: 0,
     });
   }
-  return { cuts, skipped, shortened };
+  return { cuts, kept, skipped, shortened };
 }
 
 /**

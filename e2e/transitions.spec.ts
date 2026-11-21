@@ -186,6 +186,10 @@ test("selected cuts get transitions by scope in one edit and skip missing handle
     await expect(page.getByRole("banner").getByRole("status")).toContainText(
       `${skipped} too little media`,
     );
+    await page.keyboard.press(key);
+    await expect(page.getByRole("banner").getByRole("status")).toContainText(
+      `Kept ${ids.length} existing transitions.`,
+    );
     await page.keyboard.press("Control+z");
     await expect(transitionIds).toHaveCount(0);
   }

@@ -453,34 +453,55 @@ test("setClip scale, rotation and crop answer as changed fields and read back as
   }
 });
 
-test("timeline_add_transitions reports added cuts and writes one undo step", async () => {
+test("timeline_add_transitions uses linked sound, keeps existing transitions and writes one undo step", async () => {
   const mcp = await connect();
   try {
     const path = join(mcp.project.path, "index.html");
     await writeFile(
       path,
       `<main data-composition-id="main" data-duration="6" data-fps="30">
-      <audio id="a" src="voice.wav" data-start="0" data-duration="2" data-media-start="1" data-track-index="1"></audio>
-      <audio id="b" src="voice.wav" data-start="2" data-duration="2" data-media-start="1" data-track-index="1"></audio>
-      <audio id="c" src="voice.wav" data-start="4" data-duration="2" data-media-start="1" data-track-index="1"></audio>
+      <audio id="a" data-link="la" src="voice.wav" data-start="0" data-duration="2" data-media-start="1" data-track-index="1"></audio>
+      <audio id="b" data-link="lb" src="voice.wav" data-start="2" data-duration="2" data-media-start="1" data-track-index="1"></audio>
+      <audio id="c" data-link="lc" src="voice.wav" data-start="4" data-duration="2" data-media-start="1" data-track-index="1"></audio>
+      <video id="va" muted data-link="la" src="video.mp4" data-start="0" data-duration="2" data-media-start="1" data-track-index="0"></video>
+      <video id="vb" muted data-link="lb" src="video.mp4" data-start="2" data-duration="2" data-media-start="2" data-track-index="0"></video>
+      <video id="vc" muted data-link="lc" src="video.mp4" data-start="4" data-duration="2" data-media-start="1" data-track-index="0"></video>
     </main>`,
     );
+    const initial = await mcp.read();
+    const existing = { kind: "dip", alignment: "end", duration: 60 } as const;
+    await mcp.result("timeline_edit", {
+      expectedRevision: initial.revision,
+      commands: [
+        {
+          type: "setTransition",
+          from: "va",
+          to: "vb",
+          linked: false,
+          transition: existing,
+        },
+      ],
+    });
     const before = await mcp.read();
     const reply = await mcp.result("timeline_add_transitions", {
-      clipIds: ["a", "b", "c"],
-      scope: "audio",
+      clipIds: ["va", "vb", "vc"],
+      scope: "both",
       expectedRevision: before.revision,
     });
     expect(reply).toMatchObject({
-      measured: { added: 2, skipped: 0, shortened: 0 },
+      measured: { added: 3, kept: 1, skipped: 0, shortened: 0 },
     });
     expect(
       (await mcp.read()).timeline.clips.filter((clip) => clip.transitionIn),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
+    expect(
+      (await mcp.read()).timeline.clips.find(({ id }) => id === "vb")
+        ?.transitionIn,
+    ).toEqual(existing);
     await mcp.result("history_undo", {});
     expect(
       (await mcp.read()).timeline.clips.filter((clip) => clip.transitionIn),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
   } finally {
     await mcp.close();
   }
