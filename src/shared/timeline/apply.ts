@@ -14,6 +14,7 @@ import {
   frames,
   micros,
   positionAtSource,
+  retimedFrames,
   secondsOf,
 } from "./piece";
 import { activeVersion, fitsVersion } from "./versions";
@@ -64,7 +65,7 @@ import { editTransform, hasTransformEdit } from "./transform";
 import { editStyle, takesStyleField } from "./elementStyle";
 import { FREEZE_DIR, localMediaPath, sourceUrl } from "../media";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
-import { editGrade } from "./grade";
+import { canHaveGrade, editGrade } from "./grade";
 import {
   moveKeyframe,
   holdKeyframes,
@@ -966,7 +967,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         };
       }
       if (input.kind === "adjustment") {
-        const { effect, ...edit } = input.region;
+        const region = input.region;
         onCreate(id, { insert: input });
         return {
           ...timeline,
@@ -975,7 +976,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             placed({
               kind: "element",
               adjustment: true,
-              region: editRegion(defaultRegion(effect, fps), edit),
+              region: region
+                ? editRegion(defaultRegion(region.effect, fps), region)
+                : null,
             }),
           ],
         };
@@ -1238,70 +1241,186 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             "unsupported",
             `Clip ${clip.id} has no source timing.`,
           );
-        if (readClipSource(clip).lane)
+        if (command.playbackRate !== undefined && readClipSource(clip).lane)
           throw new TimelineError(
             "unsupported",
             `Clip ${clip.id} has a speed ramp. Change its rate lane in the composition source.`,
           );
       }
-      const selected = readClipSource(target);
-      const anchor = frames(target.start, fps);
-      const previousMap = decode(
-        selected.stored,
-        target.playbackRate,
-        anchor,
-        fps,
-      );
+      const ids = new Set(targets.map(({ id }) => id));
+      const groupStart = Math.min(...targets.map(({ start }) => start));
       const rate = command.playbackRate ?? target.playbackRate;
-      const editedMap = decode(
-        command.mediaStart === undefined
-          ? selected.stored
-          : { mediaStart: Number(attrMicros(command.mediaStart)) },
-        rate,
-        anchor,
+      const startFor = (clip: Clip) =>
+        targets.length === 1 ||
+        command.playbackRate === undefined ||
+        command.playbackRate === clip.playbackRate
+          ? clip.start
+          : groupStart +
+            Math.max(
+              0,
+              retimedFrames(
+                clip.start - groupStart,
+                clip.playbackRate,
+                command.playbackRate,
+                clip.speedSpan?.phase ?? 0,
+              ),
+            );
+      const selected = readClipSource(target);
+      const selectedStart = frames(target.start, fps);
+      const previousMap = selected.lane
+        ? null
+        : decode(selected.stored, target.playbackRate, selectedStart, fps);
+      const anchor = frames(
+        command.playbackRate !== undefined && command.mediaStart === undefined
+          ? groupStart
+          : startFor(target),
         fps,
       );
-      return {
-        ...timeline,
-        clips: clips.map((clip) => {
-          if (!targets.includes(clip)) return clip;
+      const editedMap =
+        previousMap &&
+        decode(
+          command.mediaStart === undefined
+            ? encode(previousMap, target.playbackRate, anchor, fps)
+            : { mediaStart: Number(attrMicros(command.mediaStart)) },
+          rate,
+          anchor,
+          fps,
+        );
+      const sourceShift =
+        command.mediaStart === undefined
+          ? 0
+          : command.mediaStart - target.mediaStart!;
+      const changed = new Map(
+        targets.map((clip) => {
           const playbackRate = command.playbackRate ?? clip.playbackRate;
-          const source = readClipSource(clip);
-          const start = frames(clip.start, fps);
-          if (clip.playbackRate === target.playbackRate) {
-            const current =
-              clip === target
-                ? previousMap
-                : decode(source.stored, clip.playbackRate, start, fps);
-            if (
-              current.c === previousMap.c &&
-              current.zero === previousMap.zero
-            )
-              return {
-                ...clip,
-                playbackRate,
-                ...writeClipSource(source, encode(editedMap, rate, start, fps)),
-              };
-          }
-          // Manually linked sources with different maps keep their existing sync offset.
-          const mediaStart =
-            clip.mediaStart! +
-            (command.mediaStart === undefined
-              ? 0
-              : command.mediaStart - target.mediaStart!) +
-            frameTime(clip.start - target.start, fps) *
-              (playbackRate - clip.playbackRate);
-          return {
-            ...clip,
-            playbackRate,
-            ...retimeClipSource(
-              { ...clip, mediaStart, playbackRate },
-              clip.start,
-              fps,
-            ),
+          const speedChanged = playbackRate !== clip.playbackRate;
+          const head = clip.start - groupStart;
+          const span = clip.speedSpan ?? {
+            frames: clip.duration,
+            rate: clip.playbackRate,
+            phase: 0,
           };
+          const phase = targets.length === 1 ? 0 : span.phase;
+          const source = readClipSource(clip);
+          const current =
+            previousMap &&
+            !source.lane &&
+            clip.playbackRate === target.playbackRate
+              ? clip === target
+                ? previousMap
+                : decode(
+                    source.stored,
+                    clip.playbackRate,
+                    frames(clip.start, fps),
+                    fps,
+                  )
+              : null;
+          const sharesMap =
+            current &&
+            previousMap &&
+            current.c === previousMap.c &&
+            current.zero === previousMap.zero;
+          // Independently aligned partners keep their phase when their head rounds to a frame.
+          const oldOffset = frameTime(head, fps) * clip.playbackRate;
+          const mediaStart = clip.mediaStart! + sourceShift;
+          let start = startFor(clip);
+          let rounding =
+            frameTime(start - groupStart, fps) * playbackRate - oldOffset;
+          if (
+            speedChanged &&
+            !sharesMap &&
+            mediaStart >= 0 &&
+            round6(mediaStart + rounding) < 0
+          ) {
+            // Use the first feasible frame when rounding down would need media before source zero.
+            start += Math.ceil(
+              -(mediaStart + rounding) / frameTime(1, fps) / playbackRate,
+            );
+            rounding =
+              frameTime(start - groupStart, fps) * playbackRate - oldOffset;
+          }
+          const duration = speedChanged
+            ? Math.max(
+                1,
+                groupStart +
+                  retimedFrames(
+                    head,
+                    clip.playbackRate,
+                    playbackRate,
+                    phase,
+                    span,
+                  ) -
+                  start,
+              )
+            : clip.duration;
+          const timing =
+            sharesMap && editedMap
+              ? writeClipSource(
+                  source,
+                  encode(editedMap, rate, frames(start, fps), fps),
+                )
+              : retimeClipSource(
+                  {
+                    ...clip,
+                    mediaStart: mediaStart + rounding,
+                    playbackRate,
+                  },
+                  start,
+                  fps,
+                );
+          const resized = {
+            ...clip,
+            start,
+            duration,
+            playbackRate,
+            ...timing,
+            ...(speedChanged && {
+              speedSpan: {
+                ...span,
+                phase: round6(
+                  phase +
+                    head * clip.playbackRate -
+                    (start - groupStart) * playbackRate,
+                ),
+              },
+            }),
+          };
+          // A rounded duration can overrun the source by one frame.
+          if (
+            speedChanged &&
+            duration > 1 &&
+            framesAfterOut(resized, fps) === -1
+          )
+            resized.duration -= 1;
+          return [clip.id, resized] as const;
         }),
-      };
+      );
+      const retimed = clips.map((clip) => changed.get(clip.id) ?? clip);
+      // Move following clips together by enough to clear every retimed partner's tail.
+      const change = Math.max(
+        ...targets.map(
+          (clip) => clipEnd(changed.get(clip.id)!) - clipEnd(clip),
+        ),
+      );
+      if (!change) return { ...timeline, clips: retimed };
+
+      const edges = new Map(targets.map((clip) => [clip.track, clipEnd(clip)]));
+      const editPoint = (track: number) => edges.get(track) ?? clipEnd(target);
+      const tracks = rippleTracks(timeline, [...edges.keys()]);
+      const next =
+        change < 0
+          ? removeTime(
+              retimed,
+              tracks,
+              (track) => editPoint(track) + change,
+              -change,
+              timeline,
+              mint,
+              ids,
+            )
+          : insertTime(retimed, tracks, editPoint, change, timeline, mint, ids);
+      assertRippleSync(timeline, next, tracks, copies);
+      return { ...timeline, clips: next };
     }
     case "setClip": {
       const target = find(command.clipId);
@@ -1398,10 +1517,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           ? target.region
           : regionFor(target, command.region, fps);
       if (command.grade !== undefined) {
-        if (target.kind !== "video" && target.kind !== "image")
+        if (!canHaveGrade(target.kind, target.adjustment))
           throw new TimelineError(
             "unsupported",
-            `${clipName(target)} is not a video or image, so it has no colour grade.`,
+            `${clipName(target)} has no colour grade.`,
           );
         if (target.sourceRestrictions?.grade)
           throw new TimelineError(
@@ -2624,8 +2743,10 @@ function windowClip(
   const duration = end - start;
   if (duration <= 0) return { ...clip, start, duration };
   const mix = windowMix(clip, start - clip.start, duration, fps, mode);
+  const { speedSpan, ...original } = clip;
   return {
-    ...clip,
+    ...original,
+    ...(duration === clip.duration && speedSpan && { speedSpan }),
     ...mix,
     start,
     duration,

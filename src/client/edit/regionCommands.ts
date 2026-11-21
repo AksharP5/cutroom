@@ -63,8 +63,7 @@ export function addLayerCommands(
   timeline: Timeline,
   destination: Track,
   frame: number,
-  effect: RegionEffect,
-  box: RegionBox,
+  region?: Pick<Region, "effect" | "box">,
 ): CommandInput[] {
   const { range } = timeline;
   const marked =
@@ -104,7 +103,7 @@ export function addLayerCommands(
       type: "insert",
       track,
       at,
-      clip: { kind: "adjustment", duration, region: { effect, box } },
+      clip: { kind: "adjustment", duration, region },
     },
   ];
 }

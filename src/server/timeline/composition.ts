@@ -85,6 +85,7 @@ import {
 } from "./versions";
 import {
   GRADE_ATTRIBUTE,
+  canHaveGrade,
   readGrade,
   writeGrade,
 } from "../../shared/timeline/grade";
@@ -1055,6 +1056,22 @@ export function projectTimeline(
         `Clip ${id} has invalid audio automation. ${error.message}`,
       );
     }
+    const [durationText, rateText, framesText, spanRateText, phaseText] = (
+      element.attrs["data-cutroom-speed-span"] ?? ""
+    ).split(":");
+    const spanFrames = Number(framesText);
+    const spanRate = Number(spanRateText);
+    const phase = Number(phaseText);
+    const speedSpan =
+      Number(durationText) === end - start &&
+      Number(rateText) === playbackRate &&
+      Number.isSafeInteger(spanFrames) &&
+      spanFrames > 0 &&
+      Number.isFinite(spanRate) &&
+      spanRate > 0 &&
+      Number.isFinite(phase)
+        ? { frames: spanFrames, rate: spanRate, phase }
+        : undefined;
     const clip: Clip = {
       id,
       track: read.trackIndex,
@@ -1063,6 +1080,7 @@ export function projectTimeline(
       duration: end - start,
       ...source,
       playbackRate,
+      ...(speedSpan && { speedSpan }),
       src,
       sourceDuration: lengthOf(element),
       hasAudio,
@@ -1126,7 +1144,7 @@ export function projectTimeline(
       transitionIn: edges.in,
       transitionOut: edges.out,
       fx: hasAudio ? readableFx(element.attrs["data-fx-chain"]) : [],
-      grade: gradedKind(kind)
+      grade: canHaveGrade(kind, adjustment)
         ? readableGrade(element.attrs[GRADE_ATTRIBUTE])
         : null,
       enabled:
@@ -1632,6 +1650,18 @@ function clipChanges(
         : "data-media-start",
       String(mediaStart),
     ]);
+  const speedSpan = (clip: Clip) =>
+    clip.speedSpan
+      ? [
+          clip.duration,
+          clip.playbackRate,
+          clip.speedSpan.frames,
+          clip.speedSpan.rate,
+          clip.speedSpan.phase,
+        ].join(":")
+      : null;
+  if (speedSpan(before) !== speedSpan(after))
+    changes.push(["data-cutroom-speed-span", speedSpan(after)]);
   if (before.playbackRate !== after.playbackRate)
     changes.push(["data-playback-rate", String(after.playbackRate)]);
   if (before.x !== after.x || before.y !== after.y)
@@ -2185,9 +2215,6 @@ function textRestriction(
   return undefined;
 }
 
-/** HyperFrames grades pictures: video and image clips. */
-const gradedKind = (kind: Clip["kind"]) => kind === "video" || kind === "image";
-
 /** A clip's grade, or none when Cutroom cannot read it; `sourceRestrictions.grade` says why. */
 const readableGrade = (attribute: string | undefined) => {
   const read = readGrade(attribute);
@@ -2228,7 +2255,7 @@ function sourceRestrictions(
   const transform = isAudioKind(clip.kind) ? undefined : transformRestriction;
   const fx = fxRestriction(element.attrs["data-fx-chain"]);
   const graded = readGrade(element.attrs[GRADE_ATTRIBUTE]);
-  const grade = gradedKind(clip.kind)
+  const grade = canHaveGrade(clip.kind, clip.adjustment)
     ? "restriction" in graded
       ? graded.restriction
       : element.attrs["data-color-group"]
@@ -2410,7 +2437,7 @@ function compositionSize(root: SourceElement) {
   };
 }
 
-/** A new adjustment layer: an empty clip the region stylesheet lays over the frame. */
+/** A new adjustment layer occupies the frame without drawing a picture of its own. */
 function adjustmentMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
   const hidden = mixHides(mix, clip);
   return `<div${attributeMarkup([
@@ -2427,7 +2454,12 @@ function adjustmentMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
     ...(clip.label !== null
       ? [["data-timeline-label", clip.label] as const]
       : []),
-    [REGION_ATTRIBUTE, regionAttribute(clip.region!, fps)],
+    ...(clip.region
+      ? [[REGION_ATTRIBUTE, regionAttribute(clip.region, fps)] as const]
+      : []),
+    ...(clip.grade
+      ? [[GRADE_ATTRIBUTE, writeGrade(clip.grade)!] as const]
+      : []),
   ])}></div>`;
 }
 

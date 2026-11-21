@@ -272,6 +272,113 @@ test("marked export planning refuses links outside the project before copying th
 });
 
 test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "whole and marked MP4s play through a nested audio cut at the expected source sample",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-sample-grid-"));
+    const project = join(root, "project");
+    const workers = createRenderWorkers({ scratchDir: join(root, "scratch") });
+    const fps = { num: 25, den: 1 };
+    try {
+      await mkdir(project);
+      const source = join(project, "source.wav");
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "aevalsrc=0.17*sin(2*PI*(3700*t+2900*t*t))+0.17*sin(2*PI*(7900*t-4100*t*t)):s=48000:d=1",
+        "-c:a",
+        "pcm_s16le",
+        source,
+      ]);
+      await writeFile(
+        join(project, "index.html"),
+        `<!doctype html>
+        <html><body><main data-composition-id="main" data-fps="25" data-duration="0.24"
+          data-width="64" data-height="48" style="background:orange">
+          <div id="mount" data-composition-id="scene" data-composition-src="scene.html"
+            data-start="0.010427" data-duration="0.2" data-width="64" data-height="48"></div>
+        </main></body></html>`,
+      );
+      await writeFile(
+        join(project, "scene.html"),
+        `<template><div data-composition-id="scene"
+        data-fps="24" data-width="64" data-height="48">
+        <audio id="a" src="source.wav" data-start="0.041667" data-duration="0.041667"></audio>
+        <audio id="b" src="source.wav" data-start="0.083333" data-duration="0.041667" data-media-start="0.041667"></audio>
+        </div></template>`,
+      );
+
+      const decoded = async (file: string) => {
+        const bytes = await command([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-i",
+          file,
+          "-vn",
+          "-ac",
+          "1",
+          "-f",
+          "f32le",
+          "pipe:1",
+        ]);
+        return new Float32Array(
+          bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength,
+          ),
+        );
+      };
+      const expected = await decoded(source);
+      for (const range of [null, { start: 1, end: 5 }]) {
+        const name = range ? "marked" : "whole";
+        const path = join(root, `${name}.mp4`);
+        const state = workers.start(
+          {
+            project: { id: name, dir: project },
+            outputPath: path,
+            format: "mp4",
+            fps,
+            quality: "draft",
+            jobId: name,
+          },
+          { filename: `${name}.mp4`, directory: root, range },
+        );
+        const deadline = Date.now() + 45_000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(20);
+        expect(state.error).toBeUndefined();
+        expect(state.status).toBe("complete");
+        // The authored start is 2500.496 samples, and each clip spans 2000
+        // samples. Marking frame 1 removes the first 1920 output samples.
+        const start = range ? 580 : 2500;
+        const result = await decoded(path);
+        for (const [from, to] of [
+          [256, 1700],
+          [2256, 3700],
+        ] as const) {
+          // AAC changes the PCM values. Both halves should still correlate best
+          // at lag zero, against the original samples and all nearby shifts.
+          const atLag = (lag: number) =>
+            correlation(result.subarray(start + lag), expected, from, to);
+          const atZero = atLag(0);
+          expect(atZero).toBeGreaterThan(0.96);
+          for (let lag = -20; lag <= 20; lag++)
+            if (lag !== 0) expect(atZero).toBeGreaterThan(atLag(lag));
+        }
+      }
+    } finally {
+      await workers.cancelAll();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  100_000,
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   "an authored speed ramp keeps its pitch, audio landmarks and group gain in whole and marked MP4s",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "export-ramp-"));

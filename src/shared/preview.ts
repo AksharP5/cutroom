@@ -16,6 +16,7 @@ export const TrackGainPreviewSchema = z.object({
 export type TrackGainPreview = z.infer<typeof TrackGainPreviewSchema>;
 
 export const PreviewStateSchema = z.object({
+  adjustment: z.boolean().optional(),
   mixSignature: z.string().optional(),
   rampPending: z.boolean().optional(),
   rampPrepared: z.boolean().optional(),

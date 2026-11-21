@@ -260,14 +260,14 @@ test("a 200% NTSC camera clip keeps its opacity keys at hour-long timecode", () 
         type: "setKeyframe",
         clipId: "a",
         property: "opacity",
-        frame: 60,
+        frame: 59,
         value: 1,
       },
     ],
     108000,
   );
   expect(fcpxml).toContain('<keyframe time="2703063113/750000s" value="0.5"/>');
-  expect(fcpxml).toContain('<keyframe time="2704564613/750000s" value="1"/>');
+  expect(fcpxml).toContain('<keyframe time="225378299/62500s" value="1"/>');
 });
 
 test("an exact cut time beyond FCPXML's range gives an actionable export error", () => {
@@ -288,7 +288,7 @@ test("an exact cut time beyond FCPXML's range gives an actionable export error",
           type: "setKeyframe",
           clipId: "a",
           property: "opacity",
-          frame: 60,
+          frame: 59,
           value: 1,
         },
       ],
