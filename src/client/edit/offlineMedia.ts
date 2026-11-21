@@ -6,13 +6,33 @@ import { fileMissing, useWorkspace } from "../workspace";
 import { useTimeline } from "./timeline";
 import { previewImageSources, useVariables } from "./variables";
 
+const offlinePaths = new WeakMap<
+  Readonly<Record<string, string | null>>,
+  Map<string, Map<string, string | null>>
+>();
+
 export function offlineMediaPath(
   files: Readonly<Record<string, string | null>>,
   composition: string,
   src: string | null,
 ) {
-  const path = src && previewMediaPath(composition, src, files);
-  return path && fileMissing(files, composition, path) ? path : null;
+  if (!src) return null;
+  let compositions = offlinePaths.get(files);
+  if (!compositions) {
+    compositions = new Map();
+    offlinePaths.set(files, compositions);
+  }
+  let sources = compositions.get(composition);
+  if (!sources) {
+    sources = new Map();
+    compositions.set(composition, sources);
+  }
+  const cached = sources.get(src);
+  if (cached !== undefined) return cached;
+  const path = previewMediaPath(composition, src, files);
+  const offline = path && fileMissing(files, composition, path) ? path : null;
+  sources.set(src, offline);
+  return offline;
 }
 
 /** One entry per missing file on the open timeline, at its earliest clip. */
