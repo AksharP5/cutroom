@@ -1383,11 +1383,13 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               },
             }),
           };
-          if (speedChanged)
-            resized.duration = Math.max(
-              1,
-              duration + Math.min(0, framesAfterOut(resized, fps)),
-            );
+          // A rounded duration can overrun the source by one frame.
+          if (
+            speedChanged &&
+            duration > 1 &&
+            framesAfterOut(resized, fps) === -1
+          )
+            resized.duration -= 1;
           return [clip.id, resized] as const;
         }),
       );
