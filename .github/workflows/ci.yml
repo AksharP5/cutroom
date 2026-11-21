@@ -63,8 +63,22 @@ jobs:
         run: bun run check
       - if: matrix.suite == 'checks'
         run: bun test
-      - if: matrix.shard
-        run: bun run test:e2e --shard=${{ matrix.shard }} --reporter=list
+      - name: Run browser shard
+        if: matrix.shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          # These eight tests took over seven minutes together in shard 3.
+          # Give them to shard 1, which has the most headroom.
+          transition_tests="$RUNNER_TEMP/transition-tests.txt"
+          printf '%s\n' transition-frames.spec.ts > "$transition_tests"
+          reporter=list,./e2e/teardown-watchdog.ts
+          budget=1500000
+          if [[ "$SHARD" == 1/3 ]]; then budget=960000; fi
+          bun run test:e2e --shard="$SHARD" --test-list-invert="$transition_tests" --reporter="$reporter" --global-timeout="$budget"
+          if [[ "$SHARD" == 1/3 ]]; then
+            bunx playwright test --grep-invert @performance --test-list="$transition_tests" --reporter="$reporter" --global-timeout=660000
+          fi
       - if: matrix.suite == 'performance'
         run: bun run test:perf --reporter=list
       - uses: actions/upload-artifact@v4
