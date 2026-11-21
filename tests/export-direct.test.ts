@@ -761,3 +761,85 @@ ${clips.join("\n")}
   },
   300_000,
 );
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "direct adjustment grades match capture after clip colour and placement",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-adjustment-"));
+    const scratchDir = `${root}-scratch`;
+    const direct = createRenderWorkers({ scratchDir });
+    const capture = createRenderWorkers({ scratchDir, directExport: false });
+    const fps = { num: 30, den: 1 };
+    const range = { start: 8, end: 14 };
+    try {
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        `color=0xb25580:s=${WIDTH}x${HEIGHT}:r=30:d=1`,
+        "-vf",
+        BT709,
+        "-threads",
+        "2",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        join(root, "plate.mp4"),
+      ]);
+      await writeFile(
+        join(root, "index.html"),
+        `<!doctype html><html><head><style>html,body{margin:0;width:100%;height:100%;background:#30a060}main{position:relative;width:100%;height:100%}</style></head><body><main data-composition-id="main" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="1" data-fps="30">
+  <video id="plate" muted src="plate.mp4" data-start="0" data-duration="1" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;scale:0.8;opacity:0.6" data-color-grading='{"adjust":{"exposure":0.5}}'></video>
+  <div id="lift" class="clip" data-start="0.2" data-duration="0.6" data-track-index="1" data-cutroom-adjustment data-color-grading='{"adjust":{"temperature":-0.3}}'></div>
+  <div id="look" class="clip" data-start="0.2" data-duration="0.6" data-track-index="2" data-cutroom-adjustment data-color-grading='{"adjust":{"contrast":0.5}}'></div>
+</main></body></html>`,
+      );
+      const outputs: string[] = [];
+      for (const [name, workers] of [
+        ["direct", direct],
+        ["capture", capture],
+      ] as const) {
+        const filename = name + ".mp4";
+        const state = workers.start(
+          {
+            project: { id: name, dir: root },
+            outputPath: join(root, filename),
+            format: "mp4",
+            fps,
+            quality: "high",
+            jobId: name,
+          },
+          { filename, directory: root, range },
+        );
+        const deadline = Date.now() + 20_000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(50);
+        expect(state.error).toBeUndefined();
+        expect(state.renderer).toBe(name);
+        outputs.push(state.outputPath);
+      }
+      const [fast, browser] = await Promise.all(outputs.map(decode));
+      const samples = [
+        [12, 12],
+        [WIDTH / 2, HEIGHT / 2],
+      ];
+      for (const [x, y] of samples) {
+        const offset = (y! * WIDTH + x!) * 3;
+        for (let channel = 0; channel < 3; channel++)
+          expect(
+            Math.abs(fast![offset + channel]! - browser![offset + channel]!),
+          ).toBeLessThanOrEqual(6);
+      }
+    } finally {
+      await Promise.all([direct.cancelAll(), capture.cancelAll()]);
+      await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
+    }
+  },
+  45_000,
+);
