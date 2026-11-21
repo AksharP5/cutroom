@@ -985,6 +985,32 @@ test("a queued edit to a title still applies after the server answers with a new
   expect(anchorsChanged(anchors, titled({ color: "#ff0000" }))).toBe(true);
 });
 
+test("a queued ripple delete survives a read of the same dissolve", () => {
+  const timeline = sequence();
+  const dissolve = {
+    kind: "dissolve",
+    alignment: "center",
+    duration: 12,
+  } as const;
+  const withDissolve = (duration: number): Timeline => ({
+    ...timeline,
+    clips: timeline.clips.map((clip) => {
+      if (clip.id === "a")
+        return { ...clip, transitionOut: { ...dissolve, duration } };
+      if (clip.id === "b")
+        return { ...clip, transitionIn: { ...dissolve, duration } };
+      return clip;
+    }),
+  });
+  const shown = withDissolve(12);
+  const commands = [
+    CommandSchema.parse({ type: "remove", clipIds: ["a"], ripple: true }),
+  ];
+  const anchors = editAnchors(shown, applyAll(shown, commands), commands);
+  expect(anchorsChanged(anchors, withDissolve(12))).toBe(false);
+  expect(anchorsChanged(anchors, withDissolve(16))).toBe(true);
+});
+
 test("a dragged volume point stays a frame from its neighbours and its gain follows the line under the pointer", () => {
   const timeline = sequence();
   const automation = JSON.stringify({

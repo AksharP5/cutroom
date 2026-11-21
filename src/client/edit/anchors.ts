@@ -1,6 +1,7 @@
 import { clipEnd } from "../../shared/timeline/apply";
 import { sameTitle } from "../../shared/timeline/title";
 import { sameStyle } from "../../shared/timeline/elementStyle";
+import { sameTransition } from "../../shared/timeline/transition";
 import { sameRegion } from "../../shared/timeline/region";
 import type {
   Clip,
@@ -31,6 +32,8 @@ function sameClip(seen: Clip, clip: Clip | undefined) {
     if (key === "title") return sameTitle(seen.title, clip.title);
     if (key === "style") return sameStyle(seen.style, clip.style);
     if (key === "region") return sameRegion(seen.region, clip.region);
+    if (key === "transitionIn" || key === "transitionOut")
+      return seen[key] === clip[key] || sameTransition(seen[key], clip[key]);
     if (key === "fx" || key === "grade")
       return JSON.stringify(seen[key]) === JSON.stringify(clip[key]);
     return seen[key] === clip[key];
