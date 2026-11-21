@@ -995,6 +995,11 @@ export function createReviewService(store: ProjectStore) {
         }
         const versions = await versionsFor(project, paths);
         const selections = new Map<Entry, Set<number>>();
+        // Accept All also settles rows whose clip is back as it was before the agent, such as a clip
+        // an agent made and later removed. They show nothing to accept, but unsettled they would
+        // stay in the ledger forever.
+        const settled = new Map<Entry, Set<number>>();
+        const all = editId === undefined && !groupMembers;
         let count = 0;
         for (const entry of entries) {
           if (entry.by !== "agent" || entry.accepted === true) continue;
@@ -1004,10 +1009,17 @@ export function createReviewService(store: ProjectStore) {
               !pending(member) ||
               !versions.has(path) ||
               (editId !== undefined && memberId(member) !== editId) ||
-              (groupMembers && !groupMembers.has(memberId(member))) ||
-              sourceResolved(member, versions.get(path)?.get(clipId))
+              (groupMembers && !groupMembers.has(memberId(member)))
             )
               continue;
+            if (sourceResolved(member, versions.get(path)?.get(clipId))) {
+              if (all)
+                settled.set(
+                  entry,
+                  (settled.get(entry) ?? new Set()).add(member.ordinal),
+                );
+              continue;
+            }
             const selected = selections.get(entry);
             if (selected) selected.add(member.ordinal);
             else selections.set(entry, new Set([member.ordinal]));
@@ -1016,8 +1028,8 @@ export function createReviewService(store: ProjectStore) {
         }
         if (editId !== undefined && count === 0)
           throw new HttpError(409, "This change is no longer pending review.");
-        if (count) {
-          acceptMembers(ledger, selections);
+        if (count || settled.size) {
+          acceptMembers(ledger, selections, settled);
           await writeState(project, { ...state, ledger });
         }
         return count;

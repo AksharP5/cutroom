@@ -471,17 +471,23 @@ function memberCount(entry: Entry) {
   );
 }
 
-/** Earlier acceptances establish the accepted bytes for later pending work on that target. */
+/**
+ * Earlier acceptances establish the accepted bytes for later pending work on that target.
+ * `settled` rows are marked accepted without that: their clip is back to its state before the
+ * agent, so their after bytes say nothing about later work.
+ */
 export function acceptMembers(
   ledger: Ledger,
   selections: ReadonlyMap<Entry, ReadonlySet<number>>,
+  settled: ReadonlyMap<Entry, ReadonlySet<number>> = new Map(),
 ) {
-  if (!selections.size) return;
+  if (!selections.size && !settled.size) return;
   const baselines = new Map<number, string>();
   ledger.edits = ledger.edits.map((entry) => {
     if (entry.accepted === true || entry.by === "human") return entry;
     const selected = selections.get(entry);
-    if (!selected && !baselines.size) return entry;
+    const quiet = settled.get(entry);
+    if (!selected && !quiet && !baselines.size) return entry;
     const accepted = new Set(entry.accepted);
     const before = { ...entry.before };
     let changed = false;
@@ -490,6 +496,11 @@ export function acceptMembers(
       if (selected?.has(member.ordinal)) {
         if (comparable(member))
           baselines.set(member.index, afterSignature(member)!);
+        accepted.add(member.ordinal);
+        changed = true;
+        continue;
+      }
+      if (quiet?.has(member.ordinal)) {
         accepted.add(member.ordinal);
         changed = true;
         continue;

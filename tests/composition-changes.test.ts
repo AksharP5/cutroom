@@ -579,3 +579,30 @@ test("an older build's multi-edit review.json moves to the ledger once, even whe
     await f.close();
   }
 });
+
+test("Accept All settles the rows of a clip an agent added and then removed, so they can leave the ledger", async () => {
+  const f = await setup();
+  try {
+    const added = source.replace(
+      clip("caption"),
+      `${clip("caption")}${clip("extra")}`,
+    );
+    await f.save(added);
+    await f.save(source);
+    const before = await f.read();
+    // Back as it was before the agent: nothing to accept, and nothing settled yet.
+    expect(before.agentChanges).not.toContain("extra");
+    expect(before.clipEdits.filter((edit) => edit.clipId === "extra")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ accepted: false, resolution: "source" }),
+      ]),
+    );
+    await f.review.acceptChanges(f.project);
+    const after = await f.read();
+    const extra = after.clipEdits.filter((edit) => edit.clipId === "extra");
+    expect(extra.length).toBeGreaterThan(0);
+    expect(extra.every((edit) => edit.accepted)).toBe(true);
+  } finally {
+    await f.close();
+  }
+});
