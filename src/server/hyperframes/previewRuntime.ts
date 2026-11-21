@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { getHyperframeRuntimeScript } from "@hyperframes/core/runtime-script";
 import { z } from "zod";
+import { rampRuntime } from "./rampRuntime";
 
 let script: string | undefined;
 
@@ -19,7 +20,7 @@ export function previewRuntimeScript() {
       ),
     ),
   );
-  const source = getHyperframeRuntimeScript();
+  const source = rampRuntime(getHyperframeRuntimeScript());
   const before = "a&&O.length===0&&c.some($=>$.param===a.param)&&QW(a,C)";
   // Live preview seeds a lane at the playhead, then ramps each straight segment to its end. A
   // Web Audio ramp starts at the previous event, so a first point after the playhead was ramped

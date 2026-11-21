@@ -1,4 +1,7 @@
-import { PipelineResponseSchema } from "../../shared/pipeline";
+import {
+  FOOTAGE_PIXEL_LIMIT,
+  PipelineResponseSchema,
+} from "../../shared/pipeline";
 import type { FootageColour, PipelinePlan } from "../../shared/pipeline";
 import type { TimelineView } from "../../shared/timeline/schema";
 import { localMediaPath } from "../../shared/media";
@@ -94,6 +97,10 @@ async function openSource(
 ) {
   const { read, size } = await openRanges(url, signal);
   const track = await readVideoTrack(read, size);
+  if (!scrubProxy && track.width * track.height > FOOTAGE_PIXEL_LIMIT)
+    throw new Error(
+      `The playing file is ${track.width} × ${track.height}, above the pipeline's 1080p limit.`,
+    );
   if (!(await SourceDecoder.supported(track)))
     throw new Error(`This browser cannot decode ${track.codec}.`);
   const turned = track.rotation % 180 !== 0;

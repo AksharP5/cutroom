@@ -1020,10 +1020,11 @@ test("paused timing and gain edits update one document, including both in one ed
     await expect(stage).toHaveAttribute("data-preview-ready");
     expect(await document()).toBe(origin);
   };
+  // Half-frame ties settle to the nearest writable in-point on the source line.
   await changed([{ type: "setTiming", clipId: "bed-1", mediaStart: 0.25 }]);
   await expect(live.locator("#bed-1")).toHaveAttribute(
     "data-media-start",
-    "0.25",
+    "0.250001",
   );
   await changed([{ type: "setTrack", index: 2, volume: 0.5 }]);
   await expect(bus).toHaveAttribute("data-volume", "0.5");
@@ -1039,7 +1040,7 @@ test("paused timing and gain edits update one document, including both in one ed
   ]);
   await expect(live.locator("#bed-1")).toHaveAttribute(
     "data-media-start",
-    "0.75",
+    "0.750001",
   );
   await expect(bus).toHaveAttribute("data-volume", "0.25");
 });
@@ -1058,7 +1059,7 @@ test("script-free timing edits and track gain keep the preview's sound in sync",
   await edit([{ type: "setTiming", clipId: "bed-1", mediaStart: 0.25 }]);
   await expect(live.locator("#bed-1")).toHaveAttribute(
     "data-media-start",
-    "0.25",
+    "0.250001",
   );
   await expect(stage).toHaveAttribute("data-preview-ready");
   await expect(stage).not.toHaveAttribute("data-preview-ready", token!);
