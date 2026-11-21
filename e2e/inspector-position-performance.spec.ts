@@ -9,6 +9,7 @@ interface MeasuredWindow extends Window {
     observations: { start: number; duration: number }[];
     boxes: number[];
     frames: number[];
+    startedAt: number;
     running: boolean;
     observer: PerformanceObserver;
   };
@@ -109,6 +110,7 @@ test(
       mode: "playback" | "scrub";
       selected: boolean;
       interval: number;
+      windowMs: number;
       observations: MeasuredWindow["positionPerf"]["observations"];
       boxes: number[];
       frames: number[];
@@ -152,6 +154,7 @@ test(
           observations: [] as { start: number; duration: number }[],
           boxes: [] as number[],
           frames: [] as number[],
+          startedAt: performance.now(),
           running: true,
           observer: new PerformanceObserver((list) => {
             for (const entry of list.getEntries())
@@ -166,7 +169,7 @@ test(
         };
         stats.observer.observe({ type: "measure" });
         Object.assign(window, { positionPerf: stats });
-        let previous = performance.now();
+        let previous = stats.startedAt;
         const sample = () => {
           const now = performance.now(); // Actual callback entry, not rAF's scheduled timestamp.
           stats.frames.push(now - previous);
@@ -208,6 +211,7 @@ test(
         stats.running = false;
         stats.observer.disconnect();
         return {
+          windowMs: performance.now() - stats.startedAt,
           observations: stats.observations,
           boxes: stats.boxes,
           frames: stats.frames.slice(1),
@@ -239,6 +243,9 @@ test(
           mode,
           selected,
           observations: sum(runs.map((result) => result.observations.length)),
+          observationsPerSecond: runs.map(
+            (result) => (result.observations.length * 1000) / result.windowMs,
+          ),
           maxObservation: Math.max(
             ...runs.map((result) => result.maxObservation),
           ),
@@ -303,12 +310,12 @@ test(
         expect(result.boxes.length).toBeLessThanOrEqual(
           result.mode === "playback" ? 6 : result.frames.length * 2 + 4,
         );
-        expect(result.observations.length).toBeGreaterThanOrEqual(
-          result.mode === "playback" ? 6 : 1,
-        );
-        expect(result.observations.length).toBeLessThanOrEqual(
-          result.mode === "playback" ? 10 : result.frames.length + 2,
-        );
+        if (result.mode === "scrub") {
+          expect(result.observations.length).toBeGreaterThanOrEqual(1);
+          expect(result.observations.length).toBeLessThanOrEqual(
+            result.frames.length + 2,
+          );
+        }
       }
     }
     // Like #63, tolerate one scheduling outlier without hiding a repeated expensive read.
@@ -327,6 +334,21 @@ test(
       summary.find(
         (result) => result.mode === "playback" && result.selected === selected,
       )!;
+    const rates = playback(true).observationsPerSecond;
+    // The bridge polls every 350 ms and also checks at transport changes.
+    // Use the time the preview actually spent collecting reads, including those checks.
+    expect(
+      Math.min(...rates),
+      "playback: fewest observations per second",
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      Math.max(...rates),
+      "playback: most observations per second",
+    ).toBeLessThanOrEqual(5);
+    expect(
+      median(rates),
+      "playback: median observations per second",
+    ).toBeLessThan(4);
     expect(
       playback(true).lateRate - playback(false).lateRate,
       "playback: added late-frame rate",
