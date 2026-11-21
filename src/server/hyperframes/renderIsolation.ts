@@ -1,3 +1,4 @@
+import { rampRuntime } from "./rampRuntime.ts";
 import { readFileSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
 import { registerHooks } from "node:module";
@@ -5,6 +6,7 @@ import { join } from "node:path";
 import { COLOR_GRADING_SOURCE_HIDDEN_ATTR } from "@hyperframes/core/color-grading";
 import { MEDIA_TRASH } from "../../shared/media.ts";
 import { adjustmentCapture } from "./adjustmentCapture.ts";
+import { spanIndex } from "../../shared/timeline/spanIndex.ts";
 import { previewPolicy } from "./isolation.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
 import type { RenderJob } from "@hyperframes/producer";
@@ -228,7 +230,7 @@ function replaceOnce(
 /** Frame injection supplies the decoded pixels. The source element still owns opacity. */
 export function renderGradeRuntime(source: string, adjustment = false) {
   const adapted = replaceOnce(
-    source,
+    rampRuntime(source),
     'i=r&&!n;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=a.opacity||"1"',
     'i=r;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=(n?window.getComputedStyle(e.element):a).opacity||"1"',
     "the colour grading runtime",
@@ -241,7 +243,7 @@ export function renderGradeRuntime(source: string, adjustment = false) {
   const style = document.createElement("style");
   style.textContent = ${JSON.stringify(hideGradedFrame)};
   document.head.append(style);
-${adjustment ? "window.__cutroomAdjustmentCapture = (" + adjustmentCapture.toString() + ")();" : ""}
+${adjustment ? "window.__cutroomAdjustmentCapture = (" + adjustmentCapture.toString() + ")(" + spanIndex.toString() + ");" : ""}
 }`;
 }
 
@@ -255,6 +257,7 @@ export function registerRenderIsolation(
     scratchDir: string;
     projectDir: string;
     scopedMedia?: boolean;
+    fullChromaJpeg?: boolean;
   },
   adjustment = false,
 ) {
@@ -379,11 +382,24 @@ export function registerRenderIsolation(
           "return [...cutroomColour(metadata), SDR_CANVAS_PASSTHROUGH_FILTER];",
           url,
         );
-        // Frames cached before the conversion keep their old colours otherwise.
+        if (range?.fullChromaJpeg) {
+          // Keep the source chroma grid sharp as it expands to RGB. The JPEG
+          // then keeps all of that chroma until Chromium composites the frame.
+          source = replaceOnce(
+            source,
+            "scale=flags=neighbor+accurate_rnd,format=gbrp,scale=out_color_matrix=bt601:out_range=pc:flags=neighbor,format=yuv420p",
+            "scale=flags=neighbor+accurate_rnd+full_chroma_int,format=gbrp,scale=out_color_matrix=bt601:out_range=pc:flags=bicubic+accurate_rnd,format=yuv444p",
+            url,
+          );
+        }
+        // Cache entries must carry the colour transform and the JPEG layout.
         source = replaceOnce(
           source,
           '            work.finalFrameOnly ? "final-frame" : undefined,\n',
-          '            work.finalFrameOnly ? "final-frame" : undefined,\n            ...cutroomColour(work.metadata).filter((filter) => filter.startsWith("colorspace=")),\n',
+          `            work.finalFrameOnly ? "final-frame" : undefined,\n            ...cutroomColour(work.metadata).filter((filter) => filter.startsWith("colorspace=")),\n` +
+            (range?.fullChromaJpeg
+              ? '            work.format === "jpg" ? "cutroom-jpeg444" : undefined,\n'
+              : ""),
           url,
         );
         if (range?.range) {

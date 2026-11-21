@@ -324,11 +324,11 @@ test("the adjustment is drawn after the lower footage and only across its interv
   const { timeline } = parseComposition(html, emptyTimelineSettings());
   const frame = frameLayersAt(timeline, plan, 45)!;
   expect(frame.pictures.map(({ clip }) => clip.id)).toEqual(["a", "broll"]);
-  expect(frame.adjustments.map(({ clip, after }) => [clip.id, after])).toEqual([
-    ["look", 2],
-  ]);
-  expect(frameLayersAt(timeline, plan, 29)?.adjustments).toEqual([]);
-  expect(frameLayersAt(timeline, plan, 75)?.adjustments).toEqual([]);
+  expect(frame.adjustments?.map(({ clip, after }) => [clip.id, after])).toEqual(
+    [["look", 2]],
+  );
+  expect(frameLayersAt(timeline, plan, 29)?.adjustments).toBeUndefined();
+  expect(frameLayersAt(timeline, plan, 75)?.adjustments).toBeUndefined();
 });
 
 test("playback prepares clips that come back into view, not only clips that start", () => {

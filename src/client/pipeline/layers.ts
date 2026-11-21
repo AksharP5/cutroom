@@ -26,7 +26,7 @@ type ShownAdjustment = {
 
 type FrameLayers = {
   pictures: Shown[];
-  adjustments: ShownAdjustment[];
+  adjustments?: ShownAdjustment[];
 };
 
 /**
@@ -80,7 +80,9 @@ function layerQuery(
   };
   // The lookahead visits every frame in the window. Prepare its metadata and candidate
   // intervals once; ownership still sees the whole timeline, including clips outside it.
-  const candidates: { clip: Clip; first: number; end: number }[] = [];
+  type Candidate = { clip: Clip; first: number; end: number };
+  const candidates: Candidate[] = [];
+  let adjustmentCandidates: Candidate[] | undefined;
   for (const clip of timeline.clips) {
     if (isAudioKind(clip.kind) || !clip.enabled || off.has(clip.track))
       continue;
@@ -97,22 +99,22 @@ function layerQuery(
       (clip.transitionOut ? framesAfter(clip.transitionOut) : 0) +
       pad;
     if (end <= from || first > to) continue;
+    if (clip.adjustment) {
+      if (clip.grade || clip.id === draftClip) {
+        (adjustmentCandidates ??= []).push({ clip, first, end });
+        continue;
+      }
+      if (!clip.region) continue;
+    }
     candidates.push({ clip, first, end });
   }
   return (frame: number): FrameLayers | null => {
     const shown: (Shown & { level: number; index: number })[] = [];
     const hyperframes: { level: number; index: number; track: number }[] = [];
-    const adjustments: Clip[] = [];
     for (const { clip, first, end } of candidates) {
       if (frame < first || frame >= end) continue;
       const level = plan.trackZ[String(clip.track)] ?? 0;
       const index = order.get(clip.id) ?? Infinity;
-      if (clip.adjustment && (clip.grade || clip.id === draftClip)) {
-        if (clip.region || fractional.has(clip.id)) return null;
-        adjustments.push(clip);
-        continue;
-      }
-      if (clip.adjustment && !clip.region) continue;
       const fit = clip.kind === "video" ? ownerOf(clip) : "hyperframes";
       if (!fit) return null;
       if (fit === "hyperframes") {
@@ -195,10 +197,12 @@ function layerQuery(
     const pictures = shown
       .sort((a, b) => a.level - b.level || a.index - b.index)
       .map(({ level: _level, index: _index, ...rest }) => rest);
-    if (!adjustments.length) return { pictures, adjustments: [] };
+    if (!adjustmentCandidates) return { pictures };
 
-    const graded: ShownAdjustment[] = [];
-    for (const clip of adjustments.sort((a, b) => a.track - b.track)) {
+    let graded: ShownAdjustment[] | undefined;
+    for (const { clip, first, end } of adjustmentCandidates) {
+      if (frame < first || frame >= end) continue;
+      if (clip.region || fractional.has(clip.id)) return null;
       // An HTML layer beneath the adjustment needs the native compositor, as does a
       // stacking order that cannot put the track boundary between two pipeline pictures.
       if (hyperframes.some((other) => other.track < clip.track)) return null;
@@ -210,8 +214,9 @@ function layerQuery(
         pictures.slice(after).some((picture) => picture.clip.track < clip.track)
       )
         return null;
-      graded.push({ clip, after });
+      (graded ??= []).push({ clip, after });
     }
+    graded?.sort((a, b) => a.clip.track - b.clip.track);
     return { pictures, adjustments: graded };
   };
 }
@@ -243,7 +248,7 @@ function visible(all: FrameLayers | null): FrameLayers | null {
   return {
     pictures: all.pictures.slice(covering),
     adjustments: all.adjustments
-      .filter(({ after }) => after > covering)
+      ?.filter(({ after }) => after > covering)
       .map(({ clip, after }) => ({ clip, after: after - covering })),
   };
 }

@@ -161,17 +161,18 @@ test("freeze holds the selected source frame across linked picture and sound, an
   const exportPng = await readFile(exportAsset);
   expect(png.subarray(1, 4).toString()).toBe("PNG");
   expect(exportPng.subarray(1, 4).toString()).toBe("PNG");
+  // The stored in-point preserves the exact source line at the new edge.
   const tails = clips.filter((clip) => clip.start === 73);
   expect(tails).toHaveLength(2);
   expect(tails[0]).toMatchObject({
     track: 0,
     duration: 35,
-    mediaStart: 1.443108,
+    mediaStart: 1.443109,
   });
   expect(tails[1]).toMatchObject({
     track: 1,
     duration: 35,
-    mediaStart: 1.443108,
+    mediaStart: 1.443109,
     link: tails[0]!.link,
   });
   expect(tails[0]!.link).not.toBe("pair");

@@ -834,6 +834,7 @@ export function connectPreview(
       return state;
     },
     resize() {
+      if (!state.adjustment) return;
       const bounds = frame.getBoundingClientRect();
       const scale = Math.min(
         bounds.width / frame.clientWidth,

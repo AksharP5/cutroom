@@ -439,12 +439,9 @@ export const LutInfoSchema = z.object({
 export type LutInfo = z.infer<typeof LutInfoSchema>;
 
 /** Pictures own a grade. An adjustment grades the composited tracks beneath it. */
-export function canHaveGrade({
-  kind,
-  adjustment,
-}: Pick<Clip, "kind" | "adjustment">) {
+export function canHaveGrade(kind: Clip["kind"], adjustment: boolean) {
   return adjustment || kind === "video" || kind === "image";
 }
 
 export const takesGrade = (clip: Clip) =>
-  canHaveGrade(clip) && !clip.sourceRestrictions?.grade;
+  canHaveGrade(clip.kind, clip.adjustment) && !clip.sourceRestrictions?.grade;

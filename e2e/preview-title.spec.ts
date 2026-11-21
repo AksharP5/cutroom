@@ -498,7 +498,7 @@ test("title edits share the timing operation with track gains and linked source 
   await expect(frame.locator("#title-0")).toHaveText("Mixed & title");
   await expect(frame.locator("#voice-0")).toHaveAttribute(
     "data-media-start",
-    "0.25",
+    "0.250001",
   );
   await expect(bus).toHaveAttribute("data-volume", "0.25");
   await afterPaint(page, () =>

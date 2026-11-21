@@ -9,6 +9,8 @@ import {
 } from "../src/shared/timeline/apply";
 import type { ClipOrigin } from "../src/shared/timeline/apply";
 import { CommandSchema } from "../src/shared/timeline/schema";
+import { resolveClip } from "../src/shared/timeline/clipTiming";
+import { encode, frames } from "../src/shared/timeline/piece";
 import { editLabel } from "../src/shared/timeline/labels";
 import { countingIds } from "./clip-ids";
 import { syncOffsets } from "../src/shared/timeline/sync";
@@ -1240,7 +1242,7 @@ test("moves overwrite partial and full clips without rippling or changing the mo
     later: [0, 210, 30],
   });
   expect(result.clips.find((item) => item.id === "tail")?.mediaStart).toBe(
-    4 + 1 / 3,
+    4.333333,
   );
   expect(result.clips.find((item) => item.id === "moving")).toMatchObject({
     mediaStart: 2,
@@ -2223,7 +2225,7 @@ test("slide moves a clip between its neighbours, which trim to follow with their
   const source = Object.fromEntries(
     slid.clips.map((item) => [item.id, item.mediaStart]),
   );
-  expect([source.a, source.b, source.c]).toEqual([0, 1, 3 + 10 / 30]);
+  expect([source.a, source.b, source.c]).toEqual([0, 1, 3.333333]);
   expect(() => run(state, { type: "slide", clipIds: ["b"], by: 30 })).toThrow(
     "talk.mp4 can slide at most 29 frames later: then clip c would be shorter than one frame.",
   );
@@ -2308,7 +2310,7 @@ test("slide trims each neighbour's linked sound with its picture, and the sound'
   const source = Object.fromEntries(
     slid.clips.map((item) => [item.id, item.mediaStart]),
   );
-  expect([source.c, source["c-sound"]]).toEqual([2 + 10 / 30, 2 + 10 / 30]);
+  expect([source.c, source["c-sound"]]).toEqual([2.333333, 2.333333]);
   // The sound has less source after its out point than the picture.
   const short = timeline(
     interview().clips.map((item) =>
@@ -2355,7 +2357,7 @@ test("clips next to each other slide as one block, and a clip between them refus
   });
   const [a, b, c] = slid.clips.map((item) => item.mediaStart!);
   expect([a, b]).toEqual([1, 3]);
-  expect(c).toBeCloseTo(6 + 5 / 30, 9);
+  expect(c).toBe(6.166667);
   expect(() =>
     run(state, { type: "slide", clipIds: ["a", "c"], by: 5 }),
   ).toThrow(
@@ -2470,4 +2472,75 @@ test("link needs two different clips", () => {
   expect(() => run(apart, { type: "link", clipIds: ["a", "a"] })).toThrow(
     "Linking takes two or more different clips.",
   );
+});
+
+test("setTiming keeps matching linked source maps across 636 in-points and 3,816 speed changes", () => {
+  const map = (clip: Clip, fps: Timeline["fps"]) => {
+    const { c, tau, zero } = resolveClip(clip, fps);
+    return { c, tau, zero };
+  };
+  const rates = [24, 25, 30, 50, 60].map((num) => ({ num, den: 1 }));
+  rates.push({ num: 30_000, den: 1001 });
+  let inPoints = 0;
+  let speedChanges = 0;
+  for (const fps of rates) {
+    const source = { c: -1000, tau: 0, zero: 0 };
+    const inPoint = (start: number) =>
+      encode(source, 1, frames(start, fps), fps).mediaStart / 1e6;
+    const picture = clip("picture", 0, 120, 120, {
+      link: "pair",
+      mediaStart: inPoint(120),
+    });
+    for (let offset = -53; offset <= 53; offset++) {
+      if (offset === 0) continue;
+      const soundStart = picture.start + offset;
+      const sound = clip("sound", 1, soundStart, 130, {
+        kind: "audio",
+        link: "pair",
+        mediaStart: inPoint(soundStart),
+      });
+      const state = { ...timeline([picture, sound], avTracks), fps };
+      const slip = run(state, {
+        type: "setTiming",
+        clipId: "picture",
+        mediaStart: 4.25,
+      });
+      expect(map(slip.clips[1], fps)).toEqual(map(slip.clips[0], fps));
+      inPoints++;
+      for (const playbackRate of [0.5, 0.75, 1.03125, 1.5, 2, 3.333333]) {
+        const speed = run(state, {
+          type: "setTiming",
+          clipId: "picture",
+          playbackRate,
+        });
+        expect(map(speed.clips[1], fps)).toEqual(map(speed.clips[0], fps));
+        speedChanges++;
+      }
+    }
+  }
+  expect({ inPoints, speedChanges }).toEqual({
+    inPoints: 636,
+    speedChanges: 3816,
+  });
+});
+
+test("setTiming preserves the in-point offset of a separately aligned linked source", () => {
+  const state = timeline(
+    [
+      clip("picture", 0, 0, 30, { link: "pair", mediaStart: 1 }),
+      clip("sound", 1, 0, 30, {
+        kind: "audio",
+        link: "pair",
+        src: "room.wav",
+        mediaStart: 2,
+      }),
+    ],
+    avTracks,
+  );
+  const edited = run(state, {
+    type: "setTiming",
+    clipId: "picture",
+    mediaStart: 1.5,
+  });
+  expect(edited.clips.map(({ mediaStart }) => mediaStart)).toEqual([1.5, 2.5]);
 });

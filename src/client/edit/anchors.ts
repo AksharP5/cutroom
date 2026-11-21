@@ -1,40 +1,51 @@
 import { clipEnd } from "../../shared/timeline/apply";
-import { sameTitle } from "../../shared/timeline/title";
-import { sameStyle } from "../../shared/timeline/elementStyle";
-import { sameRegion } from "../../shared/timeline/region";
 import type {
   Clip,
   CommandInput,
   Timeline,
 } from "../../shared/timeline/schema";
 
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (
+    a === null ||
+    b === null ||
+    typeof a !== "object" ||
+    typeof b !== "object"
+  )
+    return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  return (
+    Object.keys(a).every((key) =>
+      sameValue(Reflect.get(a, key), Reflect.get(b, key)),
+    ) &&
+    Object.keys(b).every(
+      (key) => Object.hasOwn(a, key) || Reflect.get(b, key) === undefined,
+    )
+  );
+}
+
 function sameClip(seen: Clip, clip: Clip | undefined) {
+  if (seen === clip) return true;
   if (!clip) return false;
-  return (Object.keys(seen) as (keyof Clip)[]).every((key) => {
-    if (key === "mediaStart") {
-      // The server stores source offsets to the microsecond.
-      return seen.mediaStart === null || clip.mediaStart === null
-        ? seen.mediaStart === clip.mediaStart
-        : Math.abs(seen.mediaStart - clip.mediaStart) <= 1e-6;
-    }
-    if (key === "sourceRestrictions")
-      return (
-        seen.sourceRestrictions?.copy === clip.sourceRestrictions?.copy &&
-        seen.sourceRestrictions?.remove === clip.sourceRestrictions?.remove
-      );
-    if (key === "startRef")
-      return (
-        seen.startRef?.clipId === clip.startRef?.clipId &&
-        seen.startRef?.offset === clip.startRef?.offset
-      );
-    // Every server answer parses a new title object, so a title is the same by its values.
-    if (key === "title") return sameTitle(seen.title, clip.title);
-    if (key === "style") return sameStyle(seen.style, clip.style);
-    if (key === "region") return sameRegion(seen.region, clip.region);
-    if (key === "fx" || key === "grade")
-      return JSON.stringify(seen[key]) === JSON.stringify(clip[key]);
-    return seen[key] === clip[key];
-  });
+  // The server stores source offsets to the microsecond.
+  const from = seen.mediaStart;
+  const to = clip.mediaStart;
+  if (
+    from !== to &&
+    (from === null || to === null || Math.abs(from - to) > 1e-6)
+  )
+    return false;
+  return (
+    Object.keys(seen).every(
+      (key) =>
+        key === "mediaStart" ||
+        sameValue(Reflect.get(seen, key), Reflect.get(clip, key)),
+    ) &&
+    Object.keys(clip).every(
+      (key) => Object.hasOwn(seen, key) || Reflect.get(clip, key) === undefined,
+    )
+  );
 }
 
 function occupants(timeline: Timeline, range: Clip) {

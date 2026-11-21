@@ -1,10 +1,9 @@
-import { offsetSourceTime } from "../../shared/timeline/time";
 import {
   AudioAutomationError,
   RATE_TARGET,
-  parseAutomation,
-  serializeAutomation,
 } from "@hyperframes/core/audio-automation";
+import { parseRateLane, sourceTimeAt } from "@hyperframes/core/speed-ramp";
+import { z } from "zod";
 import { isCompositionVariable } from "@hyperframes/core/variables";
 import {
   CSS_URL_RE,
@@ -116,6 +115,20 @@ import {
   toFrames,
   toSeconds,
 } from "../../shared/timeline/apply";
+import {
+  readClipSource,
+  resolveClip,
+  writeClipSource,
+} from "../../shared/timeline/clipTiming";
+import {
+  attrMicros,
+  decode,
+  encode,
+  firstFrame,
+  frames,
+  localWindows,
+} from "../../shared/timeline/piece";
+import type { ExactTime } from "../../shared/timeline/piece";
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import { mixHides, mixSilences, trackMix } from "../../shared/timeline/tracks";
 import type { TrackMix } from "../../shared/timeline/tracks";
@@ -396,30 +409,6 @@ function scriptWritesText(scripts: readonly string[], id: string): boolean {
   );
 }
 
-/**
- * The source time at the cut, after any incoming transition handle. An authored start between
- * frames also shifts the source by the gap to the first shown frame. An editor-written start
- * uses its frame index so a saved decimal cannot move the source in-point.
- */
-function sourceAtFirstFrame(
-  authored: number,
-  begin: number,
-  start: number,
-  fps: Fps,
-  playbackRate: number,
-): number {
-  const elementStart = toFrames(begin, fps);
-  const handle = start - elementStart;
-  const gap = frameTime(elementStart, fps) - begin;
-  const source =
-    Math.abs(gap) > 1e-6
-      ? authored + (gap + frameTime(handle, fps)) * playbackRate
-      : handle
-        ? offsetSourceTime(authored, handle, fps, playbackRate)
-        : authored;
-  return Math.max(0, canonicalSeconds(source)) + 0;
-}
-
 const sourceOf = (element: SourceElement) =>
   element.attrs.src ??
   element.children.find((child) => child.tag === "source")?.attrs.src ??
@@ -551,49 +540,56 @@ function projectComposition(
     return src ? (mediaLengths.get(src) ?? null) : null;
   };
 
-  type Timing = ClipTiming & { begin: number; finish: number | null };
-  const timings = new Map<SourceElement, Timing>();
-  const resolving = new Set<SourceElement>();
-  const timing = (element: SourceElement): Timing => {
-    const known = timings.get(element);
-    if (known) return known;
-    resolving.add(element);
-    const attribute = (name: string) => element.attrs[name] ?? null;
-    const read = readClipTiming(
-      { getAttribute: attribute },
-      {
-        resolveReferenceEnd: (refId) => {
-          const target = byId.get(refId);
-          // A reference cycle resolves to nothing, as in the runtime.
-          if (!target || resolving.has(target)) return null;
-          const resolved = timing(target);
-          return resolved.finish ?? resolved.begin;
-        },
-      },
-    );
-    resolving.delete(element);
-    const begin = read.start ?? 0;
-    const kind = clipKind(element);
-    const duration =
-      read.duration ??
-      (kind === "image" ? DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS : null) ??
-      (kind === "video" || isAudioKind(kind)
-        ? resolveMediaDuration({
-            tag: isAudioKind(kind) ? "audio" : "video",
-            authoredDurationSeconds: null,
-            sourceDurationSeconds: lengthOf(element),
-            mediaStartSeconds: readMediaOffsetSeconds(attribute),
-            playbackRate: readPlaybackRate(attribute),
-          }).seconds
-        : null);
-    const result = {
-      ...read,
-      begin,
-      finish: duration === null ? null : begin + duration,
-    };
-    timings.set(element, result);
-    return result;
-  };
+  const windows = localWindows({
+    fps,
+    elements: all
+      .filter(({ attrs }) => attrs.id || attrs["data-start"] !== undefined)
+      .map((element) => {
+        const attribute = (name: string) => element.attrs[name] ?? null;
+        const read = readClipTiming({ getAttribute: attribute });
+        const expression = read.startExpression;
+        const start =
+          expression?.kind === "reference"
+            ? {
+                ref: String(byId.get(expression.refId)?.index ?? ""),
+                offsetUs: attrMicros(expression.offset),
+              }
+            : { us: attrMicros(expression?.value ?? 0) };
+        const kind = clipKind(element);
+        const naturalSeconds =
+          kind === "image"
+            ? DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS
+            : kind === "video" || isAudioKind(kind)
+              ? (resolveMediaDuration({
+                  tag: isAudioKind(kind) ? "audio" : "video",
+                  authoredDurationSeconds: null,
+                  sourceDurationSeconds: lengthOf(element),
+                  mediaStartSeconds: readMediaOffsetSeconds(attribute),
+                  playbackRate: readPlaybackRate(attribute),
+                }).seconds ?? undefined)
+              : undefined;
+        return {
+          id: String(element.index),
+          element,
+          read,
+          start,
+          naturalSeconds,
+          ...(read.duration !== null && {
+            durationUs: attrMicros(read.duration),
+          }),
+          ...(read.durationSource === "legacy-end" &&
+            read.end !== null && { endUs: attrMicros(read.end) }),
+        };
+      }),
+  });
+  const timings = new Map(
+    windows.map(({ el, start, end }) => [
+      el.element,
+      { ...el.read, begin: start, finish: end },
+    ]),
+  );
+  type Timing = ClipTiming & { begin: ExactTime; finish: ExactTime | null };
+  const timing = (element: SourceElement) => timings.get(element)!;
 
   const rows: {
     id: string;
@@ -615,8 +611,9 @@ function projectComposition(
         "unsupported",
         `Clip ${element.attrs.id || element.attrs["data-hf-id"] || "clip"} has a negative data-track-index.`,
       );
-    let start = toFrames(read.begin, fps);
-    let end = read.finish === null ? null : toFrames(read.finish, fps);
+    let start = Number(firstFrame(read.begin, fps));
+    let end =
+      read.finish === null ? null : Number(firstFrame(read.finish, fps));
     // Shorter than a frame is never on screen, and the editor cannot address it.
     if (end !== null && end <= start) continue;
     // The clip is the element less the media it plays under its transitions.
@@ -900,6 +897,17 @@ type ProjectionOptions = {
   mediaLengths?: ReadonlyMap<string, number>;
 };
 
+const legacyRamp = z.object({
+  lanes: z.array(
+    z.object({
+      target: z.string(),
+      audioWindow: z
+        .object({ mediaStart: z.number().nonnegative(), offset: z.number() })
+        .optional(),
+    }),
+  ),
+});
+
 /** Projects composition HTML and its sidecar settings onto the frames the runtime shows. */
 export function parseComposition(
   html: string,
@@ -959,7 +967,7 @@ export function projectTimeline(
       kind === "element" ? readElementTitle(element, fps, fonts) : null;
     const attribute = (name: string) => element.attrs[name] ?? null;
     const reference =
-      read.startExpression?.kind === "reference" && read.start !== null
+      read.startExpression?.kind === "reference"
         ? byId.get(read.startExpression.refId)
         : undefined;
     const referenced = reference && clipIds.get(reference);
@@ -991,21 +999,62 @@ export function projectTimeline(
           ? null
           : sourceOf(element);
     const versions = readVersions(kind, src, element.attrs[VERSIONS_ATTRIBUTE]);
-    const rawAutomation = element.attrs["data-automation"];
-    let automation: string | null = null;
-    if (rawAutomation) {
-      try {
-        automation = offsetAutomation(
-          serializeAutomation(parseAutomation(rawAutomation)),
+    const authoredSource = {
+      playbackRate,
+      mediaStart:
+        kind === "video" || isAudioKind(kind) || kind === "composition"
+          ? readMediaOffsetSeconds(attribute)
+          : null,
+      automation: element.attrs["data-automation"] ?? null,
+    };
+    let source: Pick<Clip, "mediaStart" | "automation"> = {
+      ...authoredSource,
+      automation: null,
+    };
+    try {
+      const decoded = readClipSource(authoredSource);
+      if (authoredSource.mediaStart !== null) {
+        let map = decode(decoded.stored, decoded.curve, read.begin, fps);
+        // Recover the original intercept of consistent windows from the discontinued #332 format.
+        if (
+          typeof decoded.curve === "object" &&
+          authoredSource.automation?.includes('"audioWindow"')
+        ) {
+          const legacy = legacyRamp.safeParse(
+            JSON.parse(authoredSource.automation),
+          );
+          const window = legacy.data?.lanes.find(
+            ({ target }) => target === RATE_TARGET,
+          )?.audioWindow;
+          if (window) {
+            const zeroSeconds =
+              window.mediaStart - sourceTimeAt(decoded.curve, window.offset);
+            const atStart =
+              zeroSeconds +
+              sourceTimeAt(decoded.curve, (decoded.stored.offset ?? 0) / 1e6);
+            if (Math.abs(atStart * 1e6 - decoded.stored.mediaStart) <= 1 + 1e-7)
+              map = { ...map, zero: Number(attrMicros(zeroSeconds)) };
+          }
+        }
+        source = writeClipSource(
+          decoded,
+          encode(map, decoded.curve, frames(start, fps), fps),
+        );
+      } else {
+        source.automation =
+          decoded.parsed && writeClipSource(decoded, decoded.stored).automation;
+      }
+      if (source.automation)
+        source.automation = offsetAutomation(
+          source.automation,
           -frameTime(edges.in ? framesBefore(edges.in) : 0, fps),
         );
-      } catch (error) {
-        if (!(error instanceof AudioAutomationError)) throw error;
-        throw new TimelineError(
-          "unsupported",
-          `Clip ${id} has invalid audio automation. ${error.message}`,
-        );
-      }
+    } catch (error) {
+      if (!(error instanceof AudioAutomationError)) throw error;
+      throw new TimelineError(
+        "unsupported",
+        `Clip ${id} has invalid audio automation. ${error.message}`,
+      );
     }
     const clip: Clip = {
       id,
@@ -1013,16 +1062,7 @@ export function projectTimeline(
       kind,
       start,
       duration: end - start,
-      mediaStart:
-        kind === "video" || isAudioKind(kind) || kind === "composition"
-          ? sourceAtFirstFrame(
-              readMediaOffsetSeconds(attribute),
-              read.begin,
-              start,
-              fps,
-              playbackRate,
-            )
-          : null,
+      ...source,
       playbackRate,
       src,
       sourceDuration: lengthOf(element),
@@ -1087,19 +1127,18 @@ export function projectTimeline(
       transitionIn: edges.in,
       transitionOut: edges.out,
       fx: hasAudio ? readableFx(element.attrs["data-fx-chain"]) : [],
-      grade: canHaveGrade({ kind, adjustment })
+      grade: canHaveGrade(kind, adjustment)
         ? readableGrade(element.attrs[GRADE_ATTRIBUTE])
         : null,
-      automation,
       enabled:
         element.attrs["data-hidden"] === undefined ||
         element.attrs["data-cutroom-track-hidden"] !== undefined,
       ...(versions && { versions }),
       startRef:
-        referenced && typeof referencedEnd === "number"
+        referenced && referencedEnd
           ? {
               clipId: referenced,
-              offset: start - toFrames(referencedEnd, fps),
+              offset: start - Number(firstFrame(referencedEnd, fps)),
             }
           : null,
     };
@@ -1216,6 +1255,39 @@ export function timelineContent(timeline: Timeline) {
       ({ sourceRestrictions, variableBindings, ...clip }) => clip,
     ),
   };
+}
+
+/** Check the physical pieces after serialization, separately from the clip's other edits. */
+export function timelineReadbackMatches(written: Timeline, intended: Timeline) {
+  const { clips: actual, ...writtenSettings } = timelineContent(written);
+  const { clips: expected, ...intendedSettings } = timelineContent(intended);
+  if (
+    actual.length !== expected.length ||
+    !Bun.deepEquals(writtenSettings, intendedSettings)
+  )
+    return false;
+
+  const comparable = ({
+    mediaStart,
+    automation,
+    ...clip
+  }: (typeof actual)[number]) => {
+    if (mediaStart === null) return { ...clip, automation, piece: null };
+    const fields = { ...clip, mediaStart, automation };
+    const { parsed, lane } = readClipSource(fields);
+    return {
+      ...clip,
+      automation: parsed?.lanes.filter((candidate) => candidate !== lane) ?? [],
+      piece: resolveClip(fields, written.fps, true),
+    };
+  };
+  return actual.every((clip, index) => {
+    const target = expected[index]!;
+    return (
+      Bun.deepEquals(clip, target) ||
+      Bun.deepEquals(comparable(clip), comparable(target))
+    );
+  });
 }
 
 export function settingsOf(timeline: Timeline): TimelineSettings {
@@ -1490,44 +1562,6 @@ function readAuthoredAudioGroups(
   });
 }
 
-/** Reading a transition samples its head. A mix edit must keep the element's original speed there. */
-function automationForElement(
-  before: Clip,
-  after: Clip,
-  authored: string | undefined,
-) {
-  const head = before.transitionIn ? framesBefore(before.transitionIn) : 0;
-  if (
-    !head ||
-    !after.transitionIn ||
-    framesBefore(after.transitionIn) !== head ||
-    !authored ||
-    !before.automation ||
-    !after.automation
-  )
-    return after.automation;
-
-  const next = parseAutomation(after.automation);
-  const rateLanes = (value: ReturnType<typeof parseAutomation>) =>
-    value.lanes.filter(({ target }) => target === RATE_TARGET);
-  const rates = rateLanes(next);
-  if (
-    !rates.length ||
-    !Bun.deepEquals(rates, rateLanes(parseAutomation(before.automation)))
-  )
-    return after.automation;
-
-  const original = rateLanes(parseAutomation(authored));
-  if (original.length !== rates.length) return after.automation;
-  let index = 0;
-  return serializeAutomation({
-    ...next,
-    lanes: next.lanes.map((lane) =>
-      lane.target === RATE_TARGET ? original[index++]! : lane,
-    ),
-  });
-}
-
 /** The attribute changes that turn `before` into `after` on `element`. */
 function clipChanges(
   before: Clip,
@@ -1539,9 +1573,27 @@ function clipChanges(
 ): AttributeChange[] {
   const has = (name: string) => element.attrs[name] !== undefined;
   const changes: AttributeChange[] = [];
+  const authoredStart = parseNumeric(element.attrs["data-start"]);
+  const authoredAutomation = element.attrs["data-automation"];
+  const changedAutomation = before.automation !== after.automation;
+  const regrid =
+    authoredStart !== null &&
+    Number(attrMicros(authoredStart)) !==
+      Number(attrMicros(toSeconds(after.start, fps))) &&
+    (before.duration !== after.duration ||
+      before.mediaStart !== after.mediaStart ||
+      before.playbackRate !== after.playbackRate ||
+      (changedAutomation && parseRateLane(after.automation) !== null));
   const writeStart =
     after.startRef === null &&
-    (before.start !== after.start || before.startRef !== null);
+    (before.start !== after.start || before.startRef !== null || regrid);
+  const writeAutomation =
+    changedAutomation ||
+    (writeStart &&
+      parseRateLane(after.automation)?.offset !==
+        parseRateLane(authoredAutomation)?.offset);
+  const removesLegacyWindow =
+    writeAutomation && authoredAutomation?.includes('"audioWindow"');
   if (writeStart)
     changes.push(["data-start", String(toSeconds(after.start, fps))]);
   if (after.authoredAudioGroupId !== before.authoredAudioGroupId)
@@ -1571,7 +1623,8 @@ function clipChanges(
       (before.mediaStart === null
         ? null
         : canonicalSeconds(before.mediaStart)) ||
-      (writeStart && authoredMediaStart !== mediaStart))
+      ((writeStart || removesLegacyWindow) &&
+        authoredMediaStart !== mediaStart))
   )
     changes.push([
       has("data-playback-start") ||
@@ -1610,11 +1663,7 @@ function clipChanges(
         attribute,
         after[field] ? String(toSeconds(after[field], fps)) : null,
       ]);
-  if (before.automation !== after.automation)
-    changes.push([
-      "data-automation",
-      automationForElement(before, after, element.attrs["data-automation"]),
-    ]);
+  if (writeAutomation) changes.push(["data-automation", after.automation]);
   if (!Bun.deepEquals(before.grade, after.grade))
     changes.push([GRADE_ATTRIBUTE, writeGrade(after.grade)]);
   if (!Bun.deepEquals(before.fx, after.fx))
@@ -2177,7 +2226,7 @@ function sourceRestrictions(
   const transform = isAudioKind(clip.kind) ? undefined : transformRestriction;
   const fx = fxRestriction(element.attrs["data-fx-chain"]);
   const graded = readGrade(element.attrs[GRADE_ATTRIBUTE]);
-  const grade = canHaveGrade(clip)
+  const grade = canHaveGrade(clip.kind, clip.adjustment)
     ? "restriction" in graded
       ? graded.restriction
       : element.attrs["data-color-group"]
@@ -2822,6 +2871,7 @@ export function patchComposition(
       after.clips.some((clip) => clip.transitionIn || clip.transitionOut)
         ? transitionStyle()
         : null,
+      true,
     ),
     ...managedStyleEdits(
       parsed,

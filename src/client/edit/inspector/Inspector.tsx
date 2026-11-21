@@ -823,7 +823,7 @@ export function Inspector({
               />
             </details>
           )}
-          {canHaveGrade(clip) && (
+          {canHaveGrade(clip.kind, clip.adjustment) && (
             <ColorSection
               projectId={projectId}
               composition={view!.composition}
