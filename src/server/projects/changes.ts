@@ -9,6 +9,7 @@ import {
   compositionScope,
   compositionSourceOwners,
 } from "../timeline/composition";
+import type { CompositionScope } from "../timeline/composition";
 import { imageOverridesAt, sceneImageReferences } from "./mediaReferences";
 import { sceneSources } from "./sceneSources";
 import { readSource } from "./store";
@@ -22,6 +23,7 @@ const signature = (content: string) =>
 
 type SourceVersions = {
   source: string;
+  scope: CompositionScope;
   versions: ClipVersions;
   urls: Map<string | null, Set<string>>;
 };
@@ -39,8 +41,9 @@ function references(text: string) {
 }
 
 function sourceVersions(source: string, composition: string, cacheKey: string) {
+  const scope = compositionScope(composition);
   const previous = cache.get(cacheKey);
-  if (previous?.source === source) return previous;
+  if (previous?.source === source && previous.scope === scope) return previous;
   const versions: ClipVersions = new Map();
   const media = new Map<string | null, Set<string>>();
   const add = (id: string | null, value: string) => {
@@ -51,10 +54,7 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
     urls.add(url);
   };
   try {
-    const { roots, clips } = compositionSourceOwners(
-      source,
-      compositionScope(composition),
-    );
+    const { roots, clips } = compositionSourceOwners(source, scope);
     clips.sort((a, b) => a.element.start - b.element.start);
     const owners = new Map(clips.map((clip) => [clip.element, clip.id]));
     const visit = (elements: typeof roots, owner: string | null) => {
@@ -119,7 +119,7 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
     versions.set(null, signature(source));
     for (const url of references(source)) add(null, url);
   }
-  const result = { source, versions, urls: media };
+  const result = { source, scope, versions, urls: media };
   cache.delete(cacheKey);
   cache.set(cacheKey, result);
   if (cache.size > 8) cache.delete(cache.keys().next().value!);

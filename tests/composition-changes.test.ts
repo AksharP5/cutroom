@@ -316,6 +316,21 @@ test("linked sound fingerprints reach every member, including voiceover", async 
   }
 });
 
+test("source review caches identical HTML separately by its composition scope", () => {
+  const html = `<html><body>
+    <main data-composition-id="entry">${clip("entry-clip")}</main>
+    <template><main data-composition-id="scene">${clip("scene-clip")}</main></template>
+  </body></html>`;
+  const key = "same bytes in the entry and as a template";
+  expect([...sourceClipVersions(html, "index.html", key).keys()]).toEqual([
+    "entry-clip",
+    null,
+  ]);
+  expect([
+    ...sourceClipVersions(html, "compositions/scene.html", key).keys(),
+  ]).toEqual(["scene-clip", null]);
+});
+
 test("every source byte is covered, including anonymous clips, invalid timelines and DOM order", () => {
   const before = sourceClipVersions(source, "index.html");
   for (const changed of [
