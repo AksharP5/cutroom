@@ -124,6 +124,8 @@ The inspector holds the rest: the effect of an adjustment layer, a zoom's magnif
 
 ### Media files
 
+Drop video, audio, or image files into Media or use **Import media**. The desktop app hard-links files on the same filesystem when possible, so they take up no additional space. Both names refer to the same file until one is replaced. Files from other drives are copied with a progress readout and **Cancel import**. Each completed batch is one undo step. Browser uploads are limited to 500 MB at a time.
+
 Use **Search media** to filter the project's files by name or folder path. Down Arrow goes to the first result. Escape clears the search.
 
 A paper tick marks each source used in the open timeline. Hover the row to see how many clips use it. Still thumbnails fit the whole image on a neutral background, including transparent edges.
