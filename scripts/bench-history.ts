@@ -177,6 +177,15 @@ export async function benchHistory(store: ProjectStore) {
     groups[`group${index}`] = performance.now() - started;
     if (response.status !== 409)
       throw new Error("The dependent trim should block undo.");
+    const offer = z
+      .object({
+        conflict: z.object({
+          undoTogether: z.object({ withEntries: z.array(z.string()) }),
+        }),
+      })
+      .safeParse(await response.json());
+    if (offer.data?.conflict.undoTogether.withEntries.length !== index)
+      throw new Error(`Undo all ${index} should be offered.`);
   }
   return {
     historySelection: median(selection),
