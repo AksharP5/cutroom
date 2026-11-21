@@ -8,6 +8,7 @@ import {
   mkdir,
   open,
   realpath,
+  readdir,
   rename,
   statfs,
   unlink,
@@ -27,7 +28,7 @@ import type {
 } from "../../local/mediaImport";
 import { HttpError } from "../../shared/errors";
 import type { Project } from "../../shared/project";
-import { projectStatePath } from "./path";
+import { projectStatePath, unavailableProjectFile } from "./path";
 import type { ReviewService } from "./review";
 import type { ProjectStore } from "./store";
 
@@ -48,6 +49,56 @@ const discard = (path: string) =>
     if (!hasCode(error, "ENOENT")) throw error;
   });
 
+type StagedMedia = {
+  source: z.infer<typeof ImportSourcesSchema>["sources"][number];
+  name: string;
+  temp: string;
+  copyBytes: bigint;
+  linked: boolean;
+};
+
+const directoryFlags =
+  constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+const stagedName =
+  /^\.import-(?:([1-9]\d*)-)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.hf[0-9a-f]{6}\.tmp$/;
+
+export async function sweepMediaImports(project: Pick<Project, "path">) {
+  try {
+    const assets = await projectStatePath(project, "assets");
+    const directory = await open(assets, directoryFlags);
+    try {
+      const pinned = pinnedDirectory(assets, directory.fd);
+      if ((await realpath(pinned)) !== assets) return;
+      for (const entry of await readdir(pinned, { withFileTypes: true })) {
+        const match = stagedName.exec(entry.name);
+        if (!entry.isFile() || !match) continue;
+        if (match[1]) {
+          const pid = Number(match[1]);
+          if (pid > 2_147_483_647) continue;
+          try {
+            process.kill(pid, 0);
+            continue;
+          } catch (error) {
+            if (!hasCode(error, "ESRCH")) continue;
+          }
+        }
+        await discard(join(pinned, entry.name));
+      }
+    } finally {
+      await directory.close();
+    }
+  } catch (error) {
+    if (!unavailableProjectFile(error))
+      console.warn(
+        `Could not clean up interrupted media imports in ${project.path}:`,
+        error,
+      );
+  }
+}
+
+// Copies across all projects share a disk-space check. Hard links can still land immediately.
+let copyQueue = Promise.resolve();
+
 export async function importMedia(
   store: ProjectStore,
   reviews: ReviewService,
@@ -66,19 +117,10 @@ export async function importMedia(
   await mkdir(assets).catch((error: unknown) => {
     if (!hasCode(error, "EEXIST")) throw error;
   });
-  const directory = await open(
-    assets,
-    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-  );
+  const directory = await open(assets, directoryFlags);
   // Keep writes and cleanup on the directory we checked, even if it is replaced mid-copy.
   const pinned = pinnedDirectory(assets, directory.fd);
-  const staged: Array<{
-    source: (typeof sources)[number];
-    name: string;
-    temp: string;
-    copyBytes: bigint;
-    linked: boolean;
-  }> = [];
+  const staged: StagedMedia[] = [];
   try {
     if ((await realpath(pinned)) !== assets)
       throw new HttpError(403, "The project's assets folder changed.");
@@ -86,7 +128,9 @@ export async function importMedia(
     for (const source of sources) {
       signal.throwIfAborted();
       const original = await openImportSource(source.path, source.identity);
-      const temp = atomicTempPath(join(pinned, `.import-${randomUUID()}`));
+      const temp = atomicTempPath(
+        join(pinned, `.import-${process.pid}-${randomUUID()}`),
+      );
       try {
         const linked =
           dev === original.info.dev &&
@@ -117,66 +161,19 @@ export async function importMedia(
       }
     }
 
-    const totalBytes = staged.reduce((sum, entry) => sum + entry.copyBytes, 0n);
-    if (totalBytes) {
-      const { bavail, bsize } = await statfs(pinned, { bigint: true });
-      if (totalBytes > bavail * bsize)
-        throw new HttpError(
-          409,
-          "There is not enough free space to import these files.",
-        );
-    }
-    const total = Number(totalBytes);
-    let copied = 0;
-    let lastProgress = -Infinity;
-    if (total) await options.progress?.({ type: "progress", copied, total });
-    for (const entry of staged) {
-      if (entry.linked) continue;
-      signal.throwIfAborted();
-      const { file } = await openImportSource(
-        entry.source.path,
-        entry.source.identity,
-      );
-      const start = copied;
-      try {
-        await pipeline(
-          file.createReadStream({
-            autoClose: false,
-            highWaterMark: 1024 * 1024,
-          }),
-          async function* (chunks: AsyncIterable<Buffer>) {
-            for await (const chunk of chunks) {
-              copied += chunk.length;
-              if (copied - start > Number(entry.copyBytes))
-                throw new HttpError(
-                  409,
-                  `${entry.name} changed while it was being copied.`,
-                );
-              if (
-                options.progress &&
-                (performance.now() - lastProgress >= 75 || copied === total)
-              ) {
-                lastProgress = performance.now();
-                await options.progress({ type: "progress", copied, total });
-              }
-              yield chunk;
-            }
-          },
-          createWriteStream(entry.temp, { flags: "wx" }),
-          { signal },
-        );
-        const after = await file.stat({ bigint: true });
-        if (
-          copied - start !== Number(entry.copyBytes) ||
-          sourceIdentity(after) !== entry.source.identity
-        )
-          throw new HttpError(
-            409,
-            `${entry.name} changed while it was being copied.`,
-          );
-      } finally {
-        await file.close();
-      }
+    const copies = staged.filter((entry) => !entry.linked);
+    if (copies.length) {
+      const pending = copyQueue.then(async () => {
+        signal.throwIfAborted();
+        try {
+          await copyMedia(pinned, copies, signal, options.progress);
+        } catch (error) {
+          await Promise.all(copies.map(({ temp }) => discard(temp)));
+          throw error;
+        }
+      });
+      copyQueue = pending.catch(() => {});
+      await pending;
     }
 
     const label =
@@ -222,6 +219,89 @@ export async function importMedia(
       await Promise.all(staged.map(({ temp }) => discard(temp)));
     } finally {
       await directory.close();
+    }
+  }
+}
+
+async function copyMedia(
+  pinned: string,
+  copies: StagedMedia[],
+  signal: AbortSignal,
+  progress?: (event: MediaImportProgress) => Promise<unknown> | void,
+) {
+  const totalBytes = copies.reduce((sum, entry) => sum + entry.copyBytes, 0n);
+  if (totalBytes) {
+    const { bavail, bsize } = await statfs(pinned, { bigint: true });
+    if (totalBytes > bavail * bsize)
+      throw new HttpError(
+        409,
+        "There is not enough free space to import these files.",
+      );
+  }
+  const total = Number(totalBytes);
+  let copied = 0;
+  let lastProgress = -Infinity;
+  if (total) await progress?.({ type: "progress", copied, total });
+  for (const entry of copies) {
+    signal.throwIfAborted();
+    const { file, info } = await openImportSource(
+      entry.source.path,
+      entry.source.identity,
+    );
+    const start = copied;
+    try {
+      await pipeline(
+        file.createReadStream({
+          autoClose: false,
+          highWaterMark: 1024 * 1024,
+        }),
+        async function* (chunks: AsyncIterable<Buffer>) {
+          for await (const chunk of chunks) {
+            copied += chunk.length;
+            if (copied - start > Number(entry.copyBytes))
+              throw new HttpError(
+                409,
+                `${entry.name} changed while it was being copied.`,
+              );
+            if (
+              progress &&
+              (performance.now() - lastProgress >= 75 || copied === total)
+            ) {
+              lastProgress = performance.now();
+              await progress({ type: "progress", copied, total });
+            }
+            yield chunk;
+          }
+        },
+        createWriteStream(entry.temp, { flags: "wx", mode: 0o600 }),
+        { signal },
+      );
+      const after = await file.stat({ bigint: true });
+      if (
+        copied - start !== Number(entry.copyBytes) ||
+        sourceIdentity(after) !== entry.source.identity
+      )
+        throw new HttpError(
+          409,
+          `${entry.name} changed while it was being copied.`,
+        );
+      const destination = await open(
+        entry.temp,
+        constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      try {
+        const staged = await destination.stat();
+        if (!staged.isFile() || staged.nlink !== 1)
+          throw new HttpError(
+            409,
+            `${entry.name} changed while it was being copied.`,
+          );
+        await destination.chmod(Number(info.mode & 0o777n));
+      } finally {
+        await destination.close();
+      }
+    } finally {
+      await file.close();
     }
   }
 }

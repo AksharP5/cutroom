@@ -75,7 +75,7 @@ export async function openImportSource(path: string, expected?: string) {
     !extname(name) ||
     !mediaKind(name) ||
     protectedPath(name, false) ||
-    /[\\\u0000-\u001f]/.test(name)
+    /[\\\p{Cc}\p{Cf}\u2028\u2029]/u.test(name)
   )
     throw new HttpError(
       400,

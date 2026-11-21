@@ -124,7 +124,7 @@ The inspector holds the rest: the effect of an adjustment layer, a zoom's magnif
 
 ### Media files
 
-Drop video, audio, or image files into Media or use **Import media**. The desktop app hard-links files on the same filesystem when possible, so they take up no additional space. Both names refer to the same file until one is replaced. Files from other drives are copied with a progress readout and **Cancel import**. Each completed batch is one undo step. Browser uploads are limited to 500 MB at a time.
+Drop video, audio, or image files into Media or use **Import media**. The desktop app hard-links files on the same filesystem when possible. On import, both names share the same bytes. Undo can keep that link in history's aside folder so the footage remains available for redo, even if you remove the original name. Redo restores a separate project file, which can use the full size of the recording on disk. Files from other drives are copied with a progress readout and **Cancel import**. Each completed batch is one undo step. Browser uploads are limited to 500 MB at a time.
 
 Use **Search media** to filter the project's files by name or folder path. Down Arrow goes to the first result. Escape clears the search.
 

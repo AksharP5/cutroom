@@ -43,14 +43,18 @@ export function createMediaImportRoutes(
     const project = await store.get(c.req.param("id"));
     const input = parseInput(ImportSourcesSchema, await c.req.json());
     const id = parseInput(z.uuid(), c.req.param("job"));
+    if (lifetime.signal.aborted)
+      throw new HttpError(503, "Cutroom is closing.");
     if (active.has(id))
       throw new HttpError(409, "This import is already running.");
     const who = historyWho(reviews, c, project);
     const agentToken = c.req.header(AGENT_HEADER);
+    const cancel = new AbortController();
+    const completion = Promise.withResolvers<void>();
     c.header("Content-Type", "application/x-ndjson");
     c.header("Cache-Control", "no-store");
-    return stream(c, (output) => {
-      const cancel = new AbortController();
+    active.set(id, { projectId: project.id, cancel, done: completion.promise });
+    return stream(c, async (output) => {
       const disconnected = new AbortController();
       output.onAbort(() => disconnected.abort());
       const signal = AbortSignal.any([
@@ -61,27 +65,26 @@ export function createMediaImportRoutes(
       ]);
       const send = (event: MediaImportEvent) =>
         output.writeln(JSON.stringify(event));
-      const done = (async () => {
-        try {
-          const result = await importMedia(store, reviews, project, input, {
-            signal,
-            progress: send,
-            agentToken,
-            who,
+      try {
+        const result = await importMedia(store, reviews, project, input, {
+          signal,
+          progress: send,
+          agentToken,
+          who,
+        });
+        await send({ type: "result", ...result });
+      } catch (error) {
+        if (disconnected.signal.aborted) return;
+        if (cancel.signal.aborted) await send({ type: "cancelled" });
+        else
+          await send({
+            type: "error",
+            error: error instanceof Error ? error.message : String(error),
           });
-          await send({ type: "result", ...result });
-        } catch (error) {
-          if (disconnected.signal.aborted) return;
-          if (cancel.signal.aborted) await send({ type: "cancelled" });
-          else
-            await send({
-              type: "error",
-              error: error instanceof Error ? error.message : String(error),
-            });
-        }
-      })();
-      active.set(id, { projectId: project.id, cancel, done });
-      return done.finally(() => active.delete(id));
+      } finally {
+        active.delete(id);
+        completion.resolve();
+      }
     });
   });
   api.post("/projects/:id/media/import/:job/cancel", (c) => {

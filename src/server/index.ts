@@ -17,8 +17,12 @@ const runtime = await createApp({
   port,
   allowDevOrigin: process.env.CUTROOM_DEV === "1",
 });
-const socket = importSocketPath(`http://127.0.0.1:${port}`);
-const socketDir = await openImportSocket(socket, true);
+const socket = importSocketPath(`http://127.0.0.1:${port}`, runtime.dataDir);
+const socketDir = await openImportSocket(socket, true).catch(
+  (error: unknown) => {
+    console.warn("Local media import is unavailable:", error);
+  },
+);
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port,
@@ -27,27 +31,41 @@ const server = Bun.serve({
   maxRequestBodySize: 512 * 1024 * 1024,
   fetch: runtime.app.fetch,
 });
-let imports: ReturnType<typeof Bun.serve>;
-try {
-  // Owning the TCP port also means no other Cutroom server owns this port's socket.
-  const stale = lstatSync(socketDir.address, { throwIfNoEntry: false });
-  if (stale) {
-    if (!stale.isSocket() || stale.uid !== process.getuid?.())
-      throw new Error("Cutroom's media import socket path is occupied.");
-    unlinkSync(socketDir.address);
+const stopImports = socketDir && listenForImports(socketDir);
+
+function listenForImports({
+  address,
+  handle,
+}: Awaited<ReturnType<typeof openImportSocket>>) {
+  try {
+    // Owning the TCP port also means no other Cutroom server owns this port's socket.
+    const stale = lstatSync(address, { throwIfNoEntry: false });
+    if (stale) {
+      if (!stale.isSocket() || stale.uid !== process.getuid?.())
+        throw new Error("Cutroom's media import socket path is occupied.");
+      unlinkSync(address);
+    }
+    const imports = Bun.serve({
+      unix: address,
+      fetch(request, server) {
+        server.timeout(request, 0);
+        return runtime.mediaImport.fetch(request);
+      },
+    });
+    return async () => {
+      try {
+        await imports.stop(true);
+        unlinkSync(address);
+      } catch (error) {
+        if (!hasCode(error, "ENOENT")) console.warn(error);
+      } finally {
+        await handle.close();
+      }
+    };
+  } catch (error) {
+    console.warn("Local media import is unavailable:", error);
+    void handle.close().catch(console.warn);
   }
-  imports = Bun.serve({
-    unix: socketDir.address,
-    fetch(request, server) {
-      server.timeout(request, 0);
-      return runtime.mediaImport.fetch(request);
-    },
-  });
-} catch (error) {
-  await server.stop(true);
-  await socketDir.handle.close();
-  await runtime.dispose();
-  throw error;
 }
 console.log(`Cutroom is ready at ${server.url}`);
 let stopping = false;
@@ -57,15 +75,12 @@ async function stop() {
   try {
     await runtime.dispose();
   } finally {
-    await imports.stop(true);
     try {
-      unlinkSync(socketDir.address);
-    } catch (error) {
-      if (!hasCode(error, "ENOENT")) console.error(error);
+      await stopImports?.();
+    } finally {
+      await server.stop(true);
+      if (process.connected) process.disconnect();
     }
-    await socketDir.handle.close();
-    await server.stop(true);
-    if (process.connected) process.disconnect();
   }
 }
 for (const signal of ["SIGINT", "SIGTERM"] as const)

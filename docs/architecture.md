@@ -311,7 +311,7 @@ Both MCP transports forward to the running server. They do not open a second pro
 
 Mutating editor and upstream routes require an exact allowed Cutroom `Origin`. The loopback `/mcp` endpoint also accepts native HTTP clients that omit `Origin`. If a client sends an opaque, foreign, or wrong-port origin, the server responds with 403. Both MCP transports supply the selected server origin when forwarding requests. Development additionally permits the two explicit Vite origins.
 
-Path-based media import uses a Unix socket under the Cutroom data directory. Its parent directory is accessible only to the OS account running Cutroom. Electron supplies paths from disk-backed files selected or dropped by the owner. The stdio bridge proves it can open each source and sends its stat identity, which the server checks again before linking or copying. The TCP listener has no path-import route.
+Path-based media import uses a Unix socket under the Cutroom data directory. The socket trusts processes running as Cutroom's OS user. Electron supplies paths from disk-backed files selected or dropped by the owner. The stdio bridge pre-checks that it can open each source and sends its stat identity. The server opens the source and checks that identity again before linking or copying. The TCP listener has no path-import route, and the web server still starts if the Unix socket is unavailable.
 
 ## Background jobs and timeline media cache
 

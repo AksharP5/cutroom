@@ -12,6 +12,7 @@ import { createMcpHttpHandler } from "./mcp/server";
 import { createReviewService } from "./projects/review";
 import { createProjectRoutes } from "./projects/routes";
 import { createMediaImportRoutes } from "./projects/mediaImportRoutes";
+import { sweepMediaImports } from "./projects/mediaImport";
 import { createProjectStore } from "./projects/store";
 import { createTimelineRoutes } from "./timeline/routes";
 import { createCaptionRoutes } from "./captions/routes";
@@ -49,6 +50,7 @@ export async function createApp(
   const port = options.port ?? Number(process.env.CUTROOM_PORT || 4317);
   const baseUrl = `http://127.0.0.1:${port}`;
   const projects = await createProjectStore({ dataDir, projectsDir });
+  await Promise.all((await projects.list()).map(sweepMediaImports));
   const review = createReviewService(projects);
   const mediaImport = createMediaImportRoutes(projects, review);
   const agents = await createAgentService({
@@ -154,6 +156,7 @@ export async function createApp(
   app.get("*", serveStatic({ root: staticDir, path: "index.html" }));
   return {
     app,
+    dataDir,
     projects,
     agents,
     editor,
