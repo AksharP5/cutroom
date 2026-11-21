@@ -22,6 +22,8 @@ The same file applies one version-checked loading transform to Apache-2.0 `@pupp
 
 `src/server/hyperframes/previewRuntime.ts` adapts the served runtime in memory, with an exact source-match and version check for core 0.9.26. It refreshes a group's static gain when `data-volume` changes even when that group had no automation lane. This lets a live track fader update the existing Web Audio stage. It also holds an automation lane at its first point until playback reaches it, where the pinned runtime ramped from the playhead, so live preview plays the envelope export bakes. The published dependency and export runtime files remain unchanged.
 
+Cutroom extends HyperFrames rate lanes with a signed clock offset so trims and splits keep the authored curve. The Bun core patch and the in-memory runtime adapter reuse HyperFrames' rate sampler and integration grid.
+
 The pinned patches in `patches/` share mounted scene path resolution and nested mount identity between the public preview compiler and the Cutroom producer. The preview runtime adapter also makes fetched scenes use the compiler's template selection and default order.
 
 ## GSAP

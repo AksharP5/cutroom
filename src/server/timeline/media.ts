@@ -1,7 +1,10 @@
 import { stat } from "node:fs/promises";
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { z } from "zod";
-import { FootageColourSchema } from "../../shared/pipeline";
+import {
+  FOOTAGE_PIXEL_LIMIT,
+  FootageColourSchema,
+} from "../../shared/pipeline";
 import type { FootageColour } from "../../shared/pipeline";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath, mediaKind } from "../../shared/media";
@@ -9,12 +12,14 @@ import type { MediaFileDetails } from "../../shared/media";
 import { projectPath, unavailableProjectFile } from "../projects/path";
 import { compositionScope, mediaSources } from "./composition";
 import { localMediaInputOptions } from "../media/input";
+import { makesProxy } from "../media/settings";
 
 const ProbeSchema = z.object({
   streams: z
     .array(
       z.object({
         codec_type: z.string().optional(),
+        codec_name: z.string().optional(),
         width: z.number().optional(),
         height: z.number().optional(),
         avg_frame_rate: z.string().optional(),
@@ -66,7 +71,7 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       "error",
       ...localMediaInputOptions,
       "-show_entries",
-      "format=duration:stream=codec_type,width,height,avg_frame_rate,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode:stream_disposition=attached_pic",
+      "format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode:stream_disposition=attached_pic",
       "-of",
       "json",
       path,
@@ -85,19 +90,22 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   const { streams, format } = ProbeSchema.parse(JSON.parse(output));
   const seconds = format.duration;
   const video = streams.find((stream) => stream.codec_type === "video");
-  let footageRefusal: string | undefined;
-  if (video?.width && video.height && video.width * video.height > 1920 * 1080)
-    footageRefusal = `its source is ${video.width} × ${video.height}, above the pipeline's 1080p limit`;
-  else if (
+  const alpha =
     /^(yuva|rgba|bgra|argb|abgr|gbrap|ya)/.test(video?.pix_fmt ?? "") ||
-    video?.tags?.alpha_mode === "1"
-  )
-    footageRefusal = "its source has alpha";
-  else if (
+    video?.tags?.alpha_mode === "1";
+  const hdr =
     video?.color_transfer === "smpte2084" ||
-    video?.color_transfer === "arib-std-b67"
+    video?.color_transfer === "arib-std-b67";
+  let footageRefusal: string | undefined;
+  if (alpha) footageRefusal = "its source has alpha";
+  else if (hdr) footageRefusal = "its source is HDR";
+  else if (
+    video?.width &&
+    video.height &&
+    video.width * video.height > FOOTAGE_PIXEL_LIMIT &&
+    !makesProxy({ codec: video.codec_name ?? "unknown", alpha, hdr })
   )
-    footageRefusal = "its source is HDR";
+    footageRefusal = `its source is ${video.width} × ${video.height}, above the pipeline's 1080p limit`;
 
   const primaries = FootageColourSchema.shape.primaries.safeParse(
     video?.color_primaries,
