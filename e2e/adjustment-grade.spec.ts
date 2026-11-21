@@ -144,6 +144,7 @@ test.use({
       "--no-sandbox",
       "--mute-audio",
       "--enable-blink-features=CanvasDrawElement",
+      "--force-device-scale-factor=2",
     ],
   },
 });
@@ -223,6 +224,45 @@ test("grades the dissolve and lower title in native preview and MP4", async ({
   });
   expect(mean).toBeLessThanOrEqual(3);
   expect(Math.max(...errors)).toBeLessThanOrEqual(6);
+});
+
+test("uses CSS pixels while playing and restores the paused grade at full resolution", async ({
+  page,
+  request,
+}) => {
+  const project = await projectWithAdjustment(request, true, false);
+  await page.addInitScript(() => {
+    if (self === top) localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  await page.goto("/#project/" + project.id);
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, 25);
+  await expect
+    .poll(async () => (await viewerPixels(page))[1])
+    .toEqual([72, 104, 24]);
+  const paused = await viewerPixels(page);
+  const canvas = page
+    .frameLocator("iframe[data-live]")
+    .locator("canvas[layoutsubtree]");
+  const captureWidth = () =>
+    canvas.evaluate(
+      (element) => (element as HTMLCanvasElement).width,
+      undefined,
+      { timeout: 800 },
+    );
+  const full = await captureWidth();
+
+  await page.getByRole("button", { name: "Play forward" }).click();
+  await expect
+    .poll(async () => Math.abs((await captureWidth()) * 2 - full), {
+      timeout: 1500,
+    })
+    .toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect.poll(captureWidth).toBe(full);
+
+  await seekFrame(page, 25);
+  await expect.poll(() => viewerPixels(page)).toEqual(paused);
 });
 
 test("a grade in a mounted scene composes with a parent grade", async ({

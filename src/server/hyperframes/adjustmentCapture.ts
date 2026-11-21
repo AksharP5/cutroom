@@ -182,11 +182,16 @@ export function adjustmentCapture() {
     capture.remove();
   };
 
-  const captureSize = (root: HTMLElement) =>
-    [
-      Math.round(root.offsetWidth * devicePixelRatio * displayScale),
-      Math.round(root.offsetHeight * devicePixelRatio * displayScale),
+  const captureSize = (root: HTMLElement) => {
+    // Use CSS pixels while playing to avoid copying a HiDPI picture every frame.
+    const scale =
+      displayScale *
+      (!request && win.__player?.isPlaying() ? 1 : devicePixelRatio);
+    return [
+      Math.round(root.offsetWidth * scale),
+      Math.round(root.offsetHeight * scale),
     ] as const;
+  };
 
   function draw(scene: Scene, selected: Map<number, Grade>) {
     const { root, bands, capture, context } = scene;
@@ -359,8 +364,11 @@ export function adjustmentCapture() {
   const follow = () => {
     animation = 0;
     // During playback, a change of interval also matters over a static picture.
-    if (bypassed || !(grades ??= read()).length || !win.__player?.isPlaying())
+    if (bypassed || !(grades ??= read()).length) return;
+    if (!win.__player?.isPlaying()) {
+      if (scenes.size) update();
       return;
+    }
     prepare(win.__player.getTime(), false);
     animation = requestAnimationFrame(follow);
   };

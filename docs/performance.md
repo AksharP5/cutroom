@@ -820,6 +820,8 @@ For jobs with a graded adjustment, the producer uses screenshots for every frame
 
 On Electron 45.2.3 (Chromium 156.0.8078.80) at device pixel ratio 2, the native viewer played a synthetic 1080p60 clip with a title under the grade and the footage pipeline disabled. At the same 314 × 177 CSS-pixel viewer size, the capture canvas shrank from 3840 × 2160 to 628 × 353. The graded title pixel stayed RGB (72, 104, 24). Across three 3.5-second samples, the observed distinct pictures per second were 28 to 30 before and 27.7 to 28 after. Electron's frame subscription delivered at most 30 samples per second in this headless run, so it cannot establish 60 fps playback.
 
+The headed Wayland test used a 1237 × 696 CSS-pixel viewer on a 60 Hz display and emulated DPR 2 for the preview. It played synthetic 1080p60 footage with an HTML title under the grade and the footage pipeline off. In two 4.5-second windows, the adjustment canvas received 53.6 and 59.1 paint events per second at 2474 × 1392. Capturing at 1237 × 696 during playback reduced the capture area by 75%. The two playback runs received 54.9 and 58.2 paint events per second. The ranges overlap. The canvas returned to 2474 × 1392 on pause, and the decoded screenshots of the same paused frame matched pixel for pixel.
+
 ### Placed clips and stills
 
 Clips the inspector moved, scaled, rotated, cropped or faded, and image stills, now draw from their sources too ([architecture](architecture.md#export-dialog)). The workload is the interview above with five cuts edited (punch-ins at 115 to 125%, three of them moved, and one cut at 60%, turned 4 degrees and moved, over the page colour), a 1080p PNG slide and a 4:3 JPEG photo over cuts, b-roll, the music bed and two titles, exported whole at Standard quality.
