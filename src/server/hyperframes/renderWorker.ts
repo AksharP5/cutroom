@@ -1,10 +1,14 @@
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { decodedUrlPath } from "@hyperframes/parsers/asset-paths";
 import { z } from "zod";
 import {
   directAudioStage,
   registerRenderIsolation,
   spliceSourceParts,
 } from "./renderIsolation.ts";
+import { adjustmentSources } from "./adjustmentCapture.ts";
+import { projectPath } from "../projects/path.ts";
 import { DirectPlanSchema } from "./directSchema.ts";
 import type { VideoEncoder } from "./directExport.ts";
 import {
@@ -20,7 +24,11 @@ import { ExportStageError } from "./renderFailure.ts";
 const Input = z.object({
   projectDir: z.string(),
   outputPath: z.string(),
-  options: z.looseObject({ fps: FpsSchema, format: ExportFormatSchema }),
+  options: z.looseObject({
+    fps: FpsSchema,
+    format: ExportFormatSchema,
+    entryFile: z.string().optional(),
+  }),
   sources: z.record(z.string(), z.string()).default({}),
   range: ExportRangeSchema.nullish(),
   scopedMedia: z.boolean().default(false),
@@ -57,6 +65,39 @@ try {
   for await (const chunk of process.stdin)
     body += typeof chunk === "string" ? chunk : chunk.toString("utf8");
   const input = Input.parse(JSON.parse(body));
+  const entryPath = join(
+    input.projectDir,
+    input.options.entryFile ?? "index.html",
+  );
+  const entry =
+    input.direct?.html ??
+    input.sources[entryPath] ??
+    (await readFile(entryPath, "utf8").catch(() => ""));
+  const seen = new Set([entryPath]);
+  const needsAdjustment = async (html: string): Promise<boolean> => {
+    const { graded, scenes } = adjustmentSources(html);
+    if (graded) return true;
+    for (const src of scenes) {
+      if (src.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(src)) continue;
+      // Mounted composition paths resolve from the project root in the producer.
+      const local = [decodedUrlPath(src), src].map((path) =>
+        path.replace(/^(?:\.?[\\/])+/, ""),
+      );
+      for (const path of new Set(local)) {
+        const file = await projectPath({ path: input.projectDir }, path).catch(
+          () => null,
+        );
+        if (!file || seen.has(file)) continue;
+        seen.add(file);
+        const source =
+          input.sources[join(input.projectDir, path)] ??
+          (await readFile(file, "utf8").catch(() => ""));
+        if (await needsAdjustment(source)) return true;
+      }
+    }
+    return false;
+  };
+  const adjustment = await needsAdjustment(entry);
   const capture = input.direct?.plan.segments.filter(
     (segment) => segment.kind === "capture",
   );
@@ -64,13 +105,17 @@ try {
   // browser draws only its runs and the span joins them with the frames drawn from the sources.
   const range =
     input.range ?? (capture?.length ? input.direct?.plan.frames : undefined);
-  const verifyIsolation = registerRenderIsolation(input.sources, {
-    range: range ? { fps: input.options.fps, frames: range } : undefined,
-    progress,
-    scratchDir: input.scratchDir,
-    projectDir: input.projectDir,
-    scopedMedia: input.scopedMedia,
-  });
+  const verifyIsolation = registerRenderIsolation(
+    input.sources,
+    {
+      range: range ? { fps: input.options.fps, frames: range } : undefined,
+      progress,
+      scratchDir: input.scratchDir,
+      projectDir: input.projectDir,
+      scopedMedia: input.scopedMedia,
+    },
+    adjustment,
+  );
   const {
     createConsoleLogger,
     createRenderJob,
@@ -85,7 +130,14 @@ try {
   const { encodeSourceParts, exportDirect, prepareDirectExport } =
     await import("./directExport.ts");
   verifyIsolation();
-  const engineConfig = resolveConfig();
+  const engineConfig = resolveConfig(
+    adjustment
+      ? {
+          forceScreenshot: true,
+          useDrawElement: false,
+        }
+      : undefined,
+  );
   // Exports run one at a time, so no render is reading the shared frame cache while it shrinks.
   if (engineConfig.extractCacheDir)
     gcExtractionCache(engineConfig.extractCacheDir, {

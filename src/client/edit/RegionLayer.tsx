@@ -307,8 +307,7 @@ export function RegionLayer({
             useViewSettings.getState().destinations,
           ).video,
           at,
-          effect,
-          final,
+          { effect, box: final },
         ),
       undefined,
       (_, commands) =>

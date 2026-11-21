@@ -69,6 +69,7 @@ try {
       "--disable-dev-shm-usage",
       "--disable-extensions",
       "--mute-audio",
+      "--enable-blink-features=CanvasDrawElement",
       "--autoplay-policy=no-user-gesture-required",
       "--use-gl=angle",
       "--use-angle=swiftshader",
