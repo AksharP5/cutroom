@@ -1,7 +1,17 @@
 import { expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { SourceSchema } from "../src/shared/project";
-import { sourceClipVersions } from "../src/server/projects/changes";
+import {
+  compositionVersions,
+  sourceClipVersions,
+} from "../src/server/projects/changes";
 import { projectFixture } from "./project-fixture";
 import { createReviewService } from "../src/server/projects/review";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
@@ -65,7 +75,7 @@ test("a saved invalid clip envelope keeps the source reviewable and editable", a
         resolution: undefined,
       }),
     );
-    const rejected = await f.request(`${f.base}/timeline`);
+    const rejected = await f.request(`${f.base}/timeline?clipEdits=1`);
     expect(rejected.status).toBe(422);
     expect(await rejected.json()).toMatchObject({
       error: expect.stringContaining("Clip voice has invalid audio automation"),
@@ -80,7 +90,9 @@ test("a saved invalid clip envelope keeps the source reviewable and editable", a
     );
     expect(accepted.status).toBe(200);
     await f.save(earlier);
-    expect((await f.request(`${f.base}/timeline`)).status).toBe(200);
+    expect((await f.request(`${f.base}/timeline?clipEdits=1`)).status).toBe(
+      200,
+    );
     expect((await f.read()).clipEdits).toContainEqual(
       expect.objectContaining({ id: added!.id, accepted: true }),
     );
@@ -165,16 +177,41 @@ test.each(["changes", "clipEdits", "history-backed", "v2"])(
           historyId: history.list().at(-1)!.id,
         }),
       };
-      await mkdir(`${f.project.path}/.cutroom`, { recursive: true });
-      await writeFile(
-        `${f.project.path}/.cutroom/review.json`,
-        JSON.stringify({
-          schemaVersion: 1,
-          items: [],
-          ...(format === "changes" ? { changes: [row] } : { clipEdits: [row] }),
-        }),
+      const directory = `${f.project.path}/.cutroom`;
+      const path = `${directory}/review.json`;
+      const legacy = JSON.stringify({
+        schemaVersion: 1,
+        items: [],
+        ...(format === "changes" ? { changes: [row] } : { clipEdits: [row] }),
+      });
+      await mkdir(directory, { recursive: true });
+      // A project last opened by a build from before the ledger file.
+      await rm(`${directory}/review-ledger.json`, { force: true });
+      await writeFile(path, legacy);
+      const migrated = await f.read();
+      expect(migrated.agentChanges).toEqual(["title"]);
+      expect(migrated.clipEdits[0]).toMatchObject({
+        id: format === "changes" ? `legacy:index.html:title:${hash}` : row.id,
+        label: format === "changes" ? "Edited source" : row.label,
+        historyId: row.historyId,
+      });
+      expect(await readFile(`${directory}/review.v1.json`, "utf8")).toBe(
+        legacy,
       );
-      expect((await f.read()).agentChanges).toEqual(["title"]);
+      const first = await stat(path);
+      // Older builds still read review.json; the rows moved to the ledger file.
+      expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
+        schemaVersion: 1,
+        clipEdits: [],
+      });
+      expect(
+        JSON.parse(await readFile(`${directory}/review-ledger.json`, "utf8")),
+      ).toMatchObject({ schemaVersion: 1, ledger: { edits: [{}] } });
+      const fresh = createReviewService(f.store);
+      expect(await fresh.clipChanges(f.project, "index.html")).toEqual(
+        migrated,
+      );
+      expect((await stat(path)).ino).toBe(first.ino);
       await f.save(
         source
           .replace(">caption</div>", ">Earlier caption</div>")
@@ -284,6 +321,49 @@ test.each(["clip", "composition"])(
     }
   },
 );
+
+test("linked sound fingerprints reach every member, including voiceover", async () => {
+  const html = `<main data-composition-id="main" data-duration="5">
+    <video id="picture" src="picture.mp4" data-start="0" data-duration="5" data-link="dialogue"></video>
+    <audio id="sound" src="sound.wav" data-start="0" data-duration="5" data-link="dialogue"></audio>
+    <audio id="voice" src="voice.wav" data-start="0" data-duration="5" data-link="dialogue" data-cutroom-kind="voiceover"></audio>
+    <audio id="room" src="room.wav" data-start="0" data-duration="5" data-link="room"></audio>
+  </main>`;
+  const f = await setup(html);
+  try {
+    const voice = `${f.project.path}/voice.wav`;
+    await writeFile(voice, "original");
+    const before = await compositionVersions(f.project, "index.html");
+    await writeFile(voice, "replacement with different bytes");
+    const after = await compositionVersions(f.project, "index.html");
+    const changed = [...after.versions.keys()].filter(
+      (id) => before.versions.get(id) !== after.versions.get(id),
+    );
+    expect(changed).toEqual(["picture", "sound", "voice"]);
+    expect([...after.references.get("picture")!]).toEqual([
+      "picture.mp4",
+      "sound.wav",
+      "voice.wav",
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("source review caches identical HTML separately by its composition scope", () => {
+  const html = `<html><body>
+    <main data-composition-id="entry">${clip("entry-clip")}</main>
+    <template><main data-composition-id="scene">${clip("scene-clip")}</main></template>
+  </body></html>`;
+  const key = "same bytes in the entry and as a template";
+  expect([...sourceClipVersions(html, "index.html", key).keys()]).toEqual([
+    "entry-clip",
+    null,
+  ]);
+  expect([
+    ...sourceClipVersions(html, "compositions/scene.html", key).keys(),
+  ]).toEqual(["scene-clip", null]);
+});
 
 test("every source byte is covered, including anonymous clips, invalid timelines and DOM order", () => {
   const before = sourceClipVersions(source, "index.html");
@@ -424,6 +504,150 @@ test("several sub-composition clip edits produce one entry row without underlini
     const scene = await f.review.clipChanges(f.project, "scene.html");
     expect(scene.agentChanges).toEqual(["title", "caption"]);
     expect(scene.clipEdits).toHaveLength(2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("an older build's multi-edit review.json moves to the ledger once, even when interrupted, beside an earlier backup", async () => {
+  const f = await setup();
+  try {
+    const sign = (text: string) => text.padEnd(64, "0");
+    const row = (fields: Record<string, unknown>) => ({
+      composition: "index.html",
+      noteIds: [],
+      at: "2026-11-01T10:00:00.000Z",
+      accepted: false,
+      by: "agent",
+      agentName: "Codex",
+      ...fields,
+    });
+    // As main writes them: one row per clip per edit, a ripple sharing its history entry.
+    const clipEdits = [
+      row({
+        id: "r1",
+        clipId: "title",
+        historyId: "h1",
+        label: "Ripple delete",
+        beforeSignature: sign("a1"),
+        signature: sign("b1"),
+        batchLabels: ["Ripple delete", "Move"],
+      }),
+      row({
+        id: "r2",
+        clipId: "caption",
+        historyId: "h1",
+        label: "Ripple delete",
+        beforeSignature: sign("a2"),
+        signature: sign("b2"),
+      }),
+      row({
+        id: "r3",
+        clipId: "title",
+        historyId: "h2",
+        label: "Set opacity",
+        accepted: true,
+        beforeSignature: sign("b1"),
+        signature: sign("c1"),
+      }),
+      row({
+        id: "r4",
+        clipId: "caption",
+        historyId: "h3",
+        label: "Trim caption",
+        by: "human",
+        agentName: undefined,
+        accepted: true,
+      }),
+      row({
+        id: "r5",
+        clipId: "caption",
+        label: "Edited caption",
+        beforeSignature: sign("b2"),
+        signature: sign("d2"),
+      }),
+    ];
+    const directory = `${f.project.path}/.cutroom`;
+    const legacy = JSON.stringify({
+      schemaVersion: 1,
+      clipEdits,
+      changes: [],
+      items: [],
+    });
+    await mkdir(directory, { recursive: true });
+    await rm(`${directory}/review-ledger.json`, { force: true });
+    await writeFile(`${directory}/review.v1.json`, "an earlier backup\n");
+    await writeFile(`${directory}/review.json`, legacy);
+
+    const migrated = await f.read();
+    expect(migrated.agentChanges.toSorted()).toEqual(["caption", "title"]);
+    expect(
+      migrated.clipEdits
+        .map(({ id, accepted, by }) => [id, accepted, by])
+        .toSorted(),
+    ).toEqual([
+      ["r1", false, "agent"],
+      ["r2", false, "agent"],
+      ["r3", true, "agent"],
+      ["r4", true, "human"],
+      ["r5", false, "agent"],
+    ]);
+    // The backup from the first move is kept, and no other copy piles up beside it.
+    expect(await readFile(`${directory}/review.v1.json`, "utf8")).toBe(
+      "an earlier backup\n",
+    );
+    expect(
+      (await readdir(directory)).filter((name) =>
+        name.startsWith("review.v1.json"),
+      ),
+    ).toEqual(["review.v1.json"]);
+    expect(
+      JSON.parse(await readFile(`${directory}/review.json`, "utf8")),
+    ).toEqual({
+      schemaVersion: 1,
+      clipEdits: [],
+      items: [],
+    });
+    const ledger = await readFile(`${directory}/review-ledger.json`, "utf8");
+
+    // Interrupted after the ledger was written: review.json still holds the old rows.
+    await writeFile(`${directory}/review.json`, legacy);
+    const again = await createReviewService(f.store).clipChanges(
+      f.project,
+      "index.html",
+    );
+    expect(again).toEqual(migrated);
+    // Nothing was moved twice.
+    expect(
+      JSON.parse(await readFile(`${directory}/review-ledger.json`, "utf8")),
+    ).toEqual(JSON.parse(ledger));
+  } finally {
+    await f.close();
+  }
+});
+
+test("Accept All settles the rows of a clip an agent added and then removed, so they can leave the ledger", async () => {
+  const f = await setup();
+  try {
+    const added = source.replace(
+      clip("caption"),
+      `${clip("caption")}${clip("extra")}`,
+    );
+    await f.save(added);
+    await f.save(source);
+    const before = await f.read();
+    // Back as it was before the agent: nothing to accept, and nothing settled yet.
+    expect(before.agentChanges).not.toContain("extra");
+    expect(before.clipEdits.filter((edit) => edit.clipId === "extra")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ accepted: false, resolution: "source" }),
+      ]),
+    );
+    await f.review.acceptChanges(f.project);
+    const after = await f.read();
+    const extra = after.clipEdits.filter((edit) => edit.clipId === "extra");
+    expect(extra.length).toBeGreaterThan(0);
+    expect(extra.every((edit) => edit.accepted)).toBe(true);
   } finally {
     await f.close();
   }

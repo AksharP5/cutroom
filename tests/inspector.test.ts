@@ -21,7 +21,7 @@ import {
   ledgerChanges,
   reviewRows,
   shownChanges,
-} from "../src/client/edit/inspector/changes";
+} from "../src/shared/timeline/reviewChanges";
 import { editLabel } from "../src/shared/timeline/labels";
 import { projectFixture } from "./project-fixture";
 
@@ -59,7 +59,7 @@ test("an unaccepted mark written by #30 survives the new opacity projection and 
     );
     const read = async () =>
       TimelineViewSchema.parse(
-        await (await fixture.request(`${path}/timeline`)).json(),
+        await (await fixture.request(`${path}/timeline?clipEdits=1`)).json(),
       );
     const view = await read();
     expect(view.agentChanges).toEqual(["title"]);
@@ -163,7 +163,7 @@ test("inspector timing uses normal move and trim, changes linked source timing, 
   const splitEdit = {
     ...timeline,
     clips: timeline.clips.map((clip) =>
-      clip.id === "voice" ? { ...clip, start: 15, mediaStart: 0.5 } : clip,
+      clip.id === "voice" ? { ...clip, start: 12, mediaStart: 0.4 } : clip,
     ),
   };
   const retimed = applyAll(splitEdit, [
@@ -174,7 +174,12 @@ test("inspector timing uses normal move and trim, changes linked source timing, 
       mediaStart: 1,
     }),
   ]);
-  expect(retimed.clips.find((clip) => clip.id === "voice")?.mediaStart).toBe(2);
+  expect(retimed.clips.find((clip) => clip.id === "voice")).toMatchObject({
+    start: 6,
+    duration: 30,
+    mediaStart: 1.4,
+    playbackRate: 2,
+  });
   expect(() => apply("start", 60)).toThrow("overlap");
   const bounded = {
     ...timeline,
@@ -188,6 +193,7 @@ test("inspector timing uses normal move and trim, changes linked source timing, 
         type: "setTiming",
         clipId: "picture",
         playbackRate: 2,
+        mediaStart: 1,
       }),
     ]),
   ).toThrow("end of its source");
@@ -203,7 +209,7 @@ test("static opacity preserves other CSS, reads back exactly, and takes one undo
   const path = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await fixture.request(`${path}/timeline`)).json(),
+      await (await fixture.request(`${path}/timeline?clipEdits=1`)).json(),
     );
   try {
     const file = join(project.path, "index.html");
@@ -252,7 +258,7 @@ test("the Changes ledger credits owner and agent, accepts one edit at a time and
   const path = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await fixture.request(`${path}/timeline`)).json(),
+      await (await fixture.request(`${path}/timeline?clipEdits=1`)).json(),
     );
   const edit = async (clipId: string, label: string, agent: boolean) => {
     const response = await fixture.app.request(`/api/cutroom${path}/commands`, {
@@ -268,7 +274,7 @@ test("the Changes ledger credits owner and agent, accepts one edit at a time and
       }),
     });
     expect(response.status).toBe(200);
-    return TimelineViewSchema.parse(await response.json());
+    return read();
   };
   try {
     await edit("headline", "Owner title", false);
@@ -341,7 +347,7 @@ test("undo hides owner and agent rows; redo restores the same pending edit witho
   const path = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await fixture.request(`${path}/timeline`)).json(),
+      await (await fixture.request(`${path}/timeline?clipEdits=1`)).json(),
     );
   try {
     for (const agent of [false, true]) {
@@ -673,7 +679,7 @@ test("position round-trips native baselines, preserves CSS and linked audio, and
   const path = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await fixture.request(`${path}/timeline`)).json(),
+      await (await fixture.request(`${path}/timeline?clipEdits=1`)).json(),
     );
   const edit = async (commands: unknown[]) =>
     fixture.request(`${path}/commands`, "POST", {

@@ -352,8 +352,11 @@ async function writePackage(
   const replaced = new Map<string, Clip>();
   const layerNotes: string[] = [];
   if (layers.length) await mkdir(join(folder, "Layers"));
+  const layerCounts = new Map<number, number>();
   for (const layer of layers) {
-    const filename = `${trackName(layer.track)}.mov`;
+    const count = (layerCounts.get(layer.track) ?? 0) + 1;
+    layerCounts.set(layer.track, count);
+    const filename = `${trackName(layer.track)}${count > 1 ? `-${count}` : ""}.mov`;
     const path = await options.render!(layer, {
       directory: join(folder, "Layers"),
       filename,
@@ -370,7 +373,7 @@ async function writePackage(
     }
     layerNotes.push(
       layer.flatten
-        ? `${trackName(layer.track)}'s blur or highlight is drawn over the tracks beneath it in Layers/${filename}, as they were when exported.`
+        ? `${trackName(layer.track)}'s adjustment layer is rendered with the tracks beneath it in Layers/${filename}, as they were when exported.`
         : `${trackName(layer.track)}'s titles, scenes and other clips Resolve can't open are rendered with transparency in Layers/${filename}, one clip each.`,
     );
   }

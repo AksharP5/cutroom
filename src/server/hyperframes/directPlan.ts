@@ -2,15 +2,28 @@ import {
   VERSIONS_ATTRIBUTE,
   VERSION_INDEX_ATTRIBUTE,
 } from "../timeline/versions";
-import { offsetSourceTime } from "../../shared/timeline/time.ts";
 import { transform, transformStyleAttribute } from "lightningcss";
 import type { Declaration, Rule, SelectorComponent } from "lightningcss";
 import { defaultTreeAdapter, parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import type { Fps } from "../../shared/timeline/schema.ts";
+import { emptyTimelineSettings } from "../../shared/timeline/schema.ts";
 import { GRADE_ATTRIBUTE, readGrade } from "../../shared/timeline/grade.ts";
+import type { Grade } from "../../shared/timeline/grade.ts";
+import {
+  ADJUSTMENT_ATTRIBUTE,
+  REGION_ATTRIBUTE,
+  REGION_STYLE_ATTRIBUTE,
+  regionStyle,
+} from "../../shared/timeline/regionStyle.ts";
+import { parseComposition } from "../timeline/composition.ts";
 import { readPosition } from "../timeline/position.ts";
 import { readClipStyle } from "../timeline/style.ts";
+import {
+  TRANSITION_STYLE_ATTRIBUTE,
+  transitionStyle,
+} from "../timeline/transitions.ts";
+import { isGradedAdjustment } from "./adjustmentCapture.ts";
 import { coversFrame, visibleRect } from "./directPlacement.ts";
 import type { DirectPlan, Placement, SourceSegment } from "./directSchema.ts";
 
@@ -232,6 +245,7 @@ export function checkStylesheet(
   protectedElements: { element: Element; clip: boolean }[],
   stacking: Stacking,
   pinned: ReadonlySet<string> = PINNED,
+  managedAnimations = false,
 ): string | undefined {
   let refusal: string | undefined;
   const visit = (rules: Rule[], tracks: boolean) => {
@@ -250,7 +264,13 @@ export function checkStylesheet(
           continue;
         case "layer-statement":
         case "font-face":
+          continue;
         case "keyframes":
+          if (
+            managedAnimations &&
+            /^cutroom-(zoom|fade|dissolve|dip)-/.test(rule.value.name.value)
+          )
+            refusal = "a stylesheet overrides a Cutroom animation";
           continue;
         case "style":
           break;
@@ -321,9 +341,53 @@ export const seconds = (value: string | undefined) => {
   return Number(value);
 };
 
+const TRANSITION_ATTRIBUTE =
+  /^data-transition-(in|out)(-duration|-align|-under)?$/;
+
+/** Accept the generated region sheet only when its inputs still match the saved document. */
+function regionFrames(
+  html: string,
+  css: string,
+  root: Element,
+  fps: Fps,
+  width: number,
+  height: number,
+) {
+  const ids = new Set<string>();
+  const uniqueIds = (element: Element): boolean => {
+    const id = attribute(element, "id");
+    if (id && ids.has(id)) return false;
+    if (id) ids.add(id);
+    return elements(element).every(uniqueIds);
+  };
+  if (!uniqueIds(root)) return null;
+  try {
+    const { timeline } = parseComposition(html, emptyTimelineSettings());
+    if (timeline.fps.num * fps.den !== fps.num * timeline.fps.den) return null;
+    if (regionStyle(timeline, { width, height })?.css !== css) return null;
+    return timeline.clips.flatMap(({ enabled, start, duration, region }) =>
+      enabled && region ? [{ start, end: start + duration }] : [],
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** The empty markup Cutroom writes for a colour-only adjustment. */
+const ADJUSTMENT_ATTRIBUTES = new Set([
+  "id",
+  "class",
+  "data-start",
+  "data-duration",
+  "data-track-index",
+  "data-timeline-label",
+  ADJUSTMENT_ATTRIBUTE,
+  GRADE_ATTRIBUTE,
+]);
+
 /**
- * Plans an export that FFmpeg can draw from the sources without a browser: every frame shows one
- * video clip, full frame, with nothing over it. Anything this cannot prove the browser would draw
+ * Plans the frames FFmpeg can draw directly from source, including colour-only adjustments on
+ * a composite this planner already knows how to draw. Anything this cannot prove the browser would draw
  * the same way returns a reason instead, and the export uses frame capture.
  */
 export function planDirectExport(
@@ -386,15 +450,37 @@ export function planDirectExport(
     return { reason: "the composition size is not an even number of pixels" };
 
   const styles: string[] = [];
+  let transitions = false;
+  let regions = false;
+  const effects: Frames[] = [];
   for (const element of elements(head)) {
     if (element.tagName === "meta" || element.tagName === "title") continue;
     if (element.tagName === "style") {
-      styles.push(
-        element.childNodes
-          .filter(defaultTreeAdapter.isTextNode)
-          .map((node) => node.value)
-          .join(""),
-      );
+      const css = element.childNodes
+        .filter(defaultTreeAdapter.isTextNode)
+        .map((node) => node.value)
+        .join("")
+        .trim();
+      const marker = element.attrs[0];
+      if (element.attrs.length === 1 && marker) {
+        if (
+          marker.name === TRANSITION_STYLE_ATTRIBUTE &&
+          `<style ${marker.name}="${marker.value}">\n${css}\n</style>` ===
+            transitionStyle()
+        ) {
+          transitions = true;
+          continue;
+        }
+        if (marker.name === REGION_STYLE_ATTRIBUTE && marker.value === "1") {
+          const spans = regionFrames(html, css, root, fps, width, height);
+          if (spans) {
+            regions = true;
+            effects.push(...spans);
+            continue;
+          }
+        }
+      }
+      styles.push(css);
       continue;
     }
     if (
@@ -409,6 +495,7 @@ export function planDirectExport(
 
   type Clip = { element: Element; start: number; end: number };
   const visual: Clip[] = [];
+  const adjustments: (Frames & { track: number; grade: Grade })[] = [];
   const pictures: Element[] = [];
   const stacking: Stacking = {
     trackZ: new Map(),
@@ -436,7 +523,64 @@ export function planDirectExport(
     if (element.tagName === "audio") continue;
     if (element.tagName === "video" || element.tagName === "img")
       pictures.push(element);
+    const layer = attribute(element, ADJUSTMENT_ATTRIBUTE) !== undefined;
+    const adjustment = isGradedAdjustment(element);
+    if (
+      layer &&
+      !adjustment &&
+      attribute(element, REGION_ATTRIBUTE) === undefined
+    )
+      continue;
+    if (adjustment) {
+      const grade = readGrade(attribute(element, GRADE_ATTRIBUTE));
+      const track = Number(attribute(element, "data-track-index"));
+      if (
+        "restriction" in grade ||
+        !Number.isInteger(track) ||
+        element.tagName !== "div" ||
+        element.childNodes.some(
+          (node) => !("value" in node) || node.value.trim(),
+        ) ||
+        element.attrs.some(({ name }) => !ADJUSTMENT_ATTRIBUTES.has(name))
+      ) {
+        effects.push({ start: first, end: last });
+      } else if (grade.grade) {
+        pictures.push(element);
+        adjustments.push({
+          start: first,
+          end: last,
+          track,
+          grade: grade.grade,
+        });
+      }
+      continue;
+    }
     visual.push({ element, start: first, end: last });
+    if (transitions) {
+      for (const edge of ["in", "out"] as const) {
+        const kind = attribute(element, `data-transition-${edge}`);
+        if (kind !== "dissolve" && kind !== "dip") continue;
+        if (
+          kind === "dissolve" &&
+          attribute(element, `data-transition-${edge}-under`) !== undefined
+        )
+          continue;
+        const length = seconds(
+          attribute(element, `data-transition-${edge}-duration`),
+        );
+        // CSS starts the outgoing animation at the element's end minus its duration.
+        // If the attribute is not on Cutroom's frame grid, let the browser draw this clip.
+        const count = length === null ? null : frameAt(length);
+        if (count === null || count > last - first)
+          effects.push({ start: first, end: last });
+        else if (count > 0)
+          effects.push(
+            edge === "in"
+              ? { start: first, end: first + count }
+              : { start: last - count, end: last },
+          );
+      }
+    }
     try {
       if (
         declarationsOf(attribute(element, "style") ?? "").some(
@@ -472,7 +616,13 @@ export function planDirectExport(
     ...pictures.map((element) => ({ element, clip: true })),
   ];
   for (const css of styles) {
-    const refusal = checkStylesheet(css, protectedElements, stacking);
+    const refusal = checkStylesheet(
+      css,
+      protectedElements,
+      stacking,
+      PINNED,
+      regions || transitions,
+    );
     if (refusal) return { reason: refusal };
   }
 
@@ -488,6 +638,9 @@ export function planDirectExport(
       ...visual
         .flatMap((clip) => [clip.start, clip.end])
         .filter((at) => at > frames.start && at < frames.end),
+      ...[...effects, ...adjustments]
+        .flatMap(({ start, end }) => [start, end])
+        .filter((at) => at > frames.start && at < frames.end),
     ]),
   ].sort((a, b) => a - b);
   const segments: DirectPlan["segments"] = [];
@@ -501,17 +654,36 @@ export function planDirectExport(
       (above, clip) => (above && level(above) > level(clip) ? above : clip),
       undefined,
     );
-    const drawn = !top
-      ? { reason: `frame ${start} shows no clip` }
-      : showing.length > 1 && stacking.authored
-        ? {
-            reason: `frame ${start} shows ${showing.length} clips in an authored order`,
-          }
-        : placedClip(top.element, {
-            width,
-            height,
-            beneath: showing.length === 1 ? colour : null,
-          });
+    const activeAdjustments = adjustments.filter(
+      (layer) => layer.start <= start && start < layer.end,
+    );
+    const track = Number(top && attribute(top.element, "data-track-index"));
+    const drawn =
+      effects.some((span) => span.start <= start && start < span.end) ||
+      (activeAdjustments.length > 0 &&
+        (!Number.isInteger(track) || stacking.authored))
+        ? { reason: `frame ${start} draws a Cutroom effect` }
+        : !top
+          ? { reason: `frame ${start} shows no clip` }
+          : showing.length > 1 && stacking.authored
+            ? {
+                reason: `frame ${start} shows ${showing.length} clips in an authored order`,
+              }
+            : placedClip(
+                {
+                  ...top.element,
+                  attrs: top.element.attrs.filter(
+                    ({ name }) =>
+                      !(regions && name === REGION_ATTRIBUTE) &&
+                      !(transitions && TRANSITION_ATTRIBUTE.test(name)),
+                  ),
+                },
+                {
+                  width,
+                  height,
+                  beneath: showing.length === 1 ? colour : null,
+                },
+              );
     const previous = segments.at(-1);
     if ("reason" in drawn || !top) {
       reason ??= "reason" in drawn ? drawn.reason : undefined;
@@ -520,12 +692,27 @@ export function planDirectExport(
       continue;
     }
     const src = attribute(top.element, "src")!;
-    const mediaStart = offsetSourceTime(
-      seconds(attribute(top.element, "data-media-start") ?? "0")!,
-      start - top.start,
-      fps,
-    );
-    segments.push({ kind: "source", start, end, src, mediaStart, ...drawn });
+    const mediaStart = seconds(
+      attribute(top.element, "data-media-start") ?? "0",
+    )!;
+    // A fully covering top picture hides every lower grade. The eligible
+    // source run represents the whole visible lower composite for the grades above it.
+    const byTrack = new Map<number, Grade>();
+    for (const layer of activeAdjustments)
+      if (layer.track > track) byTrack.set(layer.track, layer.grade);
+    const grades = [...byTrack]
+      .sort(([a], [b]) => a - b)
+      .map(([, grade]) => grade);
+    segments.push({
+      kind: "source",
+      start,
+      end,
+      src,
+      mediaStart,
+      ...(top.start !== start && { clipStart: top.start }),
+      ...drawn,
+      ...(grades.length && { adjustments: grades }),
+    });
   }
   if (!segments.some((segment) => segment.kind === "source"))
     return { reason: reason ?? "no frame shows a plain video" };

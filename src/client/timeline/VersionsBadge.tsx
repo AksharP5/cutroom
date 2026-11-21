@@ -14,7 +14,7 @@ import {
 } from "../../shared/timeline/versions";
 import { menuStep } from "../components/menu";
 import type { MenuSearch } from "../components/menu";
-import { restoreMenuFocus } from "../keymap";
+import { hint, restoreMenuFocus } from "../keymap";
 import { editTimeline, useTimeline } from "../edit/timeline";
 import {
   addClipVersion,
@@ -57,6 +57,7 @@ export function VersionsBadge({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`${count} versions`}
+        title={`${hint("cutroomPreviousVersion")} · ${hint("cutroomNextVersion")}`}
         onPointerDown={(event) => {
           // The lanes would select or move the clip underneath.
           event.stopPropagation();

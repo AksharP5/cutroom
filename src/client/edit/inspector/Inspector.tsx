@@ -41,6 +41,7 @@ import { LayerTextFields } from "./LayerTextFields";
 import { TitleSection } from "./TitleSection";
 import { isTitle } from "../../../shared/timeline/title";
 import { StyleSection } from "./StyleSection";
+import { canHaveGrade } from "../../../shared/timeline/grade";
 import { ColorSection } from "./ColorSection";
 import {
   BindImageVariable,
@@ -60,7 +61,7 @@ import {
   rounded,
   useClipFrame,
 } from "./Keyframes";
-import { ledgerChanges } from "./changes";
+import { useInspectorChanges } from "../reviewChanges";
 import { SelectionSummary } from "./SelectionSummary";
 import { ChangeList } from "./ChangeList";
 import { TimelineOverview } from "./TimelineOverview";
@@ -287,8 +288,8 @@ export function Inspector({
   const view = useTimeline((state) => state.view);
   const selection = useTimeline((state) => state.selection);
   const root = useRef<HTMLElement>(null);
-  // Changes holds its rows while the inspector is in use, so the fields below never move under
-  // the pointer or a field being typed in. A scrub or drag anywhere holds it until release.
+  // Keep Changes rows steady while the inspector is in use.
+  // A scrub or drag anywhere holds the list until release.
   const [pointerInside, setPointerInside] = useState(false);
   const [fieldFocused, setFieldFocused] = useState(false);
   const gesture = useWorkspace((state) => state.gesture);
@@ -457,12 +458,17 @@ export function Inspector({
       clip.id
         .replaceAll(/[-_]+/g, " ")
         .replace(/^./, (letter) => letter.toUpperCase()));
-  const edits = subject
-    ? ledgerChanges(
-        view?.clipEdits ?? [],
-        new Set(subject.members.map((member) => member.id)),
-      )
-    : [];
+  const changeClips = subject
+    ? subject.members.map((member) => member.id)
+    : selection.ids.size > 1
+      ? [...selection.ids]
+      : undefined;
+  const changes =
+    useInspectorChanges(
+      projectId,
+      open && !!timeline && selection.transition === undefined,
+      changeClips,
+    ) ?? [];
   const track =
     timeline &&
     clip &&
@@ -521,14 +527,6 @@ export function Inspector({
             clips={timeline.clips.filter((clip) => selection.ids.has(clip.id))}
             fps={timeline.fps}
           />
-          <ChangeList
-            key={selection.anchor}
-            projectId={projectId}
-            timeline={timeline}
-            edits={ledgerChanges(view?.clipEdits ?? [], selection.ids)}
-            limit={3}
-            hold={holdChanges}
-          />
           {sound.length > 0 && (
             <details
               open={audioOpen}
@@ -580,6 +578,15 @@ export function Inspector({
               />
             </details>
           )}
+          <ChangeList
+            key={selection.anchor}
+            projectId={projectId}
+            timeline={timeline}
+            edits={changes}
+            clipIds={changeClips}
+            limit={3}
+            hold={holdChanges}
+          />
         </div>
       ) : selection.transition !== undefined && timeline ? (
         <TransitionSection
@@ -587,12 +594,12 @@ export function Inspector({
           timeline={timeline}
           incoming={selection.transition}
         />
-      ) : !timeline ? null : !clip ? (
+      ) : !timeline || !view ? null : !clip ? (
         <TimelineOverview
           projectId={projectId}
           name={projectName}
-          timeline={timeline}
-          edits={view?.clipEdits ?? []}
+          view={view}
+          edits={changes}
           hold={holdChanges}
         />
       ) : (
@@ -617,15 +624,6 @@ export function Inspector({
               </time>
             </span>
           </div>
-          <ChangeList
-            key={selection.anchor}
-            projectId={projectId}
-            timeline={timeline}
-            edits={edits}
-            limit={3}
-            times={false}
-            hold={holdChanges}
-          />
           {clip.region && !isAudioKind(clip.kind) && (
             <RegionSection
               projectId={projectId}
@@ -822,7 +820,7 @@ export function Inspector({
               />
             </details>
           )}
-          {(clip.kind === "video" || clip.kind === "image") && (
+          {canHaveGrade(clip.kind, clip.adjustment) && (
             <ColorSection
               projectId={projectId}
               composition={view!.composition}
@@ -872,7 +870,7 @@ export function Inspector({
                 )}
                 {audio.trackGainWarning && (
                   <p className="inspector-warning" role="note">
-                    Track gain does not apply to this clip's audio group.
+                    Track gain does not apply to this clip's bus.
                   </p>
                 )}
                 <ValueField
@@ -1030,6 +1028,16 @@ export function Inspector({
               </FieldRow>
             )}
           </details>
+          <ChangeList
+            key={selection.anchor}
+            projectId={projectId}
+            timeline={timeline}
+            edits={changes}
+            clipIds={changeClips}
+            limit={3}
+            times={false}
+            hold={holdChanges}
+          />
         </div>
       )}
     </aside>

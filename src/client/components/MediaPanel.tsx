@@ -1,4 +1,8 @@
 import { canAddVersion } from "../../shared/timeline/versions";
+import {
+  ProjectFormatSchema,
+  ProjectRateSchema,
+} from "../../shared/projectFormat";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { MagnifyingGlass, Plus, Waveform } from "@phosphor-icons/react";
@@ -44,7 +48,7 @@ const UPLOAD_BYTES = 500 * 1024 * 1024;
 const STILL_IMPORTING =
   "Still importing. Drop the next files when it finishes.";
 const UPLOAD_LIMIT =
-  "Imports are limited to 500 MB at a time. Copy larger files into the project folder and they will appear here.";
+  "Browser imports are limited to 500 MB at a time. Use the Cutroom desktop app for larger files.";
 
 const projectFilesSchema = z.object({
   files: z.array(z.string()),
@@ -183,7 +187,10 @@ function MediaRow({
       : 0,
   );
   const [duration, setDuration] = useState<number | null>(null);
-  const [hasAudio, setHasAudio] = useState<boolean | null>(null);
+  const [videoInfo, setVideoInfo] = useState<{
+    hasAudio: boolean;
+    format?: MediaDrag["format"];
+  } | null>(null);
   // Decoders start only for rows that have been on screen.
   const row = useRef<HTMLLIElement>(null);
   const [seen, setSeen] = useState(false);
@@ -204,7 +211,7 @@ function MediaRow({
   useEffect(() => {
     if (!seen || gone || kind !== "video") return;
     const closing = new AbortController();
-    setHasAudio(null);
+    setVideoInfo(null);
     const probe = async () => {
       for (;;) {
         const response = await fetch(
@@ -215,9 +222,27 @@ function MediaRow({
           if (!response.ok)
             throw new Error(`Cannot probe ${path} (${response.status}).`);
           const info = z
-            .object({ channels: z.number().positive().optional() })
+            .object({
+              channels: z.number().positive().optional(),
+              video: z
+                .object({
+                  width: z.number(),
+                  height: z.number(),
+                  matchFps: ProjectRateSchema.optional(),
+                })
+                .optional(),
+            })
             .parse(await response.json());
-          if (!closing.signal.aborted) setHasAudio(info.channels !== undefined);
+          if (!closing.signal.aborted) {
+            const format = ProjectFormatSchema.safeParse({
+              ...info.video,
+              fps: info.video?.matchFps,
+            });
+            setVideoInfo({
+              hasAudio: info.channels !== undefined,
+              format: format.data,
+            });
+          }
           return;
         }
         await response.body?.cancel();
@@ -238,12 +263,13 @@ function MediaRow({
   const placeable =
     !gone &&
     (kind === "image" ||
-      (duration !== null && (kind !== "video" || hasAudio !== null)));
+      (duration !== null && (kind !== "video" || videoInfo !== null)));
   const dragged = (): MediaDrag => ({
     kind,
     path,
     seconds: duration ?? STILL_SECONDS,
-    hasAudio: hasAudio ?? kind === "audio",
+    hasAudio: videoInfo?.hasAudio ?? kind === "audio",
+    format: videoInfo?.format,
   });
   // The source viewer needs a timeline: its playhead counts the timeline's frames.
   const open = () => {
@@ -429,6 +455,10 @@ export function MediaPanel({
     : visibleMedia?.[0]?.path;
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [copyProgress, setCopyProgress] = useState<number>();
+  const [cancelling, setCancelling] = useState(false);
+  const nativeImport = useRef<string | undefined>(undefined);
+  const desktop = window.cutroomDesktop;
   const compositions = useCompositions(projectId);
   // The list appears once the project has a scene; the root alone needs no list.
   const [view, setView] = useState<"media" | "compositions">("media");
@@ -691,38 +721,62 @@ export function MediaPanel({
         );
       return;
     }
-    if (importing) {
+    if (importing || nativeImport.current) {
       setMessage(STILL_IMPORTING);
       return;
     }
-    // Refuse before sending: a server rejecting a huge body can surface as a reset, not a 413.
-    if (media.reduce((total, file) => total + file.size, 0) > UPLOAD_BYTES) {
+    // A browser upload rejected by the server can surface as a reset, not a 413.
+    if (
+      !desktop &&
+      media.reduce((total, file) => total + file.size, 0) > UPLOAD_BYTES
+    ) {
       setMessage(UPLOAD_LIMIT);
       return;
     }
-    const body = new FormData();
-    for (const file of media) body.append("file", file);
     setImporting(true);
     setMessage("");
     try {
-      const response = await fetch(`${projectUrl}/upload?dir=assets`, {
-        method: "POST",
-        body,
-      });
-      if (response.status === 413) throw new Error(UPLOAD_LIMIT);
-      if (!response.ok)
-        throw new Error(`The import failed (${response.status}).`);
-      const result = uploadSchema.parse(await response.json());
-      const refused = [
-        ...unsupported.map((file) => `${file.name} is not a supported format`),
-        ...result.skipped.map((name) => `${name} is too large`),
-        ...result.invalid.map((item) => `${item.name}: ${item.reason}`),
-      ];
+      const refused = unsupported.map(
+        (file) => `${file.name} is not a supported format`,
+      );
+      if (desktop) {
+        const id = crypto.randomUUID();
+        nativeImport.current = id;
+        const result = await desktop.importMedia(
+          id,
+          projectId,
+          media,
+          ({ copied, total }) =>
+            setCopyProgress(Math.floor((100 * copied) / total)),
+        );
+        if (!result) {
+          setMessage("Import cancelled.");
+          return;
+        }
+      } else {
+        const body = new FormData();
+        for (const file of media) body.append("file", file);
+        const response = await fetch(`${projectUrl}/upload?dir=assets`, {
+          method: "POST",
+          body,
+        });
+        if (response.status === 413) throw new Error(UPLOAD_LIMIT);
+        if (!response.ok)
+          throw new Error(`The import failed (${response.status}).`);
+        const result = uploadSchema.parse(await response.json());
+        refused.push(
+          ...result.skipped.map((name) => `${name} is too large`),
+          ...result.invalid.map((item) => `${item.name}: ${item.reason}`),
+        );
+      }
       if (refused.length) setMessage(`Not imported. ${refused.join(". ")}.`);
       await load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
+      nativeImport.current = undefined;
+      setCopyProgress(undefined);
+      setCancelling(false);
       setImporting(false);
       setMessage((current) => (current === STILL_IMPORTING ? "" : current));
     }
@@ -810,6 +864,34 @@ export function MediaPanel({
           }}
         />
       </header>
+      {desktop && importing && (
+        <div className="media-import-status">
+          <span role="status">
+            {cancelling
+              ? "Cancelling import"
+              : copyProgress === undefined || copyProgress === 100
+                ? "Importing media"
+                : `Copying media ${copyProgress}%`}
+          </span>
+          {copyProgress !== undefined && copyProgress < 100 && (
+            <button
+              className="text-button"
+              disabled={cancelling}
+              onClick={() => {
+                const id = nativeImport.current;
+                if (!id) return;
+                setCancelling(true);
+                void desktop.cancelMediaImport(id).catch((error: unknown) => {
+                  setCancelling(false);
+                  failed(error);
+                });
+              }}
+            >
+              Cancel import
+            </button>
+          )}
+        </div>
+      )}
       {message && (
         <p className="media-message" role="alert">
           {message}
@@ -853,8 +935,14 @@ export function MediaPanel({
           </div>
         ) : media?.length === 0 ? (
           <div className="media-empty">
-            <strong>{importing ? "Importing" : "No media yet"}</strong>
-            <span>Drop files here or import from your computer.</span>
+            {importing ? (
+              !desktop && <strong>Importing</strong>
+            ) : (
+              <>
+                <strong>No media yet</strong>
+                <span>Drop files here or import from your computer.</span>
+              </>
+            )}
           </div>
         ) : (
           <ul

@@ -1,3 +1,9 @@
+import {
+  defaultFormat,
+  pictureSizeRule,
+  ProjectFormatSchema,
+  withinPictureArea,
+} from "./projectFormat";
 import { z } from "zod";
 import { TimelineSettingsSchema } from "./timeline/schema";
 import { JobStateSchema } from "./jobs";
@@ -109,12 +115,15 @@ export const ProjectSummarySchema = z.object({
   /** Seconds. */
   duration: z.number().nonnegative(),
 });
-export const CreateProjectSchema = z.object({
-  name: z.string().trim().min(1).max(120),
-  width: z.number().int().min(240).max(7680).default(1920),
-  height: z.number().int().min(240).max(7680).default(1080),
-  duration: z.number().finite().min(1).max(86_400).default(12),
-});
+export const CreateProjectSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    width: ProjectFormatSchema.shape.width.default(defaultFormat.width),
+    height: ProjectFormatSchema.shape.height.default(defaultFormat.height),
+    fps: ProjectFormatSchema.shape.fps.default(defaultFormat.fps),
+    duration: z.number().finite().min(1).max(86_400).default(12),
+  })
+  .refine(withinPictureArea, pictureSizeRule);
 export const ImportProjectSchema = z.object({
   path: z.string().min(1),
   name: z.string().trim().min(1).max(120).optional(),

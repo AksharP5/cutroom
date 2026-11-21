@@ -1,3 +1,9 @@
+import { historyCache } from "../history/historyCache";
+import {
+  openProjectHistory,
+  readProjectHistory,
+} from "../history/projectHistory";
+import { fpsToFfmpegArg } from "@hyperframes/core";
 import { projectEditedAt } from "./edited";
 import { randomUUID } from "node:crypto";
 import {
@@ -13,11 +19,9 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import {
   applyFileMutations,
   fileContentVersion,
-  historyCache,
-  openProjectHistory,
-  readProjectHistory,
 } from "@hyperframes/studio-server";
-import type { FileMutationInput, HistoryWho } from "@hyperframes/studio-server";
+import type { FileMutationInput } from "@hyperframes/studio-server";
+import type { HistoryWho } from "../history/historyLog";
 import { z } from "zod";
 import {
   CreateProjectSchema,
@@ -33,6 +37,7 @@ import type {
 } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
 import { guardFreezeHistory } from "./freezeHistory";
+import { rememberTimelineWrite } from "../timeline/watch";
 import { isMissing, projectPath, projectWritePath } from "./path";
 
 export { isMissing, projectPath } from "./path";
@@ -152,7 +157,7 @@ body { color: #ededed; background: #111111; font-family: "Instrument Sans", syst
   font-weight: 400; line-height: 1.5; color: #a8a8a8;
 }
 </style></head>
-<body><main id="main" data-composition-id="main" data-no-timeline data-width="${input.width}" data-height="${input.height}" data-duration="${input.duration}" class="stage">
+<body><main id="main" data-composition-id="main" data-no-timeline data-width="${input.width}" data-height="${input.height}" data-fps="${fpsToFfmpegArg(input.fps)}" data-duration="${input.duration}" class="stage">
 <div id="rule" class="clip background" data-start="0" data-duration="${input.duration}" data-track-index="0" data-label="Background"></div>
 <div id="headline" class="clip title" data-start="0" data-duration="${input.duration}" data-track-index="1" data-label="Project title">${escapeHtml(input.name)}</div>
 <div id="caption" class="clip caption" data-start="0" data-duration="${input.duration}" data-track-index="2" data-label="Getting started">Drop media in, or ask your agent to start.</div>
@@ -181,6 +186,9 @@ export async function createProjectStore(options: {
       undoScope: "everyone",
       beforeReplay: (changes, readBlob, context) =>
         guardFreezeHistory({ path: projectDir }, changes, readBlob, context),
+      // A moved folder or a deleted .hyperframes/history-id looks like a gone project.
+      // Undo history is only removed by the owner, never on a timer.
+      pruneGoneProjectsBudgetMs: 0,
     }),
   );
   const documentReads = new WeakMap<ProjectDocument, string | null>();
@@ -311,9 +319,20 @@ export async function createProjectStore(options: {
       expectedVersion: fileContentVersion(before),
     };
   };
-  const writeFiles = (project: Project, mutations: FileMutationInput[]) => {
+  const writeFiles = (
+    project: Project,
+    mutations: FileMutationInput[],
+    origin?: string,
+  ) => {
     try {
-      applyFileMutations(project.path, mutations);
+      const saved = applyFileMutations(project.path, mutations);
+      for (const [index, file] of saved.entries())
+        if (file.changed)
+          rememberTimelineWrite(
+            mutations[index]!.absPath,
+            () => file.version,
+            origin,
+          );
     } catch (error) {
       if (
         error instanceof Error &&
@@ -330,10 +349,11 @@ export async function createProjectStore(options: {
     project: Project,
     value: ProjectDocument,
     additional: FileMutationInput[] = [],
+    origin?: string,
   ) => {
     ProjectDocumentSchema.parse(value);
     const mutation = await documentMutation(project, value);
-    writeFiles(project, [...additional, mutation]);
+    writeFiles(project, [...additional, mutation], origin);
     documentReads.set(value, mutation.after);
   };
   return {

@@ -3,8 +3,20 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { fileURLToPath } from "node:url";
-import { writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createApp } from "../src/server/app";
 import { Hono } from "hono";
 import { createProjectRoutes } from "../src/server/projects/routes";
 import { createReviewService } from "../src/server/projects/review";
@@ -511,3 +523,292 @@ test("title text edits through MCP write the source, undo in one step, and refus
     await fixture.close();
   }
 });
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "media_files tells an agent each file's length, size, picture and sound without probing it",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "cutroom-media-details-"));
+    const probe = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response(),
+    });
+    const port = probe.port;
+    await probe.stop(true);
+    const runtime = await createApp({
+      dataDir: root,
+      projectsDir: join(root, "projects"),
+      port,
+    });
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: runtime.app.fetch,
+    });
+    const client = new Client({ name: "media-details-test", version: "1" });
+    try {
+      const project = await runtime.projects.create({ name: "Media details" });
+      const assets = join(project.path, "assets");
+      await mkdir(assets, { recursive: true });
+      const ffmpeg = (...args: string[]) =>
+        expect(Bun.spawnSync(["ffmpeg", "-v", "error", ...args]).exitCode).toBe(
+          0,
+        );
+      ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=s=320x180:r=50:d=2",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=d=2",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-shortest",
+        join(assets, "talk.mp4"),
+      );
+      ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=s=640x360:r=24000/1001:d=1",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        join(assets, "broll.mp4"),
+      );
+      ffmpeg("-f", "lavfi", "-i", "sine=d=3", join(assets, "music.wav"));
+      ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "color=s=64x32",
+        "-frames:v",
+        "1",
+        join(assets, "logo.png"),
+      );
+      await client.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${port}/mcp`),
+        ),
+      );
+      const list = async () =>
+        z
+          .object({
+            structuredContent: z.object({
+              result: z.object({
+                files: z.array(z.looseObject({ path: z.string() })),
+              }),
+            }),
+          })
+          .parse(
+            await client.callTool({
+              name: "media_files",
+              arguments: { projectId: project.id, query: "assets/" },
+            }),
+          ).structuredContent.result.files;
+      let files = await list();
+      const file = (name: string) =>
+        files.find(({ path }) => path === `assets/${name}`);
+      const bytes = async (name: string) =>
+        (await stat(join(assets, name))).size;
+      expect(file("talk.mp4")).toEqual({
+        path: "assets/talk.mp4",
+        kind: "video",
+        src: "assets/talk.mp4",
+        bytes: await bytes("talk.mp4"),
+        duration: expect.closeTo(2, 1),
+        width: 320,
+        height: 180,
+        fps: 50,
+        audio: true,
+      });
+      expect(file("broll.mp4")).toMatchObject({
+        width: 640,
+        height: 360,
+        fps: 23.976,
+        audio: false,
+      });
+      expect(file("music.wav")).toEqual({
+        path: "assets/music.wav",
+        kind: "audio",
+        src: "assets/music.wav",
+        bytes: await bytes("music.wav"),
+        duration: 3,
+        audio: true,
+      });
+      expect(file("logo.png")).toEqual({
+        path: "assets/logo.png",
+        kind: "image",
+        src: "assets/logo.png",
+        bytes: await bytes("logo.png"),
+      });
+
+      // A replacement of the same size that keeps the old modification time is probed again:
+      // 2 s of mono and 1 s of stereo hold the same number of bytes.
+      const music = join(assets, "music.wav");
+      ffmpeg("-f", "lavfi", "-i", "sine=d=2", "-ac", "1", "-y", music);
+      files = await list();
+      const mono = await stat(music);
+      expect(file("music.wav")).toMatchObject({ duration: 2 });
+      const stereo = join(root, "stereo.wav");
+      ffmpeg("-f", "lavfi", "-i", "sine=d=1", "-ac", "2", stereo);
+      expect((await stat(stereo)).size).toBe(mono.size);
+      await rename(stereo, music);
+      await utimes(music, mono.atimeMs / 1000, mono.mtimeMs / 1000);
+      expect((await stat(music)).mtimeMs).toBe(mono.mtimeMs);
+      files = await list();
+      expect(file("music.wav")).toMatchObject({
+        bytes: mono.size,
+        duration: 1,
+      });
+
+      // A file that went, or a path outside the project, is refused and never probed.
+      await writeFile(join(root, "outside.wav"), "not inside the project");
+      for (const path of [
+        "assets/gone.wav",
+        "../../outside.wav",
+        join(root, "outside.wav"),
+      ])
+        expect(
+          (
+            await runtime.app.request(
+              `http://127.0.0.1:${port}/api/cutroom/projects/${project.id}/media/details?path=${encodeURIComponent(path)}`,
+            )
+          ).status,
+        ).toBe(404);
+    } finally {
+      await client.close();
+      await runtime.dispose();
+      await server.stop(true);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  30_000,
+);
+
+test.skipIf(
+  !Bun.which("ffmpeg") || !Bun.which("ffprobe") || !Bun.which("bash"),
+)(
+  "media_files probes eight files at a time, and a file ffprobe cannot read or stalls on keeps its size",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "cutroom-media-probes-"));
+    const probe = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response(),
+    });
+    const port = probe.port;
+    await probe.stop(true);
+    const runtime = await createApp({
+      dataDir: root,
+      projectsDir: join(root, "projects"),
+      port,
+    });
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: runtime.app.fetch,
+    });
+    const client = new Client({ name: "media-probes-test", version: "1" });
+    const configured = process.env.HYPERFRAMES_FFPROBE_PATH;
+    // Stand-ins for ffprobe: one notes how many probes are running before running the real one,
+    // the other never answers.
+    const running = join(root, "running");
+    await mkdir(running);
+    const counting = join(root, "ffprobe-counting");
+    await writeFile(
+      counting,
+      `#!/usr/bin/env bash\ntouch "${running}/$$"\nls "${running}" | wc -l >> "${root}/counts"\nsleep 0.2\nrm "${running}/$$"\nexec "${Bun.which("ffprobe")}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    const stalling = join(root, "ffprobe-stalling");
+    await writeFile(stalling, "#!/bin/sh\nexec sleep 60\n", { mode: 0o755 });
+    try {
+      const project = await runtime.projects.create({ name: "Media probes" });
+      const assets = join(project.path, "assets");
+      await mkdir(assets, { recursive: true });
+      const tone = join(root, "tone.wav");
+      expect(
+        Bun.spawnSync([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=d=1",
+          tone,
+        ]).exitCode,
+      ).toBe(0);
+      for (let index = 0; index < 20; index++)
+        await copyFile(tone, join(assets, `take-${index}.wav`));
+      await writeFile(join(assets, "broken.mp4"), "not a video at all");
+      await client.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${port}/mcp`),
+        ),
+      );
+      const list = async (query: string) =>
+        z
+          .object({
+            structuredContent: z.object({
+              result: z.object({
+                files: z.array(z.looseObject({ path: z.string() })),
+              }),
+            }),
+          })
+          .parse(
+            await client.callTool({
+              name: "media_files",
+              arguments: { projectId: project.id, query },
+            }),
+          ).structuredContent.result.files;
+      const size = async (name: string) =>
+        (await stat(join(assets, name))).size;
+
+      process.env.HYPERFRAMES_FFPROBE_PATH = counting;
+      const files = await list("assets/");
+      expect(files.filter((file) => file.duration === 1)).toHaveLength(20);
+      expect(files.find((file) => file.path === "assets/broken.mp4")).toEqual({
+        path: "assets/broken.mp4",
+        kind: "video",
+        src: "assets/broken.mp4",
+        bytes: await size("broken.mp4"),
+      });
+      const counts = (await readFile(join(root, "counts"), "utf8"))
+        .trim()
+        .split("\n")
+        .map(Number);
+      expect(counts).toHaveLength(21);
+      expect(Math.max(...counts)).toBeGreaterThan(1);
+      expect(Math.max(...counts)).toBeLessThanOrEqual(8);
+
+      // ffprobe is stopped after 15 s and the file still lists with its size.
+      process.env.HYPERFRAMES_FFPROBE_PATH = stalling;
+      await copyFile(tone, join(assets, "stalled.wav"));
+      expect(await list("stalled")).toEqual([
+        {
+          path: "assets/stalled.wav",
+          kind: "audio",
+          src: "assets/stalled.wav",
+          bytes: await size("stalled.wav"),
+        },
+      ]);
+    } finally {
+      if (configured === undefined) delete process.env.HYPERFRAMES_FFPROBE_PATH;
+      else process.env.HYPERFRAMES_FFPROBE_PATH = configured;
+      await client.close();
+      await runtime.dispose();
+      await server.stop(true);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  45_000,
+);

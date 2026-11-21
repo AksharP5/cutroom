@@ -102,6 +102,11 @@ const cutroomTools: Record<
     kind: "project",
     object: () => "media files",
   },
+  media_import: {
+    verb: ["Imported", "Importing", "Import"],
+    kind: "edit",
+    object: (target) => target ?? "media files",
+  },
   media_rename: {
     verb: ["Renamed", "Renaming", "Rename"],
     kind: "edit",
@@ -276,10 +281,20 @@ const cutroomTools: Record<
   },
   source_marks: { verb: read, kind: "project", object: () => "source marks" },
   timeline_read: { verb: read, kind: "project", object: () => "the timeline" },
+  timeline_format_preview: {
+    verb: ["Previewed", "Previewing", "Preview"],
+    kind: "project",
+    object: () => "the project format change",
+  },
   timeline_edit: {
     verb: edited,
     kind: "edit",
     object: (target) => target ?? "the timeline",
+  },
+  timeline_add_transitions: {
+    verb: ["Added", "Adding", "Add"],
+    kind: "edit",
+    object: () => "transitions",
   },
   timeline_destinations: {
     verb: ["Checked", "Checking", "Check"],
@@ -340,6 +355,11 @@ const cutroomTools: Record<
     verb: ["Accepted", "Accepting", "Accept"],
     kind: "queue",
     object: note,
+  },
+  review_accept_all: {
+    verb: ["Accepted", "Accepting", "Accept"],
+    kind: "queue",
+    object: () => "all pending agent changes",
   },
   review_send_back: {
     verb: ["Sent back", "Sending back", "Send back"],

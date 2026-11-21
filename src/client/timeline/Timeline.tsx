@@ -76,8 +76,9 @@ import { KeyframeMarks } from "./KeyframeMarks";
 import { useLaneGestures } from "./lanes";
 import { mediaDrag, subscribeMediaDrag } from "./mediaDrag";
 import type { LaneGestureOptions } from "./lanes";
+import { selectedEditEdges } from "./selection";
 import type { Selection } from "./selection";
-import { useClipMotion } from "./motion";
+import { readSlideTiming, useClipMotion } from "./motion";
 import { createViewport } from "./view";
 import type { TimelineViewport, ViewPlacement } from "./view";
 import { formatTimecode, quietTimecode } from "../../shared/timeline/timecode";
@@ -108,6 +109,10 @@ export interface TimelinePin {
 }
 export interface TimelineProps {
   timeline: TimelineData;
+  /** The open mixer, which takes the meter column's place and width from the lanes. */
+  mixer?: ReactNode;
+  /** Opens the mixer from the meter column. */
+  onMixer?(): void;
   viewSettings: TimelineViewSettings;
   onViewSettings(settings: TimelineViewSettings): void;
   /** The index of the track of each kind that media placed without a drag goes to. */
@@ -121,6 +126,7 @@ export interface TimelineProps {
   pins: readonly TimelinePin[];
   agentChanges?: ReadonlySet<string>;
   selection: Selection;
+  linkedSelection?: boolean;
   onSelect(selection: Selection): void;
   /** What a press on a clip does: move and resize, ripple and roll, or razor. */
   tool: Tool;
@@ -194,6 +200,7 @@ interface Mounted {
 
 function readSizes(): {
   rows: RowSizes;
+  slide: ReturnType<typeof readSlideTiming>;
   head: number;
   /** The ruler and its seam, over the lanes in the same scroller. */
   ruler: number;
@@ -203,6 +210,7 @@ function readSizes(): {
   const style = getComputedStyle(document.documentElement);
   const px = (token: string) => parseFloat(style.getPropertyValue(token));
   return {
+    slide: readSlideTiming(style),
     rows: {
       video: px("--size-track-video"),
       audio: px("--size-track-audio"),
@@ -779,6 +787,7 @@ export function Timeline({
   pins,
   agentChanges,
   selection,
+  linkedSelection = true,
   onSelect,
   tool,
   snapping,
@@ -798,8 +807,17 @@ export function Timeline({
   onOpenPin,
   onOpenMarker,
   onOpenClip,
+  mixer,
+  onMixer,
 }: TimelineProps) {
   const [takeTrack, setTakeTrack] = useState<Track | null>(null);
+  const mixerOpen = mixer !== undefined;
+  const mixerWas = useRef(mixerOpen);
+  // The mixer takes its width from the lanes without rescaling them: the frames stay put.
+  useLayoutEffect(() => {
+    if (mixerWas.current !== mixerOpen) viewport.current?.hold();
+    mixerWas.current = mixerOpen;
+  }, [mixerOpen]);
   useLayoutEffect(() => {
     if (!recording) {
       setTakeTrack(null);
@@ -960,6 +978,13 @@ export function Timeline({
       });
     },
   });
+  const editEdges = useMemo(
+    () =>
+      selection.editPoint
+        ? selectedEditEdges(timeline, selection.editPoint, linkedSelection)
+        : [],
+    [timeline, selection.editPoint, linkedSelection],
+  );
   const gestures = useLaneGestures({
     timeline,
     composition: source.composition,
@@ -968,6 +993,7 @@ export function Timeline({
     tracks,
     imageSources,
     selection,
+    linkedSelection,
     tool,
     snapping,
     lanes,
@@ -1106,6 +1132,7 @@ export function Timeline({
     () => viewport.current?.state().ppf ?? 0,
     (slides) => bodies.current?.slide(slides),
     gestures.held,
+    sizes.slide,
   );
   useLayoutEffect(() => {
     viewport.current?.measure({
@@ -1554,6 +1581,17 @@ export function Timeline({
                           }}
                         />
                       )}
+                      {editEdges
+                        .filter((edge) => edge.track === row.track.index)
+                        .map((edge) => (
+                          <i
+                            key={`${edge.id}:${edge.edge}`}
+                            className={`tl-edit-edge ${edge.edge}`}
+                            data-edit-edge={`${edge.id}:${edge.edge}`}
+                            data-frame={edge.frame}
+                            style={{ "--s": edge.frame }}
+                          />
+                        ))}
                       {/* Brackets sit above the transitions they may cross. */}
                       {rowClips.map(
                         ({ clip, row }) =>
@@ -1662,7 +1700,7 @@ export function Timeline({
           </div>
         </div>
       </div>
-      <AudioMeters />
+      {mixer ?? <AudioMeters onMixer={onMixer} />}
     </div>
   );
 }

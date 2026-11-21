@@ -82,6 +82,30 @@ test(", and . nudge the selected clip a frame, overwriting its neighbour, each o
   await expect.poll(() => clip("shot-2")).toEqual([0, 84, 90]);
 });
 
+test("a held nudge saves after a keyup without a code when Shift already ended", async ({
+  page,
+  request,
+}) => {
+  const { clip, select } = await open(page, request);
+  await select("shot-2");
+  const saved = page.waitForRequest(
+    (event) => event.method() === "POST" && event.url().endsWith("/commands"),
+  );
+  await page.keyboard.down("Shift");
+  for (let n = 0; n < 3; n++) await page.keyboard.down("Period");
+  await page.keyboard.up("Shift");
+  expect(await clip("shot-2")).toEqual([0, 90, 90]);
+  await page.evaluate(() =>
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "." })),
+  );
+  expect((await saved).postDataJSON()).toMatchObject({
+    label: "Moved 15 frames right",
+    commands: [{ type: "move", by: 15 }],
+  });
+  await expect.poll(() => clip("shot-2")).toEqual([0, 105, 90]);
+  await page.keyboard.up("Period");
+});
+
 test("Alt+Up and Alt+Down move the selected clip between video tracks and say when there is none", async ({
   page,
   request,
@@ -181,12 +205,15 @@ test("preset keys Cutroom lacks say so instead of nothing", async ({
 }) => {
   const { select, notice } = await open(page, request);
   await select("shot-1");
-  await page.keyboard.press("v");
-  await expect(notice).toContainText(
-    "Cutroom has no edit point selection yet (V).",
-  );
-  await page.keyboard.press("Shift+r");
-  await expect(notice).toContainText(
-    "Cutroom has no freeze frames yet (Shift+R).",
-  );
+  await page.keyboard.press("F1");
+  await expect(
+    notice.filter({ hasText: "Shortcut not yet supported" }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Shift+Tab");
+  await expect(
+    notice.filter({ hasText: "Shortcut not yet supported" }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Control+F1");
+  await expect(notice).toContainText("Shortcut not yet supported (Ctrl+F1).");
 });

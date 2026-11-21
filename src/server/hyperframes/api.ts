@@ -90,7 +90,9 @@ import {
 } from "./thumbnails";
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { createRenderIndex } from "./renders";
+import { renderCacheConfig } from "./renderCache";
 import type { ExportRequest } from "./jobs";
+import { timedCaptureMedia } from "./captureWorkload";
 import { measureLoudness } from "../timeline/audio";
 import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
@@ -98,7 +100,12 @@ import { exportResolve } from "../resolve/export";
 import { layerHtml, layerSources } from "../resolve/layers";
 import { previewPolicy } from "./isolation";
 import { APP_STATE_DIR, previewTimingPolicy } from "./previewTimingPolicy";
-import { previewDependencies } from "./previewTiming";
+import {
+  previewDependencies,
+  previewSourceTiming,
+  updatePreviewSourceTiming,
+} from "./previewTiming";
+import type { PreviewTiming, TrackGainPreview } from "../../shared/preview";
 import { previewDocument, withPreviewClipIdentities } from "./previewBridge";
 import { readTrackMix, trackMixStamp } from "../timeline/mix";
 import {
@@ -227,6 +234,21 @@ export function createHyperframesApi(
       >;
     }
   >();
+  type SourceTiming = {
+    ids: ReadonlySet<string>;
+    dependencies: string;
+    mixStamp: string;
+    authored: PreviewTiming;
+    compiled: PreviewTiming;
+    mix: TrackGainPreview;
+  };
+  const sourceTimings = new Map<string, SourceTiming>();
+  const rememberSourceTiming = (id: string, timing: SourceTiming) => {
+    sourceTimings.delete(id);
+    sourceTimings.set(id, timing);
+    if (sourceTimings.size > 8)
+      sourceTimings.delete(sourceTimings.keys().next().value!);
+  };
   // Keep the compiler's decision outside authored HTML. The upstream cache's write
   // hook supplies the final, stable response bytes, including all augmentations.
   type TimingBuild = { allowed?: boolean; signature?: string };
@@ -332,7 +354,8 @@ export function createHyperframesApi(
   const thumbnails = createThumbnailRenderer();
   const renderIndex = createRenderIndex();
   const renders = createRenderWorkers({
-    scratchDir: join(store.dataDir, "scratch"),
+    ...renderCacheConfig(),
+    legacyScratchDir: join(store.dataDir, "scratch"),
     gpu:
       process.env.CUTROOM_EXPORT_GPU === "0"
         ? undefined
@@ -345,17 +368,18 @@ export function createHyperframesApi(
               );
               return works;
             }),
-    frameCache: {
-      dir: join(store.dataDir, "cache", "frames"),
-      maxBytes: 2 * 1024 ** 3,
-    },
-    workload: async (id, composition) => {
-      const { timeline } = await readComposition(id, composition);
+    workload: async (id, composition, sourceOverride) => {
+      const { parsed, timeline } = await readComposition(id, composition);
       return {
         mediaClips: timeline.clips.filter(
           (clip) => clip.kind === "video" || isAudioKind(clip.kind),
         ).length,
         durationFrames: timeline.duration,
+        fps: timeline.fps,
+        timedMedia:
+          composition === "index.html"
+            ? timedCaptureMedia(sourceOverride ?? parsed.html)
+            : undefined,
       };
     },
     published: async (id, path) =>
@@ -1268,12 +1292,78 @@ export function createHyperframesApi(
     if (timingOnly && (loaded?.projectId !== projectId || !loaded.allowed))
       return c.json({ error: "This document requires a reload." }, 409);
     const project = await store.get(projectId);
-    const sourceBefore = timingOnly
-      ? await readSource(project, "index.html")
-      : null;
-    const dependenciesBefore = timingOnly
-      ? await previewDependencies(project.path, "index.html")
-      : null;
+    const navigation =
+      !!documentId &&
+      documentId.length <= 100 &&
+      c.req.header("sec-fetch-dest") === "iframe" &&
+      c.req.header("sec-fetch-site") === "same-origin" &&
+      !timingDocuments.has(documentId);
+    // Preview variants still use the compiler, which applies their requested values.
+    const sourceTimingRequest =
+      (navigation || timingOnly) &&
+      path === "preview" &&
+      !url.searchParams.has("variables") &&
+      !url.searchParams.has(AUDITION_PARAM) &&
+      !url.searchParams.has("hf-capture");
+    const prior = !url.searchParams.has("variables")
+      ? sourceTimings.get(documentId ?? "")
+      : undefined;
+    const readEntry = () =>
+      readSource(project, "index.html").catch((error: unknown) => {
+        if (
+          isMissing(error) ||
+          (error instanceof HttpError && error.status === 404)
+        )
+          return null;
+        throw error;
+      });
+    const readMixStamp = () =>
+      store.document(project).then(trackMixStamp, (error: unknown) => {
+        if (error instanceof ProjectDocumentError) return null;
+        throw error;
+      });
+    const [sourceBefore, dependenciesBefore, mixStampBefore] =
+      await Promise.all([
+        timingOnly || sourceTimingRequest ? readEntry() : null,
+        timingOnly ? previewDependencies(project.path, "index.html") : null,
+        sourceTimingRequest ? readMixStamp() : null,
+      ]);
+    if (
+      timingOnly &&
+      prior &&
+      sourceBefore &&
+      dependenciesBefore === prior.dependencies &&
+      mixStampBefore === prior.mixStamp
+    ) {
+      const authored = previewSourceTiming(sourceBefore.content, prior.ids);
+      const timing =
+        authored &&
+        updatePreviewSourceTiming(prior.authored, authored, prior.compiled);
+      if (timing) {
+        const [source, dependencies, mixStamp] = await Promise.all([
+          readEntry(),
+          previewDependencies(project.path, "index.html"),
+          readMixStamp(),
+        ]);
+        if (
+          source?.version === sourceBefore.version &&
+          dependencies === dependenciesBefore &&
+          mixStamp === mixStampBefore
+        ) {
+          c.header("Cache-Control", "no-store");
+          const mix =
+            timing === prior.compiled
+              ? prior.mix
+              : { ...prior.mix, signature: timing.revision };
+          return c.json({
+            version: sourceBefore.version,
+            timing,
+            mix,
+            live: true,
+          });
+        }
+      }
+    }
     // A disk write can beat its watch event. Do not label a cached compiled document
     // with the newer source version merely because the watcher has not invalidated it yet.
     if (timingOnly) signatures.delete(project.path);
@@ -1417,23 +1507,54 @@ export function createHyperframesApi(
         window.duration,
       ]),
     );
+    const checkedSourceTiming = async (
+      compiled: PreviewTiming,
+      dependencies: string,
+      sourceVersion: string | undefined,
+    ): Promise<SourceTiming | undefined> => {
+      if (
+        !sourceTimingRequest ||
+        !sourceBefore ||
+        sourceVersion !== sourceBefore.version ||
+        mixStampBefore === null ||
+        !response.ok ||
+        !response.headers.has("ETag") ||
+        mixStampBefore !== (await readMixStamp())
+      )
+        return;
+      const ids = new Set(compiled.clips.map(({ id }) => id));
+      const authored = previewSourceTiming(sourceBefore.content, ids);
+      if (authored?.clips.length !== ids.size) return;
+      return {
+        ids,
+        dependencies,
+        mixStamp: mixStampBefore,
+        authored,
+        compiled,
+        mix,
+      };
+    };
     if (timingOnly) {
       c.header("Cache-Control", "no-store");
-      const sourceAfter = await readSource(project, "index.html");
-      if (!response.ok || sourceBefore?.version !== sourceAfter.version)
+      const sourceAfter = await readEntry();
+      if (
+        !response.ok ||
+        !sourceBefore ||
+        sourceBefore.version !== sourceAfter?.version
+      )
         return c.json(
           { error: "The preview changed while reading timing." },
           409,
         );
       if (!document.timing)
         return c.json({
-          version: sourceAfter.version,
+          version: sourceBefore.version,
           timing: null,
           mix,
           live: true,
         });
       if (
-        dependenciesBefore === null ||
+        !dependenciesBefore ||
         dependencies === null ||
         dependenciesBefore !== dependencies
       )
@@ -1441,8 +1562,15 @@ export function createHyperframesApi(
           { error: "The preview changed while reading timing." },
           409,
         );
+      const checked = await checkedSourceTiming(
+        document.timing,
+        dependencies,
+        sourceAfter.version,
+      );
+      if (checked && documentId && timingDocuments.get(documentId) === loaded)
+        rememberSourceTiming(documentId, checked);
       return c.json({
-        version: sourceAfter.version,
+        version: sourceBefore.version,
         timing: document.timing,
         mix,
         live:
@@ -1450,20 +1578,31 @@ export function createHyperframesApi(
           timingDocuments.get(documentId ?? "")?.allowed === true,
       });
     }
-    if (
-      documentId &&
-      documentId.length <= 100 &&
-      c.req.header("sec-fetch-dest") === "iframe" &&
-      c.req.header("sec-fetch-site") === "same-origin" &&
-      !timingDocuments.has(documentId)
-    ) {
-      timingDocuments.set(documentId, {
-        projectId,
-        allowed: document.timing !== null,
-        ramp: ramp ? { assets: ramp.assets, pending: ramp.pending } : undefined,
-      });
-      if (timingDocuments.size > 64)
-        timingDocuments.delete(timingDocuments.keys().next().value!);
+    if (navigation && documentId && !timingDocuments.has(documentId)) {
+      const compiled = document.timing;
+      const checked =
+        sourceTimingRequest && compiled && dependencies
+          ? await checkedSourceTiming(
+              compiled,
+              dependencies,
+              (await readEntry())?.version,
+            )
+          : undefined;
+      if (!timingDocuments.has(documentId)) {
+        timingDocuments.set(documentId, {
+          projectId,
+          allowed: compiled !== null,
+          ramp: ramp
+            ? { assets: ramp.assets, pending: ramp.pending }
+            : undefined,
+        });
+        if (timingDocuments.size > 64) {
+          const oldest = timingDocuments.keys().next().value!;
+          timingDocuments.delete(oldest);
+          sourceTimings.delete(oldest);
+        }
+        if (checked) rememberSourceTiming(documentId, checked);
+      }
     }
     return new Response(document.html, {
       status: response.status,

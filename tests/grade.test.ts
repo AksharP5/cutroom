@@ -115,6 +115,131 @@ test("a grade is written as HyperFrames' data-color-grading, edited field by fie
   expect(clip(neutral, "shot").grade).toBeNull();
 });
 
+test("a region-free adjustment layer keeps a grade without changing its source shots", () => {
+  const graded = edit(page(shot), [
+    { type: "setTrack", index: 1, kind: "video" },
+    {
+      type: "insert",
+      at: 30,
+      track: 1,
+      clip: { kind: "adjustment", id: "look", duration: 90 },
+    },
+    { type: "setClip", clipId: "look", grade: look },
+  ]);
+  expect(clip(graded, "look")).toMatchObject({
+    adjustment: true,
+    grade: look,
+    region: null,
+    start: 30,
+    duration: 90,
+  });
+  expect(clip(graded, "shot").grade).toBeNull();
+  const cleared = edit(graded, [
+    { type: "setClip", clipId: "look", grade: null },
+  ]);
+  expect(clip(cleared, "look")).toMatchObject({
+    adjustment: true,
+    grade: null,
+    region: null,
+  });
+});
+
+const adjustedShot = () =>
+  edit(page(shot), [
+    { type: "setTrack", index: 1, kind: "video" },
+    {
+      type: "insert",
+      at: 60,
+      track: 1,
+      clip: { kind: "adjustment", id: "look", duration: 30 },
+    },
+    { type: "setClip", clipId: "look", grade: look },
+  ]);
+
+test("a grade on an adjustment layer follows its span on either export path", () => {
+  const html = adjustedShot();
+  const plan = planDirectExport(html, { num: 30, den: 1 }, null);
+  if ("reason" in plan) throw new Error(plan.reason);
+  expect(
+    plan.segments.map(({ kind, start, end }) => [kind, start, end]),
+  ).toEqual([
+    ["source", 0, 60],
+    ["source", 60, 90],
+    ["source", 90, 300],
+  ]);
+  expect(plan.segments[1]).toMatchObject({ adjustments: [look] });
+  const title =
+    '<div id="title" data-start="2" data-duration="1" data-track-index="0">Title</div>';
+  const mixed = planDirectExport(
+    html.replace("</main>", title + "</main>"),
+    { num: 30, den: 1 },
+    null,
+  );
+  if ("reason" in mixed) throw new Error(mixed.reason);
+  expect(
+    mixed.segments.map(({ kind, start, end }) => [kind, start, end]),
+  ).toEqual([
+    ["source", 0, 60],
+    ["capture", 60, 90],
+    ["source", 90, 300],
+  ]);
+  const neutral = edit(html, [
+    { type: "setClip", clipId: "look", grade: null },
+  ]);
+  const plain = planDirectExport(neutral, { num: 30, den: 1 }, null);
+  if ("reason" in plain) throw new Error(plain.reason);
+  expect(
+    plain.segments.map(({ kind, start, end }) => [kind, start, end]),
+  ).toEqual([["source", 0, 300]]);
+});
+
+test("an adjustment below a fully covering clip leaves that clip ungraded", () => {
+  const html = adjustedShot().replace(
+    shot,
+    shot.replace('data-track-index="0"', 'data-track-index="2"'),
+  );
+  expect(html).toContain('data-track-index="2"');
+  const plan = planDirectExport(html, { num: 30, den: 1 }, null);
+  if ("reason" in plan) throw new Error(plan.reason);
+  expect(
+    plan.segments.every(
+      (segment) =>
+        segment.kind === "source" &&
+        segment.src === "shot.mp4" &&
+        !segment.adjustments?.length,
+    ),
+  ).toBe(true);
+});
+
+test.each([
+  [
+    "inline style",
+    (html: string) =>
+      html.replace('id="look"', 'id="look" style="opacity:0.5"'),
+  ],
+  [
+    "region",
+    (html: string) =>
+      edit(html, [
+        { type: "setClip", clipId: "look", region: { effect: "blur" } },
+      ]),
+  ],
+] as const)("a graded adjustment with %s uses browser capture", (_, author) => {
+  const plan = planDirectExport(
+    author(adjustedShot()),
+    { num: 30, den: 1 },
+    null,
+  );
+  if ("reason" in plan) throw new Error(plan.reason);
+  expect(
+    plan.segments.map(({ kind, start, end }) => [kind, start, end]),
+  ).toEqual([
+    ["source", 0, 60],
+    ["capture", 60, 90],
+    ["source", 90, 300],
+  ]);
+});
+
 test("a razor cut and a freeze frame keep the grade", () => {
   const graded = edit(page(shot), [
     { type: "setClip", clipId: "shot", grade: { adjust: { saturation: -1 } } },

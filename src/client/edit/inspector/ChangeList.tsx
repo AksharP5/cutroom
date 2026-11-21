@@ -9,8 +9,11 @@ import { showToast } from "../../workspace";
 import { showSource } from "../source";
 import { loadTimeline, useTimeline } from "../timeline";
 import { transport } from "../transport";
-import { pendingEdit, shownChanges } from "./changes";
-import type { ChangeRow } from "./changes";
+import {
+  pendingEdit,
+  shownChanges,
+} from "../../../shared/timeline/reviewChanges";
+import type { InspectorChange } from "../../../shared/timeline/reviewChanges";
 
 /**
  * What changed, newest first: one row per change, verb first. A row seeks to its clip and selects
@@ -20,13 +23,15 @@ export function ChangeList({
   projectId,
   timeline,
   edits,
+  clipIds,
   limit,
   times = true,
   hold,
 }: {
   projectId: string;
   timeline: Timeline;
-  edits: ChangeRow[];
+  edits: InspectorChange[];
+  clipIds?: readonly string[];
   /** Rows shown before "Show all"; pending agent work is always shown. */
   limit: number;
   /** Each row's clip start. Left out where every row is the same clip. */
@@ -47,7 +52,7 @@ export function ChangeList({
     return () => controller.abort();
   }, [projectId]);
   // The rows showing when the hold began; rows still update in place from `edits`.
-  const [held, setHeld] = useState<ChangeRow[] | null>(null);
+  const [held, setHeld] = useState<InspectorChange[] | null>(null);
   if (hold && !held) setHeld(edits);
   if (!hold && held) setHeld(null);
   const latest = new Map(edits.map((edit) => [edit.id, edit]));
@@ -55,16 +60,22 @@ export function ChangeList({
     hold && held ? held.map((edit) => latest.get(edit.id) ?? edit) : edits;
   if (!rows.length) return null;
   const shown = shownChanges(rows, expanded, limit);
-  const accept = async (edit: ChangeRow) => {
+  const clips = new Map<string | undefined, Timeline["clips"][number]>(
+    timeline.clips.map((clip) => [clip.id, clip]),
+  );
+  const accept = async (edit: InspectorChange) => {
     setAccepting(edit.id);
     const { signal } = closing.current;
     try {
-      for (const member of edit.members.filter(pendingEdit))
-        await api(
-          `/projects/${projectId}/review/changes/accept`,
-          z.object({ ok: z.boolean() }),
-          json("POST", { editId: member.id }),
-        );
+      await api(
+        `/projects/${projectId}/review/changes/accept-row`,
+        z.object({ ok: z.boolean() }),
+        json("POST", {
+          groupId: edit.groupId,
+          composition: useTimeline.getState().composition,
+          clipIds,
+        }),
+      );
       await loadTimeline(projectId, signal);
     } catch (error) {
       if (!signal.aborted)
@@ -76,12 +87,19 @@ export function ChangeList({
   const reveal = (clipId: string, frame: number) => {
     showSource(false);
     transport.seek(frame);
-    useTimeline.setState(({ selection }) => ({
-      selection: clickSelection(timeline, [], selection, clipId, {
-        toggle: false,
-        range: false,
-        alone: false,
-      }),
+    useTimeline.setState(({ selection, linkedSelection }) => ({
+      selection: clickSelection(
+        timeline,
+        [],
+        selection,
+        clipId,
+        {
+          toggle: false,
+          range: false,
+          alone: false,
+        },
+        linkedSelection,
+      ),
     }));
   };
   return (
@@ -92,11 +110,7 @@ export function ChangeList({
       <ol className="inspector-changes">
         {shown.map((edit) => {
           // A removed clip keeps its history, but there is nothing left to show.
-          const clip = timeline.clips
-            .filter((clip) =>
-              edit.members.some((member) => member.clipId === clip.id),
-            )
-            .toSorted((a, b) => a.start - b.start)[0];
+          const clip = clips.get(edit.revealClipId);
           const [verb, ...rest] = edit.label.split(" ");
           const title = [
             edit.details,

@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import { getHyperframeRuntimeScript } from "@hyperframes/core/runtime-script";
 import { z } from "zod";
+import { rampRuntime } from "./rampRuntime";
 
 let script: string | undefined;
 
 /**
  * The pinned runtime, adapted for live preview: it observes group faders but only refreshes their
- * gain after removing automation, and it ramps into a lane's first point from the playhead.
+ * gain after removing automation, and it ramps into a lane's first point from the playhead. The
+ * mixer also needs to move a fader before the edit is saved, and to see an automated fader.
  */
 export function previewRuntimeScript() {
   if (script !== undefined) return script;
@@ -18,7 +20,7 @@ export function previewRuntimeScript() {
       ),
     ),
   );
-  const source = getHyperframeRuntimeScript();
+  const source = rampRuntime(getHyperframeRuntimeScript());
   const before = "a&&O.length===0&&c.some($=>$.param===a.param)&&QW(a,C)";
   // Live preview seeds a lane at the playhead, then ramps each straight segment to its end. A
   // Web Audio ramp starts at the previous event, so a first point after the playhead was ramped
@@ -40,7 +42,29 @@ export function previewRuntimeScript() {
     throw new Error(
       "Cutroom's scene variable adapter no longer matches HyperFrames 0.9.26. Review the runtime adapter before upgrading.",
     );
-  const gradeChanges = [
+  const runtimeChanges = [
+    // At rest the bridge polls for duration changes. Each element.getAnimations() can
+    // flush style across the composition, even when the element is far from the playhead.
+    // Take one animation snapshot for both adapters, then look up effects by their target.
+    [
+      'dt=(u=!1)=>{let p=0;for(let h of e.deterministicAdapters){let b=u?h.getAnimationCycleEndSeconds:h.getInferredDurationSeconds;if(typeof b!="function")continue;let v=null;try{v=b()}',
+      'dt=(u=!1)=>{let p=0,animations=a3();for(let h of e.deterministicAdapters){let b=u?h.getAnimationCycleEndSeconds:h.getInferredDurationSeconds;if(typeof b!="function")continue;let v=null;try{v=b(animations)}',
+    ],
+    [
+      "getInferredDurationSeconds:()=>{let m=0;for(let g of t){if(!g.el.isConnected)continue;let x=i(g.el);for(let y of n(g.el)){let E=l(y,x);E.endSeconds!=null&&(m=Math.max(m,E.endSeconds))}}return m>0?m:null}",
+      "getInferredDurationSeconds:(pageAnimations)=>{if(!t.length)return null;" +
+        "let byTarget=new Map;for(let animation of n(document,pageAnimations)){" +
+        "let effect=animation.effect,target=effect?.target;if(!target||effect.pseudoElement)continue;" +
+        "let list=byTarget.get(target);if(list)list.push(animation);else byTarget.set(target,[animation])}" +
+        "let m=0;for(let g of t){if(!g.el.isConnected)continue;let x=i(g.el);for(let y of byTarget.get(g.el)??[]){let E=l(y,x);E.endSeconds!=null&&(m=Math.max(m,E.endSeconds))}}return m>0?m:null}",
+    ],
+    [
+      "getInferredDurationSeconds:()=>{let A=0;for(let w of s())",
+      "getInferredDurationSeconds:(pageAnimations)=>{let A=0;for(let w of s(pageAnimations))",
+    ],
+    // Studio retains a fully buffered source after its clip leaves the preload window.
+    // On a long timeline those sources accumulate even after a jump to a distant clip.
+    ["Wy(u,!Yc||window.__HF_RELEASE_PASSED_MEDIA===!0)", "Wy(u,!0)"],
     // Video frame callbacks already redraw while playing. timeupdate would upload and shade
     // the same picture again, including the copy back from WebGL to the clip canvas.
     [
@@ -99,10 +123,10 @@ export function previewRuntimeScript() {
       '(!L.isConnected||window.__cutroomParkedMedia?.has(L)||V.source==="attribute"&&!F.has(L))',
     ],
   ] as const;
-  for (const [before] of gradeChanges)
+  for (const [before] of runtimeChanges)
     if (source.split(before).length !== 2)
       throw new Error(
-        "Cutroom's colour preview adapter no longer matches HyperFrames 0.9.26.",
+        `Cutroom's media preview adapter no longer matches HyperFrames 0.9.26 near ${before.slice(0, 64)}.`,
       );
   // Gate the takes after their effects and fades so the outgoing take's effect tails fade too.
   const auditionChanges = [
@@ -132,6 +156,12 @@ export function previewRuntimeScript() {
       throw new Error(
         "Cutroom's media audition adapter no longer matches HyperFrames 0.9.26.",
       );
+  const meter =
+    "window.__hf.audioMeter={start:()=>M.startMetering(),stop:()=>M.stopMetering(),read:()=>M.readLevels()}";
+  if (source.split(meter).length !== 2)
+    throw new Error(
+      "Cutroom's mixer adapter no longer matches HyperFrames 0.9.26.",
+    );
   script = source
     // A standalone preview fetches its children. Use the same template and default order as the compiler.
     .replace(fetchedTemplate, 'A.querySelector("template")')
@@ -145,7 +175,18 @@ export function previewRuntimeScript() {
       seed,
       '||o.unshift({kind:"set",time:n.scheduledAt,value:(r??_h)(rn(e,n.elapsed,t))}),i?.kind==="ramp"&&e.points[0].t>n.elapsed&&o.splice(1,0,{kind:"ramp",time:n.scheduledAt+(e.points[0].t-n.elapsed)/n.rate,value:(r??_h)(e.points[0].v)}),o}',
     );
-  for (const [before, after] of [...gradeChanges, ...auditionChanges])
+  for (const [before, after] of [...runtimeChanges, ...auditionChanges])
     script = script.replace(before, after);
+  // A mixer fader is heard while it moves, before anything is saved: a bus's fader gain, or a
+  // trim after the master chain for Main. Automated faders report where their lane holds them.
+  script = script.replace(
+    meter,
+    // `pre` meters clips that play through a bus as they enter it, by their track, so a track
+    // whose clips all go to buses still shows what comes from it. Its taps live while metering.
+    "window.__hf.audioMeter=(()=>{let T=new Map;function clear(){for(let t of T.values())t.dispose();T.clear()}return{start:()=>M.startMetering(),stop:()=>{M.stopMetering();clear()},clearPre:clear,read:()=>M.readLevels()," +
+      "fade:(t,n)=>{let r=t===null?M._busOut:M._groups.get(t)?.fader;r&&M._ctx&&r.gain.setTargetAtTime(n,M._ctx.currentTime,.004)}," +
+      "faders:t=>{let n={};for(let r of t){let o=M._groups.get(r);o&&(n[r]=o.fader.gain.value)}return n}," +
+      'pre:()=>{let n={};for(let r of M._activeSources){let o=r.el,g=o?.getAttribute?.("data-audio-group"),e=g?o.ownerDocument.getElementById(g):null,k=o?.getAttribute?.("data-track-index");if(!e||e.tagName.toLowerCase()!=="hf-audio-group"||e.hasAttribute("data-cutroom-track")||k==null||!r.gainNode||!M._ctx)continue;let p=T.get(r);p||(p=Ph(M._ctx,r.gainNode),T.set(r,p));let v=p.read(),c=n[k];n[k]=c?{l:Math.max(c.l,v.l),r:Math.max(c.r,v.r)}:v}for(let[r,p]of T)M._activeSources.includes(r)||(p.dispose(),T.delete(r));return n}}})()',
+  );
   return script;
 }

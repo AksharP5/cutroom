@@ -182,7 +182,6 @@ ${offsets.map((offset, index) => `<video id="v${index}" src="${index % 2}.mp4" m
     const render = async (
       format: "mp4" | "mov",
       range: "timeline" | { start: number; end: number },
-      direct = false,
     ) => {
       const start = range === "timeline" ? 0 : range.start;
       const length = range === "timeline" ? total : range.end - range.start;
@@ -207,7 +206,7 @@ ${offsets.map((offset, index) => `<video id="v${index}" src="${index % 2}.mp4" m
       );
       expect.soft(job.status, job.error ?? format).toBe("complete");
       if (job.status !== "complete") return null;
-      expect(job.encoder).toBe(direct ? "libx264" : undefined);
+      expect(job.encoder).toBe(format === "mp4" ? "libx264" : undefined);
       const { stdout } = await ffmpeg(
         "ffmpeg",
         ["-v", "error", "-i", job.outputPath, ...rawOptions],
@@ -339,7 +338,7 @@ ${offsets.map((offset, index) => `<video id="v${index}" src="${index % 2}.mp4" m
     await writeFile(composition, source);
     const start = shotLength + 1;
     const end = start + 4;
-    const frame = await render("mp4", { start, end }, true);
+    const frame = await render("mp4", { start, end });
     if (frame)
       for (let at = start; at < end; at++)
         expect(frame(at), `FFmpeg at output frame ${at}`).toEqual([

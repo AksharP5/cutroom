@@ -103,6 +103,7 @@
 .inspector-content {
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .inspector-motion-tween h4 {
@@ -1111,4 +1112,8 @@
   margin-left: auto;
   color: var(--text-secondary);
   font-size: var(--type-xs);
+}
+
+.inspector-format-edit {
+  margin-left: auto;
 }

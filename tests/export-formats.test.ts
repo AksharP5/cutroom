@@ -60,9 +60,15 @@ async function render(
     fps?: Fps;
     range?: { start: number; end: number } | null;
     outputResolution?: "landscape";
+    frameCache?: string;
   },
 ) {
-  const workers = createRenderWorkers({ scratchDir: `${root}-scratch` });
+  const workers = createRenderWorkers({
+    scratchDir: `${root}-scratch`,
+    frameCache: options.frameCache
+      ? { dir: options.frameCache, maxBytes: 16 * 1024 ** 2 }
+      : undefined,
+  });
   const filename = `${name}.${options.format}`;
   const state = workers.start(
     {
@@ -149,6 +155,115 @@ const near = (actual: number[], expected: number[], tolerance: number) =>
   );
 
 const ready = browserExecutable() && Bun.which("ffmpeg");
+
+test.skipIf(!ready)(
+  "browser capture keeps CanvasDrawElement and avoids the screenshot stall",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-capture-cadence-"));
+    try {
+      // Encode the source ordinal in black and white cells below the title.
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "nullsrc=s=96x54:r=30,geq=lum='if(mod(floor(N/pow(2,floor(X/12))),2),235,16)':cb=128:cr=128",
+        "-frames:v",
+        "60",
+        "-c:v",
+        "libx264",
+        "-threads",
+        "1",
+        join(root, "source.mp4"),
+      ]);
+      await writeFile(
+        join(root, "index.html"),
+        `<!doctype html><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style>
+<main id="main" data-composition-id="main" data-no-timeline data-width="96" data-height="54" data-fps="30" data-duration="1" style="position:relative;width:100%;height:100%">
+  <video id="picture" src="source.mp4" muted data-start="0" data-duration="1" data-media-start="0.5" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video>
+  <div id="title" data-start="0" data-duration="1" style="position:absolute;inset:2px auto auto 2px;padding:4px 8px;background:#605060;color:#111;font:12px sans-serif">Title</div>
+</main>
+<script>
+  if (typeof document.createElement('canvas').getContext('2d')?.drawElementImage === 'function')
+    document.getElementById('title').style.backgroundColor = '#ff8000';
+</script>`,
+      );
+      const started = performance.now();
+      const path = await render(root, "cadence", { format: "mp4" });
+      // Leave room for cold startup and shared runners, with a ceiling below the 2 s/frame stall.
+      expect(performance.now() - started).toBeLessThan(25_000);
+      const decoded = await frames(path, 96, 54);
+      expect(decoded).toHaveLength(30);
+      expect(
+        decoded.map((frame) =>
+          Array.from({ length: 8 }, (_, bit) =>
+            frame.at(6 + bit * 12, 40)[0] > 128 ? 1 << bit : 0,
+          ).reduce((ordinal, mask) => ordinal | mask, 0),
+        ),
+      ).toEqual(Array.from({ length: 30 }, (_, index) => 15 + index));
+      expect(
+        near(decoded[0]!.at(6, 8), [255, 128, 0, 255], 9),
+        "the title turns orange when the export page can draw HTML into a canvas",
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(`${root}-scratch`, { recursive: true, force: true });
+    }
+  },
+  90_000,
+);
+
+test.skipIf(!ready)(
+  "MOV, WebM and GIF keep full chroma when extracting SDR footage for browser capture",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-chroma-formats-"));
+    try {
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=s=96x64:r=30:d=0.2",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        join(root, "source.mp4"),
+      ]);
+      await writeFile(
+        join(root, "index.html"),
+        `<!doctype html><style>body{margin:0}</style>
+<main data-composition-id="main" data-width="96" data-height="64" data-duration="0.2">
+  <video id="picture" class="clip" src="source.mp4" muted data-start="0" data-duration="0.2" data-track-index="0"
+    style="position:absolute;inset:0;width:100%;height:100%"></video>
+</main>`,
+      );
+      for (const format of ["mov", "webm", "gif"] as const) {
+        // Give each export a cold cache so it has to extract its own frame.
+        const frameCache = join(`${root}-scratch`, format + "-frames");
+        await render(root, format, { format, frameCache });
+        const frame = (await readdir(frameCache, { recursive: true })).find(
+          (name) => name.endsWith("frame_00001.jpg"),
+        );
+        if (!frame) throw new Error(`${format} did not extract a JPEG.`);
+        expect((await probe(join(frameCache, frame)))[0], format).toMatchObject(
+          {
+            codec_name: "mjpeg",
+            pix_fmt: "yuvj444p",
+          },
+        );
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(`${root}-scratch`, { recursive: true, force: true });
+    }
+  },
+  60_000,
+);
 
 test.skipIf(!ready)(
   "MOV and WebM exports key over a colour, whole or marked, with their codecs and sound",

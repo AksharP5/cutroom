@@ -1,12 +1,14 @@
-import {
-  resolveRateSpec,
-  sourceTimeAt,
-  timeAtSourceTime,
-} from "@hyperframes/core/speed-ramp";
 import { mediaKind } from "../media";
+import {
+  framesAfterOut,
+  framesBeforeIn,
+  resolveClip,
+  sourceAtEdge,
+} from "./clipTiming";
+import { frames, secondsOf, sourceAt } from "./piece";
+import type { ExactTime } from "./piece";
 import { isAudioKind, MAX_VERSIONS } from "./schema";
 import type { Clip, Fps, Timeline, Version } from "./schema";
-import { frameTime } from "./time";
 import { framesAfter, framesBefore } from "./transition";
 
 /** A scene version is an HTML composition file; the query or hash does not count. */
@@ -41,11 +43,57 @@ export const versionStart = (version: Version, fps: Fps) =>
 export const versionOffset = (version: Version, seconds: number, fps: Fps) =>
   Math.round(seconds * sourceRate(version, fps) * 1e9) / 1e9 + 0;
 
-export const consumedSource = (clip: Clip, frames: number, fps: Fps) =>
-  sourceTimeAt(
-    resolveRateSpec(clip.automation, clip.playbackRate),
-    frameTime(frames, fps),
+/** The clip as it would play a take: same edit and source map, the take's in-point and length. */
+const asTake = (clip: Clip, mediaStart: number, version: Version): Clip => ({
+  ...clip,
+  mediaStart,
+  sourceDuration: version.sourceDuration ?? null,
+});
+
+/** Source seconds a take shows at a timeline frame, through the shared piece resolver. */
+export function versionSourceAt(
+  clip: Clip,
+  version: Version,
+  frame: number,
+  fps: Fps,
+) {
+  const time = sourceAt(
+    resolveClip(asTake(clip, versionStart(version, fps), version), fps),
+    frames(frame, fps),
   );
+  return typeof time === "number" ? time : secondsOf(time);
+}
+
+/**
+ * Move every take's in-point with the clip's edge, along the clip's own source map. The shown
+ * take takes the clip's new in-point as it is, so the two never disagree.
+ */
+export function versionsAtEdge(
+  clip: Clip,
+  shown: number | null,
+  authored: ExactTime,
+  edge: ExactTime,
+  fps: Fps,
+  edgeFps = fps,
+) {
+  if (!clip.versions || !mediaVersions(clip.kind)) return clip.versions;
+  const active = activeVersion(clip);
+  return clip.versions.map((version, i) => {
+    const mediaStart =
+      i === active
+        ? shown
+        : sourceAtEdge(
+            { ...clip, mediaStart: versionStart(version, fps) },
+            authored,
+            edge,
+            fps,
+            edgeFps,
+          ).mediaStart;
+    return mediaStart === null
+      ? version
+      : { ...version, sourceIn: versionOffset(version, mediaStart, edgeFps) };
+  });
+}
 
 /** Only a video's own separated sound follows its take. Other linked edits keep their sources. */
 export function versionPartners(clips: readonly Clip[], picture: Clip) {
@@ -86,18 +134,15 @@ export function canAddVersion(clip: Clip, { clips, tracks }: Timeline) {
   );
 }
 
+/** Frames a take lacks to cover the clip and its transition handles. */
 function shortage(clip: Clip, start: number, version: Version, fps: Fps) {
   if (isAudioKind(clip.kind) && version.silent) return 0;
+  const take = asTake(clip, start, version);
   const inHandle = clip.transitionIn ? framesBefore(clip.transitionIn) : 0;
+  const before = inHandle - framesBeforeIn(take, fps);
+  if (before > 0) return before;
   const outHandle = clip.transitionOut ? framesAfter(clip.transitionOut) : 0;
-  const before = consumedSource(clip, -inHandle, fps);
-  if (start + before < -1e-6)
-    return Math.max(1, Math.ceil(-(start + before) / frameTime(1, fps)));
-  if (version.sourceDuration === undefined) return 0;
-  const rate = resolveRateSpec(clip.automation, clip.playbackRate);
-  const end = clip.duration + outHandle;
-  const available = timeAtSourceTime(rate, version.sourceDuration - start);
-  return Math.max(0, end - Math.ceil(available / frameTime(1, fps) - 1e-3));
+  return Math.max(0, outHandle - framesAfterOut(take, fps));
 }
 
 export function versionFit(

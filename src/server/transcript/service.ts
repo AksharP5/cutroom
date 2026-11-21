@@ -26,7 +26,7 @@ import {
   parseSourceDocument,
   patchElementInHtml,
 } from "@hyperframes/studio-server";
-import type { HistoryWho } from "@hyperframes/studio-server";
+import type { HistoryWho } from "../history/historyLog";
 import { randomClipId } from "../../shared/timeline/apply";
 import { recordClipIds, usedClipIds } from "../projects/ids";
 import { projectPath, readSource } from "../projects/store";

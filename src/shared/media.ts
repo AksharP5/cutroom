@@ -27,6 +27,19 @@ export const mediaKinds = [
   },
 ] as const;
 
+/** What an agent needs to plan a cut from a media file without probing it. Missing facts are left out. */
+export const MediaFileDetailsSchema = z.object({
+  bytes: z.int().nonnegative(),
+  /** Seconds; absent for stills and files that report no length. */
+  duration: z.number().positive().optional(),
+  width: z.int().positive().optional(),
+  height: z.int().positive().optional(),
+  fps: z.number().positive().optional(),
+  /** Whether a video or sound file holds an audio stream. */
+  audio: z.boolean().optional(),
+});
+export type MediaFileDetails = z.infer<typeof MediaFileDetailsSchema>;
+
 export const mediaKind = (path: string) => {
   const extension = path.split(".").at(-1)?.toLowerCase();
   return mediaKinds.find((item) =>
@@ -100,6 +113,15 @@ export const MediaRemoveSchema = z.object({
     .default(false)
     .describe(
       "Remove a file used by clips or composition CSS/scripts. Existing clips and references remain offline until the file is back",
+    ),
+});
+
+export const MediaImportSchema = z.object({
+  paths: z
+    .array(z.string().min(1).max(4096))
+    .min(1)
+    .describe(
+      "Absolute paths to readable video, audio, or image files on this computer",
     ),
 });
 

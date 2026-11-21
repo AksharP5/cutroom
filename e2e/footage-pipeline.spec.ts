@@ -280,6 +280,7 @@ async function expectSamePictures(
     for (const bias of result.bias)
       expect(bias, `frame ${frame} bias`).toBeLessThan(1.5);
   }
+  return results;
 }
 
 async function parity(
@@ -287,6 +288,7 @@ async function parity(
   project: Project,
   fps: number,
   frames: number[],
+  exact = false,
 ) {
   const context = await browser.newContext({
     viewport: { width: 1720, height: 1050 },
@@ -304,8 +306,8 @@ async function parity(
     });
     try {
       const page = await onContext.newPage();
-      const on = await pictures(page, project, fps, frames, true);
-      await expectSamePictures(page, off, on, frames);
+      const on = await pictures(page, project, fps, frames, true, exact);
+      return await expectSamePictures(page, off, on, frames);
     } finally {
       await onContext.close();
     }
@@ -351,6 +353,136 @@ async function cutsProject(
   await numbered(join(created.path, secondFile), text, "480x360");
   return created;
 }
+
+test("a click on GPU footage selects the clip the viewer draws", async ({
+  page,
+  request,
+}) => {
+  const created = await project(request, { num: 30, den: 1 }, () =>
+    [
+      `<video id="picture" src="a.mp4" muted data-start="0" data-duration="3" data-track-index="0" style="${fill}"></video>`,
+      `<video id="transparent" src="a.mp4" muted data-start="0" data-duration="3" data-track-index="1" style="${fill};opacity:0"></video>`,
+    ].join("\n"),
+  );
+  await numbered(join(created.path, "a.mp4"), "30/1");
+  await page.goto(`/#project/${created.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-pipeline", "on");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  // The visible frame belongs to the parent canvas once the isolated preview has
+  // given up the element's media. The fully transparent clip cannot take the hit.
+  await expect
+    .poll(() =>
+      page
+        .frameLocator("iframe[data-live]")
+        .locator("#picture")
+        .evaluate((video: HTMLVideoElement) => video.preload),
+    )
+    .toBe("none");
+  await page
+    .getByRole("application", { name: "Picture", exact: true })
+    .click({ position: { x: 60, y: 60 } });
+  await expect(page.locator(".edit-select-outline")).toHaveAttribute(
+    "data-outlined",
+    "picture",
+  );
+});
+
+test("the default viewer shows footage when WebGL2 is unavailable", async ({
+  page,
+  request,
+}) => {
+  const created = await cutsProject(request, { num: 30, den: 1 });
+  await page.addInitScript(() => {
+    if (window !== window.top) return;
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      value(this: HTMLCanvasElement, kind: string, attributes?: object) {
+        if (kind === "webgl2") return null;
+        return Reflect.apply(getContext, this, [kind, attributes]);
+      },
+    });
+  });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const refused = page.waitForEvent("console", {
+    predicate: (message) =>
+      message.type() === "warning" &&
+      message.text().includes("GPU footage playback is unavailable"),
+  });
+  await page.goto(`/#project/${created.id}`);
+  await refused;
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-pipeline", "off");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  await typeFrame(page, 31, 30);
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  const shot = await settledShot(page);
+  const [picture] = await compare(page, [shot], [shot]);
+  expect(picture?.numbers[0]).toBe(48);
+  expect(errors).toEqual([]);
+});
+
+test("GPU context loss during a frame upload leaves the native picture visible", async ({
+  page,
+  request,
+}) => {
+  const created = await project(
+    request,
+    { num: 30, den: 1 },
+    () =>
+      `<video id="picture" src="a.mp4" muted data-start="0" data-duration="3" data-track-index="0" style="${fill}"></video>`,
+  );
+  await numbered(
+    join(created.path, "a.mp4"),
+    "30/1",
+    undefined,
+    "format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv",
+  );
+  await page.addInitScript(() => {
+    if (window !== window.top) return;
+    const copyTo = VideoFrame.prototype.copyTo;
+    VideoFrame.prototype.copyTo = async function (...args) {
+      const planes = await copyTo.apply(this, args);
+      const canvas = document.querySelector<HTMLCanvasElement>(
+        ".edit-pipeline[data-lose-context-on-copy]",
+      );
+      if (!canvas) return planes;
+      delete canvas.dataset.loseContextOnCopy;
+      const extension = canvas
+        .getContext("webgl2")
+        ?.getExtension("WEBGL_lose_context");
+      if (!extension) throw new Error("Cannot force context loss");
+      // Finish the pending upload after the browser has delivered the real loss event.
+      await new Promise<void>((resolve) => {
+        canvas.addEventListener("webglcontextlost", () => resolve(), {
+          once: true,
+        });
+        extension.loseContext();
+      });
+      return planes;
+    };
+  });
+  await page.goto(`/#project/${created.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  await expect(stage).toHaveAttribute("data-pipeline", "on");
+  const lost = page.waitForEvent("console", {
+    predicate: (message) =>
+      message.text().includes("GPU dropped its drawing context"),
+  });
+  await page.locator(".edit-pipeline").evaluate((canvas: HTMLCanvasElement) => {
+    canvas.dataset.loseContextOnCopy = "";
+  });
+  await page.keyboard.press("ArrowRight");
+  await lost;
+
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  const shot = await settledShot(page);
+  const [picture] = await compare(page, [shot], [shot]);
+  expect(picture?.numbers[0]).toBe(1);
+  await expect(stage).toHaveAttribute("data-pipeline", "off");
+});
 
 test("the footage pipeline places, crops, fades and dissolves clips as HyperFrames does, under a title", async ({
   browser,
@@ -993,6 +1125,72 @@ test("a 4K60 source stays native while overlapping HD footage and after a cut", 
   const result = await compare(page, shots, shots);
   expect(result.map(({ numbers }) => numbers[1])).toEqual([24, 61, 112, 26]);
 });
+
+for (const { name, file, encoder } of [
+  {
+    name: "HEVC",
+    file: "large.mkv",
+    encoder: [
+      "-c:v",
+      "libx265",
+      "-preset",
+      "ultrafast",
+      "-x265-params",
+      "pools=2:frame-threads=2:log-level=error",
+    ],
+  },
+  {
+    name: "ProRes",
+    file: "large.mov",
+    encoder: [
+      "-c:v",
+      "prores_ks",
+      "-profile:v",
+      "2",
+      "-pix_fmt",
+      "yuv422p10le",
+      "-threads",
+      "4",
+    ],
+  },
+]) {
+  test(`a 4K ${name} source draws through its finished 1080p editing proxy`, async ({
+    browser,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const created = await project(
+      request,
+      { num: 60, den: 1 },
+      (seconds) =>
+        `<video id="uhd" src="${file}" muted data-start="0" data-duration="${seconds(30)}" data-track-index="0" style="${fill}"></video>`,
+    );
+    await numbered(join(created.path, file), "60", "3840x2160", undefined, [
+      ...encoder,
+      "-t",
+      "0.75",
+    ]);
+    const projectUrl = `/api/cutroom/projects/${created.id}`;
+    const { plan } = PipelineResponseSchema.parse(
+      await (await request.get(`${projectUrl}/pipeline`)).json(),
+    );
+    expect(plan).toMatchObject({ drawable: { uhd: "fill" } });
+    await expect
+      .poll(
+        async () =>
+          (
+            await request.get(`${projectUrl}/media/proxy?path=${file}`, {
+              headers: { range: "bytes=0-0" },
+            })
+          ).status(),
+        { timeout: 60_000 },
+      )
+      .toBe(206);
+    const frames = [0, 15, 29];
+    const results = await parity(browser, created, 60, frames, true);
+    expect(results.map(({ numbers }) => numbers[1])).toEqual(frames);
+  });
+}
 
 test("a title under footage switches only the intersecting range to HyperFrames", async ({
   page,

@@ -1,3 +1,5 @@
+import { FormatFields } from "./components/FormatFields";
+import { defaultFormat, ProjectFormatSchema } from "../shared/projectFormat";
 import {
   Component,
   Suspense,
@@ -22,6 +24,7 @@ import { z } from "zod";
 import { ProjectSchema, type Project } from "../shared/project";
 import {
   NotebookSchema,
+  REVIEW_LEDGER_PATH,
   REVIEW_STATE_PATH,
   ReviewItemSchema,
   type Notebook,
@@ -157,6 +160,18 @@ export function App() {
   >(null);
   useKeymap({ resolveCustomizedActions: () => setDialog("shortcuts") });
   const [picker, setPicker] = useState<"file" | "directory" | null>(null);
+  const [projectFormat, setProjectFormat] = useState(() => {
+    try {
+      const saved = ProjectFormatSchema.safeParse(
+        JSON.parse(localStorage.getItem("cutroom.projectFormat") ?? "null"),
+      );
+      return saved.success ? saved.data : defaultFormat;
+    } catch {
+      return defaultFormat;
+    }
+  });
+  const validProjectFormat =
+    ProjectFormatSchema.safeParse(projectFormat).success;
   const [name, setName] = useState("");
   const projectName = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
@@ -283,7 +298,9 @@ export function App() {
     );
     useWorkspace.setState({ fileChanges: {} });
     if (!projectId) return;
-    return subscribeProjectEvents(projectId, "message", (event) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let deadline = 0;
+    const stop = subscribeProjectEvents(projectId, "message", (event) => {
       try {
         const payload = z
           .object({ changed: z.string(), version: z.string().nullable() })
@@ -292,7 +309,8 @@ export function App() {
           setSourceRevision((value) => value + 1);
         else if (
           payload.changed !== "cutroom.json" &&
-          payload.changed !== REVIEW_STATE_PATH
+          payload.changed !== REVIEW_STATE_PATH &&
+          payload.changed !== REVIEW_LEDGER_PATH
         ) {
           useWorkspace.setState((state) => ({
             mediaRevision: state.mediaRevision + 1,
@@ -306,8 +324,21 @@ export function App() {
       } catch {
         return;
       }
-      void refreshDocument().catch(() => {});
+      const now = performance.now();
+      if (timer === undefined) deadline = now + 500;
+      clearTimeout(timer);
+      timer = setTimeout(
+        () => {
+          timer = undefined;
+          void refreshDocument().catch(() => {});
+        },
+        Math.max(0, Math.min(100, deadline - now)),
+      );
     });
+    return () => {
+      clearTimeout(timer);
+      stop();
+    };
   }, [projectId, refreshDocument]);
 
   useEffect(() => {
@@ -644,6 +675,7 @@ export function App() {
                   <ReviewPanel
                     key={project.id}
                     projectId={project.id}
+                    visible={panel === "review" && notebookVisible}
                     items={projectDocument.items}
                     reviewError={projectDocument.reviewError}
                     draft={reviewDraft}
@@ -668,9 +700,9 @@ export function App() {
                     }}
                     onAcceptChanges={async () => {
                       await api(
-                        `/projects/${projectId}/review/changes/accept`,
+                        `/projects/${projectId}/review/changes/accept-all`,
                         z.unknown(),
-                        json("POST"),
+                        json("POST", { scope: "project" }),
                       );
                       await refreshDocument();
                     }}
@@ -854,15 +886,24 @@ export function App() {
             className="project-form"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!name.trim() || projectOpening.current) return;
+              if (!name.trim() || !validProjectFormat || projectOpening.current)
+                return;
               const operation = {};
               projectOpening.current = operation;
               setCreating(true);
               clearToasts();
-              void api("/projects", ProjectSchema, json("POST", { name }))
+              void api(
+                "/projects",
+                ProjectSchema,
+                json("POST", { name, ...projectFormat }),
+              )
                 .then(async (created) => {
                   await loadProjects();
                   if (projectOpening.current !== operation) return;
+                  localStorage.setItem(
+                    "cutroom.projectFormat",
+                    JSON.stringify(projectFormat),
+                  );
                   openProject(created);
                   setName("");
                 })
@@ -890,6 +931,11 @@ export function App() {
               required
               maxLength={120}
             />
+            <FormatFields
+              format={projectFormat}
+              onChange={setProjectFormat}
+              disabled={creating}
+            />
             <p className="field-help">
               Saved in{" "}
               {status?.projectsDir.replace(/^\/home\/[^/]+/, "~") ??
@@ -905,7 +951,7 @@ export function App() {
               </button>
               <button
                 className="primary-button"
-                disabled={!name.trim() || creating}
+                disabled={!name.trim() || !validProjectFormat || creating}
               >
                 {creating ? "Creating…" : "Create project"}
               </button>
@@ -990,10 +1036,7 @@ export function App() {
                 />
                 GPU footage playback
               </label>
-              <p>
-                Experimental. Decodes and draws video clips in Cutroom's own
-                pipeline, with titles and graphics from HyperFrames on top.
-              </p>
+              <p>Draws supported footage on the GPU for smoother editing.</p>
             </section>
             <section>
               <h3>Keyboard</h3>

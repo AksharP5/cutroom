@@ -8,6 +8,17 @@ import { probeNvenc } from "../src/server/hyperframes/nvenc";
 import type { Fps } from "../src/shared/timeline/schema";
 import { defaultTitle } from "../src/shared/timeline/title";
 import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
+import { planDirectExport } from "../src/server/hyperframes/directPlan";
+import {
+  parseComposition,
+  patchComposition,
+} from "../src/server/timeline/composition";
+import { applyAll } from "../src/shared/timeline/apply";
+import type { ClipOrigin } from "../src/shared/timeline/apply";
+import {
+  CommandSchema,
+  emptyTimelineSettings,
+} from "../src/shared/timeline/schema";
 
 const WIDTH = 640;
 const HEIGHT = 360;
@@ -399,6 +410,192 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   300_000,
 );
 
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "zoom, blur, highlight, a graded dissolve and a title capture only their own frames",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-effects-"));
+    const scratchDir = `${root}-scratch`;
+    const direct = createRenderWorkers({ scratchDir });
+    const capture = createRenderWorkers({ scratchDir, directExport: false });
+    const fps = { num: 60, den: 1 };
+    const range = { start: 0, end: 240 };
+    const settings = emptyTimelineSettings();
+    try {
+      await Promise.all([
+        source(join(root, "a.mp4"), "640x360", "60", BT709, true),
+        source(join(root, "b.mp4"), "640x360", "60", BT709),
+        command([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "aevalsrc=0.15*sin(2*PI*(180*t+30*t*t)):s=48000:c=stereo:d=4",
+          join(root, "bed.wav"),
+        ]),
+      ]);
+      const base = parseComposition(
+        project(
+          fps,
+          [
+            { src: "a.mp4", start: 0, frames: 120, mediaStart: 0 },
+            { src: "b.mp4", start: 120, frames: 120, mediaStart: 1 },
+          ],
+          { titles: [{ start: 170, frames: 15 }] },
+        )
+          .replace('data-duration="0"', 'data-duration="0" data-fps="60"')
+          .replace(
+            'data-track-index="2" data-volume=',
+            'data-track-index="4" data-volume=',
+          ),
+        settings,
+      );
+      const origins = new Map<string, ClipOrigin>();
+      const box = { x: 0.2, y: 0.2, width: 0.6, height: 0.6 };
+      const timeline = applyAll(
+        base.timeline,
+        CommandSchema.array().parse([
+          {
+            type: "setClip",
+            clipId: "v0",
+            grade: { adjust: { exposure: 0.2, contrast: 0.1 } },
+          },
+          {
+            type: "setTransition",
+            from: "v0",
+            to: "v1",
+            transition: { duration: 24 },
+          },
+          {
+            type: "insert",
+            track: 3,
+            at: 20,
+            clip: {
+              kind: "adjustment",
+              id: "zoom",
+              duration: 30,
+              region: { effect: "zoom", box, in: 6, out: 6 },
+            },
+          },
+          {
+            type: "insert",
+            track: 3,
+            at: 55,
+            clip: {
+              kind: "adjustment",
+              id: "blur",
+              duration: 15,
+              region: { effect: "blur", box, blur: 9 },
+            },
+          },
+          {
+            type: "insert",
+            track: 3,
+            at: 80,
+            clip: {
+              kind: "adjustment",
+              id: "highlight",
+              duration: 15,
+              region: { effect: "highlight", box, dim: 0.45 },
+            },
+          },
+        ]),
+        {
+          mediaLengths: new Map([
+            ["a.mp4", 5],
+            ["b.mp4", 5],
+            ["bed.wav", 4],
+          ]),
+          onCreate: (id, origin) => origins.set(id, origin),
+        },
+      );
+      const html = patchComposition(base, timeline, origins);
+      const plan = planDirectExport(html, fps, range);
+      if ("reason" in plan) throw new Error(plan.reason);
+      expect(plan.segments.filter(({ kind }) => kind === "capture")).toEqual([
+        { kind: "capture", start: 20, end: 50 },
+        { kind: "capture", start: 55, end: 70 },
+        { kind: "capture", start: 80, end: 95 },
+        { kind: "capture", start: 108, end: 132 },
+        { kind: "capture", start: 170, end: 185 },
+      ]);
+      expect(
+        planDirectExport(
+          html.replace("perspective:1000px", "perspective:900px"),
+          fps,
+          range,
+        ),
+      ).toHaveProperty("reason");
+      expect(
+        planDirectExport(
+          html.replace(
+            "</head>",
+            "<style>@keyframes cutroom-dissolve-in{to{opacity:.2}}</style></head>",
+          ),
+          fps,
+          range,
+        ),
+      ).toHaveProperty("reason");
+      await writeFile(join(root, "index.html"), html);
+      const outputs = [];
+      for (const [workers, renderer] of [
+        [capture, "capture"],
+        [direct, "mixed"],
+      ] as const) {
+        const filename = `${renderer}.mp4`;
+        const state = workers.start(
+          {
+            project: { id: "effects", dir: root },
+            outputPath: join(root, filename),
+            format: "mp4",
+            fps,
+            quality: "high",
+            jobId: renderer,
+          },
+          { filename, directory: root, range },
+        );
+        while (state.status === "rendering") await Bun.sleep(50);
+        expect(state.error).toBeUndefined();
+        expect(state.renderer).toBe(renderer);
+        outputs.push(state.outputPath);
+      }
+      const [reference, mixed] = await Promise.all(outputs.map(decode));
+      expect(reference!.length).toBe(range.end * WIDTH * HEIGHT * 3);
+      expect(mixed!.length).toBe(reference!.length);
+      const max = [0, 0, 0];
+      const mean = [0, 0, 0];
+      for (let i = 0; i < reference!.length; i++) {
+        const channel = i % 3;
+        const error = Math.abs(reference![i]! - mixed![i]!);
+        mean[channel]! += error;
+        max[channel] = Math.max(max[channel]!, error);
+      }
+      for (const error of mean)
+        expect(error / (reference!.length / 3)).toBeLessThan(4);
+      const [referenceAudio, mixedAudio] = await Promise.all(
+        outputs.map(sound),
+      );
+      expect(mixedAudio!.length).toBe(referenceAudio!.length);
+      const power = (samples: Float32Array) =>
+        samples.reduce((sum, sample) => sum + sample ** 2, 0);
+      const audioDb =
+        10 * Math.log10(power(mixedAudio!) / power(referenceAudio!));
+      expect(Math.abs(audioDb)).toBeLessThanOrEqual(0.1);
+      console.info("Effect export parity", {
+        meanRgb: mean.map((sum) => sum / (reference!.length / 3)),
+        maxRgb: max,
+        audioDb,
+      });
+    } finally {
+      await Promise.all([direct.cancelAll(), capture.cancelAll()]);
+      await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
+    }
+  },
+  120_000,
+);
+
 /** The browser's CSS: translate, then rotate, then scale, about the frame's centre. */
 const placedAt =
   (x: number, y: number, scale: number, degrees: number, squeeze = 1): Drawn =>
@@ -563,4 +760,118 @@ ${clips.join("\n")}
     }
   },
   300_000,
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "direct adjustment grades match capture after downscaling and placement",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-adjustment-"));
+    const scratchDir = `${root}-scratch`;
+    const direct = createRenderWorkers({ scratchDir });
+    const capture = createRenderWorkers({ scratchDir, directExport: false });
+    const fps = { num: 30, den: 1 };
+    const range = { start: 12, end: 18 };
+    try {
+      // Each pair of source columns averages to a gradient. A nonlinear LUT applied
+      // before that average produces a different picture from grading after resize.
+      const luma = "95+75*X/W+12*Y/H+if(mod(X,2),22,-22)";
+      const gradient = `geq=r='${luma}':g='${luma}':b='${luma}'`;
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        `nullsrc=s=${WIDTH * 2}x${HEIGHT * 2}:r=30`,
+        "-vf",
+        `format=gbrp,${gradient},${BT709},loop=loop=29:size=1:start=0,setpts=N/(30*TB)`,
+        "-t",
+        "1",
+        "-threads",
+        "2",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "12",
+        join(root, "plate.mp4"),
+      ]);
+      const fill =
+        "position:absolute;inset:0;width:100%;height:100%;object-fit:cover";
+      const html = `<!doctype html><html><head><style>html,body{margin:0;width:100%;height:100%;background:#30a060}main{position:relative;width:100%;height:100%}</style></head><body><main data-composition-id="main" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="1" data-fps="30">
+  <video id="plain" muted src="plate.mp4" data-start="0" data-duration="0.5" data-track-index="0" style="${fill}"></video>
+  <video id="placed" muted src="plate.mp4" data-start="0.5" data-duration="0.5" data-track-index="0" style="${fill};scale:0.8;opacity:0.6" data-color-grading='{"adjust":{"temperature":0.15}}'></video>
+  <div id="lift" class="clip" data-start="0.2" data-duration="0.6" data-track-index="1" data-cutroom-adjustment data-color-grading='{"adjust":{"exposure":0.45}}'></div>
+  <div id="look" class="clip" data-start="0.2" data-duration="0.6" data-track-index="2" data-cutroom-adjustment data-color-grading='{"curves":{"master":[[0,0],[0.32,0.24],[0.58,0.64],[0.78,0.88],[1,1]]}}'></div>
+</main></body></html>`;
+      const plan = planDirectExport(html, fps, range);
+      if ("reason" in plan) throw new Error(plan.reason);
+      expect(
+        plan.segments.map(({ start, end, ...segment }) => [
+          start,
+          end,
+          segment.kind === "source" && Boolean(segment.placement),
+        ]),
+      ).toEqual([
+        [12, 15, false],
+        [15, 18, true],
+      ]);
+      await writeFile(join(root, "index.html"), html);
+      const outputs: string[] = [];
+      for (const [name, workers] of [
+        ["direct", direct],
+        ["capture", capture],
+      ] as const) {
+        const filename = name + ".mp4";
+        const state = workers.start(
+          {
+            project: { id: name, dir: root },
+            outputPath: join(root, filename),
+            format: "mp4",
+            fps,
+            quality: "high",
+            jobId: name,
+          },
+          { filename, directory: root, range },
+        );
+        const deadline = Date.now() + 20_000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(50);
+        expect(state.error).toBeUndefined();
+        expect(state.renderer).toBe(name);
+        outputs.push(state.outputPath);
+      }
+      const [fast, browser] = await Promise.all(outputs.map(decode));
+
+      const frameSize = WIDTH * HEIGHT * 3;
+      const frames = range.end - range.start;
+      expect(fast!.length).toBe(frames * frameSize);
+      expect(browser!.length).toBe(frames * frameSize);
+      for (let frame = 0; frame < frames; frame++) {
+        const errors = new Uint32Array(256);
+        let total = 0;
+        const offset = frame * frameSize;
+        for (let i = offset; i < offset + frameSize; i++) {
+          const error = Math.abs(fast![i]! - browser![i]!);
+          errors[error]!++;
+          total += error;
+        }
+        let remaining = Math.ceil(frameSize * 0.99);
+        const p99 = errors.findIndex((count) => (remaining -= count) <= 0);
+        expect(
+          total / frameSize,
+          `frame ${frame + range.start} mean`,
+        ).toBeLessThanOrEqual(1.5);
+        expect(p99, `frame ${frame + range.start} p99`).toBeLessThanOrEqual(10);
+      }
+    } finally {
+      await Promise.all([direct.cancelAll(), capture.cancelAll()]);
+      await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
+    }
+  },
+  45_000,
 );

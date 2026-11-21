@@ -1,3 +1,4 @@
+import type { ProjectFormat } from "../../shared/projectFormat";
 import type {
   InsertClip,
   InsertComposition,
@@ -16,6 +17,7 @@ export interface MediaDrag {
   /** Seconds into the file where that part begins. */
   start?: number;
   hasAudio: boolean;
+  format?: ProjectFormat;
 }
 
 /**

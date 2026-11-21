@@ -1,11 +1,15 @@
+import { rampRuntime } from "./rampRuntime.ts";
 import { readFileSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
 import { COLOR_GRADING_SOURCE_HIDDEN_ATTR } from "@hyperframes/core/color-grading";
 import { MEDIA_TRASH } from "../../shared/media.ts";
+import { adjustmentCapture } from "./adjustmentCapture.ts";
+import { spanIndex } from "../../shared/timeline/spanIndex.ts";
 import { previewPolicy } from "./isolation.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
+import { chromiumSocketPathFits } from "./ownedDirectories.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportOptions } from "../../shared/export.ts";
@@ -225,9 +229,9 @@ function replaceOnce(
 }
 
 /** Frame injection supplies the decoded pixels. The source element still owns opacity. */
-export function renderGradeRuntime(source: string) {
+export function renderGradeRuntime(source: string, adjustment = false) {
   const adapted = replaceOnce(
-    source,
+    rampRuntime(source),
     'i=r&&!n;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=a.opacity||"1"',
     'i=r;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=(n?window.getComputedStyle(e.element):a).opacity||"1"',
     "the colour grading runtime",
@@ -240,6 +244,7 @@ export function renderGradeRuntime(source: string) {
   const style = document.createElement("style");
   style.textContent = ${JSON.stringify(hideGradedFrame)};
   document.head.append(style);
+${adjustment ? "window.__cutroomAdjustmentCapture = (" + adjustmentCapture.toString() + ")(" + spanIndex.toString() + ");" : ""}
 }`;
 }
 
@@ -252,7 +257,9 @@ export function registerRenderIsolation(
     progress: (job: RenderJob) => void;
     scratchDir: string;
     projectDir: string;
+    scopedMedia?: boolean;
   },
+  adjustment = false,
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
   for (const [name, version] of [
@@ -304,6 +311,16 @@ export function registerRenderIsolation(
   const rampSource = JSON.stringify(
     new URL("./rampSource.ts", import.meta.url).href,
   );
+  const capturePictures = JSON.stringify(
+    new URL("./capturePictures.ts", import.meta.url).href,
+  );
+  const audioClock = JSON.stringify(
+    new URL("./audioClock.ts", import.meta.url).href,
+  );
+  const browserCwd =
+    range && !chromiumSocketPathFits(range.scratchDir)
+      ? range.scratchDir
+      : undefined;
   let producerLoaded = false;
   let audioMixerLoaded = false;
   let captureLoaded = false;
@@ -313,13 +330,11 @@ export function registerRenderIsolation(
     load(url, context, nextLoad) {
       const loaded = nextLoad(url, context);
       if (url.endsWith("/@hyperframes/engine/dist/services/audioMixer.js")) {
-        audioMixerLoaded = true;
-        return {
-          ...loaded,
-          source: replaceOnce(
-            String(loaded.source),
-            "    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);",
-            `    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);
+        let source = `import { AUDIO_SAMPLE_RATE } from ${audioClock};\n${String(loaded.source)}`;
+        source = replaceOnce(
+          source,
+          "    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);",
+          `    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);
     if (typeof normalizedPlaybackRate === "object" && !options?.loop && !isHttpUrl(srcPath)) {
         const { prepareLocalRamp } = await import(${rampSource});
         const prepared = await prepareLocalRamp(srcPath, outputPath, mediaStart, duration, normalizedPlaybackRate, signal, ffmpegProcessTimeout)
@@ -329,9 +344,80 @@ export function registerRenderIsolation(
             });
         if (prepared?.success) return prepared;
     }`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "            let audioSrcPath = srcPath;",
+          `            const { samples } = element;
+            const duration = samples ? (samples.end - samples.start) / AUDIO_SAMPLE_RATE : element.end - element.start;
+            let audioSrcPath = srcPath;`,
+          url,
+        );
+        for (const stage of ['"extract"', '"prepare"'])
+          source = replaceOnce(
+            source,
+            `${stage}, element.mediaStart, element.end - element.start, element.playbackRate,`,
+            `${stage}, element.mediaStart, duration, element.playbackRate,`,
             url,
-          ),
-        };
+          );
+        source = replaceOnce(
+          source,
+          "                srcPath: audioSrcPath,",
+          "                srcPath: audioSrcPath,\n                samples,",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    const delayMs = Math.round(track.start * 1000);",
+          "    const delay = track.samples ? `${track.samples.start}S` : Math.round(track.start * 1000);",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    const filters = `[${index}:a]atrim=0:${formatFilterNumber(trimDuration)},${volumeFilter}${buildFadeFilters(track)},adelay=${delayMs}|${delayMs}`;",
+          `    const trim = track.samples
+        ? "end_sample=" + (track.samples.end - track.samples.start + Math.round((track.tailSeconds ?? 0) * AUDIO_SAMPLE_RATE))
+        : "0:" + formatFilterNumber(trimDuration);
+    const filters = \`[\${index}:a]atrim=\${trim},\${volumeFilter}\${buildFadeFilters(track)},adelay=\${delay}|\${delay}\`;`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    const warmUp = fromSidecar ? Math.min(SIDECAR_WARM_UP_SECONDS, ffmpegStart) : 0;",
+          `    const warmUp = fromSidecar ? Math.min(SIDECAR_WARM_UP_SECONDS, ffmpegStart) : 0;
+    // An AAC input seek alone can jump forward to the next packet. Decode
+    // with preroll and trim on timestamps normalized to the input's start.
+    const exactAac = inputSeek && !fromSidecar && !readsUrl && metadata?.audioCodec === "aac";
+    const aacSeek = exactAac ? Math.max(0, ffmpegStart - 8192 / metadata.sampleRate) : 0;
+    const aacTrim = exactAac
+        ? \`atrim=start=\${start}:end=\${formatFilterNumber(ffmpegStart + sourceDuration)},asetpts=PTS-STARTPTS\`
+        : null;`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "warmUp > 0 ? `atrim=start=${warmUp},asetpts=PTS-STARTPTS` : timestampTrim,",
+          "aacTrim ?? (warmUp > 0 ? `atrim=start=${warmUp},asetpts=PTS-STARTPTS` : timestampTrim),",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "        ...(inputSeek\n            ? [",
+          `        ...(exactAac
+            ? ["-copyts", "-start_at_zero", ...(aacSeek > 0 ? ["-ss", formatFfmpegSeconds(aacSeek)] : [])]
+            : inputSeek
+            ? [`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    if (normalizedPlaybackRate !== 1 || options?.padToDuration)",
+          "    if (exactAac || normalizedPlaybackRate !== 1 || options?.padToDuration)",
+          url,
+        );
+        audioMixerLoaded = true;
+        return { ...loaded, source };
       }
       // Standalone templates keep the parent shell's styles and scripts. Its
       // render canvas, like its duration, belongs to the selected scene.
@@ -353,33 +439,173 @@ export function registerRenderIsolation(
       // Puppeteer starts each Chromium in its own session. Keeping it in the worker's
       // process group lets a stopped export take its browsers with it, even when the
       // worker is killed before Puppeteer's exit handlers can run.
-      if (url.endsWith("/@puppeteer/browsers/lib/launch.js"))
+      if (url.endsWith("/@puppeteer/browsers/lib/launch.js")) {
+        let source = replaceOnce(
+          String(loaded.source),
+          "opts.detached ??= process.platform !== 'win32';",
+          "opts.detached ??= false;",
+          url,
+        );
+        // Linux gives the browser a short name for the same on-disk scratch directory.
+        if (browserCwd)
+          source = replaceOnce(
+            source,
+            "            env,\n            stdio,\n        });",
+            `            env: { ...env, TMPDIR: "/proc/self/cwd" },\n            cwd: ${JSON.stringify(browserCwd)},\n            stdio,\n        });`,
+            url,
+          );
+        return { ...loaded, source };
+      }
+      if (
+        process.platform === "linux" &&
+        url.endsWith("/@hyperframes/engine/dist/services/browserManager.js")
+      ) {
+        const captureArgs = JSON.stringify(
+          new URL("./captureBrowserArgs.ts", import.meta.url).href,
+        );
         return {
           ...loaded,
           source: replaceOnce(
-            String(loaded.source),
-            "opts.detached ??= process.platform !== 'win32';",
-            "opts.detached ??= false;",
+            `import { captureBrowserArgs } from ${captureArgs};\n${String(loaded.source)}`,
+            "    return chromeArgs;",
+            "    return captureBrowserArgs(chromeArgs);",
             url,
           ),
         };
+      }
       if (
         url.endsWith(
           "/@hyperframes/engine/dist/services/videoFrameExtractor.js",
         )
       ) {
-        let source = `import { chromeSdrColourFilters as cutroomColour } from ${colour};\n${String(loaded.source)}`;
+        let source = `import { capturePictures, extractPictures } from ${capturePictures};\nimport { chromeSdrColourFilters as cutroomColour } from ${colour};\n${String(loaded.source)}`;
+        // The server prunes under an exclusive lock. An age-based sweep during capture can
+        // remove files the current render still needs.
+        source = replaceOnce(
+          source,
+          "    const sweepDue = breakdown.cacheMisses > 0 ||\n        (cacheRootDir !== undefined && gcSweepDue(cacheRootDir, GC_STALENESS_MS));",
+          "    const sweepDue = false;",
+          url,
+        );
         source = replaceOnce(
           source,
           "return [...chromeGuessForUntaggedMatrix(metadata), SDR_CANVAS_PASSTHROUGH_FILTER];",
           "return [...cutroomColour(metadata), SDR_CANVAS_PASSTHROUGH_FILTER];",
           url,
         );
-        // Frames cached before the conversion keep their old colours otherwise.
+        // Keep full chroma in intermediate JPEGs for every delivery format.
+        source = replaceOnce(
+          source,
+          "scale=flags=neighbor+accurate_rnd,format=gbrp,scale=out_color_matrix=bt601:out_range=pc:flags=neighbor,format=yuv420p",
+          "scale=flags=neighbor+accurate_rnd+full_chroma_int,format=gbrp,scale=out_color_matrix=bt601:out_range=pc:flags=bicubic+accurate_rnd,format=yuv444p",
+          url,
+        );
+        // Cache entries must carry the colour transform and the JPEG layout.
         source = replaceOnce(
           source,
           '            work.finalFrameOnly ? "final-frame" : undefined,\n',
-          '            work.finalFrameOnly ? "final-frame" : undefined,\n            ...cutroomColour(work.metadata).filter((filter) => filter.startsWith("colorspace=")),\n',
+          `            work.finalFrameOnly ? "final-frame" : undefined,
+            work.cutroomPictures?.cacheKey,
+            ...cutroomColour(work.metadata).filter((filter) => filter.startsWith("colorspace=")),
+            work.format === "jpg" ? "cutroom-jpeg444" : undefined,
+`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "            alignClipStartToFirstOutputFrame(video, fps);",
+          `            const cutroomPictures = await inExtractionSlot(() => capturePictures(
+                video, videoPath, ${JSON.stringify(range?.projectDir)}, configuredFps,
+                options.timelineEnd, ${JSON.stringify(range?.range?.frames)}, signal), signal);
+            if (cutroomPictures) {
+                video.cutroomPictures = cutroomPictures.lookup;
+                const format = resolveFrameFormat(metadata, options.format);
+                const sdrToHdrTransfer = sdrToHdrTransfers[index];
+                const hdrToSdrTransform = options.toneMapHdrToSdr === true && isHdrColorSpaceUtil(metadata.colorSpace)
+                    ? await hdrToSdrTransformKey()
+                    : undefined;
+                const keyInput = cacheKeyInputs[index];
+                if (keyInput) keyInput.mediaStart = 0;
+                return { work: {
+                    video, videoPath, index, metadata, format, sdrToHdrTransfer,
+                    hdrToSdrTransformKey: hdrToSdrTransform, cutroomPictures,
+                    videoDuration: 1, extractionMediaStart: 0,
+                    dedupeKey: JSON.stringify([videoPath, cutroomPictures.cacheKey, format, sdrToHdrTransfer, hdrToSdrTransform]),
+                } };
+            }
+            alignClipStartToFirstOutputFrame(video, fps);`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "            finalFrameOnly: work.finalFrameOnly,",
+          "            cutroomPictures: work.cutroomPictures,\n            finalFrameOnly: work.finalFrameOnly,",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    function lookupCacheFor(work) {\n        if (!cacheRootDir)",
+          "    function lookupCacheFor(work) {\n        if (!cacheRootDir || work.cutroomPictures?.ordinals.length === 0)",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "        if (work.finalFrameOnly ||\n            work.metadata.isVFR ||",
+          "        if (work.cutroomPictures || work.finalFrameOnly ||\n            work.metadata.isVFR ||",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    if (misses.some(({ work }) => work.finalFrameOnly))",
+          "    if (misses.some(({ work }) => work.cutroomPictures || work.finalFrameOnly))",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          '    if (!(playableDuration > 0)) {\n        throw new VideoSourceExtractionError("invalid_media", false, "Video source has no positive duration", `Playable video stream duration is ${playableDuration}s`);\n    }\n    if (startTime >= playableDuration) {',
+          '    if (!options.cutroomPictures && (!(playableDuration > 0) || startTime >= playableDuration)) {\n        if (!(playableDuration > 0)) throw new VideoSourceExtractionError("invalid_media", false, "Video source has no positive duration", `Playable video stream duration is ${playableDuration}s`);',
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    const sampleAtOutputFps = !options.finalFrameOnly;",
+          "    const sampleAtOutputFps = !options.finalFrameOnly && !options.cutroomPictures;",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          '    encodeArgs.push("-y", outputPattern);',
+          `    encodeArgs.push("-y", outputPattern);
+    if (options.cutroomPictures) {
+        const plan = options.cutroomPictures;
+        options.onProgress?.({ planned: plan.ordinals.length });
+        await inExtractionSlot(() => extractPictures({
+            plan, decodeArgs: keepsHdrForChrome ? ["-hwaccel", "videotoolbox", ...decodeArgs] : decodeArgs,
+            filters: filtersFor(0), encodeArgs, signal, timeout: ffmpegProcessTimeout,
+            done: (done) => options.onProgress?.({ done }),
+        }), signal);
+        const framePaths = framePathsFromDirectory(videoOutputDir, format);
+        if (framePaths.size !== plan.ordinals.length)
+            throw new Error("Extracted picture count did not match " + videoId);
+        return { videoId, srcPath: videoPath, outputDir: videoOutputDir, framePattern, fps,
+            totalFrames: framePaths.size, metadata, framePaths };
+    }`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    let localTime = Math.max(0, globalTime - videoStart);",
+          `    if (extracted.cutroomPictures) {
+        const { first, fps, slots } = extracted.cutroomPictures;
+        return slots[Math.round(globalTime * fps.num / fps.den) - first] ?? null;
+    }
+    let localTime = Math.max(0, globalTime - videoStart);`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "table.addVideo(ext, video.start, video.end, video.mediaStart, video.loop, video.playbackRate);",
+          "table.addVideo({ ...ext, cutroomPictures: video.cutroomPictures }, video.start, video.end, video.mediaStart, video.loop, video.playbackRate);",
           url,
         );
         if (range?.range) {
@@ -419,17 +645,66 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { bindPicturePlacement, PictureSlotsSchema } from ${capturePictures};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nimport { AUDIO_SAMPLE_RATE, audioFrameSample, sampleGridAudio } from ${audioClock};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = replaceOnce(
+          source,
+          "  const probeStart = Date.now();",
+          "  const cutroomAuthoredVideos = composition.videos.map((video) => ({ ...video }));\n  const probeStart = Date.now();",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "      hasAudio: readBoolean(video.hasAudio, \`${field}.hasAudio\`)",
+          "      hasAudio: readBoolean(video.hasAudio, \`${field}.hasAudio\`),\n      ...(video.cutroomPictures && { cutroomPictures: PictureSlotsSchema.parse(video.cutroomPictures) })",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    const expectedFrames = expectedFramesForVideo(video, entry, fps);\n    const capturedFrames = entry ? entry.deferredRange ? entry.totalFrames : entry.framePaths.size : 0;",
+          `    const visibleSlots = video.cutroomPictures?.slots.filter((slot) => slot !== null);
+    const expectedFrames = visibleSlots?.length ?? expectedFramesForVideo(video, entry, fps);
+    const capturedFrames = visibleSlots
+      ? visibleSlots.filter((slot) => entry?.framePaths.has(slot)).length
+      : entry ? entry.deferredRange ? entry.totalFrames : entry.framePaths.size : 0;`,
+          url,
+        );
+        source = replaceOnce(
+          `import { utimesSync as cutroomTouchGif } from "node:fs";\n${source}`,
+          "  if (resolve5(input.outputPath) !== resolve5(input.cachePath) && !isUsableFile(input.outputPath)) {",
+          `  const cutroomNow = new Date();
+  try { cutroomTouchGif(input.cachePath, cutroomNow, cutroomNow); } catch {}
+  if (resolve5(input.outputPath) !== resolve5(input.cachePath) && !isUsableFile(input.outputPath)) {`,
+          url,
+        );
         source = replaceOnce(
           source,
           "return resolveVerifiedHyperframeRuntime().runtimeSource;",
-          "return cutroomGradeRuntime(resolveVerifiedHyperframeRuntime().runtimeSource);",
+          `return cutroomGradeRuntime(resolveVerifiedHyperframeRuntime().runtimeSource, ${adjustment});`,
           url,
         );
         source = replaceOnce(
           source,
           "function runAudioStage(input) {",
           "cutroomProvideAudioStage(runAudioStage);\nfunction runAudioStage(input) {",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          '  const pcmSourcePath = join24(input.workDir, "audio-source.wav");\n  const duration = input.totalFrames * input.fps.den / input.fps.num;',
+          '  const pcmSourcePath = join24(input.workDir, "audio-source.wav");\n  const duration = audioFrameSample(input.totalFrames, input.fps) / AUDIO_SAMPLE_RATE;',
+          url,
+        );
+        // Apply authored sample placement after runtime media discovery and before either mix.
+        source = replaceOnce(
+          source,
+          "  try {\n    if (needsBrowser) {\n      const reasons = [];",
+          "  const cutroomAudioBeforeProbe = needsBrowser ? composition.audios.map((audio) => ({ ...audio })) : undefined;\n  try {\n    if (needsBrowser) {\n      const reasons = [];",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "  const browserProbeMs = Date.now() - probeStart;",
+          "  bindPicturePlacement(cutroomAuthoredVideos, composition.videos, compiled.html, input.compiled.subCompositions);\n  composition.audios = sampleGridAudio(composition.audios, compiled.html, input.compiled.subCompositions, cutroomAudioBeforeProbe);\n  const browserProbeMs = Date.now() - probeStart;",
           url,
         );
         source = replaceOnce(
@@ -456,7 +731,10 @@ export function registerRenderIsolation(
           const audio = JSON.stringify(
             new URL("./rangeAudio.ts", import.meta.url).href,
           );
-          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { renameSync as cutroomRename } from "node:fs";\nimport { publishRangeProgress, spanParts as cutroomSpanParts, capturedFrame as cutroomCapturedFrame, capturesList as cutroomCapturesList, encodeCaptured as cutroomEncodeCaptured } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
+          const failure = JSON.stringify(
+            new URL("./renderFailure.ts", import.meta.url).href,
+          );
+          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { renameSync as cutroomRename } from "node:fs";\nimport { publishRangeProgress, spanParts as cutroomSpanParts, capturedFrame as cutroomCapturedFrame, capturesList as cutroomCapturesList, encodeCaptured as cutroomEncodeCaptured } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nimport { ExportStageError } from ${failure};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
           // The planner materializes source links before its HTTP server sees
           // them. Apply the same project boundary before copying their bytes.
           source = replaceOnce(
@@ -530,21 +808,31 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "    log: c.log\n  });\n}\nasync function extractPlanVideos",
-            "    log: c.log,\n    ...cutroomStage\n  }));\n}\nasync function extractPlanVideos",
+            "    log: c.log,\n    ...cutroomStage\n  })).catch((error) => { throw new ExportStageError('process_audio', error); });\n}\nasync function extractPlanVideos",
             url,
           );
-          // Cutroom writes the range's audio itself. Chunks muxing the plan mix
-          // would cut it at composition times it no longer starts at.
+          // The range has its own audio. Scoped media and adjustment grades need
+          // video frames only for the capture runs.
           source = replaceOnce(
             source,
             "      { chunksCarryAudio: true }\n    );",
-            "      { chunksCarryAudio: false }\n    );",
+            `      { chunksCarryAudio: false${adjustment || range.scopedMedia ? ", deferVideoExtraction: true" : ""} }\n    );`,
             url,
           );
           source = replaceOnce(
             source,
             "  job.progress = Math.max(job.progress, boundedProgress);",
             "  job.progress = Math.max(job.progress, boundedProgress);\n  publishRangeProgress(job);",
+            url,
+          );
+          source = replaceOnce(
+            source,
+            "      if (chunkWorkerCount === 1) {\n        const bootStarted = Date.now();",
+            `      if (chunkWorkerCount === 1) {
+        job.currentStage = "Starting Chromium";
+        job.stageProgress = { code: "start_browsers", done: 0, total: 1 };
+        publishRangeProgress(job);
+        const bootStarted = Date.now();`,
             url,
           );
           // Frames drawn from the sources are encoded beside the plan; only the rest are captured.
@@ -588,6 +876,54 @@ export function registerRenderIsolation(
             "const chunkFrameNumbers = Array.from({ length: framesInChunk }, (_, i) => cutroomCapturedFrame(range.startFrame + i));",
             url,
           );
+          if (range.scopedMedia) {
+            // FFmpeg has already mixed the audio. Browser audio requests can occupy every
+            // connection to the capture server before the first frame arrives.
+            const chunkServer = `    const fileServer = await createFileServer({
+      projectDir: compiledDir,
+      compiledDir,
+      port: 0,`;
+            source = replaceOnce(
+              source,
+              chunkServer,
+              `${chunkServer}\n      cutroomFramesOnly: true,`,
+              url,
+            );
+            // The decoder supplies every visible frame, as in a whole export. Leave the native
+            // video elements idle and give visible ones the decoder's intrinsic size.
+            source = replaceOnce(
+              source,
+              `      skipReadinessVideoIds: deferredVideos.filter(
+        (video) => !shownFrames.get(video.videoId)?.size || remoteVideoIds.has(video.videoId)
+      ).map((video) => video.videoId),
+      videoMetadataHints: collectVideoMetadataHints(
+        deferredVideos.filter((video) => remoteVideoIds.has(video.videoId))
+      )`,
+              `      skipReadinessVideoIds: collectVideoReadinessSkipIds(
+        planVideos?.videos.filter((video) => !shownFrames.get(video.id)?.size).map((video) => video.id) ?? [],
+        planVideos?.extracted ?? []
+      ),
+      videoMetadataHints: collectVideoMetadataHints(
+        planVideos?.extracted.filter((video) => shownFrames.get(video.videoId)?.size) ?? []
+      )`,
+              url,
+            );
+            // Seeking each frame just to size its extraction can time out on a long edit.
+            // Keep source dimensions, as the span did before it could defer extraction.
+            source = replaceOnce(
+              source,
+              `      const measureBoxes = async (page) => {
+        shownBoxes = await measureVideoShownBoxes(
+          page,
+          [...shownFrames.keys()],
+          chunkFrameNumbers.map((frame) => frame * chunkFps.den / chunkFps.num)
+        );
+        boxesMeasured();
+      };`,
+              "      const measureBoxes = async () => boxesMeasured();",
+              url,
+            );
+          }
           source = replaceOnce(
             source,
             "overlap.current = canEncodeWhileCapturing(encodeInput,",
@@ -610,15 +946,19 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "    await writeStitchedMp4(parts, outputPath);",
-            `    const cutroomVideo = join45(workDir, \`range.\${config.format}\`);
-    if (config.format === "mp4") await writeStitchedMp4(parts, cutroomVideo);
-    else if (parts.length === 1) cutroomRename(parts[0], cutroomVideo);
-    else throw new Error(\`A \${config.format} range rendered \${parts.length} parts; it should render one.\`);
-    await alignRangeAudio({
-      videoPath: cutroomVideo, audioPath: resolvePlanAudioPath(planDir), outputPath,
-      fps: cutroomRangeFps, frames: { start: startFrame, end: endFrame },
-      signal: config.abortSignal
-    });`,
+            `    try {
+      const cutroomVideo = join45(workDir, \`range.\${config.format}\`);
+      if (config.format === "mp4") await writeStitchedMp4(parts, cutroomVideo);
+      else if (parts.length === 1) cutroomRename(parts[0], cutroomVideo);
+      else throw new Error(\`A \${config.format} range rendered \${parts.length} parts; it should render one.\`);
+      await alignRangeAudio({
+        videoPath: cutroomVideo, audioPath: resolvePlanAudioPath(planDir), outputPath,
+        fps: cutroomRangeFps, frames: { start: startFrame, end: endFrame },
+        signal: config.abortSignal
+      });
+    } catch (error) {
+      throw new ExportStageError("assemble", error);
+    }`,
             url,
           );
         }
@@ -658,7 +998,9 @@ export function registerRenderIsolation(
     c.header("Access-Control-Allow-Origin", "null");
     c.header("X-Content-Type-Options", "nosniff");
   });
-  app.get("/*", async (c) => {`,
+  app.get("/*", async (c) => {
+    if (options.cutroomFramesOnly && c.req.header("sec-fetch-dest") === "audio")
+      return c.body(null, 204);`,
           url,
         );
         source = replaceOnce(
@@ -687,6 +1029,12 @@ export function registerRenderIsolation(
           source,
           "    const page = await session.browser.newPage();",
           "    const page = await session.browser.newPage();\n    await cutroomIsolatePage(page, session.serverUrl + '/');",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    await page.evaluate(async () => {\n        const runtime = window.__hf?.colorGrading;\n        await runtime?.waitForActiveLuts?.();\n    });",
+          "    await page.evaluate(async (time) => {\n        const runtime = window.__hf?.colorGrading;\n        await runtime?.waitForActiveLuts?.();\n        await window.__cutroomAdjustmentCapture?.render(time);\n    }, quantizedTime);",
           url,
         );
         captureLoaded = true;

@@ -236,7 +236,9 @@ test("an unlabelled agent edit is named from its commands, and unaccepted agent 
     `<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="1"><div id="title" class="clip" data-start="0" data-duration="1" data-track-index="0"></div>${clips}</main></body></html>`,
   );
   const read = async () =>
-    TimelineViewSchema.parse(await (await request(`${path}/timeline`)).json());
+    TimelineViewSchema.parse(
+      await (await request(`${path}/timeline?clipEdits=1`)).json(),
+    );
   const send = async (commands: unknown[], agent: boolean) => {
     const response = await app.request(`/api/cutroom${path}/commands`, {
       method: "POST",

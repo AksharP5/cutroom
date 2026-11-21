@@ -12,6 +12,20 @@ export const clipCount = 100;
 export const clipSeconds = 3;
 export const duration = clipCount * clipSeconds;
 
+export const scaleFps = 60;
+
+export type ScaleClipCount = 100 | 1000;
+
+export function scaleShots(count: ScaleClipCount, sourceFrames = 1800) {
+  const pairs = count === 1000 ? 486 : 46;
+  const frames = (count === 1000 ? 900 : 90) * scaleFps;
+  return Array.from({ length: pairs }, (_, index) => ({
+    start: Math.floor((index * frames) / pairs),
+    end: Math.floor(((index + 1) * frames) / pairs),
+    source: 120 + ((index * 331) % (sourceFrames - 360)),
+  }));
+}
+
 /** Where clip `index` starts in the source, in seconds. Distinct enough that a cut always changes the number. */
 export const mediaStart = (index: number, seconds = sourceSeconds) =>
   (index * 37) % (seconds - clipSeconds);

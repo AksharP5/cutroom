@@ -3,6 +3,7 @@ import {
   clipEnd,
   cutRoom,
   frameTime,
+  planBatchTransitions,
   toFrames,
 } from "../../shared/timeline/apply";
 import { takesTransition } from "../../shared/timeline/transition";
@@ -15,7 +16,8 @@ import type {
 } from "../../shared/timeline/schema";
 import type { Action } from "../keymap";
 import type { MediaDrag } from "../timeline/mediaDrag";
-import type { Gap } from "../timeline/selection";
+import { clipsAtEditPoint } from "../timeline/selection";
+import type { EditPoint, Gap } from "../timeline/selection";
 
 /** What an editing key acts on, read when the key is pressed. */
 export interface EditTarget {
@@ -25,6 +27,8 @@ export interface EditTarget {
   frame: number;
   /** A selected transition, named by the clip it leads into. */
   transition?: string;
+  editPoint?: EditPoint;
+  linked?: boolean;
   /** A selected gap, which Delete and Backspace close. */
   gap?: Gap;
   /** With the Trim tool, what comma and period do to the selected clips, as Resolve's S picks. */
@@ -58,6 +62,11 @@ function underPlayhead(timeline: Timeline, target: EditTarget) {
     spans(clip, frame),
   );
   if (selected.length) return selected;
+  return autoSelectAt(timeline, frame);
+}
+
+/** The enabled auto-select tracks with clips under the playhead, picture first. */
+function autoSelectAt(timeline: Timeline, frame: number) {
   const editable = new Set(
     timeline.tracks
       .filter((track) => track.autoSelect && !track.locked)
@@ -94,10 +103,109 @@ const trimToPlayhead =
             edge,
             to: target.frame,
             ripple: true,
+            ...(target.linked === false && { linked: false }),
           },
         ]
       : [];
   };
+
+const trimAllToPlayhead =
+  (edge: "start" | "end") =>
+  (timeline: Timeline, target: EditTarget): CommandInput[] => {
+    const clips = autoSelectAt(timeline, target.frame);
+    const clipIds = clips
+      .filter((clip) => edge === "start" || clip.start < target.frame)
+      .map(({ id }) => id);
+    if (!clipIds.length) return [];
+    return [
+      {
+        type: "trimPlayhead",
+        clipIds,
+        edge,
+        at: target.frame,
+        ripple: target.trim !== undefined,
+        ...(target.linked === false && { linked: false }),
+      },
+    ];
+  };
+
+export const freezeAt = (
+  clip: Clip,
+  at: number,
+  mode?: "replace",
+): CommandInput => ({
+  type: "freeze",
+  clipId: clip.id,
+  at,
+  ...(mode && { mode }),
+});
+
+const swapWith =
+  (direction: "before" | "after") =>
+  (timeline: Timeline, target: EditTarget): CommandInput[] => {
+    const [clip, ...others] = onePerLink(selectedIn(timeline, target));
+    if (!clip || others.length)
+      throw new TimelineError(
+        "unsupported",
+        "Select one clip to swap with its neighbour.",
+      );
+    const neighbour = timeline.clips.find(
+      (item) =>
+        item.track === clip.track &&
+        (direction === "after"
+          ? item.start === clipEnd(clip)
+          : clipEnd(item) === clip.start),
+    );
+    if (!neighbour)
+      throw new TimelineError(
+        "not_found",
+        `No clip meets the selected clip ${direction === "after" ? "on the right" : "on the left"}.`,
+      );
+    const [from, to] =
+      direction === "after" ? [clip, neighbour] : [neighbour, clip];
+    return [
+      {
+        type: "swap",
+        from: from.id,
+        to: to.id,
+        ...(target.linked === false && { linked: false }),
+      },
+    ];
+  };
+
+function trimEditPoint(
+  timeline: Timeline,
+  point: EditPoint,
+  by: number,
+  { linked, trim }: EditTarget,
+): CommandInput[] {
+  const cut = clipsAtEditPoint(timeline, point);
+  const alone = linked === false ? { linked: false } : {};
+  if (point.mode === "roll" && cut?.from && cut.to)
+    return [{ type: "roll", from: cut.from.id, to: cut.to.id, by, ...alone }];
+  const clip = point.mode === "start" ? cut?.to : cut?.from;
+  if (point.mode === "roll" || !clip)
+    throw new TimelineError(
+      "not_found",
+      "The selected edit point has changed. Press V to select it again.",
+    );
+  const to = (point.mode === "start" ? clip.start : clipEnd(clip)) + by;
+  if (to < 0)
+    throw new TimelineError(
+      "out_of_bounds",
+      "The trim would start before the timeline.",
+    );
+  return [
+    {
+      type: "trim",
+      clipId: clip.id,
+      edge: point.mode,
+      to,
+      ripple: trim !== undefined,
+      ...alone,
+    },
+  ];
+}
 
 /** Q and W park on the new edit point, showing the first frame after the cut. */
 export function trimmedPlayhead(
@@ -105,8 +213,17 @@ export function trimmedPlayhead(
   commands: readonly CommandInput[],
 ) {
   const [command] = commands;
-  if (command?.type !== "trim" || !command.ripple) return null;
-  const clip = timeline.clips.find((clip) => clip.id === command.clipId);
+  if (command?.type === "roll")
+    return timeline.clips.find((clip) => clip.id === command.to)?.start ?? null;
+  if (
+    !command ||
+    (command.type !== "trim" && command.type !== "trimPlayhead") ||
+    !command.ripple
+  )
+    return null;
+  const id =
+    command.type === "trimPlayhead" ? command.clipIds[0] : command.clipId;
+  const clip = timeline.clips.find((clip) => clip.id === id);
   if (!clip) return null;
   return command.edge === "start" ? clip.start : clipEnd(clip);
 }
@@ -188,6 +305,8 @@ function onePerLink(clips: readonly Clip[]) {
 const nudge =
   (by: number) =>
   (timeline: Timeline, target: EditTarget): CommandInput[] => {
+    if (target.editPoint)
+      return trimEditPoint(timeline, target.editPoint, by, target);
     const selected = selectedIn(timeline, target);
     // The selection slides as one block, so clips next to each other move together.
     if (target.trim === "slide")
@@ -197,12 +316,27 @@ const nudge =
     if (target.trim === "slip") {
       const sourced = selected.filter((clip) => clip.mediaStart !== null);
       // With nothing to slip, the engine says why about the first clip.
-      return onePerLink(sourced.length ? sourced : selected.slice(0, 1)).map(
-        (clip) => ({ type: "slip", clipId: clip.id, by: -by }),
+      const clips = sourced.length ? sourced : selected.slice(0, 1);
+      return (target.linked === false ? clips : onePerLink(clips)).map(
+        (clip) => ({
+          type: "slip",
+          clipId: clip.id,
+          by: -by,
+          ...(target.linked === false && { linked: false }),
+        }),
       );
     }
     const clipIds = selected.map((clip) => clip.id);
-    return clipIds.length ? [{ type: "move", clipIds, by }] : [];
+    return clipIds.length
+      ? [
+          {
+            type: "move",
+            clipIds,
+            by,
+            ...(target.linked === false && { linked: false }),
+          },
+        ]
+      : [];
   };
 
 /** Alt+comma and Alt+period slip the selected sound alone, out of sync with its picture. */
@@ -273,13 +407,44 @@ const moveTrack =
  * Ctrl+T, Alt+T and Shift+T: a one-second cross dissolve, centred on the cut nearest the playhead
  * between two clips on unlocked auto-select tracks, or touching the selected clips when there are
  * some. Ctrl+T takes a picture cut first and its linked sound with it; Alt+T only picture, Shift+T
- * only sound. Where the media runs short it takes the longest that fits and says so.
+ * only sound. Multiple selected clips take every cut between them. Where the media runs short it takes the longest that fits and says so.
  */
 export function addTransition(
   timeline: Timeline,
   target: EditTarget,
   scope: "both" | "video" | "audio",
 ): { commands: CommandInput[]; note: string | null } {
+  if (onePerLink(selectedIn(timeline, target)).length > 1) {
+    const { cuts, kept, skipped, shortened } = planBatchTransitions(
+      timeline,
+      target.selection,
+      scope,
+    );
+    if (!cuts.length && !skipped && !kept)
+      throw new TimelineError(
+        "not_found",
+        "No cuts between selected clips on the requested tracks.",
+      );
+    if (!cuts.length && !kept)
+      throw new TimelineError(
+        "out_of_bounds",
+        `${skipped} selected ${skipped === 1 ? "cut had" : "cuts had"} too little media for a transition.`,
+      );
+    const note = [
+      kept &&
+        `Kept ${kept} existing ${kept === 1 ? "transition" : "transitions"}.`,
+      skipped &&
+        `${skipped} ${skipped === 1 ? "cut had" : "cuts had"} too little media for a transition.`,
+      shortened &&
+        `${shortened} ${shortened === 1 ? "transition was" : "transitions were"} shortened to fit.`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return {
+      commands: cuts.length ? [{ type: "setTransitions", cuts }] : [],
+      note: note || null,
+    };
+  }
   const tracks = new Map(
     timeline.tracks
       .filter((track) => track.autoSelect && !track.locked)
@@ -367,7 +532,15 @@ export function matchFrame(
           kind,
           path: src,
           seconds: sourceDuration,
-          hasAudio: clip.hasAudio,
+          hasAudio:
+            clip.hasAudio ||
+            (clip.link !== null &&
+              timeline.clips.some(
+                (partner) =>
+                  partner.link === clip.link &&
+                  partner.src === src &&
+                  partner.hasAudio,
+              )),
         },
         frame: toFrames(seconds, timeline.fps),
       },
@@ -382,7 +555,7 @@ export function matchFrame(
 }
 
 /**
- * The clip whose version Alt+V changes: a selected clip with versions under the playhead, or
+ * The clip whose version the bracket shortcuts change: a selected clip with versions under the playhead, or
  * else the topmost clip with versions there.
  */
 export function versionTarget(timeline: Timeline, target: EditTarget) {
@@ -420,6 +593,36 @@ export const editKeys = {
   trimRippleEndToPlayhead: {
     label: "Ripple trim end",
     commands: trimToPlayhead("end"),
+  },
+  clipFreezeFrame: {
+    label: "Freeze frame",
+    commands: (timeline, target) => {
+      const clip = underPlayhead(timeline, target).find(
+        (clip) => clip.kind === "video",
+      );
+      if (!clip)
+        throw new TimelineError(
+          "not_found",
+          "Move the playhead inside a video clip to freeze a frame.",
+        );
+      return [freezeAt(clip, target.frame, "replace")];
+    },
+  },
+  editNudgeTrimStepTrimStart: {
+    label: "Trim start",
+    commands: trimAllToPlayhead("start"),
+  },
+  editNudgeTrimStepTrimEnd: {
+    label: "Trim end",
+    commands: trimAllToPlayhead("end"),
+  },
+  editNudgeSwapEditReverse: {
+    label: "Swap clips",
+    commands: swapWith("before"),
+  },
+  editNudgeSwapEditForward: {
+    label: "Swap clips",
+    commands: swapWith("after"),
   },
   editBladeRazor: { label: "Razor", commands: razor },
   editM2SplitClip: { label: "Split", commands: razor },

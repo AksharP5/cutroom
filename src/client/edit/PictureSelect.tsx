@@ -442,15 +442,22 @@ export function PictureSelect({
   };
 
   const select = (hit: PictureHit | null, toggle: boolean) => {
-    const { view, selection } = useTimeline.getState();
+    const { view, selection, linkedSelection } = useTimeline.getState();
     // Ctrl on nothing keeps what is selected, as on the timeline.
     if (!view || (!hit && toggle)) return;
     const next = hit
-      ? clickSelection(view.timeline, [], selection, hit.clipId, {
-          toggle,
-          range: false,
-          alone: false,
-        })
+      ? clickSelection(
+          view.timeline,
+          [],
+          selection,
+          hit.clipId,
+          {
+            toggle,
+            range: false,
+            alone: false,
+          },
+          linkedSelection,
+        )
       : emptySelection;
     useTimeline.setState({ selection: next });
     // The promoted preview just measured this box. Draw it with selection rather than waiting

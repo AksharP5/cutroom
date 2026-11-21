@@ -21,6 +21,8 @@ import {
   TranscriptImportSchema,
 } from "../../shared/project";
 import {
+  MediaFileDetailsSchema,
+  MediaImportSchema,
   MediaRemoveSchema,
   MediaRenameSchema,
   mediaKind,
@@ -29,6 +31,7 @@ import {
 } from "../../shared/media";
 import { EDIT_SUMMARY_HEADER } from "../../shared/timeline/schema";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
+import type { MediaFileDetails } from "../../shared/media";
 import { animationEvents } from "./animationFollowup";
 import { registerTimelineTools } from "./timelineTools";
 import { registerExportTools } from "./exportTools";
@@ -48,7 +51,7 @@ type LocalFetch = (
 export interface RequestOptions {
   /** Streams the edit's animation inspection after the committed result. */
   followup?: (data: AnimationFeedback) => Promise<void>;
-  /** Shapes the parsed answer before it becomes the tool's result. */
+  /** Shapes the parsed answer before it becomes the tool's result; it may read more from the server. */
   reply?: (result: unknown) => unknown;
 }
 interface McpOptions {
@@ -56,6 +59,13 @@ interface McpOptions {
   fetch?: LocalFetch;
   /** Set only in the bridge Cutroom gives its native agents; other clients act as `external`. */
   agentToken?: string;
+  importMedia?: (
+    projectId: string,
+    paths: string[],
+    signal: AbortSignal,
+    agentName: string,
+    progress: (copied: number, total: number) => void,
+  ) => Promise<{ files: string[] } | null>;
 }
 const project = {
   projectId: z.string().describe("Project ID returned by projects_list"),
@@ -136,7 +146,7 @@ export function createMcpServer(options: McpOptions = {}) {
             "Timeline edit did not acknowledge its committed result.",
           );
         }
-        const result = reply(first.value.result);
+        const result = await reply(first.value.result);
         const summary = response.headers.get(EDIT_SUMMARY_HEADER);
         setTimeout(() => {
           void (async () => {
@@ -177,7 +187,7 @@ export function createMcpServer(options: McpOptions = {}) {
           ],
           isError: true,
         };
-      const result = reply(text ? JSON.parse(text) : null);
+      const result = await reply(text ? JSON.parse(text) : null);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result) }],
         structuredContent: { result },
@@ -271,10 +281,62 @@ export function createMcpServer(options: McpOptions = {}) {
     (input) => request(`/projects/${id(input.projectId)}/media`),
   );
   registry.registerTool(
+    "media_import",
+    {
+      description:
+        "Import video, audio, or images by absolute path through the local stdio bridge. Same-filesystem files are hard linked; other files are copied. Returns project-relative paths in assets/. The batch is one undo step. This reads outside the project and always asks in Cutroom.",
+      inputSchema: { ...project, ...MediaImportSchema.shape },
+      annotations: edit,
+    },
+    async ({ projectId, paths }, extra) => {
+      try {
+        if (!options.importMedia)
+          throw new Error(
+            "Use Cutroom's local stdio MCP bridge to import media by path.",
+          );
+        const progressToken = extra._meta?.progressToken;
+        const result = await options.importMedia(
+          projectId,
+          paths,
+          extra.signal,
+          AgentNameSchema.parse(
+            server.server.getClientVersion()?.name ?? "Agent",
+          ),
+          (copied, total) => {
+            if (progressToken === undefined) return;
+            void extra
+              .sendNotification({
+                method: "notifications/progress",
+                params: { progressToken, progress: copied, total },
+              })
+              .catch(() => {
+                // A disconnected client cannot receive progress.
+              });
+          },
+        );
+        if (!result) throw new Error("Media import cancelled.");
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          structuredContent: { result },
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: error instanceof Error ? error.message : String(error),
+            },
+          ],
+        };
+      }
+    },
+  );
+  registry.registerTool(
     "media_files",
     {
       description:
-        "Find video, audio, and image files in the project's Media panel, including files unused on any timeline. Search by file name or project-relative path. Use path for source_marks, and pass src and kind to timeline_edit insertion. Specify the same composition as the insert so src is relative to the right folder. Returns 100 files at a time. Pass nextOffset as offset to read the next page.",
+        "Find video, audio, and image files in the project's Media panel, including files unused on any timeline. Search by file name or project-relative path. Use path for source_marks, and pass src and kind to timeline_edit insertion. Specify the same composition as the insert so src is relative to the right folder. Each file has its size in bytes; video and audio files also have duration in seconds and whether they hold audio, and video has width, height and fps. Stills and files that cannot be read have only their size. Returns 100 files at a time. Pass nextOffset as offset to read the next page.",
       inputSchema: {
         ...project,
         query: z.string().max(255).default(""),
@@ -289,7 +351,7 @@ export function createMcpServer(options: McpOptions = {}) {
       outputSchema: {
         result: z.object({
           files: z.array(
-            z.object({
+            MediaFileDetailsSchema.partial().extend({
               path: z.string(),
               kind: z.enum(["audio", "image", "video"]),
               src: z.string(),
@@ -302,7 +364,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     ({ projectId, query, composition, offset }) =>
       requestApi(`/projects/${id(projectId)}`, "GET", undefined, {
-        reply: (result) => {
+        reply: async (result) => {
           const { files, fileVersions } = z
             .object({
               files: z.array(z.string()),
@@ -321,10 +383,30 @@ export function createMcpServer(options: McpOptions = {}) {
             })
             .sort((a, b) => a.path.localeCompare(b.path));
           const end = offset + 100;
+          const page = assets.slice(offset, end);
+          // A few probes at a time; a file that went, stalled or cannot be read keeps its path and kind.
+          const details: Partial<MediaFileDetails>[] = page.map(() => ({}));
+          let next = 0;
+          await Promise.all(
+            Array.from({ length: Math.min(8, page.length) }, async () => {
+              while (next < page.length) {
+                const index = next++;
+                const response = await requestLocal(
+                  `/api/cutroom/projects/${id(projectId)}/media/details?path=${id(page[index]!.path)}`,
+                ).catch(() => null);
+                if (response?.ok)
+                  details[index] = MediaFileDetailsSchema.parse(
+                    await response.json(),
+                  );
+                else await response?.body?.cancel();
+              }
+            }),
+          );
           return {
-            files: assets.slice(offset, end).map((asset) => ({
+            files: page.map((asset, index) => ({
               ...asset,
               src: sourceUrl(composition, asset.path),
+              ...details[index],
             })),
             nextOffset: end < assets.length ? end : null,
           };

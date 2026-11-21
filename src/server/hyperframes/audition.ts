@@ -5,13 +5,13 @@ import type { Project } from "../../shared/project";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import {
   activeVersion,
-  consumedSource,
   mediaVersions,
   nextAudition,
   versionPartners,
   versionStart,
 } from "../../shared/timeline/versions";
-import { framesBefore } from "../../shared/timeline/transition";
+import { elementBounds, sourceAtEdge } from "../../shared/timeline/clipTiming";
+import { frames } from "../../shared/timeline/piece";
 import { compositionMediaFacts } from "../timeline/media";
 import { readSource } from "../projects/store";
 import {
@@ -366,15 +366,20 @@ function mediaAudition(
       )
         continue;
       const url = path.split("/").map(encodeURIComponent).join("/");
+      // The element starts at the transition handle, on the clip's own source map.
       const start =
-        versionStart(version, fps) +
-        (clip.mediaStart ?? 0) -
-        (picture.mediaStart ?? 0) -
-        consumedSource(
-          clip,
-          clip.transitionIn ? framesBefore(clip.transitionIn) : 0,
+        sourceAtEdge(
+          {
+            ...clip,
+            mediaStart:
+              versionStart(version, fps) +
+              (clip.mediaStart ?? 0) -
+              (picture.mediaStart ?? 0),
+          },
+          frames(clip.start, fps),
+          frames(elementBounds(clip).start, fps),
           fps,
-        );
+        ).mediaStart ?? 0;
       const alternate: AttributeChange[] = [
         ["id", `cutroom-version-${clip.id}-${index}`],
         ["data-cutroom-version-owner", clip.id],

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { parse, serialize, serializeOuter } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
-import { parseFpsWithDefault } from "@hyperframes/core";
+import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
 import { canonicalText } from "../../shared/timeline/schema";
 import {
   declaredFonts,
@@ -28,8 +28,8 @@ const timingAttributes = [
 function titleContract(
   document: DefaultTreeAdapterTypes.Document,
   html: string,
+  isReferenced: (id: string) => boolean,
 ) {
-  const references = html.replace(/\sdata-hf-id="[^"]*"/g, "");
   const elements: DefaultTreeAdapterTypes.Element[] = [];
   const collect = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
     for (const node of nodes) {
@@ -82,7 +82,7 @@ function titleContract(
               child.tagName === "br" &&
               child.attrs.every(
                 ({ name, value }) =>
-                  name === "data-hf-id" && !references.includes(value),
+                  name === "data-hf-id" && !isReferenced(value),
               )
             ),
         )
@@ -128,11 +128,35 @@ function titleContract(
  * its markup travel with the snapshot so a loaded document can add or remove it exactly.
  */
 export function previewTiming(html: string, dependencies = ""): PreviewTiming {
-  const document = parse(html);
+  return timingOf(parse(html), html, dependencies);
+}
+
+function timingOf(
+  document: DefaultTreeAdapterTypes.Document,
+  html: string,
+  dependencies: string,
+): PreviewTiming {
   const clips: PreviewTiming["clips"] = [];
+  // The pinned compiler stamps short base-36 IDs. Look for all of those
+  // substrings in one pass, including in CSS or JavaScript and inside longer IDs.
+  // Authored IDs can be arbitrary strings, so retain their exact substring check.
+  const references = html.replace(/\sdata-hf-id="[^"]*"/g, "");
+  let generatedReferences: Set<string> | undefined;
+  const isReferenced = (id: string) => {
+    if (id.length !== 7 || !/^hf-[0-9a-z]{4}$/.test(id))
+      return references.includes(id);
+    generatedReferences ??= new Set(
+      Array.from(
+        references.matchAll(/hf-(?=([0-9a-z]{4}))/g),
+        ([, suffix]) => `hf-${suffix}`,
+      ),
+    );
+    return generatedReferences.has(id);
+  };
   const { titleData, expectedStyle, styles, elements } = titleContract(
     document,
     html,
+    isReferenced,
   );
   // The compiler may merge the owned rules into an adjacent stylesheet. Match only
   // the exact generated CSS, once, and retain everything around it in the structure hash.
@@ -203,12 +227,14 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
     createHash("sha256").update(value).digest("hex");
   // Generated HF ids include timing in their hash. Retain any id referenced by
   // scripts/CSS/markup; changing one of those must still reload the document.
-  const references = html.replace(/\sdata-hf-id="[^"]*"/g, "");
   const clipNodes: DefaultTreeAdapterTypes.Element[] = [];
+  const maybeAdjustment = html.includes("data-cutroom-adjustment");
+  let hasAdjustment = false;
   const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
     for (const node of nodes) {
       if (!("tagName" in node)) continue;
       const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
+      hasAdjustment ||= maybeAdjustment && attrs.has("data-cutroom-adjustment");
       const id = attrs.get("data-hf-cutroom-clip-id");
       if (id && isClip(node)) {
         const values = {
@@ -257,7 +283,7 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
       )
         node.attrs = node.attrs.filter(({ name }) => name !== "content");
       const hfId = attrs.get("data-hf-id");
-      if (hfId && !references.includes(hfId))
+      if (hfId && !isReferenced(hfId))
         node.attrs = node.attrs.filter(({ name }) => name !== "data-hf-id");
       if (node.tagName === "head")
         node.childNodes = node.childNodes.filter(
@@ -326,7 +352,10 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
         space: place.space,
       };
   }
-  const structure = hash(dependencies + serialize(document));
+  // A live document must install capture when its first adjustment arrives.
+  const structure = hash(
+    dependencies + serialize(document) + (hasAdjustment ? "\0adjustment" : ""),
+  );
 
   return {
     structure,
@@ -339,6 +368,151 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
     clips,
     titleStyle: sheet,
     duration,
+  };
+}
+
+/** The runtime seeks in raw seconds even though its visibility changes on frame boundaries. */
+export function snappedPreviewWindow(
+  attributes: ReadonlyMap<string, string>,
+  inheritedFps: number,
+) {
+  const rate = attributes.get("data-fps");
+  const parsed = rate === undefined ? null : parseFpsWithDefault(rate);
+  const fps = parsed?.ok ? parsed.value.num / parsed.value.den : inheritedFps;
+  const start = Number(attributes.get("data-start"));
+  const end = attributes.has("data-duration")
+    ? start + Number(attributes.get("data-duration"))
+    : Number(attributes.get("data-end"));
+  const changes: [string, number][] = [];
+  if (Number.isFinite(start)) {
+    const window = exportClipWindow(start, end, fps);
+    if (window.start !== start || window.end !== end) {
+      for (const [name, value] of [
+        ["data-start", window.start],
+        ["data-duration", window.end - window.start],
+        ["data-end", window.end],
+      ] as const) {
+        if (
+          attributes.has(name) &&
+          Number.isFinite(value) &&
+          Number(attributes.get(name)) !== value
+        )
+          changes.push([name, value]);
+      }
+    }
+  }
+  return { fps, start, end, changes };
+}
+
+/**
+ * An optional faster read for a single authored root with explicit clip IDs. Use the
+ * same structural comparison as compiled timing, but mask only the clips the compiler
+ * identified in the already approved preview.
+ */
+export function previewSourceTiming(
+  html: string,
+  clipIds: ReadonlySet<string>,
+) {
+  if (/\bdata-hf-id\s*=/i.test(html)) return null;
+  const document = parse(html);
+  const attribute = (node: DefaultTreeAdapterTypes.Element, name: string) =>
+    node.attrs.find((entry) => entry.name === name);
+  const children = (node: DefaultTreeAdapterTypes.ParentNode) =>
+    node.childNodes.filter(
+      (child): child is DefaultTreeAdapterTypes.Element => "tagName" in child,
+    );
+  const page = children(document).find((node) => node.tagName === "html");
+  const body = page && children(page).find((node) => node.tagName === "body");
+  const roots = body && children(body);
+  const root = roots?.[0];
+  if (!root || roots.length !== 1 || !attribute(root, "data-composition-id"))
+    return null;
+  const rate = parseFpsWithDefault(attribute(root, "data-fps")?.value);
+  if (!rate.ok) return null;
+  const fps = rate.value.num / rate.value.den;
+  for (const node of children(root)) {
+    const id = attribute(node, "id")?.value;
+    if (
+      attribute(node, "data-composition-src") ||
+      attribute(node, "data-composition-id")
+    )
+      return null;
+    if (!id || !clipIds.has(id)) continue;
+    // Relative starts and inferred spans can change when a neighbour moves.
+    const start = attribute(node, "data-start");
+    const duration = attribute(node, "data-duration");
+    if (
+      !start ||
+      !duration ||
+      !start.value.trim() ||
+      !duration.value.trim() ||
+      !Number.isFinite(Number(start.value)) ||
+      Number(start.value) < 0 ||
+      !Number.isFinite(Number(duration.value)) ||
+      Number(duration.value) <= 0 ||
+      attribute(node, "data-hf-cutroom-clip-id")
+    )
+      return null;
+    // The compiler fills the end of a media window when it has an authored duration.
+    if (
+      !attribute(node, "data-end") &&
+      (node.tagName === "video" || node.tagName === "audio")
+    )
+      node.attrs.push({
+        name: "data-end",
+        value: String(Number(start.value) + Number(duration.value)),
+      });
+    const { changes } = snappedPreviewWindow(
+      new Map(node.attrs.map(({ name, value }) => [name, value])),
+      fps,
+    );
+    for (const [name, value] of changes)
+      attribute(node, name)!.value = String(value);
+    node.attrs.push({ name: "data-hf-cutroom-clip-id", value: id });
+  }
+  return timingOf(document, html, "");
+}
+
+export function updatePreviewSourceTiming(
+  before: PreviewTiming,
+  after: PreviewTiming,
+  compiled: PreviewTiming,
+): PreviewTiming | null {
+  if (
+    before.structure !== after.structure ||
+    before.titleStyle !== after.titleStyle ||
+    before.duration !== compiled.duration ||
+    before.clips.length !== compiled.clips.length
+  )
+    return null;
+  const clips: PreviewTiming["clips"] = [];
+  for (const [index, old] of before.clips.entries()) {
+    const next = after.clips[clips.length];
+    if (!next || old.id !== next.id) continue;
+    const served = compiled.clips[index];
+    if (
+      !served ||
+      old.id !== served.id ||
+      old.body !== next.body ||
+      old.slot !== next.slot ||
+      old.space !== next.space ||
+      JSON.stringify(old.title) !== JSON.stringify(next.title) ||
+      !timingAttributes.every(
+        (name) => old.values[name] === served.values[name],
+      )
+    )
+      return null;
+    clips.push({ ...served, values: next.values });
+  }
+  if (clips.length !== after.clips.length) return null;
+  if (before.revision === after.revision) return compiled;
+  return {
+    ...compiled,
+    duration: after.duration,
+    clips,
+    revision: createHash("sha256")
+      .update(compiled.structure + after.revision)
+      .digest("hex"),
   };
 }
 

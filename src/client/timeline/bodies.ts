@@ -97,19 +97,6 @@ export function createBodies(
   let slides: (Slide & { at: number })[] = [];
   let sliding = 0;
 
-  /** How far a clip still is from its place, in CSS pixels, adding up slides still running. */
-  function offset(id: string, now: number) {
-    let x = 0;
-    let y = 0;
-    for (const slide of slides) {
-      if (slide.id !== id) continue;
-      const left =
-        1 - slide.ease(Math.min(1, (now - slide.at) / slide.duration));
-      x += slide.x * left;
-      y += slide.y * left;
-    }
-    return { x, y };
-  }
   function slideFrame() {
     const now = performance.now();
     slides = slides.filter((slide) => now - slide.at < slide.duration);
@@ -195,6 +182,19 @@ export function createBodies(
     const hair = Math.max(1, Math.round(dpr));
     wanted = [];
     const now = performance.now();
+    // Sum overlapping slides once per paint. A ripple can move every visible clip.
+    const offsets = new Map<string, { x: number; y: number }>();
+    for (const slide of slides) {
+      const left =
+        1 - slide.ease(Math.min(1, (now - slide.at) / slide.duration));
+      const offset = offsets.get(slide.id);
+      if (offset) {
+        offset.x += slide.x * left;
+        offset.y += slide.y * left;
+      } else {
+        offsets.set(slide.id, { x: slide.x * left, y: slide.y * left });
+      }
+    }
     media.beginPaint(settled);
     /** A row's waveform columns by colour, filled once per row. */
     let waves = paths();
@@ -449,13 +449,14 @@ export function createBodies(
           (placed.kind === "video" || placed.kind === "image");
         if (!pictured && !placed.hasAudio) continue;
         // A clip an edit moved is drawn where its box is on its way there.
-        const shift = offset(placed.id, now);
+        const shift = offsets.get(placed.id);
+        const x = shift?.x ?? 0;
         const enabled = clipVisible(placed, scene.mix);
         const clip =
-          shift.x || enabled !== placed.enabled
-            ? { ...placed, start: placed.start + shift.x / ppf, enabled }
+          x || enabled !== placed.enabled
+            ? { ...placed, start: placed.start + x / ppf, enabled }
             : placed;
-        const down = Math.round(shift.y * dpr);
+        const down = Math.round((shift?.y ?? 0) * dpr);
         const clipTop = y0 + down;
         const clipBottom = y1 + down;
         // The clip's box as the browser snaps it: a pixel short of the next clip.

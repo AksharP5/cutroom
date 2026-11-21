@@ -1,3 +1,5 @@
+import { ProjectFormatSchema } from "../../shared/projectFormat";
+import { planFormat } from "./format";
 import { extname } from "node:path";
 import { stat } from "node:fs/promises";
 import {
@@ -5,6 +7,13 @@ import {
   TimelineViewSettingsSchema,
 } from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
+import {
+  ChangeDetailsInputSchema,
+  ledgerChanges,
+  pendingEdit,
+  reviewRows,
+} from "../../shared/timeline/reviewChanges";
+import type { InspectorChange } from "../../shared/timeline/reviewChanges";
 import type { ClipSourcesSchema } from "../../shared/code";
 import { destinationTracks, shownTracks } from "../../shared/timeline/tracks";
 import { projectViews } from "../projects/view";
@@ -36,6 +45,8 @@ import {
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
   AnimationFeedbackSchema,
+  EDIT_HISTORY_HEADER,
+  GROUPED_EDIT_HEADER,
   EDIT_SUMMARY_HEADER,
   TAB_ORIGIN_HEADER,
   TabOriginSchema,
@@ -72,16 +83,21 @@ import {
 import type { ProjectStore } from "../projects/store";
 import {
   compositionScope,
+  compositionMarkup,
+  projectTimeline,
   rebaseClipboard,
   declareTrackLayer,
   parseComposition,
+  compositionSize,
   patchComposition,
+  authoredAudioGroupContent,
   timelineContent,
+  timelineReadbackMatches,
   settingsOf,
 } from "./composition";
 import type { HostedComposition, ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
-import { compositionMediaFacts, mediaFacts } from "./media";
+import { mediaFacts } from "./media";
 import { prepareFrozenFrames, saveFrozenFrames } from "./freeze";
 import { freezeCompanion } from "../projects/freezeAssets";
 import { versionFiles } from "./versions";
@@ -140,13 +156,21 @@ export function createTimelineRoutes(
     const settings = document.timelines[composition] ?? emptyTimelineSettings();
     // One scope for reading, media discovery, and the readback after an edit.
     const scope = compositionScope(composition);
-    const { lengths, rates, silent, files, footageRefusals, footageColours } =
-      await compositionMediaFacts(project, composition, source.content);
+    const markup = compositionMarkup(source.content, scope);
+    const [
+      { lengths, rates, silent, files, footageRefusals, footageColours },
+      inheritedFonts,
+    ] = await Promise.all([
+      mediaFacts(project, composition, markup.sources({ versions: true })),
+      composition === "index.html"
+        ? []
+        : readSource(project, "index.html").then(({ content }) =>
+            declaredFonts(content),
+          ),
+    ]);
     const fonts = new Set([
       ...declaredFonts(source.content),
-      ...(composition === "index.html"
-        ? []
-        : declaredFonts((await readSource(project, "index.html")).content)),
+      ...inheritedFonts,
     ]);
     return {
       source,
@@ -158,8 +182,7 @@ export function createTimelineRoutes(
       files,
       footageRefusals,
       footageColours,
-      parsed: parseComposition(source.content, settings, {
-        scope,
+      parsed: projectTimeline(markup, settings, {
         mediaLengths: lengths,
         silentMedia: silent,
         mediaFiles: files,
@@ -249,6 +272,7 @@ export function createTimelineRoutes(
     project: Project,
     batch: CommandBatch,
     agent: boolean,
+    origin?: string,
   ) => {
     const { composition } = batch;
     const current = await read(project, composition);
@@ -256,6 +280,27 @@ export function createTimelineRoutes(
       throw new HttpError(
         409,
         "The timeline changed since it was read. Read it again before editing.",
+      );
+    const format = batch.commands.find(
+      (command) => command.type === "setFormat",
+    );
+    if (format && composition !== "index.html")
+      throw new TimelineError(
+        "unsupported",
+        "Change the project format from its main composition.",
+      );
+    if (format && batch.commands.length !== 1)
+      throw new TimelineError(
+        "unsupported",
+        "Change format in its own command. Read the new frame grid before making more edits.",
+      );
+    const plan =
+      format &&
+      planFormat(
+        current.parsed,
+        current.document.timelines[composition] ?? emptyTimelineSettings(),
+        current.lengths,
+        format,
       );
     const versionSources = await versionFiles(
       project,
@@ -361,72 +406,77 @@ export function createTimelineRoutes(
           lengths.set(clip.src, clip.sourceDuration);
     const origins = new Map<string, ClipOrigin>();
     const shifts = new Map<string, number>();
-    const labels: string[] = [];
-    const summaries: string[] = [];
+    const labels: string[] = format
+      ? [editLabel([format], current.parsed.timeline, "")]
+      : [];
+    const summaries = [...labels];
     const hasScript = [current.parsed, ...snapshots.values()].some((source) =>
       /<script\b/i.test(source.html),
     );
-    // Commands keep source times exact; the written timeline holds them to the microsecond.
+    // Each command reads and writes the source map at the clip’s current frame.
     const timeline = canonicalTimeline(
-      applyAll(current.parsed.timeline, batch.commands, {
-        composition,
-        onCreate: (id, origin) => origins.set(id, origin),
-        onApply: (before, after, command) => {
-          labels.push(editLabel([command], before, "Edited timeline"));
-          summaries.push(
-            editLabel([command], before, "Edited timeline", "done"),
-          );
-          if (
-            !hasScript ||
-            command.type === "setVersions" ||
-            command.type === "setVersion" ||
-            command.type === "addVersion" ||
-            command.type === "keepVersion"
-          )
-            return;
-          const previous = new Map(before.clips.map((clip) => [clip.id, clip]));
-          for (const clip of after.clips) {
-            const old = previous.get(clip.id);
-            if (!old) continue;
-            const delta = canonicalSeconds(
-              animationOrigin(clip, after.fps) -
-                animationOrigin(old, before.fps),
+      plan?.timeline ??
+        applyAll(current.parsed.timeline, batch.commands, {
+          composition,
+          onCreate: (id, origin) => origins.set(id, origin),
+          onApply: (before, after, command) => {
+            labels.push(editLabel([command], before, "Edited timeline"));
+            summaries.push(
+              editLabel([command], before, "Edited timeline", "done"),
             );
-            if (delta)
-              shifts.set(
-                clip.id,
-                canonicalSeconds((shifts.get(clip.id) ?? 0) + delta),
+            if (
+              !hasScript ||
+              command.type === "setVersions" ||
+              command.type === "setVersion" ||
+              command.type === "addVersion" ||
+              command.type === "keepVersion"
+            )
+              return;
+            const previous = new Map(
+              before.clips.map((clip) => [clip.id, clip]),
+            );
+            for (const clip of after.clips) {
+              const old = previous.get(clip.id);
+              if (!old) continue;
+              const delta = canonicalSeconds(
+                animationOrigin(clip, after.fps) -
+                  animationOrigin(old, before.fps),
               );
-          }
-        },
-        onSkip: (clip, reason) =>
-          skippedClips.set(clip.id, {
-            clipId: clip.id,
-            label: clip.label,
-            reason,
-          }),
-        clipboards: new Map(
-          [...snapshots].map(([id, { timeline }]) => [
-            id,
-            timeline.clips.map((clip) =>
-              clip.versions && mediaVersions(clip.kind)
-                ? {
-                    ...clip,
-                    versions: clip.versions.map((version) =>
-                      versionMedia(version, lengths, silent, files),
-                    ),
-                  }
-                : clip,
-            ),
-          ]),
-        ),
-        mediaLengths: lengths,
-        silentMedia: silent,
-        mediaRates: rates,
-        mediaFiles: files,
-        // No new clip takes an id the project used before, even one undone since.
-        retired: await usedClipIds(project),
-      }),
+              if (delta)
+                shifts.set(
+                  clip.id,
+                  canonicalSeconds((shifts.get(clip.id) ?? 0) + delta),
+                );
+            }
+          },
+          onSkip: (clip, reason) =>
+            skippedClips.set(clip.id, {
+              clipId: clip.id,
+              label: clip.label,
+              reason,
+            }),
+          clipboards: new Map(
+            [...snapshots].map(([id, { timeline }]) => [
+              id,
+              timeline.clips.map((clip) =>
+                clip.versions && mediaVersions(clip.kind)
+                  ? {
+                      ...clip,
+                      versions: clip.versions.map((version) =>
+                        versionMedia(version, lengths, silent, files),
+                      ),
+                    }
+                  : clip,
+              ),
+            ]),
+          ),
+          mediaLengths: lengths,
+          silentMedia: silent,
+          mediaRates: rates,
+          mediaFiles: files,
+          // No new clip takes an id the project used before, even one undone since.
+          retired: await usedClipIds(project),
+        }),
     );
     const freezes = new Map(
       timeline.clips.flatMap(({ id }) => {
@@ -484,6 +534,7 @@ export function createTimelineRoutes(
       snapshots,
       hosted,
       freezeExports,
+      format,
     );
     const settings = settingsOf(timeline);
     // Compare authored content; removing markup can change the remaining source restrictions.
@@ -495,15 +546,18 @@ export function createTimelineRoutes(
       fonts: current.parsed.fonts,
     });
     const { timeline: written } = writtenSource;
-    if (!Bun.deepEquals(timelineContent(written), timelineContent(timeline)))
+    if (!timelineReadbackMatches(written, timeline))
       throw new TimelineError(
         "unsupported",
-        "This edit cannot be written to the composition exactly. Edit the source instead.",
+        format
+          ? "This format cannot preserve the composition’s timing exactly on the new grid."
+          : "This edit cannot be written to the composition exactly. Edit the source instead.",
       );
     const priorGroups = new Map(
-      timelineContent(current.parsed.timeline).authoredAudioGroups?.map(
-        (group) => [group.id, JSON.stringify(group)],
-      ),
+      current.parsed.timeline.authoredAudioGroups?.map((group) => [
+        group.id,
+        JSON.stringify(authoredAudioGroupContent(group)),
+      ]),
     );
     const routedGroups = new Set(
       batch.commands.flatMap((command) =>
@@ -513,13 +567,13 @@ export function createTimelineRoutes(
       ),
     );
     // Placing a scene or pasting a member can affect the source scope of an edited bus.
-    const writtenGroups = timelineContent(written).authoredAudioGroups ?? [];
-    for (const { id, sourceRestriction } of written.authoredAudioGroups ?? []) {
-      const content = writtenGroups.find((group) => group.id === id);
+    for (const group of written.authoredAudioGroups ?? []) {
+      const { id, sourceRestriction } = group;
       if (
         sourceRestriction &&
         (routedGroups.has(id) ||
-          priorGroups.get(id) !== JSON.stringify(content))
+          priorGroups.get(id) !==
+            JSON.stringify(authoredAudioGroupContent(group)))
       )
         throw new TimelineError("unsupported", sourceRestriction);
     }
@@ -559,6 +613,7 @@ export function createTimelineRoutes(
       label,
       summary,
       encodedSummary,
+      formatPreview: plan?.preview,
       batchLabels:
         summaries.length > 1 || summaries.some((item) => item.includes("; "))
           ? summaries
@@ -623,8 +678,8 @@ export function createTimelineRoutes(
             if (Bun.deepEquals(settings, emptyTimelineSettings()))
               delete timelines[composition];
             else timelines[composition] = settings;
-            await store.writeDocument(project, document, files);
-          } else if (files.length) store.writeFiles(project, files);
+            await store.writeDocument(project, document, files, origin);
+          } else if (files.length) store.writeFiles(project, files, origin);
         });
         return {
           composition,
@@ -633,6 +688,7 @@ export function createTimelineRoutes(
             timelines[composition] ?? emptyTimelineSettings(),
           ),
           timeline: written,
+          size: compositionSize(writtenSource.root),
           detectAnimation,
           ...(skippedClips.size && {
             skippedClips: [...skippedClips.values()],
@@ -682,6 +738,7 @@ export function createTimelineRoutes(
             composition,
             revision,
             timeline: parsed.timeline,
+            size: compositionSize(parsed.root),
           } satisfies TimelineView;
         } catch (error) {
           if (!(error instanceof TimelineError)) throw error;
@@ -693,8 +750,66 @@ export function createTimelineRoutes(
           };
         }
       },
+      c.req.query("clipEdits") === "1",
     );
     return c.json(snapshot, snapshot.error === undefined ? 200 : 422);
+  });
+  api.post("/projects/:id/timeline/changes", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(ChangeDetailsInputSchema, await c.req.json());
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
+    if (input.view === "review") {
+      const edits = await reviews.changeDetails(project, composition);
+      const pending = edits.filter(pendingEdit);
+      return c.json({
+        hasChanges: pending.length > 0,
+        compositionChanges: reviewRows(
+          input.includeClips
+            ? pending
+            : pending.filter((edit) => edit.clipId === null),
+        ),
+      });
+    }
+    const snapshot = await reviews.readComposition(
+      project,
+      composition,
+      async () => {
+        try {
+          return {
+            timeline: (await read(project, composition)).parsed.timeline,
+          };
+        } catch (error) {
+          if (!(error instanceof TimelineError)) throw error;
+          return { error };
+        }
+      },
+    );
+    if (snapshot.error) return refused(c, snapshot.error);
+    const { clipEdits = [], timeline } = snapshot;
+    const selected =
+      input.clipIds === undefined ? undefined : new Set(input.clipIds);
+    const order = new Map(
+      timeline.clips
+        .toSorted((a, b) => a.start - b.start)
+        .map((clip, index) => [clip.id, index]),
+    );
+    const rows: InspectorChange[] = ledgerChanges(clipEdits, selected).map(
+      ({ members, ...row }) => {
+        let revealClipId: string | undefined;
+        let earliest = Infinity;
+        for (const { clipId } of members) {
+          if (clipId === null) continue;
+          const index = order.get(clipId);
+          if (index === undefined || index >= earliest) continue;
+          earliest = index;
+          revealClipId = clipId;
+        }
+        return { ...row, revealClipId };
+      },
+    );
+    return c.json({ rows });
   });
   // The code panel follows the selection to each clip's element in the composition's source.
   api.get("/projects/:id/timeline/sources", async (c) => {
@@ -962,6 +1077,31 @@ export function createTimelineRoutes(
       return refused(c, error);
     }
   });
+  api.post("/projects/:id/format-preview", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const { format, ...input } = parseInput(
+      CommandBatchSchema.pick({
+        composition: true,
+        expectedRevision: true,
+      }).extend({ format: ProjectFormatSchema }),
+      await c.req.json(),
+    );
+    try {
+      const prepared = await prepareEdit(
+        project,
+        {
+          ...input,
+          composition: canonicalProjectPath(input.composition),
+          commands: [{ type: "setFormat", ...format }],
+        },
+        false,
+      );
+      return c.json(prepared.formatPreview);
+    } catch (error) {
+      return refused(c, error);
+    }
+  });
+
   api.post("/projects/:id/commands", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(CommandBatchSchema, await c.req.json());
@@ -973,9 +1113,14 @@ export function createTimelineRoutes(
           TabOriginSchema.optional(),
           c.req.header(TAB_ORIGIN_HEADER),
         ) ?? null;
+      const echoOrigin =
+        c.req.header(GROUPED_EDIT_HEADER) === "1"
+          ? (origin ?? undefined)
+          : undefined;
       const {
         view: { detectAnimation, ...result },
         encodedSummary,
+        historyId,
       } = await reviews.editComposition(
         project,
         batch.composition,
@@ -985,7 +1130,10 @@ export function createTimelineRoutes(
             project,
             batch,
             !!c.req.header(AGENT_HEADER),
+            echoOrigin,
           );
+          const history = await store.history(project);
+          const previous = history.list().at(-1)?.id;
           const result = await store.mutate(
             project,
             prepared.label,
@@ -1005,8 +1153,10 @@ export function createTimelineRoutes(
                 }
               : undefined,
           );
+          const committed = history.list().at(-1)?.id;
           return {
             view: result,
+            historyId: committed !== previous ? committed : undefined,
             summary: prepared.summary,
             encodedSummary: prepared.encodedSummary,
             batchLabels: prepared.batchLabels,
@@ -1016,14 +1166,16 @@ export function createTimelineRoutes(
         {
           label: (result) => result.summary,
           batchLabels: (result) => result.batchLabels,
+          origin: echoOrigin,
         },
       );
       const response = {
         ...result,
-        ...(await reviews.clipChanges(project, batch.composition)),
+        ...(await reviews.changeSummary(project, batch.composition)),
       };
-      // Beside the view, not in it: an edit answers with exactly what a read returns.
+      // Keep command metadata beside the timeline so a saved view matches a subsequent read.
       c.header(EDIT_SUMMARY_HEADER, encodedSummary);
+      if (historyId) c.header(EDIT_HISTORY_HEADER, historyId);
       const followup = async () => {
         // Give the committed edit's response a turn to flush before running source inspection.
         await Bun.sleep(0);

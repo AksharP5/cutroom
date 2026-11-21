@@ -24,6 +24,17 @@ interface ClipMotion {
   >;
 }
 const moving = new WeakMap<HTMLElement, ClipMotion>();
+const slideTiming = new WeakMap<
+  HTMLElement,
+  ReturnType<typeof readSlideTiming>
+>();
+
+export function readSlideTiming(style: CSSStyleDeclaration) {
+  return {
+    duration: cssMilliseconds(style.getPropertyValue("--duration-edit")),
+    ease: cssEasing(style.getPropertyValue("--ease-in-out").trim()),
+  };
+}
 
 /**
  * Slides clips from where they were drawn, `offsets` away, to where they are. Their boxes, names
@@ -37,11 +48,13 @@ export function slideClips(
   offsets: ReadonlyMap<string, Offset>,
   slideBodies: (slides: Slide[]) => void,
 ) {
-  const style = getComputedStyle(root);
-  const duration = cssMilliseconds(style.getPropertyValue("--duration-edit"));
+  const inlineTiming =
+    root.style.getPropertyValue("--duration-edit") ||
+    root.style.getPropertyValue("--ease-in-out");
+  const { duration, ease } =
+    (inlineTiming ? undefined : slideTiming.get(root)) ??
+    readSlideTiming(getComputedStyle(root));
   if (!duration) return;
-  const easing = style.getPropertyValue("--ease-in-out").trim();
-  const ease = cssEasing(easing);
   // Under half a pixel is arithmetic noise from a drag that already held the clip in place.
   const slides = [...offsets].flatMap(([id, { x, y }]) =>
     Math.abs(x) >= 0.5 || Math.abs(y) >= 0.5
@@ -127,8 +140,27 @@ export function useClipMotion(
   ppf: () => number,
   slideBodies: (slides: Slide[]) => void,
   held: RefObject<ReadonlyMap<string, Offset> | null>,
+  initialTiming: ReturnType<typeof readSlideTiming>,
 ) {
   const previous = useRef<ReadonlyMap<string, Clip>>(new Map());
+  useLayoutEffect(() => {
+    const root = lanes.current;
+    if (!root) return;
+    const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+    // Reading inherited tokens during an edit forces layout between the clip
+    // position writes and their animation. The timeline reads them with its sizes.
+    const update = () =>
+      slideTiming.set(
+        root,
+        readSlideTiming(getComputedStyle(root.ownerDocument.documentElement)),
+      );
+    slideTiming.set(root, initialTiming);
+    reducedMotion.addEventListener("change", update);
+    return () => {
+      reducedMotion.removeEventListener("change", update);
+      slideTiming.delete(root);
+    };
+  }, [lanes, initialTiming]);
   useLayoutEffect(() => {
     const before = previous.current;
     previous.current = new Map(clips.map((clip) => [clip.id, clip]));

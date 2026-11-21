@@ -4,6 +4,7 @@ import { showToast, useWorkspace } from "../workspace";
 import { z } from "zod";
 import { CommandSchema } from "../../shared/timeline/schema";
 import { ApiError, api, json } from "../api";
+import { freezeAt } from "./keys";
 import { clipMenuItems } from "./clipMenu";
 import { copyGrade, hasCopiedGrade, pasteGrade } from "./copyGrade";
 import { editTimeline, hasClipboard, useTimeline } from "./timeline";
@@ -95,7 +96,7 @@ export function openClipMenu(
       onAddVersion: addClipVersion,
       onFreeze: (clip, at) =>
         void editTimeline(projectId, "Freeze frame", () => [
-          { type: "freeze", clipId: clip.id, at },
+          freezeAt(clip, at),
         ]),
       onDuck: (bed, voices) =>
         void applyPlan(projectId, view.composition, "duck", {

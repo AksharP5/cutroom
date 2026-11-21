@@ -1,3 +1,9 @@
+import { lstatSync, unlinkSync } from "node:fs";
+import {
+  hasCode,
+  importSocketPath,
+  openImportSocket,
+} from "../local/mediaImport";
 import { createApp } from "./app";
 
 // Register before startup so quitting the desktop during initialization is remembered.
@@ -11,6 +17,12 @@ const runtime = await createApp({
   port,
   allowDevOrigin: process.env.CUTROOM_DEV === "1",
 });
+const socket = importSocketPath(`http://127.0.0.1:${port}`, runtime.dataDir);
+const socketDir = await openImportSocket(socket, true).catch(
+  (error: unknown) => {
+    console.warn("Local media import is unavailable:", error);
+  },
+);
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port,
@@ -19,6 +31,42 @@ const server = Bun.serve({
   maxRequestBodySize: 512 * 1024 * 1024,
   fetch: runtime.app.fetch,
 });
+const stopImports = socketDir && listenForImports(socketDir);
+
+function listenForImports({
+  address,
+  handle,
+}: Awaited<ReturnType<typeof openImportSocket>>) {
+  try {
+    // Owning the TCP port also means no other Cutroom server owns this port's socket.
+    const stale = lstatSync(address, { throwIfNoEntry: false });
+    if (stale) {
+      if (!stale.isSocket() || stale.uid !== process.getuid?.())
+        throw new Error("Cutroom's media import socket path is occupied.");
+      unlinkSync(address);
+    }
+    const imports = Bun.serve({
+      unix: address,
+      fetch(request, server) {
+        server.timeout(request, 0);
+        return runtime.mediaImport.fetch(request);
+      },
+    });
+    return async () => {
+      try {
+        await imports.stop(true);
+        unlinkSync(address);
+      } catch (error) {
+        if (!hasCode(error, "ENOENT")) console.warn(error);
+      } finally {
+        await handle.close();
+      }
+    };
+  } catch (error) {
+    console.warn("Local media import is unavailable:", error);
+    void handle.close().catch(console.warn);
+  }
+}
 console.log(`Cutroom is ready at ${server.url}`);
 let stopping = false;
 async function stop() {
@@ -27,8 +75,12 @@ async function stop() {
   try {
     await runtime.dispose();
   } finally {
-    await server.stop(true);
-    if (process.connected) process.disconnect();
+    try {
+      await stopImports?.();
+    } finally {
+      await server.stop(true);
+      if (process.connected) process.disconnect();
+    }
   }
 }
 for (const signal of ["SIGINT", "SIGTERM"] as const)

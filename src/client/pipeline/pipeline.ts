@@ -1,11 +1,13 @@
-import { PipelineResponseSchema } from "../../shared/pipeline";
+import {
+  FOOTAGE_PIXEL_LIMIT,
+  PipelineResponseSchema,
+} from "../../shared/pipeline";
 import type { FootageColour, PipelinePlan } from "../../shared/pipeline";
 import type { Clip, TimelineView, Version } from "../../shared/timeline/schema";
 import {
   activeVersion,
-  consumedSource,
   nextAudition,
-  versionStart,
+  versionSourceAt,
 } from "../../shared/timeline/versions";
 import { framesBefore } from "../../shared/timeline/transition";
 import { useVersions } from "../edit/versions";
@@ -19,7 +21,7 @@ import { createCompositor } from "./compositor";
 import type { Layer } from "./compositor";
 import { SourceDecoder } from "./decoder";
 import { openRanges, readVideoTrack } from "./mp4";
-import { appearances, visibleAt } from "./layers";
+import { appearances, coversFrame, frameLayersAt } from "./layers";
 import type { Appearance, Shown } from "./layers";
 import { sourceCache } from "./sources";
 import { usePipeline } from "./setting";
@@ -95,10 +97,17 @@ function colourOf(
 async function openSource(
   url: string,
   signal: AbortSignal,
-  colour?: FootageColour,
+  {
+    colour,
+    scrubProxy = false,
+  }: { colour?: FootageColour; scrubProxy?: boolean } = {},
 ) {
   const { read, size } = await openRanges(url, signal);
   const track = await readVideoTrack(read, size);
+  if (!scrubProxy && track.width * track.height > FOOTAGE_PIXEL_LIMIT)
+    throw new Error(
+      `The playing file is ${track.width} × ${track.height}, above the pipeline's 1080p limit.`,
+    );
   if (!(await SourceDecoder.supported(track)))
     throw new Error(`This browser cannot decode ${track.codec}.`);
   const turned = track.rotation % 180 !== 0;
@@ -126,6 +135,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     "webglcontextlost",
     (event) => {
       event.preventDefault();
+      compositor.dispose();
       stop("the GPU dropped its drawing context");
     },
     { signal: closing.signal },
@@ -190,11 +200,9 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const grid = grids.get(path);
     // A file this browser cannot decode or read, such as HEVC, ProRes or Matroska, plays from
     // its editing proxy: the same frames at the same times. HyperFrames draws until it exists.
-    const opened = await openSource(
-      mediaUrl(projectId, path),
-      closing.signal,
-      sourceColours[src],
-    ).catch(async (error: unknown) => {
+    const opened = await openSource(mediaUrl(projectId, path), closing.signal, {
+      colour: sourceColours[src],
+    }).catch(async (error: unknown) => {
       const url = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/proxy?path=${encodeURIComponent(path)}`;
       const response = await fetch(url, {
         headers: { range: "bytes=0-0" },
@@ -214,6 +222,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     openSource(
       `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/scrub?path=${encodeURIComponent(path)}`,
       closing.signal,
+      { scrubProxy: true },
     ),
   );
   const sources = sourceCache(async (src): Promise<Source> => {
@@ -290,8 +299,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     frame: number,
     view: TimelineView,
   ) =>
-    versionStart(version, view.timeline.fps) +
-    consumedSource(clip, frame - clip.start, view.timeline.fps) +
+    versionSourceAt(clip, version, frame, view.timeline.fps) +
+    // The runtime seeks just past the frame's start, as HyperFrames does.
     1e-5;
   function prepareAudition(
     view: TimelineView,
@@ -479,6 +488,9 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     if (drawing) return;
     drawing = true;
     try {
+      // An edit publishes its new timeline and playhead in the same key event.
+      // Read them together so decoding does not start at the old playhead.
+      await Promise.resolve();
       while (wanted && !closing.signal.aborted) {
         wanted = false;
         const drawingPlan = plan;
@@ -521,12 +533,19 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   };
 
   const drawFrame = async (drawingPlan: Plan) => {
-    const view = useTimeline.getState().view;
+    const { view, selection } = useTimeline.getState();
     const { frame, state } = useTransport.getState();
     if (!view || view.composition !== "index.html") return;
     const auditionAtDraw = useVersions.getState();
     const alternate = prepareAudition(view, frame, state.kind === "playing");
-    const shown = visibleAt(view.timeline, drawingPlan, frame);
+    const { draft } = usePreviewGrade.getState();
+    const { bypass } = useGradeBypass.getState();
+    const shown = frameLayersAt(
+      view.timeline,
+      drawingPlan,
+      frame,
+      draft?.clipId,
+    );
     if (!shown) {
       stop("the layers at the playhead need to be composited together");
       if (state.kind === "playing") prepare(view, frame, LOOKAHEAD, OPENING);
@@ -534,30 +553,38 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     }
     if (
       alternate?.refusal &&
-      shown.some(({ clip }) => clip.id === alternate.clip.id)
+      shown.pictures.some(({ clip }) => clip.id === alternate.clip.id)
     ) {
       stop(alternate.refusal);
       return;
     }
     const moving = state.kind === "scrubbing" || state.kind === "shuttle";
     const playing = state.kind === "playing";
-    const { draft } = usePreviewGrade.getState();
-    const { bypass } = useGradeBypass.getState();
     const { fileChanges } = useWorkspace.getState();
-    const textures = Promise.all(
-      shown.map(({ clip }) => {
-        const editing = draft?.clipId === clip.id;
-        const grade = editing ? draft.grade : clip.grade;
-        const key =
-          grade && !bypass
-            ? grades.identify(grade, view.composition, fileChanges, editing)
-            : null;
-        return key ? grades.get(key) : null;
-      }),
-    ).then(
-      (textures) => ({ textures }),
+    const textureOf = ({ clip }: Pick<Shown, "clip">) => {
+      const editing = draft?.clipId === clip.id;
+      const grade = editing ? draft.grade : clip.grade;
+      const key =
+        grade && !bypass
+          ? grades.identify(grade, view.composition, fileChanges, editing)
+          : null;
+      return key ? grades.get(key) : null;
+    };
+    const textures = Promise.all(shown.pictures.map(textureOf)).catch(
       (error: unknown) => ({ error }),
     );
+    const adjustments =
+      !bypass &&
+      shown.adjustments?.length &&
+      Promise.all(
+        shown.adjustments.map(async ({ clip, after }) => {
+          const grade = await textureOf({ clip });
+          return grade ? { after, grade } : null;
+        }),
+      ).then(
+        (results) => results.filter((item) => item !== null),
+        (error: unknown) => ({ error }),
+      );
     type Picture = {
       frame: VideoFrame;
       rotation: SourceDecoder["rotation"];
@@ -565,7 +592,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     };
     let arrived = false;
     let hasStandIn = false;
-    const pictures = shown.map((layer) => {
+    const pictures = shown.pictures.map((layer) => {
       const selected = alternate?.clip.id === layer.clip.id ? alternate : null;
       const src = selected?.version.src ?? layer.clip.src!;
       const seconds = selected
@@ -659,28 +686,47 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       return { exact, standIn };
     });
     const paint = async (frames: Picture[], standIn: boolean) => {
-      // A page that paints nothing shows the browser's white canvas, as frame capture does.
-      if (plan !== drawingPlan || closing.signal.aborted || compositor.lost())
-        return;
+      const target = compositor;
+      const canPaint = () =>
+        plan === drawingPlan && !closing.signal.aborted && target.isAvailable();
+      if (!canPaint()) return;
       const baked = await textures;
+      const effects = adjustments ? await adjustments : undefined;
+      if (!canPaint()) return;
       if ("error" in baked) throw baked.error;
+      if (effects && "error" in effects) throw effects.error;
       const currentAudition = useVersions.getState();
       if (
         auditionAtDraw.open !== currentAudition.open ||
         auditionAtDraw.hovered !== currentAudition.hovered
       )
         return;
-      await compositor.draw(
+      // An opaque full-frame shot without its own grade needs no intermediate copy.
+      const single = effects?.[0];
+      const fused =
+        single?.after === 1 &&
+        frames.length === 1 &&
+        effects!.length === 1 &&
+        !baked[0] &&
+        coversFrame(shown.pictures[0]!);
+      await target.draw(
         frames.map(({ frame, rotation, intrinsic }, at) =>
           // The proxy is stored upright; a phone's file may be stored turned.
-          placed(shown[at]!, frame, rotation, intrinsic, baked.textures[at]!),
+          placed(
+            shown.pictures[at]!,
+            frame,
+            rotation,
+            intrinsic,
+            fused ? single.grade : baked[at]!,
+          ),
         ),
         drawingPlan.background ?? "#ffffff",
         drawingPlan.width,
         drawingPlan.height,
+        fused ? undefined : effects,
       );
-      // A refusal or detachment during GPU upload must not make this canvas visible again.
-      if (plan !== drawingPlan || closing.signal.aborted) return;
+      // HyperFrames keeps the picture if this upload lost its drawing context.
+      if (!canPaint()) return;
       canvas.dataset.standin = String(standIn);
       canvas.dataset.frame = String(frame);
       stopped = null;
@@ -732,7 +778,9 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     for (const { found, lane, index } of frames) {
       if (moving) continue;
       if (found) found.playing = lane;
-      if (playing) lane.prefetch(index + 1, index + lane.room(8));
+      // Repeated keyboard trims can step through this opening at rest.
+      if (playing || selection.editPoint)
+        lane.prefetch(index + 1, index + lane.room(8));
     }
     if (playing) prepare(view, frame, LOOKAHEAD, OPENING);
     else if (!moving) prepare(view, frame, NEXT, PREPARED);

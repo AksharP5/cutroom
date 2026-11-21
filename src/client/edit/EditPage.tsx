@@ -7,6 +7,7 @@ import {
   FrameCorners,
   GridNine,
   Magnet,
+  LinkSimple,
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import type { EditorContext } from "../../shared/editor";
@@ -21,6 +22,7 @@ import {
   hint,
   isTyping,
   missingNotice,
+  runAction,
   useKeymap,
 } from "../keymap";
 import type { Action } from "../keymap";
@@ -48,6 +50,8 @@ import { SelectMenu } from "../components/SelectMenu";
 import {
   receiveAnimationFeedback,
   editTimeline,
+  finishHeldEdit,
+  hasPendingTimelineSaves,
   loadTimeline,
   openTimeline,
   refreshTimeline,
@@ -82,6 +86,9 @@ const previewChangeSchema = z.object({
   path: z.string(),
   affectsPreview: z.boolean(),
   affectedCompositions: z.array(z.string()).nullable(),
+});
+const projectFileEventSchema = z.object({
+  timelineSaveEcho: z.literal(true).optional(),
 });
 
 const report = (error: unknown) => reportEditorError("timeline", error);
@@ -132,13 +139,22 @@ export function EditPage({
       beforeProjectChange: () => voiceover.canLeave() && codeCanLeave(),
     });
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!useCode.getState().edited) return;
+      finishHeldEdit();
+      if (!useCode.getState().edited && !hasPendingTimelineSaves()) return;
       event.preventDefault();
       event.returnValue = "";
     };
+    const hide = () => finishHeldEdit();
+    const visibility = () => {
+      if (document.visibilityState === "hidden") hide();
+    };
     window.addEventListener("beforeunload", beforeUnload);
+    window.addEventListener("pagehide", hide);
+    document.addEventListener("visibilitychange", visibility);
     return () => {
       window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("pagehide", hide);
+      document.removeEventListener("visibilitychange", visibility);
       useWorkspace.setState({ beforeProjectChange: null });
     };
   }, [voiceover]);
@@ -166,6 +182,7 @@ export function EditPage({
   );
   useFollowVariables(projectId, composition);
   const snapping = useTimeline((state) => state.snapping);
+  const linkedSelection = useTimeline((state) => state.linkedSelection);
   const source = useSource((state) => state.file !== null);
   const sourceShown = useSource((state) => state.shown);
   /** The transport keys and bar drive what the viewer shows. */
@@ -186,7 +203,13 @@ export function EditPage({
     const stopProject = subscribeProjectEvents(
       projectId,
       "message",
-      () => void refreshTimeline(projectId, closing.signal),
+      (event) => {
+        const changed = projectFileEventSchema.safeParse(
+          JSON.parse(event.data),
+        );
+        if (!changed.success || !changed.data.timelineSaveEcho)
+          void refreshTimeline(projectId, closing.signal);
+      },
     );
     // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
     const stopAnimationFeedback = subscribeProjectEvents(
@@ -486,6 +509,8 @@ export function EditPage({
     editInsertOverwriteActionInsert: () => placeSource(projectId, "insert"),
     editInsertOverwriteActionOverwrite: () =>
       placeSource(projectId, "overwrite"),
+    editInsertOverwriteActionReplace: () => placeSource(projectId, "replace"),
+    editInsertOverwriteActionPlaceOnTop: () => placeSource(projectId, "top"),
     // The one viewer is either panel: its key shows that side and takes the keyboard there.
     viewActiveWindowSelectionSourceViewer: () => {
       if (!source)
@@ -586,6 +611,15 @@ export function EditPage({
           onClick={() => useTimeline.setState({ snapping: !snapping })}
         >
           <Magnet size={16} weight={snapping ? "fill" : "regular"} />
+        </button>
+        <button
+          className="edit-icon"
+          aria-label="Linked selection"
+          aria-pressed={linkedSelection}
+          title={hint("editLinkedSelection")}
+          onClick={() => runAction("editLinkedSelection")}
+        >
+          <LinkSimple size={16} weight={linkedSelection ? "fill" : "regular"} />
         </button>
         <button
           className="edit-icon"

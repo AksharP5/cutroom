@@ -738,6 +738,24 @@ input.tl-track-gain {
   left: 0;
   z-index: var(--z-clip-selected);
 }
+/* The active side of a cut uses the same paper bracket as clip selection. */
+.tl-edit-edge {
+  position: absolute;
+  left: calc(var(--s) / var(--span) * 100%);
+  inset-block: var(--stroke-hair);
+  width: var(--space-2);
+  z-index: var(--z-range-lines);
+  border: var(--stroke-bracket) solid var(--selection);
+  pointer-events: none;
+}
+.tl-edit-edge.start {
+  border-right: 0;
+}
+.tl-edit-edge.end {
+  margin-left: calc(-1 * var(--space-2));
+  border-left: 0;
+}
+
 /* Selection: a 1px paper outline inside the clip, with 2px brackets at its ends, above the bodies and transitions. Instant. */
 .tl-selected {
   z-index: var(--z-clip-selected);
@@ -1331,10 +1349,10 @@ input.tl-track-gain {
     transparent 2px 3px
   );
 }
-.tl-meter-channel:nth-child(2) {
+.tl-meter-channel:nth-child(1 of .tl-meter-channel) {
   right: 11px;
 }
-.tl-meter-channel:nth-child(3) {
+.tl-meter-channel:nth-child(2 of .tl-meter-channel) {
   right: 3px;
 }
 .tl-meter-channel > span {

@@ -266,3 +266,32 @@ test("every Cutroom tool has its own wording", () => {
     [...cutroomToolRegistry.keys()].toSorted(),
   );
 });
+
+test("media import approvals show the requested source folders", async () => {
+  const approve = (paths: string[]) =>
+    toolApproval(
+      tool("media_import"),
+      { projectId: project.id, paths },
+      project.path,
+    );
+  expect(await approve(["/recordings/clip.mp4"])).toMatchObject({
+    title: "Import clip.mp4?",
+    detail: "From /recordings",
+  });
+  expect(
+    await approve([
+      "/recordings/clip.mp4",
+      "/recordings/other.mp4",
+      "/external/take.wav",
+    ]),
+  ).toMatchObject({
+    title: "Import 3 media files?",
+    detail: "From /recordings, /external",
+  });
+  const longFolder = `/recordings/${"x".repeat(240)}`;
+  expect(
+    await approve([`${longFolder}/clip.mp4`, "/external/\u202e/take.wav"]),
+  ).toMatchObject({
+    detail: `From ${longFolder}, /external/\\u{202e}`,
+  });
+});

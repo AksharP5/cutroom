@@ -10,14 +10,16 @@ import {
   MIN_PLAYBACK_RATE,
 } from "@hyperframes/parsers/media-duration";
 import type { DefaultTreeAdapterTypes } from "parse5";
-import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
+import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { compositionClipLocations } from "../timeline/composition";
 import type { CompositionScope } from "../timeline/composition";
 import { TimelineError } from "../../shared/timeline/apply";
 import { canonicalText } from "../../shared/timeline/schema";
-import { previewTiming } from "./previewTiming";
+import { previewTiming, snappedPreviewWindow } from "./previewTiming";
 import type { PreviewTiming } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
+import { adjustmentCapture } from "./adjustmentCapture";
+import { spanIndex } from "../../shared/timeline/spanIndex";
 import { frameSeek } from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
 
@@ -43,7 +45,18 @@ interface PreviewWindow extends DiagnosticWindow {
     audioMeter?: {
       start(): void;
       stop(): void;
-      read(): { master: { l: number; r: number } };
+      read(): {
+        master: { l: number; r: number };
+        groups: Record<string, { l: number; r: number }>;
+      };
+      /** Cutroom's adapter: a group's fader, or Main's trim when the id is null. */
+      fade(id: string | null, gain: number): void;
+      /** Where automation holds each of these groups' faders now. */
+      faders(ids: string[]): Record<string, number>;
+      /** Peaks of clips entering a bus, by their track index. */
+      pre(): Record<string, { l: number; r: number }>;
+      /** Disconnect those taps while the mixer is closed. */
+      clearPre(): void;
     };
     /** HyperFrames' colour grading: graded pictures, and a compare that shows their source. */
     colorGrading?: {
@@ -130,24 +143,26 @@ export function liveUpdatePlan(
   const added = next.filter((clip) => !kept.has(clip.id));
   if ([...removed, ...added].some((clip) => clip.slot === null))
     return { refuse: "This clip is part of the document's structure." };
+  const retained = next.filter((clip) => kept.has(clip.id));
   if (
     current
       .filter((clip) => kept.has(clip.id))
-      .some(
-        (clip, index) =>
-          clip.id !== next.filter((clip) => kept.has(clip.id))[index]!.id,
-      )
+      .some((clip, index) => clip.id !== retained[index]!.id)
   )
     return { refuse: "The clips changed order." };
+  const firstInGap = new Map<string | null, number>();
+  for (const [index, clip] of next.entries())
+    if (kept.has(clip.id) && !firstInGap.has(clip.slot))
+      firstInGap.set(clip.slot, index);
   const after: { id: string; after: string; before: null }[] = [];
   const ahead: { id: string; after: null; before: string }[] = [];
   for (const [index, clip] of next.entries()) {
     if (kept.has(clip.id)) continue;
-    const gap = next.filter((other) => other.slot === clip.slot);
-    const first = gap.findIndex((other) => kept.has(other.id));
-    if (first < 0) return { refuse: "Added clips need a fresh document." };
+    const first = firstInGap.get(clip.slot);
+    if (first === undefined)
+      return { refuse: "Added clips need a fresh document." };
     // Clips in one gap are adjacent, so the neighbour in the list is the one in the page.
-    if (gap.indexOf(clip) > first)
+    if (index > first)
       after.push({ id: clip.id, after: next[index - 1]!.id, before: null });
     else ahead.push({ id: clip.id, after: null, before: next[index + 1]!.id });
   }
@@ -162,8 +177,12 @@ export function liveUpdatePlan(
 function installPreviewBridge(
   plan: typeof liveUpdatePlan,
   seekInFrame: typeof frameSeek,
-  /** The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does. */
-  [minRate, maxRate]: [number, number],
+  createAdjustmentCapture: (() => ReturnType<typeof adjustmentCapture>) | null,
+  /**
+   * The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does, and one
+   * gain stage's ceiling, which a fader set in place must stay under.
+   */
+  [minRate, maxRate, maxGain]: [number, number, number],
   texts: [string, string[]][],
   initialTiming:
     | (Pick<
@@ -179,6 +198,8 @@ function installPreviewBridge(
   rampPending: boolean,
   rampWindows: [src: string, seconds: number][],
 ) {
+  const adjustment = createAdjustmentCapture?.();
+  const adjustmentState = adjustment && { adjustment: true };
   const rampFiles = new Map(rampWindows);
   const animatedTitles = new Set<string>();
   const titleAnimations = new Map<string, Set<Animation>>();
@@ -310,40 +331,40 @@ function installPreviewBridge(
       }
     }
   };
-  /** The copy of a live element in a clone of the document, found by its path from the root. */
-  const cloneOf = (root: Element, element: Element) => {
-    const path: number[] = [];
-    let node: Node | null = element;
-    while (node && node !== document.documentElement) {
-      const parentNode: ParentNode | null = node.parentNode;
-      if (!parentNode) break;
-      path.unshift([...parentNode.childNodes].indexOf(node as ChildNode));
-      node = parentNode;
-    }
-    if (node !== document.documentElement)
-      throw new Error("The live preview element changed.");
-    const clone = path.reduce<Node>(
-      (node, index) => node.childNodes[index]!,
-      root,
-    );
-    if (!(clone instanceof Element))
-      throw new Error("The live preview element changed.");
-    return clone;
+  /** Faders a saved gain sets in place: Cutroom's track buses and buses without automation. */
+  const FADERS =
+    "hf-audio-group[id]:is([data-cutroom-track], :not([data-automation]))";
+  /** Matches `trackGainPreview`: a bus's level must be within one gain stage, +12 dB. */
+  const isFader = (element: Element) => {
+    if (!element.matches(FADERS)) return false;
+    if (element.hasAttribute("data-cutroom-track")) return true;
+    const level = Number(element.getAttribute("data-volume") ?? 1);
+    return level >= 0 && level <= maxGain;
   };
+  const faders = (root: ParentNode) =>
+    [...root.querySelectorAll(FADERS)].filter(isFader);
   const liveStructure = () => {
     flushSeek();
     if (seekDiverged)
       throw new Error("The live preview changed between seeks.");
-    const root = document.documentElement.cloneNode(true);
-    if (!(root instanceof Element))
-      throw new Error("The preview document is unavailable.");
+    // An inert document cannot start media loads while copying a large preview.
+    const inert = document.implementation.createHTMLDocument();
+    const root = inert.importNode(document.documentElement, true);
+    const originals = document.documentElement.querySelectorAll("*");
+    const copies = root.querySelectorAll("*");
+    const clones = new Map<Element, Element>([
+      [document.documentElement, root],
+    ]);
+    for (const [index, element] of originals.entries())
+      if (gradeSaved.has(element) || seekAttributes.has(element))
+        clones.set(element, copies[index]!);
     // A grade draft shows in the page but is not saved yet: compare the saved grade.
     for (const [element, saved] of gradeSaved) {
       if (!element.isConnected) {
         gradeSaved.delete(element);
         continue;
       }
-      const clone = cloneOf(root, element);
+      const clone = clones.get(element)!;
       if (saved === null) clone.removeAttribute(GRADE_ATTRIBUTE);
       else clone.setAttribute(GRADE_ATTRIBUTE, saved);
     }
@@ -353,7 +374,7 @@ function installPreviewBridge(
         seekAttributes.delete(element);
         continue;
       }
-      const clone = cloneOf(root, element);
+      const clone = clones.get(element)!;
       for (const [name, { before, after }] of attributes) {
         if (element.getAttribute(name) !== after)
           throw new Error(`The live preview attribute ${name} changed.`);
@@ -378,11 +399,9 @@ function installPreviewBridge(
     for (const media of root.querySelectorAll("video, audio"))
       media.setAttribute("preload", "none");
     // Gain checks and timing updates both set these faders in place.
-    for (const group of root.querySelectorAll(
-      "hf-audio-group[data-cutroom-track]",
-    ))
-      group.removeAttribute("data-volume");
-    for (const element of [root, ...root.querySelectorAll("*")]) {
+    for (const group of faders(root)) group.removeAttribute("data-volume");
+    for (const element of [root, ...copies]) {
+      if (!root.contains(element)) continue;
       const attributes = [...element.attributes].sort((a, b) =>
         a.name.localeCompare(b.name),
       );
@@ -421,7 +440,7 @@ function installPreviewBridge(
   };
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
-  /** Resolves every Cutroom track fader in this document, or null when the set differs. */
+  /** Resolves every fader in this document, or null when the set differs. */
   const trackGains = (gains: unknown) => {
     if (!Array.isArray(gains)) return null;
     const changes: { element: Element; volume: string }[] = [];
@@ -438,29 +457,45 @@ function installPreviewBridge(
       )
         return null;
       const element = document.getElementById(gain.id);
-      if (
-        element?.tagName.toLowerCase() !== "hf-audio-group" ||
-        !element.hasAttribute("data-cutroom-track")
-      )
-        return null;
+      if (!element || !isFader(element)) return null;
       changes.push({ element, volume: String(gain.volume) });
     }
     return new Set(changes.map(({ element }) => element)).size ===
-      document.querySelectorAll("hf-audio-group[data-cutroom-track]").length
+      faders(document).length
       ? changes
       : null;
   };
   const win = window as PreviewWindow;
   // Finished entrance effects disappear from getAnimations(), but the pinned runtime
   // can still retain their handles. Collect them before the parent's first seek.
-  const rememberTitleAnimations = () => {
-    if (!initialTiming || !win.__player) return;
+  const rememberTitleAnimations = (pageAnimations?: Animation[]) => {
+    if (
+      !initialTiming ||
+      !win.__player ||
+      !liveClips.some((clip) => clip.titleAttributes)
+    )
+      return;
+    const byTarget = new Map<Element, Animation[]>();
+    for (const animation of pageAnimations ?? document.getAnimations()) {
+      const effect = animation.effect;
+      // Match Element.getAnimations() without its per-element style flush.
+      if (
+        !(effect instanceof KeyframeEffect) ||
+        !effect.target ||
+        effect.pseudoElement
+      )
+        continue;
+      const animations = byTarget.get(effect.target);
+      if (animations) animations.push(animation);
+      else byTarget.set(effect.target, [animation]);
+    }
     for (const clip of liveClips) {
       if (!clip.titleAttributes) continue;
       const element = clipElement(clip.id);
       if (!element) continue;
       const handles = titleAnimations.get(clip.id) ?? new Set<Animation>();
-      for (const animation of element.getAnimations()) handles.add(animation);
+      for (const animation of byTarget.get(element) ?? [])
+        handles.add(animation);
       titleAnimations.set(clip.id, handles);
     }
   };
@@ -1449,12 +1484,45 @@ function installPreviewBridge(
     }
   };
   let metering = false;
+  let stripMetering = false;
   let animation = 0;
+  /** A group's mixer strip: `track:<index>` for a Cutroom track bus, `bus:<id>` for a bus. */
+  const stripOf = (id: string) => {
+    const group = document.getElementById(id);
+    if (group?.tagName.toLowerCase() !== "hf-audio-group") return null;
+    const track = group.getAttribute("data-cutroom-track");
+    return track === null ? `bus:${id}` : `track:${track}`;
+  };
   const levels = () => {
     if (!metering) return;
     const meter = win.__hf?.audioMeter;
     meter?.start();
-    const level = win.__player?.isPlaying() ? meter?.read().master : null;
+    const read = win.__player?.isPlaying() ? meter?.read() : null;
+    const level = read?.master;
+    let details;
+    if (stripMetering && meter && read) {
+      const strips: Record<string, { l: number; r: number }> = {};
+      for (const [id, group] of Object.entries(read.groups)) {
+        const strip = stripOf(id);
+        if (strip) strips[strip] = group;
+      }
+      // A track's clips that play through buses still show on the track's strip.
+      for (const [track, level] of Object.entries(meter.pre())) {
+        const shown = strips[`track:${track}`];
+        strips[`track:${track}`] = shown
+          ? { l: Math.max(shown.l, level.l), r: Math.max(shown.r, level.r) }
+          : level;
+      }
+      const automated = [
+        ...document.querySelectorAll(
+          "hf-audio-group[data-automation]:not([data-cutroom-track])",
+        ),
+      ].map((group) => group.id);
+      details = {
+        strips,
+        ...(automated.length && { faders: meter.faders(automated) }),
+      };
+    }
     if (win.__player?.isPlaying())
       parent.postMessage(
         {
@@ -1472,6 +1540,7 @@ function installPreviewBridge(
         playing: Boolean(win.__player?.isPlaying()),
         l: level?.l ?? 0,
         r: level?.r ?? 0,
+        ...details,
       },
       "*",
     );
@@ -1488,6 +1557,7 @@ function installPreviewBridge(
       return Number.isFinite(value) && value > 0 ? value : fallback;
     };
     return {
+      ...adjustmentState,
       rampPending,
       rampPrepared: rampFiles.size > 0,
       mixSignature:
@@ -1547,10 +1617,16 @@ function installPreviewBridge(
       "*",
     );
   };
-  const paint = () =>
+  const nextPaint = () =>
     new Promise<void>((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
     );
+  const paint = adjustment
+    ? () => {
+        adjustment.update();
+        return nextPaint();
+      }
+    : nextPaint;
   const holds = new Map<
     HTMLVideoElement,
     {
@@ -1589,6 +1665,7 @@ function installPreviewBridge(
     for (const [video, preload] of editPreloads) {
       if (preload === null) video.removeAttribute("preload");
       else video.setAttribute("preload", preload);
+      if (pipelineActive && drawnByPipeline(video)) park(video);
     }
     editPreloads.clear();
   };
@@ -1612,6 +1689,8 @@ function installPreviewBridge(
           element.pause();
           if (!editPreloads.has(element))
             editPreloads.set(element, element.getAttribute("preload"));
+          // The edit canvas needs real source pixels even when GPU playback owns the clip.
+          unpark(element, false);
           element.preload = "auto";
           if (!element.readyState) element.load();
           while (!element.readyState) {
@@ -1765,11 +1844,12 @@ function installPreviewBridge(
     ]);
     // A frame whose document's colour scheme differs from the dark editor's gets an opaque white
     // backdrop. The scheme only picks system colours, so the default text colour stays black.
+    // Mask the video without changing its authored opacity, which still controls picture hits.
     pipelineSheet.replaceSync(
       ":root { color-scheme: dark !important; } :where(:root) { color: #000; }" +
         `html, body, ${ROOT_COMPOSITION} { background: transparent !important; }` +
         (drawn.length
-          ? `${ROOT_COMPOSITION} > video:is(${drawn.join(", ")}) { opacity: 0 !important; }`
+          ? `${ROOT_COMPOSITION} > video:is(${drawn.join(", ")}) { filter: opacity(0) !important; }`
           : ""),
     );
   };
@@ -1866,7 +1946,9 @@ function installPreviewBridge(
         ? time
         : time + ((performance.now() - playedAt) / 1000) * media.playbackRate;
     // An element that already loaded gives its media back; its src stays in the DOM.
-    const released = media.readyState > HTMLMediaElement.HAVE_NOTHING;
+    const released =
+      media.readyState > HTMLMediaElement.HAVE_NOTHING ||
+      media.networkState === HTMLMediaElement.NETWORK_LOADING;
     if (released) {
       media.pause();
       media.srcObject = new MediaStream();
@@ -1942,8 +2024,8 @@ function installPreviewBridge(
     return resident;
   };
 
-  const rootMedia = (kind: "video" | "audio") =>
-    document.querySelectorAll<HTMLMediaElement>(
+  const rootMedia = <Kind extends "video" | "audio">(kind: Kind) =>
+    document.querySelectorAll<HTMLElementTagNameMap[Kind]>(
       `${ROOT_COMPOSITION} > ${kind}`,
     );
   /** Sound near the playhead stays loaded; the rest waits until the playhead comes near. */
@@ -1985,7 +2067,7 @@ function installPreviewBridge(
     if (!pipelineActive) return false;
     let released = false;
     for (const video of rootMedia("video"))
-      if (drawnByPipeline(video)) park(video);
+      if (drawnByPipeline(video) && !editPreloads.has(video)) park(video);
       else if (parked.has(video)) {
         unpark(video, false);
         released = true;
@@ -1994,6 +2076,11 @@ function installPreviewBridge(
   };
   /** True when media comes back, so the runtime must seek again for it to load and draw. */
   const setPipeline = (active: boolean, drawn: Set<string>) => {
+    if (active)
+      adjustment?.setOwnership(
+        gradeBypass,
+        document.querySelector(ROOT_COMPOSITION),
+      );
     pipelineActive = active;
     pipelineDrawn = drawn;
     writePipelineSheet();
@@ -2022,6 +2109,7 @@ function installPreviewBridge(
       if (gradeBypass) writeGradeBypass();
     }
     win.__cutroomRefreshAudition?.();
+    adjustment?.setOwnership(gradeBypass, null);
     return released;
   };
   const holdStyle = document.createElement("style");
@@ -2234,10 +2322,12 @@ function installPreviewBridge(
     for (const video of hidden) video.removeAttribute("data-cutroom-held");
     const videos = Array.from(document.querySelectorAll("video")).filter(
       (video) =>
+        (!pipelineActive || !drawnByPipeline(video)) &&
         video.checkVisibility({
           checkOpacity: true,
           checkVisibilityCSS: true,
-        }) && !awaitingProxy(video),
+        }) &&
+        !awaitingProxy(video),
     );
     for (const video of hidden) video.setAttribute("data-cutroom-held", "");
     return videos;
@@ -2470,9 +2560,12 @@ function installPreviewBridge(
       try {
         for (let pending = true; pending && !retired;) {
           pending = false;
+          // Cuts from the same file share one pending job and one poll per pass.
+          const checked = new Set<string>();
           for (const video of document.querySelectorAll("video")) {
             const path = scrubPath(video);
-            if (!path) continue;
+            if (!path || checked.has(path)) continue;
+            checked.add(path);
             const source = scrubSources.get(path) ?? { used: 0 };
             scrubSources.set(path, source);
             if (source.key || source.failed) continue;
@@ -3075,6 +3168,72 @@ function installPreviewBridge(
     )
       return;
     const id = data.id;
+    if (data.action === "display-scale") {
+      if (
+        adjustment &&
+        "scale" in data &&
+        typeof data.scale === "number" &&
+        Number.isFinite(data.scale) &&
+        data.scale > 0 &&
+        data.scale <= 1
+      )
+        adjustment.resize(data.scale);
+      return;
+    }
+    // A mixer fader on its way: heard now, saved on release. It never moves the playhead.
+    if (data.action === "mix-draft") {
+      if (
+        !("volume" in data) ||
+        typeof data.volume !== "number" ||
+        !Number.isFinite(data.volume) ||
+        data.volume < 0 ||
+        !("strip" in data) ||
+        typeof data.strip !== "string"
+      )
+        return;
+      const [kind, key] = data.strip.split(/:(.*)/s);
+      const group =
+        kind === "track"
+          ? document.querySelector(
+              `hf-audio-group[data-cutroom-track="${CSS.escape(key ?? "")}"]`,
+            )?.id
+          : kind === "bus"
+            ? key
+            : null;
+      if (group) win.__hf?.audioMeter?.fade(group, data.volume);
+      if (kind !== "main") return;
+      // Main's draft is its whole gain. This document already plays its saved Main gain, the
+      // last gain on the root's chain that `data-cutroom-main-gain` names (`readMain`), so the
+      // trim after the chain makes up the difference.
+      let saved = 1;
+      const root = document.querySelector("[data-composition-id]");
+      try {
+        const nodes: unknown = JSON.parse(
+          root?.getAttribute("data-fx-chain") ?? "",
+        ).nodes;
+        const last: unknown = Array.isArray(nodes) ? nodes.at(-1) : null;
+        if (
+          last &&
+          typeof last === "object" &&
+          Reflect.get(last, "id") ===
+            root?.getAttribute("data-cutroom-main-gain") &&
+          Reflect.get(last, "type") === "gain" &&
+          Reflect.get(last, "enabled") !== false
+        )
+          saved =
+            10 **
+            (Number(
+              Reflect.get(Reflect.get(last, "params") ?? {}, "gain") ?? 0,
+            ) /
+              20);
+      } catch {
+        // No readable chain: no saved Main gain either.
+      }
+      if (Number.isFinite(saved) && saved > 0)
+        win.__hf?.audioMeter?.fade(null, data.volume / saved);
+      return;
+    }
+    let resumeAdjustment: (() => boolean) | undefined;
     const scrub =
       data.action === "seek" && "scrub" in data && data.scrub === true;
     // Every other command starts from the playhead's true time.
@@ -3232,6 +3391,8 @@ function installPreviewBridge(
             return;
           writeGradeDraft(data.clipId, data.attribute, data.restore);
           const target = clipElement(data.clipId);
+          if (adjustment && target?.hasAttribute("data-cutroom-adjustment"))
+            adjustment.changed();
           if (target instanceof HTMLVideoElement && parked.has(target)) return;
           if (gradeBypass) writeGradeBypass();
           return;
@@ -3240,6 +3401,10 @@ function installPreviewBridge(
           if (!("bypass" in data) || typeof data.bypass !== "boolean") return;
           gradeBypass = data.bypass;
           writeGradeBypass();
+          adjustment?.setOwnership(
+            gradeBypass,
+            pipelineActive ? document.querySelector(ROOT_COMPOSITION) : null,
+          );
           return;
         }
         case "keyframe": {
@@ -3315,16 +3480,19 @@ function installPreviewBridge(
             await win.__hfWaitForSeekCompletion?.().catch(() => {});
             await new Promise((resolve) => requestAnimationFrame(resolve));
           }
-          if (
-            !initialTiming ||
-            confirmedStructure === null ||
-            liveStructure() !== confirmedStructure
-          )
+          if (updatingTiming || win.__player?.isPlaying() || !win.__player)
+            throw new Error("Timing updates require a paused preview.");
+          if (!initialTiming || confirmedStructure === null)
             throw new Error(
               "The live preview document changed or requires a reload.",
             );
-          if (updatingTiming || win.__player?.isPlaying() || !win.__player)
-            throw new Error("Timing updates require a paused preview.");
+          // The capture canvases temporarily own the lower clips. Restore their
+          // original parent and whitespace before verifying or applying a patch.
+          resumeAdjustment = adjustment?.suspend();
+          if (liveStructure() !== confirmedStructure)
+            throw new Error(
+              "The live preview document changed or requires a reload.",
+            );
           if (
             !("timing" in data) ||
             !data.timing ||
@@ -3615,7 +3783,8 @@ function installPreviewBridge(
           try {
             stopRecording();
             seekAttributes.clear();
-            rememberTitleAnimations();
+            const beforeAnimations = document.getAnimations();
+            rememberTitleAnimations(beforeAnimations);
             // Each write records its inverse, so a refused result leaves the page as it was
             // before anything paints. Reading animations here also settles the old styles.
             const undo: (() => void)[] = [];
@@ -3635,7 +3804,7 @@ function installPreviewBridge(
               else element.setAttribute(name, value);
               return true;
             };
-            const running = new Set(document.getAnimations());
+            const running = new Set(beforeAnimations);
             // Synchronous writes are one MutationObserver batch to the runtime.
             for (const { id, element, space } of removals) {
               const parent = element.parentNode!;
@@ -3911,6 +4080,9 @@ function installPreviewBridge(
             timingRevision = timing.revision;
             titleStyle = nextTitleStyle;
             parkRootVideos();
+            const graded = resumeAdjustment?.();
+            resumeAdjustment = undefined;
+            if (graded) await paint();
             scheduleObservation();
             scheduleBox();
           } finally {
@@ -3969,14 +4141,20 @@ function installPreviewBridge(
           // playhead seek then restores the picture, even when the source is still loading.
           pictureVersion += 1;
           return;
-        case "meter":
+        case "meter": {
           if (!("enabled" in data) || typeof data.enabled !== "boolean") return;
           metering = data.enabled;
+          const showStrips =
+            metering && "strips" in data && data.strips === true;
+          if (metering && stripMetering && !showStrips)
+            win.__hf?.audioMeter?.clearPre();
+          stripMetering = showStrips;
           cancelAnimationFrame(animation);
           animation = 0;
           if (metering) levels();
           else win.__hf?.audioMeter?.stop();
           break;
+        }
         case "play":
           clearEditPicture();
           pictureVersion += 1;
@@ -3985,6 +4163,7 @@ function installPreviewBridge(
           recordRuntime();
           residentAudio(false);
           win.__player?.play();
+          adjustment?.play();
           clearInterval(residency);
           if (pipelineActive)
             residency = window.setInterval(() => residentAudio(false), 1000);
@@ -4158,7 +4337,12 @@ function installPreviewBridge(
                 )
                   animatedTitles.add(clip.id);
             }
-            confirmedStructure = liveStructure();
+            const resume = adjustment?.suspend();
+            try {
+              confirmedStructure = liveStructure();
+            } finally {
+              resume?.();
+            }
           }
           scheduleObservation();
           scheduleBox();
@@ -4167,9 +4351,10 @@ function installPreviewBridge(
           return;
       }
       reply(id);
-    })().catch((error: unknown) =>
-      reply(id, error instanceof Error ? error.message : String(error)),
-    );
+    })().catch((error: unknown) => {
+      resumeAdjustment?.();
+      reply(id, error instanceof Error ? error.message : String(error));
+    });
   });
 }
 
@@ -4224,13 +4409,7 @@ export function withPreviewClipIdentities(
         text: `${existing ? "" : " "}data-hf-cutroom-clip-id="${value}"`,
       });
     });
-    return edits
-      .sort((a, b) => b.at - a.at)
-      .reduce(
-        (html, edit) =>
-          html.slice(0, edit.at) + edit.text + html.slice(edit.end),
-        html,
-      );
+    return applyPreviewEdits(html, edits);
   };
   const marked = mark(source, (node) =>
     locations.get(node.sourceCodeLocation?.startOffset ?? -1),
@@ -4254,6 +4433,20 @@ export function withPreviewClipIdentities(
   );
 }
 
+function applyPreviewEdits(
+  html: string,
+  edits: { at: number; end: number; text: string }[],
+) {
+  const chunks: string[] = [];
+  let cursor = 0;
+  for (const { at, end, text } of edits.sort((a, b) => a.at - b.at)) {
+    chunks.push(html.slice(cursor, at), text);
+    cursor = end;
+  }
+  chunks.push(html.slice(cursor));
+  return chunks.join("");
+}
+
 export function previewDocument(
   html: string,
   composition = "index.html",
@@ -4273,21 +4466,27 @@ export function previewDocument(
   const location = head && "tagName" in head ? head.sourceCodeLocation : null;
   const offset = location?.startTag?.endOffset ?? html.length;
   const sourceTexts: [string, string[]][] = [];
-  const { sources, edits } = compositionScriptSources(document, composition);
+  const { sources, edits: scriptEdits } = compositionScriptSources(
+    document,
+    composition,
+  );
+  const edits = scriptEdits.map(({ offset, end, text }) => ({
+    at: offset,
+    end,
+    text,
+  }));
+  const maybeAdjustment = html.includes("data-cutroom-adjustment");
+  let hasAdjustment = false;
   // The opaque frame needs CORS media for Web Audio, including gain above unity and its level tap.
   // Only the served preview changes; project source and its producer input stay untouched.
   const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[], fps = 30) => {
     for (const node of nodes) {
       if (!("tagName" in node)) continue;
-      const rate = node.attrs.find(({ name }) => name === "data-fps");
-      const parsed = rate && parseFpsWithDefault(rate.value);
-      const nodeFps = parsed?.ok ? parsed.value.num / parsed.value.den : fps;
-      // The runtime snaps visibility to frames, but seeks media using raw seconds.
-      // Align those windows in served documents so rounded edit times cannot show
-      // a piece that the seek still considers to be in the future.
       const timing = new Map(
         node.attrs.map(({ name, value }) => [name, value]),
       );
+      hasAdjustment ||=
+        maybeAdjustment && timing.has("data-cutroom-adjustment");
       const id = timing.get("data-hf-cutroom-clip-id");
       if (id && timing.has("data-start")) {
         const text = node.childNodes
@@ -4317,56 +4516,49 @@ export function previewDocument(
           ],
         ]);
       }
-      const start = Number(timing.get("data-start"));
-      const duration = Number(timing.get("data-duration"));
-      const end = timing.has("data-duration")
-        ? start + duration
-        : Number(timing.get("data-end"));
-      if (Number.isFinite(start)) {
-        const window = exportClipWindow(start, end, nodeFps);
-        for (const [name, value] of [
-          ["data-start", window.start],
-          ["data-duration", window.end - window.start],
-          ["data-end", window.end],
-        ] as const) {
-          const location = node.sourceCodeLocation?.attrs?.[name];
-          if (
-            location &&
-            Number.isFinite(value) &&
-            (window.start !== start || window.end !== end) &&
-            Number(timing.get(name)) !== value
-          )
-            edits.push({
-              offset: location.startOffset,
-              end: location.endOffset,
-              text: `${name}="${value}"`,
-            });
-        }
-      }
-      if (
-        (node.tagName === "audio" || node.tagName === "video") &&
-        !node.attrs.some(({ name }) => name === "crossorigin")
-      ) {
-        const start = node.sourceCodeLocation?.startTag?.startOffset;
-        if (start !== undefined)
+      const {
+        fps: nodeFps,
+        start,
+        end,
+        changes,
+      } = snappedPreviewWindow(timing, fps);
+      for (const [name, value] of changes) {
+        const location = node.sourceCodeLocation?.attrs?.[name];
+        if (location)
           edits.push({
-            offset: start + node.tagName.length + 1,
-            end: start + node.tagName.length + 1,
-            text: ' crossorigin="anonymous"',
+            at: location.startOffset,
+            end: location.endOffset,
+            text: `${name}="${value}"`,
           });
+      }
+      if (node.tagName === "audio" || node.tagName === "video") {
+        const tag = node.sourceCodeLocation?.startTag;
+        if (tag) {
+          let attributes = timing.has("crossorigin")
+            ? ""
+            : ' crossorigin="anonymous"';
+          // Chromium can select media before the runtime's preload window is installed.
+          // The runtime raises preload for the active and upcoming clips itself.
+          if (
+            start >= 0 &&
+            Number.isFinite(end) &&
+            end > start &&
+            !timing.has("preload") &&
+            !timing.has("autoplay")
+          )
+            attributes += ' preload="none"';
+          if (attributes) {
+            const at = tag.startOffset + node.tagName.length + 1;
+            edits.push({ at, end: at, text: attributes });
+          }
+        }
       }
       visit(node.childNodes, nodeFps);
       if ("content" in node) visit(node.content.childNodes, nodeFps);
     }
   };
   visit(document.childNodes);
-  const normalized = edits
-    .sort((a, b) => b.offset - a.offset)
-    .reduce(
-      (source, edit) =>
-        source.slice(0, edit.offset) + edit.text + source.slice(edit.end),
-      html,
-    );
+  const normalized = applyPreviewEdits(html, edits);
   const timing =
     dependencies === null ? null : previewTiming(normalized, dependencies);
   // Escape '<' so authored words cannot terminate the bridge's script element.
@@ -4392,7 +4584,10 @@ export function previewDocument(
     rampPending,
     rampWindows,
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
+  const createAdjustment = hasAdjustment
+    ? `() => (${adjustmentCapture.toString()})(${spanIndex.toString()})`
+    : "null";
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${createAdjustment}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE, MAX_AUDIO_GAIN])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

@@ -1,3 +1,4 @@
+import type { ProjectFormat } from "../../shared/projectFormat";
 import { trackMix } from "../../shared/timeline/tracks";
 import {
   drawnPoints,
@@ -63,6 +64,7 @@ export interface LaneGestureOptions {
   tracks: ReadonlyMap<number, TrackClips>;
   imageSources: ReadonlyMap<string, string>;
   selection: Selection;
+  linkedSelection: boolean;
   tool: Tool;
   snapping: boolean;
   lanes: RefObject<HTMLDivElement | null>;
@@ -71,7 +73,12 @@ export interface LaneGestureOptions {
   playhead(): number;
   onSelect(selection: Selection): void;
   /** Makes one undo step; false when the editor refused it and nothing changed. */
-  onEdit(label: string, commands: CommandInput[], basis?: Timeline): boolean;
+  onEdit(
+    label: string,
+    commands: CommandInput[],
+    basis?: Timeline,
+    match?: ProjectFormat,
+  ): boolean;
   /** A press began or ended. While one is under way, Esc cancels it and does nothing else. */
   onGesture(active: boolean): void;
   onTrackDrag(active: boolean): void;
@@ -125,6 +132,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
   /** The offsets a committed drag left its clips at, for `useClipMotion`. */
   const held = useRef<ReadonlyMap<string, Offset> | null>(null);
   const hoveredMix = useRef<HTMLElement | null>(null);
+  /** A mixer bus strip a clip move would route to on release. */
+  const busDrop = useRef<HTMLElement | null>(null);
+  /** Whether a bus strip was on screen when this drag began; null before its first move. */
+  const busTargets = useRef<boolean | null>(null);
   const hovered = useRef<string | null>(null);
   const hoverTransform = useRef("");
   const hoverBox = useRef<HTMLElement>(null);
@@ -513,7 +524,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const box = marquee.current;
     const ppf = view()?.ppf;
     if (current.phase !== "dragging" || !box || !ppf) return;
-    const { timeline, rows, selection, onSelect } = latest.current;
+    const { timeline, rows, selection, onSelect, linkedSelection } =
+      latest.current;
     const { origin, point } = current;
     const left = Math.min(point.x, origin.x);
     const top = Math.min(point.y, origin.y);
@@ -529,6 +541,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       rowsBetween(rows, top, bottom).map((row) => row.track.index),
       { from: left / ppf, to: right / ppf },
       marqueeBase.current,
+      linkedSelection,
     );
     if (!sameIds(next.ids, selection.ids)) onSelect(next);
   }
@@ -689,8 +702,13 @@ export function useLaneGestures(options: LaneGestureOptions) {
   }
 
   function finish(outcome: Outcome) {
-    const { lanes, selection, timeline, rows, onSelect } = latest.current;
+    const { lanes, selection, timeline, rows, onSelect, linkedSelection } =
+      latest.current;
     const active = drag.current;
+    const bus = busDrop.current?.dataset.busDrop;
+    busDrop.current?.removeAttribute("data-drop");
+    busDrop.current = null;
+    busTargets.current = null;
     const alone = kept.current;
     const edit = pointClick.current;
     drag.current = null;
@@ -706,7 +724,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
       clear();
       if (outcome === "click" && marqueeBase.current === emptySelection) {
         if (pressedGap.current) onSelect(pressedGap.current);
-        else if (selection.ids.size || selection.gap) onSelect(emptySelection);
+        else if (selection.ids.size || selection.gap || selection.editPoint)
+          onSelect(emptySelection);
       }
       return;
     }
@@ -725,8 +744,29 @@ export function useLaneGestures(options: LaneGestureOptions) {
             selection,
             alone,
             { toggle: false, range: false, alone: false },
+            linkedSelection,
           ),
         );
+      return;
+    }
+    if (outcome === "commit" && bus && active.intent.kind === "move") {
+      // Dropped on a bus strip: the clips with sound join it, and nothing moves.
+      settle(null);
+      const sounding = active.named.filter((clip) => clip.hasAudio);
+      latest.current.onEdit(
+        "Route audio",
+        [
+          {
+            type: "routeAudioGroup",
+            clipIds: (sounding.length ? sounding : active.named).map(
+              ({ id }) => id,
+            ),
+            group: bus,
+          },
+        ],
+        active.timeline,
+      );
+      latest.current.onTrackDrag(false);
       return;
     }
     // Release always uses the modifiers held now, even without a final pointer move.
@@ -743,13 +783,17 @@ export function useLaneGestures(options: LaneGestureOptions) {
   }
 
   /** Ends a preview: with its edit when it has one the editor takes, otherwise by going back. */
-  function settle(result: Preview | null, basis?: Timeline) {
+  function settle(
+    result: Preview | null,
+    basis?: Timeline,
+    match?: ProjectFormat,
+  ) {
     const { lanes, bodies, onEdit } = latest.current;
     const offsets = clear();
     if (
       result?.valid !== false &&
       result?.commands.length &&
-      onEdit(result.label, result.commands, basis)
+      onEdit(result.label, result.commands, basis, match)
     ) {
       // The clips are where the edit puts them already; `useClipMotion` slides only the rest.
       held.current = offsets;
@@ -847,8 +891,16 @@ export function useLaneGestures(options: LaneGestureOptions) {
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0 || gesture.current.phase !== "idle") return;
     hoverClip(null);
-    const { tool, timeline, rows, selection, onSelect, onGesture, playhead } =
-      latest.current;
+    const {
+      tool,
+      timeline,
+      rows,
+      selection,
+      onSelect,
+      onGesture,
+      playhead,
+      linkedSelection,
+    } = latest.current;
     const hit = hitAt(event);
     const toggle = event.ctrlKey || event.metaKey;
     const onLine =
@@ -859,7 +911,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
     // Alt still drags a clip without its partners; only an Alt-click edits points.
     pointClick.current =
       onLine && event.altKey ? { hit: hit!, x: event.clientX } : null;
-    const intent = intentAt(tool, timeline, hit, event.altKey);
+    const intent = intentAt(
+      tool,
+      timeline,
+      hit,
+      event.altKey || !linkedSelection,
+    );
     // A press on a selected clip keeps the selection, so several clips drag as one. A gain press
     // keeps it too, since a mostly horizontal gain drag becomes that same move.
     const keep =
@@ -887,6 +944,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
             range: event.shiftKey && intent?.kind !== "gain",
             alone: event.altKey,
           },
+          linkedSelection,
         );
       if (selected !== selection) onSelect(selected);
     }
@@ -1003,7 +1061,24 @@ export function useLaneGestures(options: LaneGestureOptions) {
       type: "move",
       point: local(event.clientX, event.clientY),
     }).gesture;
+    aimBus(event.clientX, event.clientY);
     update();
+  }
+
+  /** A clip move over a mixer bus strip offers to route its clips there instead. */
+  function aimBus(x: number, y: number) {
+    if (drag.current?.intent.kind !== "move") return;
+    // With the mixer closed a move never hit-tests outside the lanes.
+    busTargets.current ??= document.querySelector("[data-bus-drop]") !== null;
+    const target = busTargets.current
+      ? (document
+          .elementFromPoint(x, y)
+          ?.closest<HTMLElement>("[data-bus-drop]") ?? null)
+      : null;
+    if (target === busDrop.current) return;
+    busDrop.current?.removeAttribute("data-drop");
+    busDrop.current = target;
+    target?.setAttribute("data-drop", "");
   }
 
   function movePointer(event: PointerEvent<HTMLDivElement>) {
@@ -1163,7 +1238,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const drop = dropAt(event)?.preview;
     if (!drop) return;
     event.preventDefault();
-    settle(drop);
+    settle(drop, undefined, mediaDrag()?.format);
   }
 
   return {

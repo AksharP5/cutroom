@@ -1,10 +1,59 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import { launchCaptureBrowser } from "../src/server/hyperframes/captureBrowser";
+import { captureBrowserArgs } from "../src/server/hyperframes/captureBrowserArgs";
 import { browserExecutable } from "../src/server/hyperframes/render";
 import { captureFixture } from "./capture-fixture";
 
 const supported = process.platform === "linux" && Boolean(browserExecutable());
 const root = join(import.meta.dir, "..");
+
+test.skipIf(process.platform !== "linux")(
+  "capture adds the screenshot feature to one Chromium feature list",
+  () => {
+    expect(
+      captureBrowserArgs([
+        "--enable-features=CanvasDrawElement,Vulkan",
+        "--disable-extensions",
+        "--enable-features=CDPScreenshotNewSurface",
+      ]),
+    ).toEqual([
+      "--disable-extensions",
+      "--enable-features=CanvasDrawElement,Vulkan,CDPScreenshotNewSurface",
+    ]);
+  },
+);
+
+test.skipIf(!supported)(
+  "the shared still browser enables fresh screenshots and HTML-in-Canvas",
+  async () => {
+    const capture = await launchCaptureBrowser();
+    try {
+      const session = await capture.browser.target().createCDPSession();
+      const { arguments: args } = await session.send(
+        "Browser.getBrowserCommandLine",
+      );
+      const flags = args.filter((arg) => arg.startsWith("--enable-features="));
+      expect(flags).toHaveLength(1);
+      expect(flags[0]?.split("=")[1]?.split(",")).toContain(
+        "CDPScreenshotNewSurface",
+      );
+      const page = await capture.browser.newPage();
+      expect(
+        await page.evaluate(
+          () =>
+            typeof Object.getOwnPropertyDescriptor(
+              CanvasRenderingContext2D.prototype,
+              "drawElementImage",
+            )?.value,
+        ),
+      ).toBe("function");
+    } finally {
+      await capture.close();
+    }
+  },
+  20_000,
+);
 
 for (const target of ["server process group", "owner"] as const) {
   test.skipIf(!supported)(

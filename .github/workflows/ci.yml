@@ -11,18 +11,20 @@ jobs:
   verify:
     name: verify (${{ matrix.suite }})
     runs-on: ubuntu-24.04
-    # Keep browser shards separate from format, type, and unit checks.
+    # Leave three minutes beyond Playwright's 27-minute budget for build and runner setup.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - suite: browser 1 of 3
-            shard: 1/3
-          - suite: browser 2 of 3
-            shard: 2/3
-          - suite: browser 3 of 3
-            shard: 3/3
+          - suite: browser 1 of 4
+            shard: 1/4
+          - suite: browser 2 of 4
+            shard: 2/4
+          - suite: browser 3 of 4
+            shard: 3/4
+          - suite: browser 4 of 4
+            shard: 4/4
           - suite: performance
           - suite: checks
     steps:
@@ -63,8 +65,13 @@ jobs:
         run: bun run check
       - if: matrix.suite == 'checks'
         run: bun test
-      - if: matrix.shard
-        run: bun run test:e2e --shard=${{ matrix.shard }} --reporter=list
+      - name: Run browser shard
+        if: matrix.shard
+        env:
+          SHARD: ${{ matrix.shard }}
+          # Give the render-heavy end of the suite fewer tests per shard.
+          PWTEST_SHARD_WEIGHTS: "37:23:21:19"
+        run: bun run test:e2e --shard="$SHARD" --reporter=list,./e2e/teardown-watchdog.ts --global-timeout=1620000
       - if: matrix.suite == 'performance'
         run: bun run test:perf --reporter=list
       - uses: actions/upload-artifact@v4

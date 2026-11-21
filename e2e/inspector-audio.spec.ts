@@ -67,7 +67,7 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
   const api = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await request.get(`${api}/timeline`)).json(),
+      await (await request.get(`${api}/timeline?clipEdits=1`)).json(),
     );
   const sound = async () =>
     (await read()).timeline.clips.find((clip) => clip.id === "sound")!;
@@ -416,7 +416,7 @@ test("linked Changes has one row per history entry and keeps review and session 
   const path = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
-      await (await request.get(`${path}/timeline`)).json(),
+      await (await request.get(`${path}/timeline?clipEdits=1`)).json(),
     );
   await page.goto(`/#project/${project.id}`);
   await page.locator('[data-clip="picture"]').click();
@@ -467,8 +467,15 @@ test("linked Changes has one row per history entry and keeps review and session 
   await expect(rows).toHaveCount(2);
   await expect(summary).toHaveText("Changes 2");
   // Another review surface can accept one partner before this grouped row is accepted.
-  const edits = (await read()).clipEdits!.filter((edit) => edit.by === "agent");
-  expect(edits).toHaveLength(2);
+  const changes = (await read()).clipEdits!.filter(
+    (edit) => edit.by === "agent",
+  );
+  expect(changes.map((edit) => edit.clipId)).toEqual([
+    "picture",
+    "sound",
+    null,
+  ]);
+  const edits = changes.filter((edit) => edit.clipId !== null);
   expect(
     (
       await request.post(`${path}/review/changes/accept`, {
@@ -485,16 +492,18 @@ test("linked Changes has one row per history entry and keeps review and session 
   await expect
     .poll(async () =>
       (await read())
-        .clipEdits!.filter((edit) => edit.by === "agent")
+        .clipEdits!.filter(
+          (edit) => edit.by === "agent" && edit.clipId !== null,
+        )
         .every((edit) => edit.accepted),
     )
     .toBe(true);
-  // Changes leads the inspector for any clip, open, above the clip's own sections.
+  // Changes follows the audio controls and is open on the selected clip.
   await page.locator('[data-clip="sound"]').click();
   await expect(history).toBeVisible();
   const [changesTop, audioTop] = await Promise.all([
     history.boundingBox(),
     inspector.locator("summary", { hasText: "Audio" }).boundingBox(),
   ]);
-  expect(changesTop!.y).toBeLessThan(audioTop!.y);
+  expect(changesTop!.y).toBeGreaterThan(audioTop!.y);
 });

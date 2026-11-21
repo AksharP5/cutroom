@@ -114,6 +114,29 @@ test("a layer render shows only its own clips, silent, over a clear background",
   );
 });
 
+test("a title on a graded adjustment's track keeps transparency", () => {
+  const parsed = parseComposition(
+    `<!doctype html><html><head></head><body>
+<main data-composition-id="main" data-width="320" data-height="240" data-duration="3">
+  <video id="shot" src="shot.mp4" data-start="0" data-duration="3" data-track-index="0"></video>
+  <div id="look" class="clip" data-cutroom-adjustment data-start="0" data-duration="1" data-track-index="1" data-color-grading='{"adjust":{"exposure":-1}}'></div>
+  <div id="title" class="clip" data-start="1" data-duration="2" data-track-index="1">Title</div>
+</main></body></html>`,
+    emptyTimelineSettings(),
+  );
+  const [look, title] = layerTracks(parsed.timeline, new Set(["shot"]));
+  expect(look?.clips.map(({ id }) => id)).toEqual(["look"]);
+  expect(look?.flatten).toBe(true);
+  expect(title?.clips.map(({ id }) => id)).toEqual(["title"]);
+  expect(title?.flatten).toBe(false);
+  const grade = layerHtml(parsed, look!);
+  const lettering = layerHtml(parsed, title!);
+  expect(grade).toMatch(/id="title"[^>]+data-hidden/);
+  expect(lettering).toMatch(/id="shot"[^>]+data-hidden/);
+  expect(lettering).toMatch(/id="look"[^>]+data-hidden/);
+  expect(lettering).toContain("background:transparent!important");
+});
+
 test.skipIf(!Bun.which("ffmpeg"))(
   "layer clips are cuts of their track's render",
   async () => {

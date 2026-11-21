@@ -25,6 +25,34 @@ The new editor's code panel loads CodeMirror only when it first opens: its edito
 
 `bun run bench:transcripts` measures transcript listing separately. Reusing one parsed source per request reduced the 100-clip, 5,000-word workload from about 154 ms to 7 ms warm. The request still reads current source files; this does not rely on a cross-request cache.
 
+## 15-minute dialogue edit
+
+The scale fixture is a 1080p60 edit with 1,000 clips and a 100-clip control at the same frame rate. The 15-minute timeline contains 486 linked picture and dialogue pairs, four music clips, 24 titles, punch-ins and three dissolves. A synthetic H.264 source carries its frame number along the top.
+
+After `bun run build`, run the headed comparison on the desktop. Run each clip count once with and once without `--pipeline`, using the same `--dir` to reuse the fixtures. `--runs 3` gives three fresh browser sessions per setting.
+
+```sh
+scratch=$(mktemp -d /var/tmp/cutroom-scale.XXXXXX)
+flock /tmp/cutroom-e2e.lock node scripts/bench-vs-studio.ts --editor cutroom --scale 1000 --pipeline --runs 3 --dir "$scratch" --port 4940 --out "$scratch/1000-gpu.json"
+```
+
+The benchmark reads the numbered pictures from Chromium's tab screencast. It reports the playback clock rate separately, measures how long a source picture holds at two points on the timeline, and times a ruler drag at comparable zoom. It also records the first correct pixels after ripple delete and undo near the beginning and later in the timeline and reads proportional browser memory after closing the screencast decoder tab. Screencast JPEG capture can miss swaps at 60 fps. Compare captured picture rates and holds under the same settings. When an edit's frame is missing from the screencast, the benchmark checks the parked PNG and reports its frame number separately. The timed sample stays missing.
+
+`e2e/scale-performance.spec.ts` runs in the performance gate with GPU playback on and off. It uses two 75-second source files and checks the playback clock against 60 fps, at most 16 loaded native media elements, the numbered pictures after an early and late ripple delete, undo, redo and a ruler scrub, and ten persisted W trims followed by ten undos and ten redos. The headless gate catches stalls and lost edits with wider timing budgets than the headed target. The playback clock is sampled inside the browser so browser-driver delay stays outside the interval.
+
+With GPU playback on, the gate measures three ripples at each position and checks the original picture between samples. Each position has a 1,300 ms median budget. The pooled 80th percentile must stay below 1,550 ms, and any one ripple must show the new picture within 2,250 ms. Native playback uses one ripple at each position and an 8,000 ms cap.
+
+Five distinct duration edits to the same saved shot measured the isolated timing response after opening each project. The request included parsing the response and checking the saved duration. The GPU playback switch uses this same server path.
+
+| Clip count | Main `cdeeb359`, median (range) | Source timing, median (range) |
+| ---------- | ------------------------------- | ----------------------------- |
+| 100        | 60 ms (58 to 62)                | 6 ms (5 to 8)                 |
+| 1,000      | 637 ms (609 to 655)             | 29 ms (21 to 37)              |
+
+A CPU profile of the large preview attributed 15.8 seconds in an edit and history run to `getAnimations()`, mostly CSS duration inference. The runtime now lets both duration adapters share one document animation snapshot. Separately, the source timing check reuses the compiled layout for numeric timing changes on existing clips. A change that creates a clip, such as a W trim that splits the music bed, goes through the compiler. The compiled answer establishes a new comparison for later numeric edits in the same tab. The paused native viewer gives a slow timing response time to arrive so it can seek in the loaded document and keep its decoded media.
+
+Compiled timing indexes the compiler's short IDs referenced in the document. On the 1,000-clip camera fixture, building the same timing snapshot from compiled markup dropped from 93 ms to 23 ms over 20 warmed samples per build. This measures the snapshot calculation in isolation, excluding compilation, network time and drawing.
+
 ## Cutroom vs HyperFrames Studio
 
 On November 16, 2026 the same project was opened and edited in Cutroom (main `c3db508`, default settings, so the footage pipeline was off) and in HyperFrames Studio 0.9.26, run from this repository's `node_modules` with `hyperframes preview --no-open`. `node scripts/bench-vs-studio.ts` does both: it makes the project, starts the editor's own server on a private port, and drives one headed Chromium 155 window (X11, 1720x1050, muted) through every operation below. Three runs per editor, each with a fresh server, project copy and browser, unthrottled and with CPU throttled 4x (the editor page and, in Cutroom, its out-of-process preview). The machine was shared: load average about 10 to 13 from other work during the runs. The play rows were measured again the same day on main `4f506ed`, three runs per column, measured as described under 1x playback below.
@@ -139,7 +167,7 @@ The footage pipeline now shares the demuxed index and up to 12 MiB of compressed
 
 The 60 fps layered chart check selected the correct source frame in all 12 positions. Using the source matrix in preview and export cut its mean RGB error from 9.35 to 2.46 levels out of 255. The graded swatches and luma ramp measured 0.75 and 0.67 levels on average, both with a maximum error of 2. A 12-frame MP4 around the cut at 1:03 of the full authored benchmark, with the title and scene visible, averaged 2.14 levels before and after the colour fix. The largest per-channel error was 166 and the worst frame's 99th-percentile error was 24.
 
-**Recommendation.** Keep the setting opt-in. The composed benchmark still exceeds the grading-only colour bound. GPU playback still uses more browser memory after repeated edits on the graded fixture. Confirm playback holds and browser memory on a moving recording in Electron before revisiting the default. Sources above the 1080p pixel budget, HDR and alpha stay in HyperFrames. Unproven root scripts, authored styles or adjustment effects can still require native compositing. A title or native clip below GPU footage uses HyperFrames for the overlap, with the pipeline resuming after it.
+The composed benchmark exceeded the grading-only colour bound, and GPU playback used more browser memory after repeated edits on the graded fixture. The [desktop measurements](#desktop-playback) cover playback holds and memory in Electron. The GPU path's decoded playback track must fit the 1080p pixel budget. HDR and alpha stay in HyperFrames. Unproven root scripts, authored styles or adjustment effects can still require native compositing. A title or native clip below GPU footage uses HyperFrames for the overlap, with the pipeline resuming after it.
 
 #### Desktop playback
 
@@ -224,18 +252,25 @@ one pair per display path and give a reference for the desktop runs.
 | Chromium XWayland |                1 | 29.9 → 30.0 |         157 → 140 |         76 → 77 | 2134 → 2300 |     3899 → 3878 |
 | Chromium Wayland  |                1 | 29.9 → 29.8 |         146 → 130 |         77 → 84 | 1186 → 1270 |     3440 → 3380 |
 
-**Decision.** Keep the setting opt-in. At 1080p the corrected pipeline improved playback,
+**Decision.** Enable GPU footage playback by default for users without a saved choice. At 1080p the corrected pipeline improved playback,
 scrub, first picture, ripple and undo in both Electron modes and in the Chromium control.
 The output capture measured 30.0 pictures/s in Electron Wayland with GPU playback,
 replacing the earlier screencast estimate of 23.6. Browser PSS at 1080p increased by 145 MiB on Electron XWayland and
 235 MiB on Electron Wayland.
 
-The 4K XWayland playback rates were even to a tenth of a picture per second, but the three
+The 4K XWayland playback rates were even to a tenth of a picture per second. The three
 hold comparisons were 133 → 117, 31 → 37, and 38 → 102. Both settings used the same native
-path, and the direction changed between runs. These measurements leave 4K cadence parity
-unresolved. The Chromium Wayland reference also showed more 1080p holds than the XWayland
+path, and the direction changed between runs. 4K sources still use HyperFrames under the
+default. The Chromium Wayland reference also showed more 1080p holds than the XWayland
 reference with either setting. Cadence varied with display path and background load. The
 stale preview was the reproducible fault.
+
+The default-on tests also caught picture selection missing GPU-drawn clips and trim,
+slip and slide missing the source-edge pictures. The preview now preserves authored
+opacity for picking and restores the native decoder only for the edges it needs.
+In CI's 500-clip playback test, observing viewer resizes instead of reading the layout
+each draw reduced forced style and layout events in the editor from 252 to 12 over
+roughly 150 display frames. Both runs used GPU playback.
 
 To run locally on Hyprland, use an unrotated display at scale 1 and leave the benchmark window
 in front. The tool uses Node with TypeScript stripping, Bun, FFmpeg, a C compiler, the Wayland
@@ -300,7 +335,7 @@ The 4K HEVC candidate drew from the finished 1920 × 1080 editing proxy. In the 
 
 The 1080p HEVC fixture reached 52.1–56.8 pictures/s across three GPU runs, with a 1.75-second hold in the warmed run. The native on-demand runs showed 18.2 and 35.5 pictures/s. Their machine load was higher than in the corresponding GPU runs. The warmed native control failed the capture checks.
 
-Keep the current pixel budget. The tests show that allowing 4K clips can reduce cadence sharply, including a 4K HEVC source decoded from a 1080p proxy. Evaluate any proxy-specific exception with repeated sustained playback and matched machine load. The HEVC footage here was synthetic.
+Oversized raw footage stayed native after these tests. Later runs checked [finished HEVC editing proxies](#hevc-playback-proxy-size) at their actual track size. The HEVC footage here was synthetic.
 
 To reproduce, use the [desktop setup above](#desktop-playback) to build the screen helper. Give each fixture its own benchmark directory and a `screen` link to the helper. Generate a 4K fixture with the fifth argument to `makeProject` set to `"h264-30"`, `"h264-60"` or `"hevc-60"`. The HEVC fixture uses NVENC. For the 1080p HEVC comparison, copy the HEVC project and replace its `footage.mkv` with a 1920 × 1080 Main-profile version at 60 fps, encoded with `hevc_nvenc -preset p4 -g 252 -bf 2 -b:v 12M`.
 
@@ -356,6 +391,8 @@ At fit, all 500 clips are on screen as one element each. A zoom step writes `--p
 
 ### Clip bodies
 
+During a ripple, the canvas sums the offsets of the moving clips by ID once per paint. Filmstrips and waveforms use those offsets to stay with their clip boxes, including when several edits animate together. The offline indicator also resolves each distinct source once per composition and file listing.
+
 Filmstrips and waveforms must not cost the timeline its frame rate. On November 10, 2026 the same 500-clip composition was opened over real media (a twelve-minute 720p H.264 file with sound, so 240 filmstrips and 240 waveforms) in Chromium 1720x1050, headless with hardware GL. Each gesture was driven one input event per animation frame. The first three columns are animation-frame intervals without tracing, two runs each; a late frame is an interval over 20 ms. Main thread per frame is thread time from a separate traced run, which also slows the page. Load average was 1 to 6.
 
 | Gesture                                       |  p95 before | p95 after |                Late before |    Late after | Main thread per frame, before to after |
@@ -403,6 +440,8 @@ Shuttle and scrubbing are slow on this composition because of the preview, not t
 
 ### Zoom and ripple edits
 
+A change to the timeline length at the scroll origin uses the viewport dimensions already measured by the resize observer. Mounting, resizing, and edits while scrolled still read the current dimensions and offsets. Fit and edits keep their existing zoom and scroll behavior.
+
 The November 11, 2026 comparison used production builds on `81ba7b5`, before and after the timeline changes, Bun 1.4.4 and Chromium 155.0.8059.84 with SwiftShader, at 1720x1050 in dark mode. The workload has 190 or 240 linked picture/sound pairs and 20 titles. They reference a generated 60-second 640x360 H.264/AAC file, with actual filmstrips and waveform peaks loaded through the media service. Each project waits for the viewer's first confirmed paint and a 4.5-second warm-up.
 
 There are three runs per build and size. Key zoom sends twelve inputs 100 ms apart and samples at least 300 ms after the last one. Wheel zoom sends sixteen inputs, one per displayed frame. Ripple delete removes the fourth linked pair in Fit, followed by undo, redo and restoration; Fit is measured after twelve zoom steps. Edit windows last one second. Frame gaps use `performance.now()` at animation callback entry. Long tasks come from `PerformanceObserver`.
@@ -435,11 +474,13 @@ The 400-clip maximum key-zoom frame fell from 121.0 to 66.9 ms, and ripple from 
 
 Tracing found synchronous style/layout under viewport geometry reads and repeated whole-lane selector scans in edit motion. The viewport now reads size and offsets on resize/scroll, reads animation tokens before writes, and skips an unchanged scroll write. Motion finds moved clip nodes in one pass. Clip bodies were already memoized, canvas drawing was a smaller part of these stalls, and the 500-clip engine batch still applies in about 2 ms; neither the canvas representation nor engine normalization changed.
 
-`CUTROOM_PERF_DIR=artifacts/timeline-performance bun run bench:timeline-ui` reproduces the three-run production workload. `bun run test:perf` also runs three passes per size. For key zoom and ripple separately, it requires the median of the three per-run maximum frame gaps to stay below 150 ms. One isolated pause passes; a stall at or above 150 ms in two of three runs fails. Pooled p95 can hide a single bad frame that recurs on every edit, so the budget uses per-run maxima. The original 400-clip before-build ripple maxima were 171.4, 140.7 and 163.7 ms, giving a failing median of 163.7 ms; the after-build median was 68.2 ms. Both 500-clip medians passed.
+`CUTROOM_PERF_DIR=artifacts/timeline-performance bun run bench:timeline-ui` reproduces the three-run production workload. `bun run test:perf` also runs three passes per size. Key zoom requires a median per-run maximum frame gap below 150 ms. For ripple, the pooled p95 must stay below 125 ms, the median of the per-run maxima below 190 ms, and every gap below 250 ms. The p95 catches an edit that stays choppy after the first frame. Per-run maxima catch a pause that recurs once per edit, and the ceiling catches a single freeze, including on the first edit after opening the project.
 
-The previous single-maximum gate failed export PR #61. In CI run `42989564025`, the 400/500-clip ripple maxima were 174.1/168.1 ms, with one long task of 159/164 ms and second-worst frames of 118.4/81.3 ms. The worst gap was the first frame after Delete, as in the other inspected failures. These are real first-edit stalls; the samples alone do not establish whether code or runner speed caused them. Repetition keeps the ceiling while allowing one slow interaction run. It can miss a regression confined to the first edit, and it does not excuse sustained CPU starvation or promise 60 fps. CI runs the budget in its own job, on a fresh runner beside three browser-suite shards and a separate format, type, and unit-check job. Browser shards split at test boundaries with one worker each; the list reporter records per-test durations in CI logs. The 150-edit document and decoded-frame resource budgets run in the performance job alongside the frame-time budgets, so those long workloads do not accumulate in the last browser shard.
+The original single-maximum gate failed export PR #61. In CI run `42989564025`, the 400/500-clip ripple maxima were 174.1/168.1 ms, with one long task of 159/164 ms and second-worst frames of 118.4/81.3 ms. The worst gap was the first frame after Delete, as in the other inspected failures. These are real first-edit stalls; the samples alone do not establish whether code or runner speed caused them. The subsequent 150 ms median gate tolerated one slow interaction run. The original 400-clip before-build median was 163.7 ms, versus 68.2 ms after. That median alone would pass today. CI runs the budget in its own job, on a fresh runner beside four browser-suite shards and a separate format, type, and unit-check job. Browser shards split at test boundaries with one worker each; the list reporter records per-test durations in CI logs. The 150-edit document and decoded-frame resource budgets run in the performance job alongside the frame-time budgets, so those long workloads do not accumulate in the last browser shard.
 
-`CUTROOM_PERF_RUNS` overrides the positive integer run count. The default is three; larger values use the upper median of per-run maxima, and setting it to one restores the stricter single-maximum check for a short diagnostic run. The `frame-times.json` attachment and `CUTROOM_PERF_DIR` output retain every frame and long task, pooled p50/p95/max, and the new `medianMax` statistic. Key/ripple summaries also appear in passing CI logs, since failure-only artifacts cannot supply a passing baseline. Set `CUTROOM_PERF_TRACE=1` for compressed Chromium traces. Profiled runs retain timings and check behavior; budgets run without the profiler's overhead.
+Playwright has a 27-minute budget per browser shard. The 30-minute job limit also covers runner setup and the production build. If the runner stays alive for a minute after the last test result, the teardown watchdog fails the run and logs active Node resources and direct child processes.
+
+`CUTROOM_PERF_RUNS` overrides the positive integer run count. The default is three. The median uses the upper middle value, so with one run it equals that run's maximum. The `frame-times.json` attachment and `CUTROOM_PERF_DIR` output keep every frame gap and long task. Passing CI jobs log the summary and each ripple run's first and worst frame gaps. Set `CUTROOM_PERF_TRACE=1` for compressed Chromium traces. Profiled runs retain timings and check behavior; budgets run without the profiler's overhead.
 
 The exact parent of #59 is `006fa27`, not the historical `81ba7b5` before-build above. A later check compared production builds of `e5c593f` and `006fa27`, with three independent sessions per build and condition, three interaction runs per size in each session, Bun 1.4.4 and installed Chromium 155 with SwiftShader at 1720x1050. Without injected load on the shared host, main passed all three sessions; the parent passed two and failed one. Its 500-clip ripple median was as low as 101.4 ms, while main reached 116.8 ms. With both builds pinned to four logical CPUs and two busy workers on the same CPUs, both failed all three sessions. These distributions do not support a gate that reliably rejects that exact parent while accepting main. The budget preserves the signal in the original #59 samples, rather than claiming to detect every reversion of that patch.
 
@@ -448,6 +489,21 @@ On the same host, main passed the old one-run gate both before and after all 158
 [An unchanged-main branch control](https://github.com/AksharP5/cutroom/actions/runs/42999124119) passed the old gate, so branch identity alone did not reproduce the failures. A [paired CI comparison](https://github.com/AksharP5/cutroom/actions/runs/43002141979) then built exact main `e5c593f` and export head `0eebac9` on one runner with Chromium 158. Both passed normally: median ripple maxima were 85.8/84.8 ms for main and 83.4/93.3 ms for the export build, at 400/500 clips. With identical 2× browser CPU throttling, both failed: main reached 159.0/206.7 ms and export reached 168.7/191.0 ms. Separate profiled passes showed comparable style/layout work over the same element counts; their timings include profiler overhead. This did not reproduce an export-specific ripple regression. It confirms that the absolute ceiling can fail the shared baseline when execution slows; repetition only protects against one slow run, not a consistently slow environment.
 
 [Raw timings, matching worst-frame trace excerpts and compressed traces](https://github.com/AksharP5/cutroom/tree/pr-assets/timeline-frame-rate) include browser, renderer and viewport metadata. The separate profiled 400-clip pass had a worst frame of 104.7 ms before and 84.8 ms after. Those screenshots plot the actual Chromium events and source-map locations; the tables use untraced runs.
+
+### November 20–21 CI sample
+
+These are 50 performance job attempts with complete logs, including 10 on main and 40 on branches. Each range covers one score per job and clip count.
+
+| Jobs   | Clips | Ripple p95, ms | Median worst gap, ms | Worst gap, ms |
+| ------ | ----: | -------------: | -------------------: | ------------: |
+| Main   |   400 |      37.4–74.9 |           53.7–110.1 |    59.2–128.9 |
+| Main   |   500 |      46.2–65.7 |           68.9–116.0 |    71.9–130.3 |
+| Branch |   400 |     39.3–146.3 |           47.3–178.7 |    63.8–205.1 |
+| Branch |   500 |     37.8–158.0 |           65.4–184.0 |    70.2–210.2 |
+
+The old ripple rule failed 11 job attempts. Replaying the new rules fails four, including both slow #368 attempts. The passing #368 job's 500-clip p95 was 61.9 ms, versus 133.4 and 151.4 ms in the failures. Those two samples also had higher zoom and selection timings. The sample shows sustained slow edits, but runner and code costs are difficult to separate from these runs. [Slow #368 attempts](https://github.com/AksharP5/cutroom/actions/runs/44878138761/attempts/1), [passing #368 job](https://github.com/AksharP5/cutroom/actions/runs/44878144963).
+
+Two #367 jobs emitted matching editor chunk hashes. The 500-clip median worst gap was 122.4 ms in one job and 152.4 ms in the other. The failing job's first frame after Delete took 176.0, 152.0 and 152.4 ms across the three edits. The first gap includes a 171 ms main-thread long task. The next two gaps are also long enough for an editor to notice. The first #368 edit reached 210.2 ms on its second attempt. These pauses remain in the recorded samples. [#367 passing job](https://github.com/AksharP5/cutroom/actions/runs/44889483495), [#367 failing job and trace](https://github.com/AksharP5/cutroom/actions/runs/44889488454).
 
 ### First ripple after loading
 
@@ -471,6 +527,12 @@ Clip positions now divide by a fixed coordinate span, while only the grid uses t
 Paired 500-clip screenshots freeze both animation clocks at 110 ms, then capture the settled Fit. The sampled clip bounds match exactly at both points. The mean RGB channel difference is 0.109/255 mid-slide and 0.021/255 after Fit, with small rasterization differences visible in the raw comparison. Existing browser checks also cover interrupted Fit, overlapping undo, held trims, and recording against the playhead.
 
 [Every session's median maximum and p95, raw frame samples, traces, capture method, and matching images](https://github.com/AksharP5/cutroom/tree/pr-assets/ripple-first-edit) are retained separately from the source branch. Reproduce with `CUTROOM_PERF_DIR=... bun run test:perf`; set `CUTROOM_PERF_TRACE=1 CUTROOM_PERF_RUNS=1` for the separate profiling pass.
+
+#### Ripple animation timing
+
+On the 500-clip workload, the timeline read the animation's CSS duration after React changed the clip positions. A Chromium trace attributed 16 ms of synchronous layout to that read in the first Delete frame. Applying the clip translations then required a separate style pass over 982 elements. The same layout happened on subsequent edits, where command processing was already warm.
+
+The timeline now reads the slide duration and easing alongside its initial track sizes. It refreshes the timing when the reduced-motion preference changes and honors an inline override on the lanes. The browser can lay out the new positions and their first animation offsets together.
 
 ## Work counts
 
@@ -508,7 +570,7 @@ The spec budgets every count for every gesture; the table shows the ones each re
 
 Every edit forces about 750 style recalculations in the preview, one or two per clip, on every run. That is the current in-place edit path's cost on 480 media elements, and the budget holds it there.
 
-The frame-time budgets above and in Trim preview, Position preview and Track heights stay. They measure what a user sees, and some regressions (a slow style pass over the same elements) change time without changing any count. The counts catch the common regressions on any runner; the ceilings catch the rest when it is large. The noisiest timing assertion, Position's added late-frame rate during playback, already pairs with exact counts of observations and box reads per run, so it was left as it is.
+The frame-time budgets above and in Trim preview, Position preview and Track heights stay. They measure what a user sees, and some regressions (a slow style pass over the same elements) change time without changing any count. The counts catch the common regressions on any runner; the ceilings catch the rest when it is large. The noisiest timing assertion, Position's added late-frame rate during playback, pairs with the observation rate and the box-read count, so it was left as it is.
 
 ## Timeline reads
 
@@ -524,6 +586,25 @@ Measured on November 15, 2026 with Chromium 1720x1050 on a shared machine: five 
 | Agent edit        |        3 / 3 |       1 / 1 |            27 ms |            8 ms |            100 ms |            80 ms |
 
 The interview workload shows the same counts, with read time falling from 28 to 5 ms per edit and 16 to 5 ms per agent edit. An outside edit now shows about 70 ms later (median 153 to 225 ms from the request to the last read on the interview workload), the cost of waiting for the rest of its burst. The editor's own edits are unaffected: they show before the server answers. `e2e/timeline-reads.spec.ts` fails when an edit, an undo or an agent edit reads more than this.
+
+Project file events for the notebook use a 100 ms quiet period and a 500 ms limit from the first unanswered event. A review ledger update keeps the existing note file when its bytes are unchanged.
+
+## Saving linked timelines
+
+On November 20, 2026, the local server handled 12 saves of each edit on the numbered 1080p60 dialogue fixture. The 1,000-clip project runs 15 minutes and contains 486 linked picture and sound pairs, a music bed, titles and dissolves. Each edit was followed by Undo and the next revision was read from the server. The round trip includes receiving and parsing the JSON in the local benchmark client. Times are medians, compared with `5f20f8d4`.
+
+| Clips | Edit          | Server before | Server after | API round trip before | API round trip after |
+| ----: | ------------- | ------------: | -----------: | --------------------: | -------------------: |
+|   100 | Ripple delete |         42 ms |        26 ms |                 42 ms |                27 ms |
+|   100 | W             |         38 ms |        27 ms |                 39 ms |                28 ms |
+|   100 | Razor         |         37 ms |        31 ms |                 38 ms |                31 ms |
+| 1,000 | Ripple delete |        255 ms |       121 ms |                257 ms |               123 ms |
+| 1,000 | W             |        258 ms |       120 ms |                261 ms |               122 ms |
+| 1,000 | Razor         |        255 ms |       117 ms |                257 ms |               119 ms |
+
+At 1,000 clips, median Undo server time was 10–11 ms before and 9–10 ms after. All 72 edits and their undo steps produced identical composition, project settings and clip ID ledger bytes when replayed with the same piece IDs.
+
+Review indexes linked sound by link ID and uses the timeline's clip ownership rules to find authored byte ranges. It skips editor-only fields such as style and source restrictions, and still checks the referenced files on disk. The editor uses one HTML tree for media discovery and timeline projection. It parses each distinct inline clip style once per projection and still projects saved HTML to verify the edit before writing it. In a separate run, sharing the saved HTML tree with review changed the 1,000-clip medians to 132 ms, 111 ms and 114 ms for ripple delete, W and razor. The change did not consistently help across edits, so review keeps its independent source read.
 
 ## Trim preview
 
@@ -613,9 +694,13 @@ The bridge caches the selected clip's element and last posted box. Seek, pause, 
 
 A press costs one `elementsFromPoint` in the preview and style reads for elements under the pointer. A pointer moving over a stopped picture costs the same, with one request in flight at a time, and a press at the point being asked takes that answer; a playing picture is never asked. Only a hit test temporarily enables pointer events on visible elements whose computed value is `none`. It restores the exact inline values in `finally`. Captures never request hits. Selection immediately reuses the hit's box, before React renders the inspector.
 
-`bun run test:perf` collects `cutroom:clip-box` and `cutroom:position-observation` separately on the 500-clip real-media workload. Each budget remains below 5 ms, applied to the median of three fresh runs' maximum durations. This follows #63's smallest odd sample that tolerates one isolated pause while failing a repeated stall. Raw durations, overall maxima and per-run maxima remain in `position-observation.json`; `CUTROOM_POSITION_TIMING_OUT` saves it locally. Static selected playback may make at most six geometry reads per 2.5-second run. Unselected runs must make none, and selection may not add five percentage points to the median late-frame rate.
+`bun run test:perf` collects `cutroom:clip-box` and `cutroom:position-observation` separately on the 500-clip real-media workload. The median per-run maximum stays below 5 ms for each measurement across six selected playback and five selected scrub runs. Raw durations, overall maxima and per-run maxima remain in `position-observation.json`; `CUTROOM_POSITION_TIMING_OUT` saves it locally. Static selected playback may make at most six geometry reads per run. The preview also records the elapsed observation window, including play and stop, and checks the selected title's reads per second. The six-run median must stay below four reads a second, and each run must stay between two and five. The bridge polls every 350 ms and also checks when transport changes. Unselected runs must make no reads, and the selected late-frame share pooled across all six playback runs may increase by less than five percentage points.
 
-The picture-paint gate measures native pointer-down `timeStamp` to a task after the outline update's next animation frame, including that rendering opportunity. It makes twenty alternating video/title clicks in each of three fresh loads, after drawn clip bodies and a 4.5-second media warm-up. The median cold click and at least 95% of all 60 clicks must paint within 50 ms, three frames at 60 Hz. Every click has a 150 ms ceiling, including an isolated stall. CI Chromium 158 with SwiftShader measured 35.2 ms against the previous 33 ms ceiling. That two-frame ceiling was too close to normal runner variation. The gate runs without Playwright's trace and checks the inspector only after each paint is stamped. A trace snapshots the whole 500-clip page after every click and check, and a role locator walks it too, both on the editor's main thread. Under 4x CPU throttling those snapshots took about 25 ms per click, often between the outline's frame and the task that stamps its paint, so the gate timed the test harness along with the selection. CI failed at 50.8, 52.2 and 54.6 ms while the same commit's twin run passed. `picture-selection-paint.json` and `CUTROOM_PICTURE_TIMING_OUT` retain every pointer, outline and after-paint timestamp, cold click and bridge hit cost. This includes a rendering opportunity, not physical display scan-out.
+Four CI failure traces included a playback window with 11 observations against the old limit of 10. Their callback windows lasted 3.25 to 3.76 seconds, or about 2.93 to 3.38 reads a second. The trace estimates use the sum of recorded frame gaps. The revised test measures the full window directly. [Example CI failure trace](https://github.com/AksharP5/cutroom/actions/runs/44878138761).
+
+The picture-paint gate measures native pointer-down `timeStamp` to a task after the outline update's next animation frame, including that rendering opportunity. It makes twenty alternating video/title clicks in each of three fresh loads, after drawn clip bodies and a 4.5-second media warm-up. The median first click must paint within 67 ms, four frames at 60 Hz. At least 95% of all 60 clicks still get 50 ms, and every click has a 150 ms ceiling. In 50 CI job attempts, the cold median ranged from 22.9 to 51.8 ms, and the slowest individual click was 69.9 ms. Only two attempts missed the old 50 ms cold median, at 51.4 and 51.8 ms. Both had only two late clicks out of 60 and stayed inside the existing percentile and maximum limits. [51.4 ms failure](https://github.com/AksharP5/cutroom/actions/runs/44888260090), [51.8 ms failure](https://github.com/AksharP5/cutroom/actions/runs/44891046683).
+
+CI Chromium 158 with SwiftShader measured 35.2 ms against the previous 33 ms ceiling. That two-frame ceiling was too close to normal runner variation. The gate runs without Playwright's trace and checks the inspector only after each paint is stamped. A trace snapshots the whole 500-clip page after every click and check, and a role locator walks it too, both on the editor's main thread. Under 4x CPU throttling those snapshots took about 25 ms per click, often between the outline's frame and the task that stamps its paint, so the gate timed the test harness along with the selection. CI failed at 50.8, 52.2 and 54.6 ms while the same commit's twin run passed. `picture-selection-paint.json` and `CUTROOM_PICTURE_TIMING_OUT` retain every pointer, outline and after-paint timestamp, cold click and bridge hit cost. This includes a rendering opportunity, not physical display scan-out.
 
 Negative controls run inside actual preview reads without changing production code:
 
@@ -744,6 +829,36 @@ For live-supported edits, byte-identical live/fresh PNG comparisons cover all in
 
 The local full unit run passed 779 tests with five optional skips; the full functional run ran once with 445/448 passing. The scaled case became an explicit reload and the export/trim timeouts passed reruns. CI on `4599690` passed all 779 units, 449 functional tests and 11 performance cases before the final Scale restriction and main integration. On the integrated code, types, 56 focused units, 30 timing/title/gain workflows and both latency cases passed. The latest-main recheck passed 13 title/handoff workflows, including moved-playhead and playback continuity cases. The title/gain regression changes style, words, linked source timing and a fader in one operation, then retains the document for another title edit after a gain-only change. Final-head CI is linked in the PR.
 
+## Mixer
+
+The mixer must not cost playback, must be heard within about 50 ms of a fader move, and must paint every frame of a drag. Measured on November 20, 2026 on the shared i5-14400F, with other agents' browser runs between ours.
+
+Playback with the mixer open against `main` used `scripts/bench-vs-studio.ts --editor cutroom --footage-only --bus` (the five-minute, 100-cut 1080p project with its music bed through a bus with a compressor), adding `--mixer` on this branch. Headed Chromium on XWayland, two runs per invocation, in the order main, branch, branch, main. Late holds are 30 fps pictures held longer than two display frames in ten seconds of 1x playback, read from the frame numbers in the composited screencast; editor frames are the editor page's animation-frame intervals during the same ten seconds.
+
+| Build      |   Pictures/s | Late holds / 10 s |  Longest hold | Editor frame p95 | Editor frames over 25 ms |
+| ---------- | -----------: | ----------------: | ------------: | ---------------: | -----------------------: |
+| main       | 29.4 to 29.5 |      10, 14, 7, 6 | 133 to 150 ms |  18.0 to 18.5 ms |               2, 6, 0, 0 |
+| mixer open | 29.3 to 29.6 |      6, 5, 10, 12 | 116 to 133 ms |  17.8 to 18.6 ms |               2, 0, 2, 1 |
+
+Fader to sound, headed: a press on the Voices cap and one move from -30 dB to 0 dB while a tone played through the bus, timed from the editor's `pointermove` to the first sample of the bus's post-fader meter in the preview at least halfway (in dB) to the new level, on one clock (`performance.timeOrigin`). Eight trials: median 20.5 ms, longest 23.9 ms. That includes the meter's own read granularity.
+
+A 60-step drag at one move per animation frame moved the cap on all 60 frames, with a 17.5 ms frame p95 and no frame over 25 ms.
+
+The original 16-strip tone run took 3.63 ms per frame of editor main-thread task time with the mixer open and 1.94 ms closed. Script accounted for 0.28 ms open and 0.29 ms closed. The extra 1.69 ms exceeded the 1 ms budget. The earlier `clip-path` version had taken 4.56 ms open.
+
+The retest used the same i5-14400F, headed Chromium 155.0.8059.84 on a 60 Hz XWayland display, and all 16 meters in view at 2760 × 1451 CSS pixels and 0.625 device scale. Twelve tracks played stereo tones, three through separate buses, plus Main. The moving-level fixture modulated the stereo tones and ran a volume lane on one bus. Each table row averages two five-second windows per state at 1×, after playback had settled. All windows delivered 300 editor animation-frame intervals, with a 16.8 ms p95. The values are Chromium DevTools `TaskDuration` and `ScriptDuration` in editor-renderer CPU milliseconds per interval, using `threadTicks`. Task time includes script.
+
+| Fixture and build                            | Open task | Closed task | Added task | Open script | Closed script |
+| -------------------------------------------- | --------: | ----------: | ---------: | ----------: | ------------: |
+| Steady tones, `f0197b27`                     |     4.568 |       2.527 |      2.040 |       0.272 |         0.266 |
+| Steady tones, grouped layers                 |     2.021 |       2.267 |     -0.246 |       0.256 |         0.230 |
+| Moving levels and automation, `f0197b27`     |     8.826 |       2.580 |      6.246 |       0.313 |         0.232 |
+| Moving levels and automation, grouped layers |     3.482 |       2.604 |      0.878 |       0.285 |         0.236 |
+
+The baseline trace for moving levels put 5.71 ms per frame into Chromium's layer building with the mixer open, and 0.78 ms closed. The scrolling strips and pinned Main now each have a shared compositing layer. The meter bars still move in 3 px segments, the peak lines in 1 px steps, and the 16 meters still use one sample subscription. Idle fader caps release their layer hints, and the automated cap reads its range on resize. Stopped and closed states were checked in the running editor.
+
+These figures cover the editor main thread. The sandboxed preview renderer, compositor, GPU, and time preempted by other processes are outside the measurement. A separate run with moving levels and fixed bus gains during heavier host load measured 6.468 ms open and 4.582 ms closed, with script at 0.561 ms and 0.433 ms respectively. That run exceeded the budget and had up to 38 editor intervals over 25 ms in five seconds. Some exploratory windows fell to about 1 Hz, consistent with Chromium's background throttling. The steady and automated runs in the table held display cadence throughout.
+
 ## Range exports
 
 A marked export mixes only the audio heard within a second of its range ([architecture](architecture.md#export-dialog)). Each case below exports two seconds (60 frames, Draft, 720p) through the editor's render route, one export at a time on a shared machine. The 500-clip project is `timelineWorkload(500)`: 240 linked picture and sound pairs over ten minutes. The interview project has ten linked interview cuts, b-roll, titles and a 60-second music bed. Planning is the time between the extraction and browser-start stages, where the mix runs beside plan hashing.
@@ -803,6 +918,16 @@ Every captured run of an export now shares one start of its capture browsers, si
 
 On the 300-clip timeline the shared capture holds 9.2 GB of Chromium with two browsers and 4.2 GB with one; the source parts' four FFmpeg encoders beside it hold 3.0 to 3.6 GB, which the browser plan now reserves, so with 19.5 GiB free it starts one browser instead of two. Against main, every one of the 10,500 frames shows the same source frame, with a mean difference of 0.97/255 (1.33 at worst) and at most 0.29/255 bias per channel, and the sound has the same 16,800,000 samples at 48.1 dB SNR, the two paths' AAC encodes. The interview's output is identical to main's. No browser start stalled in any of these exports.
 
+### Adjustment grade capture
+
+Review of #368 measured a 12-second synthetic 1080p30 MP4 at 9.6 s without a layer and 69.8 s with a 10-second graded adjustment. The 300 graded frames added about 201 ms each, or about six seconds per graded second at 30 fps. At that measured per-frame cost, 7,200 graded frames in a two-minute 60 fps span would add about 24 minutes. That last figure is an extrapolation. Mixed MP4 only sends the adjustment's span and other runs that need the browser to capture.
+
+For jobs with a graded adjustment, the producer uses screenshots for every frame it captures. That includes marked ranges outside the grade and every exported frame in MOV, WebM and GIF. In the follow-up review, a 60-frame MOV took 12% longer with a three-frame grade on this path.
+
+On Electron 45.2.3 (Chromium 156.0.8078.80) at device pixel ratio 2, the native viewer played a synthetic 1080p60 clip with a title under the grade and the footage pipeline disabled. At the same 314 × 177 CSS-pixel viewer size, the capture canvas shrank from 3840 × 2160 to 628 × 353. The graded title pixel stayed RGB (72, 104, 24). Across three 3.5-second samples, the observed distinct pictures per second were 28 to 30 before and 27.7 to 28 after. Electron's frame subscription delivered at most 30 samples per second in this headless run, so it cannot establish 60 fps playback.
+
+The headed Wayland test used a 1237 × 696 CSS-pixel viewer on a 60 Hz display and emulated DPR 2 for the preview. It played synthetic 1080p60 footage with an HTML title under the grade and the footage pipeline off. In two 4.5-second windows, the adjustment canvas received 53.6 and 59.1 paint events per second at 2474 × 1392. Capturing at 1237 × 696 during playback reduced the capture area by 75%. The two playback runs received 54.9 and 58.2 paint events per second. The ranges overlap. The canvas returned to 2474 × 1392 on pause, and the decoded screenshots of the same paused frame matched pixel for pixel.
+
 ### Placed clips and stills
 
 Clips the inspector moved, scaled, rotated, cropped or faded, and image stills, now draw from their sources too ([architecture](architecture.md#export-dialog)). The workload is the interview above with five cuts edited (punch-ins at 115 to 125%, three of them moved, and one cut at 60%, turned 4 degrees and moved, over the page colour), a 1080p PNG slide and a 4:3 JPEG photo over cuts, b-roll, the music bed and two titles, exported whole at Standard quality.
@@ -812,6 +937,12 @@ Clips the inspector moved, scaled, rotated, cropped or faded, and image stills, 
 | Edited interview, whole 0:45 |       37.4 s, 38.6 s |     25.8 s, 27.6 s |                9.7 / 8.1 GB |
 
 The photo is letterboxed over an interview cut that shows around it, so it stays in the browser and the server log says why; the titles do too. Against the capture, the frames have a mean difference of 0.40/255 (1.14 at worst) and at most 0.82/255 bias, with sample-identical sound. Every frame whose counter is visible reads the same source frame; in the two punch-ins without an upward move the counter is scaled off the frame, and each of those 266 frames is closer to the capture's same frame (at most 1.14/255) than to either neighbour.
+
+### Adjustment grades over footage
+
+On the same 12-second 1080p30 test with two synthetic BT.709 colour-bar cuts, one clip grade and a ten-second adjustment, a Standard MP4 with libx264 took 71.4 s using browser capture for the 300 graded frames and 5.7 s when FFmpeg applied the adjustment. Both exports contained 360 frames. The FFmpeg run finished with the browser executable disabled. The same cuts with the adjustment removed took 3.7 s.
+
+Over every pixel in the 300 graded frames, the mean absolute error by RGB channel was 0.78, 0.56 and 0.79 out of 255, with maxima of 28, 28 and 31. The largest differences were at colour boundaries in the bars. Frame capture extracts and screenshots frames as JPEG, so edge pixels can differ between the two paths. Titles, dissolves and effects that need the browser still use capture for their own runs.
 
 ### GPU encoding
 
@@ -862,6 +993,64 @@ Transparent formats capture PNG screenshots instead of JPEG, and GIF adds a ProR
 
 Encode on the GPU, on a 20-second 1080p30 clip under film grain drawn wholly from its source (RTX 5060): 3.8 s and 3.8 s with NVENC (43.1 MB), 22.4 s and 24.5 s with libx264 (410.5 MB, which keeps grain at CRF 18; see [GPU encoding](#gpu-encoding) for quality at each tier).
 
+### Chroma in MP4 frame capture
+
+A browser-captured MP4 on main `786b0519` passed SDR footage through a 4:2:0 JPEG before drawing any overlays. A second chroma reduction in capture and MP4 encoding spread saturated colours across hard edges. Decoding the extraction files confirmed `yuvj420p` on main and `yuvj444p` with this change. Cutroom keeps the original source chroma sample boundaries when it expands the frame and preserves that picture as 4:4:4 JPEG until Chromium draws it. The comparison holds the screenshot and MP4 encoder settings fixed.
+
+The chart has moving saturated edges, smooth gradients, six skin-tone patches and seeded grain. Four versions were encoded as BT.709 limited-range H.264 4:2:0 at 1920 × 1080 or 3840 × 2160, 8- or 10-bit. Each source was exported at 60 fps (90 frames), Standard quality, CPU encoding, on Chromium 155 and FFmpeg 9.0.2. All 90 frames were compared with the matching decoded source frames in RGB, using the same bicubic chroma reconstruction for the source and delivered video. Values below are absolute RGB-channel errors out of 255, in order of maximum, 99.9th percentile and mean. The bit depth in the table is the input's. MP4 delivery uses 8-bit 4:2:0.
+
+| SDR source   |                              Hard edges |                              Gradients |                     Skin-tone patches |                                   Grain |
+| ------------ | --------------------------------------: | -------------------------------------: | ------------------------------------: | --------------------------------------: |
+| 1080p 8-bit  | 87.9 / 36.5 / 1.84 → 55.4 / 17.8 / 1.12 | 24.7 / 11.8 / 1.00 → 16.4 / 4.6 / 0.93 | 19.5 / 5.8 / 0.86 → 19.5 / 4.8 / 0.85 | 27.6 / 14.5 / 3.59 → 26.5 / 14.9 / 3.64 |
+| 1080p 10-bit | 94.3 / 37.0 / 1.63 → 50.5 / 17.8 / 0.91 | 28.0 / 11.4 / 0.90 → 10.9 / 4.4 / 0.87 | 19.9 / 5.3 / 0.90 → 18.9 / 4.6 / 0.87 | 26.7 / 14.6 / 3.66 → 25.7 / 14.6 / 3.65 |
+| 4K 8-bit     |  83.3 / 29.2 / 1.34 → 31.0 / 9.0 / 1.02 |  41.1 / 8.4 / 0.92 → 11.3 / 4.2 / 0.88 | 18.3 / 4.9 / 0.83 → 19.5 / 4.6 / 0.84 | 27.2 / 13.5 / 3.23 → 25.4 / 13.4 / 3.21 |
+| 4K 10-bit    | 89.7 / 29.6 / 1.14 → 45.5 / 10.2 / 0.84 |  38.2 / 8.6 / 0.90 → 26.4 / 4.2 / 0.86 | 17.2 / 4.9 / 0.87 → 20.4 / 4.4 / 0.85 | 27.3 / 13.3 / 3.21 → 28.0 / 13.2 / 3.19 |
+
+The enlarged crop shows the decoded source and then the two decoded exports.
+
+![The same enlarged edge from the source, the original MP4 and the new MP4, left to right](measurements/export-chroma-edge.png)
+
+The benchmark forces browser capture with a cold extraction cache. Each pair was exported three times with the order alternated. Time includes the worker's startup, capture, encode and output publication. Memory is the median of each run's peak summed proportional set size for Cutroom's benchmark process, the render worker and its Chrome and FFmpeg children, sampled every 200 ms.
+
+| SDR source   | Export time, s | Peak memory, GiB | Extracted frames, MiB |
+| ------------ | -------------: | ---------------: | --------------------: |
+| 1080p 8-bit  |    5.54 → 6.09 |      2.61 → 2.62 |           16.1 → 19.3 |
+| 1080p 10-bit |    6.34 → 6.14 |      2.57 → 2.62 |           16.5 → 19.6 |
+| 4K 8-bit     |  13.10 → 13.11 |      5.65 → 5.61 |           57.2 → 66.6 |
+| 4K 10-bit    |  13.61 → 13.71 |      5.64 → 5.66 |           58.7 → 67.2 |
+
+The PNG extraction control kept the existing JPEG browser capture. On the 4K 8-bit input it used 415 MiB of temporary frames and took 20.27 s. On 4K 10-bit it used 857 MiB and took 23.46 s. Its peak memory was 6.26 and 6.82 GiB respectively. PNG lowered mean grain error on three of the four charts. The 4:4:4 JPEG kept extraction much smaller and lowered the 99.9th-percentile edge error on the 4K chart. The direct control on the 1080p 8-bit chart measured 54.9 / 6.7 / 0.72 on hard edges.
+
+[Individual runs and pixel measurements](measurements/export-chroma.json)
+
+### PNG capture experiment
+
+We compared 4:4:4 JPEG extraction and JPEG screenshots with PNG for both stages. Each pair used the same 90-frame, 60 fps SDR chart, CPU encoding, a cold frame cache, and the same High H.264 encoder preset. PNG used source-aligned chroma sampling for opaque SDR footage. Time and peak process-group memory are medians of two runs per path. Each cell shows JPEG → PNG. Hard-edge error is the maximum / p99.9 / mean absolute RGB-channel error against the decoded source, out of 255.
+
+| SDR source   |                     Hard-edge RGB error | Export time, s | Peak memory, GiB | Extracted frames, MiB |
+| ------------ | --------------------------------------: | -------------: | ---------------: | --------------------: |
+| 1080p 8-bit  | 56.3 / 16.7 / 1.09 → 54.3 / 17.1 / 0.69 |    5.63 → 8.58 |      2.50 → 2.21 |          19.3 → 125.3 |
+| 1080p 10-bit | 51.9 / 17.8 / 0.87 → 49.9 / 17.1 / 0.71 |    5.65 → 8.82 |      2.54 → 2.35 |          19.6 → 213.5 |
+| 4K 8-bit     |   33.2 / 9.2 / 1.02 → 30.7 / 7.1 / 0.56 |  12.35 → 22.30 |      5.38 → 4.03 |          66.6 → 466.4 |
+| 4K 10-bit    |   42.2 / 9.0 / 0.81 → 33.2 / 8.4 / 0.68 |  12.77 → 26.21 |      5.29 → 4.51 |          67.2 → 838.3 |
+
+PNG lowered mean hard-edge and grain error on all four charts. Cutroom kept JPEG for opaque MP4 capture because the PNG path took 1.5–2.1× as long and used up to 12.5× the extraction space for modest gains in worst-edge error. MP4 delivery uses 8-bit H.264 4:2:0, which subsamples chroma even when its input is lossless. For a full-chroma master, export MOV (ProRes 4444). Whole and marked MOV exports of a synthetic chart decoded as `yuva444p12le` and preserved its alternating one-pixel red and blue stripes.
+
+### Chromium screenshot capture
+
+Full Chromium 155 intermittently spent about two seconds inside one `Page.captureScreenshot` call. In a 96 × 54 synthetic loop, frame 11 took 7 ms to seek, inject and finish preparing, then 1,993 ms to capture. Allowing capture outside the viewport or removing the screenshot clip left the stall in place. Chromium’s `CDPScreenshotNewSurface` feature makes the DevTools request submit and read a fresh compositor surface, bypassing the wait for the legacy redraw callback. [Chromium screenshot implementation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/renderer_host/render_widget_host_impl.cc#2401).
+
+The same Linux machine rendered 60 frames of 1080p60 synthetic `testsrc2` footage under an opaque title. Each run used one capture browser, a cold extraction cache and High quality CPU H.264. The table shows medians of three runs. Capture fps uses the time spent seeking, injecting and taking screenshots, excluding setup and encoding. The 1080p fixture ran without the two-second stall in this measurement.
+
+| Browser and capture mode                               | Capture fps | Screenshot, ms | Whole export, s |
+| ------------------------------------------------------ | ----------: | -------------: | --------------: |
+| System Chromium 155, legacy screenshot                 |        13.8 |             52 |            7.04 |
+| System Chromium 155, new-surface screenshot            |        19.9 |             34 |            5.59 |
+| Playwright headless shell 158, legacy screenshot       |        15.9 |             50 |            6.14 |
+| Headless Electron 45 (Chromium 156), legacy screenshot |        13.7 |             53 |            6.43 |
+
+On the 12-frame loop, the switch cut export time from 19.30 s to 1.48 s and median screenshot time from 1,993 ms to 12 ms. Electron took 1.45 s, and the shell took 1.57 s with screenshots or 1.21 s with explicit `BeginFrame` capture. All three browsers returned the expected source frame numbers. The before-and-after MP4s were byte-identical on the loop and all three system Chromium 1080p pairs.
+
 ## Scrubbing
 
 A ruler drag asks for a new frame on every pointer move. [Scrub proxies](architecture.md#scrub-proxies) answer those seeks from an all-intra 540-line copy of each video and show the exact frame once the pointer rests. On November 15, 2026 the same drag ran against `main` and this change: 3 s across 900 px of ruler at Fit, about 60 pointer moves a second, headless installed Chromium 155 at 1720x1050, alternating the two builds. A CDP screencast recorded every composited frame, and each frame's number was read back from blocks burned into the footage, so a picture counts only when the viewer showed a new source frame. The interview is a 90 s 1080p30 H.264 file (8 Mbit/s, 1 s GOP) with a title; the 300-clip timeline is `timelineWorkload` over a 720p copy, with each 2.5 s clip its own element.
@@ -876,9 +1065,20 @@ A ruler drag asks for a new frame on every pointer move. [Scrub proxies](archite
 
 CPU was measured with the screencast off. The 300-clip timeline uses more CPU because it now loads and draws each clip it passes; it is bounded by those loads, not by decoding. A single move shows the exact frame later than before, since the source decodes only after 60 ms of rest; the proxy frame at Fit is close to the viewer's own resolution.
 
+### Polling while a scrub proxy is made
+
+On November 20, 2026, private Electron 45.2.3 profiles played 30 seconds at 1× on a 60 Hz Wayland display. Each timeline cut the same 1080p60 OBS HEVC recording. The 1080p H.264 editing proxy was ready before open. Filmstrips and the 540p scrub proxy were made on demand. The preview used to poll separately for every cut while the scrub proxy was pending. It now polls once per source in each pass. The footage pipeline also stops its range probe as soon as the server says the proxy is pending.
+
+| Cold timeline | Pending requests from the preview, before → after | Canvas updates/s, before → after | Longest canvas hold, before → after | Machine load, before → after |
+| ------------- | ------------------------------------------------: | -------------------------------: | ----------------------------------: | ---------------------------: |
+| 30 cuts       |                                          300 → 19 |                      60.0 → 55.9 |                         18 → 483 ms |                     4.6 → 27 |
+| 1,000 clips   |                                        4,521 → 18 |                      41.0 → 39.0 |                        495 → 433 ms |                      42 → 33 |
+
+Requests were counted through the end of the playback sample. Each row is one run per build. The 1,000-clip comparison used the same renderer bundle to isolate the preview request change. Machine load varied substantially, and the renderer itself ran at 41.9 and 43.3 animation callbacks/s in the 1,000-clip runs. These runs establish the request reduction. The 60 Hz cadence target is still open at this scale.
+
 ## Footage pipeline
 
-The [footage pipeline](architecture.md#footage-pipeline) is a setting, off by default. On November 15, 2026 both settings ran on the same production build of this change, alternating, on a private server: installed Chromium 155 at 1720x1050 on the RTX 5060 (ANGLE Vulkan), muted, with the machine shared with other work and DaVinci Resolve holding 4.5 of the GPU's 8 GB. Every source frame carries its number in 16 blocks along the top, and a picture counts only when a screencast frame shows a new number. The interview is `interviewWorkload` with a 60 s 1080p30 file at 8 Mbit/s and a 1 s GOP: ten cuts that each jump back a second in one file, four b-roll clips from a 720p file over them, music and four titles. The 400-clip timeline is `timelineWorkload(400)` over a 720p30 copy with a 1 s GOP: 190 linked 2.5 s cuts and 20 titles. Playback was measured headed (headless halves the clock with this much media), with `requestVideoFrameCallback` in the preview for HyperFrames and the pipeline canvas's draws for the pipeline; HyperFrames' count includes both pictures where b-roll overlaps the interview. Its gaps are the callbacks' times, which can land a display frame early or late of the picture itself (see [Cutroom vs HyperFrames Studio](#cutroom-vs-hyperframes-studio)), so they can overstate HyperFrames' gap p95.
+On November 15, 2026, both [footage pipeline](architecture.md#footage-pipeline) settings ran on the same production build of this change, alternating, on a private server: installed Chromium 155 at 1720x1050 on the RTX 5060 (ANGLE Vulkan), muted, with the machine shared with other work and DaVinci Resolve holding 4.5 of the GPU's 8 GB. Every source frame carries its number in 16 blocks along the top, and a picture counts only when a screencast frame shows a new number. The interview is `interviewWorkload` with a 60 s 1080p30 file at 8 Mbit/s and a 1 s GOP: ten cuts that each jump back a second in one file, four b-roll clips from a 720p file over them, music and four titles. The 400-clip timeline is `timelineWorkload(400)` over a 720p30 copy with a 1 s GOP: 190 linked 2.5 s cuts and 20 titles. Playback was measured headed (headless halves the clock with this much media), with `requestVideoFrameCallback` in the preview for HyperFrames and the pipeline canvas's draws for the pipeline; HyperFrames' count includes both pictures where b-roll overlaps the interview. Its gaps are the callbacks' times, which can land a display frame early or late of the picture itself (see [Cutroom vs HyperFrames Studio](#cutroom-vs-hyperframes-studio)), so they can overstate HyperFrames' gap p95.
 
 | Ranges over 2 runs                                   |     Interview, off |      Interview, on |       400 clips, off |      400 clips, on |
 | ---------------------------------------------------- | -----------------: | -----------------: | -------------------: | -----------------: |
@@ -933,6 +1133,21 @@ HyperFrames' own playback of the interview, headed in Chromium through Playwrigh
 
 What changed: lookahead prepares every clip that comes into view, including one a clip above stops covering, and at rest the next clip to come into view, so W finds its frame decoded. Main's stalls came mostly from its decoders: the frames a decoder kept centred on the furthest frame playback had asked for and never moved back, so after playback restarted earlier in a file each new frame was evicted as it arrived, and a frame the decoder wrongly took to be in flight was waited for by feeding the rest of the file (8.3 s once). After undo, most of the remaining time is the editor's: its timeline view arrives 20-26 ms after the key on the interview and 63-137 ms on the 400-clip timeline, and the pipeline draws 17-43 ms after that.
 
+### Scheduling playback decode
+
+Playing in Electron revealed holds while the transport and compositor kept running. On a cold 30-cut OBS edit, one canvas hold lasted 483 ms with both decoder lanes busy. In a trial that forced low-latency decoding of a finished 1080p H.264 proxy from a 4K60 HEVC source, the canvas held for about 970 ms while the renderer still ran at 59.8 animation callbacks/s. The lane for the current shot submitted the next visible frame 427 ms into the gap and returned it 495 ms later. The spare lane spent 711 ms flushing work ahead of a cut.
+
+Lookahead used to queue a whole range of pictures ahead of the next draw. It now queues one missing picture at a time, so a draw can go ahead of the remaining lookahead. The decoder gives a target already in flight a chance to come out before feeding more samples. In a deterministic queue replay, 48 prefetched frames used to finish ahead of an unrelated picture request. Four already submitted frames finish ahead of it now.
+
+Electron 45.2.3, Wayland at 60 Hz, one 30-second warm pass per build at each size. Both timelines used the same 1080p60 H.264 editing proxy of an OBS recording. A hold is an interval over 25 ms between sampled canvas updates.
+
+| Warm edit   | Samples submitted, before → after | Decoder flushes, before → after | Canvas updates/s, before → after | Holds, before → after | Longest hold, before → after |
+| ----------- | --------------------------------: | ------------------------------: | -------------------------------: | --------------------: | ---------------------------: |
+| 30 cuts     |                     2,562 → 2,307 |                           5 → 0 |                      60.0 → 60.0 |                 1 → 2 |                   33 → 33 ms |
+| 1,000 clips |                     2,698 → 2,318 |                           6 → 0 |                      55.5 → 58.6 |               99 → 13 |                 153 → 250 ms |
+
+The shared machine's load was lower on the second run at both sizes. At 1,000 clips the renderer's animation callbacks ran at 55.8 and 58.8/s. The 250 ms canvas hold matched a 250 ms gap in renderer callbacks. The 1,000-clip editor still missed 60 Hz.
+
 ### Real footage
 
 On November 16, 2026, the pipeline was checked against HyperFrames on camera, phone and screen footage: the owner's own recordings (a DaVinci Resolve 1080p60 MOV render with a timecode track, a vertical Resolve MOV, a full-range MP4 with an ICC profile, a 60 fps screen recording at 1916x1074, an OBS HEVC recording), and ffmpeg stand-ins with numbered frames for what was missing. Parity is the e2e test's comparison, the viewer with and without the pipeline at nine frames across two cuts, headless; the export tolerance is a mean difference under 4/255 and a bias under 1.5/255. Playback, scrub, steps and edits were measured headed in Chromium 155 through Playwright (X11), on a four-cut 1080p composition of one file, with renderer memory as the proportional set size after a drag (Playwright's Network domain inflates the pipeline's side, as above).
@@ -958,7 +1173,30 @@ Chromium 155 and Electron 45 on Linux decode no HEVC, in `<video>` or WebCodecs,
 
 Before the fixes measured here, rotated phone video drew sideways (mean difference 121 to 218), HDR in a MOV and HDR named only in the bitstream drew untone-mapped (bias 26 and 18), Android's full-range EBU footage drew 8/255 too little blue, a delayed edit list drew the wrong frames, and Resolve's MOVs, which write negative composition offsets in a version 0 `ctts`, showed the previous frame for one in two or three frames, then stalled on the open GOP's B-frames once their times were read right. 4K60 played at 2.3 pictures a second: low-latency decoding ran at 94 fps there against 166 with frame threading, and the two lanes fell behind each other. On the 400-clip timeline, frame threading measured the same as low latency (29.6 pictures a second, steps 31 / 54-104 ms against 29-31 / 105-107 ms, W 39 ms, undo 96-102 against 100-165 ms).
 
-In that comparison the 4K60 decoders produced about four frames for each one drawn. Cutroom now leaves sources above the 1080p pixel budget with HyperFrames, clip by clip. At an x264 open GOP's leading B-frames, a seeking `<video>` shows the keyframe after them and the pipeline shows the frame the file's timestamps name, as the export does; the e2e test checks those frames by number.
+In that comparison the 4K60 decoders produced about four frames for each one drawn. Cutroom leaves playback tracks above the 1080p pixel budget with HyperFrames, clip by clip. At an x264 open GOP's leading B-frames, a seeking `<video>` shows the keyframe after them and the pipeline shows the frame the file's timestamps name, as the export does; the e2e test checks those frames by number.
+
+### Linux hardware decoding in Electron
+
+On November 20, 2026, Electron 45.2.3 with Chromium 156 ran on an RTX 5060 (driver 615.78.08) under Hyprland. A muted WebCodecs probe decoded nine seconds of synthetic H.264 High at each resolution in a fresh profile. DevTools `Media` events recorded the selected decoder and whether it was a platform decoder. Every supported configuration decoded all 540 frames. Stock Electron selected `FFmpegVideoDecoder` even with `hardwareAcceleration: "no-preference"`, and rejected `"prefer-hardware"` at both resolutions.
+
+| Electron decode configuration            | Decoder            | Output | 1080p60 burst, frames/s | 4K60 burst, frames/s |
+| ---------------------------------------- | ------------------ | ------ | ----------------------: | -------------------: |
+| Stock Wayland, prefer software           | FFmpegVideoDecoder | I420   |                     211 |                  255 |
+| NVIDIA VA-API, Wayland, prefer hardware  | VaapiVideoDecoder  | NV12   |                     645 |                  363 |
+| NVIDIA VA-API, XWayland, prefer hardware | VaapiVideoDecoder  | BGRA   |                     732 |                  484 |
+
+The candidate used ANGLE OpenGL, `AcceleratedVideoDecodeLinuxGL`, `VaapiOnNvidiaGPUs`, and `AcceleratedVideoDecodeLinuxZeroCopyGL`, with the GPU blocklist and driver workarounds bypassed for the probe and the NVIDIA libva driver's direct backend. It kept Cutroom's `disable-gpu-memory-buffer-video-frames` switch. Chromium documents its NVIDIA VA-API option as experimental. [Chromium VA-API documentation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/gpu/vaapi.md)
+
+The same 4K60 clip then ran for 30 seconds in the desktop editor on a 60 Hz display, with 30 three-second cuts. The size guard was bypassed in the test. The trace counted canvas frame changes sampled on animation frames and logged the decoder selected by WebCodecs. These are canvas updates, a measure upstream of display presentation. The shared machine's one-minute load ranged from 11 to 37 across the runs.
+
+| 4K60 editor path                                             | Canvas updates/s | Timeline advanced | Result                                                                                  |
+| ------------------------------------------------------------ | ---------------: | ----------------: | --------------------------------------------------------------------------------------- |
+| Stock Wayland, software decode                               |             24.7 |            30.0 s | The canvas was held up to 634 ms                                                        |
+| NVIDIA VA-API with Wayland zero-copy                         |              7.5 |            26.0 s | GPU process exited, the drawing context was lost, and the decoders repeatedly restarted |
+| NVIDIA VA-API, Wayland without the explicit zero-copy option |              8.4 |            29.2 s | WebCodecs reported decoding errors and the pipeline fell back                           |
+| NVIDIA VA-API, XWayland                                      |              6.6 |            29.8 s | GPU uploads repeatedly failed to find the decoded image                                 |
+
+Software was already fast enough to decode all 540 frames when the probe fed them at 60 per second. In the editor, two software decoders accepted 7,312 chunks for 808 canvas updates in the same 30-second window. Decoder throughput alone leaves that extra work and the compositor's cost in the playback path. Keep the current software decode configuration and the raw 4K guard.
 
 ## Editing proxies
 
@@ -987,6 +1225,30 @@ Before and after, on a fresh project of one 10 s HEVC 1080p30 clip, headed in Ch
 A minute of 4K 10-bit HEVC shows "Preparing footage" 1.7 s after opening and its picture after 17 s. Before one editing proxy could run beside a filmstrip, the same clip waited 28 s for its filmstrip first.
 
 On one of the owner's OBS recordings (HEVC Main, 1080p60, 17.4 minutes, in Matroska, checked locally and deleted), NVENC made the proxy in 93 s (5.4 s a minute, 25 MB a minute) and libx264 in 140 s (19 MB a minute). All 62,509 frame times matched the recording's, and sampled frames differed from it by 0.2/255 on average. In the editor the clip played 86 pictures in 3 s through the pipeline, with 30 ms steps.
+
+### HEVC playback proxy size
+
+An opaque SDR source that uses an editing proxy, such as HEVC, ProRes or DNxHR, can use GPU footage playback when its finished proxy fits the pipeline's 2,073,600-pixel budget. The pipeline reads the actual dimensions from the MP4 track before configuring WebCodecs. Pending proxies can still play from pieces in HyperFrames, and raw 4K H.264 continues to play there.
+
+On November 20, 2026, Electron 45.2.3 played 30 seconds of a 3840 × 2160, 60 fps composition on a 60 Hz Wayland display. The synthetic source was 4K60 HEVC. The edit had 30 graded cuts and chapter titles. The pipeline server plan classified 0 video clips as drawable before the size change and 30 after. DevTools recorded a 1920 × 1080 H.264 decoder configuration in the running editor after the change. The display capture read the source's burned-in frame numbers.
+
+| Playback path                                 | Pictures/s observed on screen | Gaps over 25 ms | Longest gap | Potentially missed capture refreshes |
+| --------------------------------------------- | ----------------------------: | --------------: | ----------: | -----------------------------------: |
+| Native, warmed media and renderer             |                          58.0 |              54 |       67 ms |                                    1 |
+| GPU, warmed media and renderer                |                          59.6 |               9 |       67 ms |                                   11 |
+| GPU, fresh profile, ancillary media on demand |                          58.9 |              23 |      167 ms |                                   14 |
+
+The one-minute machine load at the end of playback was 9.3 native, 8.8 for the warmed GPU run and 12.4 for the on-demand run. The editing proxy was finished for every pass. Warmed media also included the filmstrip and scrub proxy. The capture can miss a refresh, which lowers the observed picture rate and can add a gap. Compositor feedback showed 59.7 and 58.2 picture updates/s for the warmed and on-demand GPU passes. The earlier 14.1-second hold did not recur. The separate decoder scheduling test reproduced a shorter hold while the clock advanced and reduced it from 967 ms to 33 ms. [Decoder scheduling measurements](https://github.com/AksharP5/cutroom/pull/361)
+
+On November 21, three fresh Electron profiles replayed the [prepared 4K HEVC scenario](#4k-sources-and-editing-proxies) on the same 60 Hz Wayland display. The 30-cut edit had six titles and a muted music bed. Each 30-second playback window used the finished 1080p editing proxy, with the filmstrip and scrub proxy ready before opening. The calibration recovered 269 of 270 expected pictures and all six deliberate holds. All three playback windows passed the capture checks.
+
+| Run | Screen pictures/s | Gaps over 25 ms | Longest gap | Trailing hold | Pictures at risk from capture gaps | Machine load |
+| --- | ----------------: | --------------: | ----------: | ------------: | ---------------------------------: | -----------: |
+| 1   |             56.86 |              92 |    50.07 ms |       8.73 ms |                                  0 |         3.94 |
+| 2   |             53.80 |             183 |    50.42 ms |       0.12 ms |                                  0 |         4.67 |
+| 3   |             57.63 |              70 |    50.03 ms |       0.18 ms |                                  0 |         3.18 |
+
+The original 14.1-second hold occurred at a machine load of 18.4. These repeats ran at 3.18 to 4.67, and the cause of that earlier freeze remains unverified.
 
 ### Long recordings, piece by piece
 
@@ -1038,7 +1300,7 @@ Temporary `performance.measure` calls included query setup and result constructi
 
 The CPU reduction did not establish a general picture-latency improvement. Median first-picture latency in the three 400-clip runs ranged 37.7 to 42.7 ms before and 36.5 to 42.4 ms after; at 500 clips it ranged 40.2 to 43.9 ms before and 41.0 to 42.6 ms after. Pictures were read from composited screencasts after measurement, using the burned-in frame numbers rather than the canvas's requested-frame attribute. Every one of the 384 steps showed the expected source picture before the next input. Two additional matched 500-clip runs in each build crossed a cut in both directions from timeline frame 3070; all 128 pictures also matched. No long tasks occurred in these runs. Cold project opening was 1.4 to 2.0 seconds across both builds; that fixture warms filmstrips and peaks first, so it is not a cold-media benchmark.
 
-This improves synchronous lookahead work when the experimental footage pipeline is on. It does not establish a playback-rate or memory improvement, and does not change the setting's default, classification, decoders, clock or HyperFrames confirmation. To reproduce the interaction manually, enable the footage pipeline, open the same generated workload, type `00:01:40:00`, and alternate 16 Right and 16 Left inputs at eight inputs per second. The cut-crossing variant starts at `00:01:42:10`.
+This improves synchronous lookahead work when the footage pipeline is on. It does not establish a playback-rate or memory improvement, and does not change the setting's default, classification, decoders, clock or HyperFrames confirmation. To reproduce the interaction manually, enable the footage pipeline, open the same generated workload, type `00:01:40:00`, and alternate 16 Right and 16 Left inputs at eight inputs per second. The cut-crossing variant starts at `00:01:42:10`.
 
 ## Clip versions
 

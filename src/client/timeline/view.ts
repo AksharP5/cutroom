@@ -56,6 +56,8 @@ export function createViewport(
   let ppf = 0;
   let fit = 0;
   let fitted = true;
+  /** The next change of width keeps the zoom: the mixer opening or closing beside the lanes. */
+  let holding = false;
   let gesturing = false;
   let extent: Extent = { frames: 0, fps: { num: 30, den: 1 } };
   /** The scroller's offset, in the whole pixels it keeps. */
@@ -308,7 +310,7 @@ export function createViewport(
     )
       onDragEnd();
   }
-  const resized = new ResizeObserver(() => measure(extent));
+  const resized = new ResizeObserver(() => measure(extent, true));
   const events = new AbortController();
   const { signal } = events;
   resized.observe(scroller);
@@ -337,19 +339,25 @@ export function createViewport(
    * rescales: an edit, undo or agent change leaves the ruler where the user put it, and Fit is
    * theirs to ask for.
    */
-  function measure(next: Extent) {
+  function measure(next: Extent, resized = false) {
     const opened = ppf === 0;
     const sameLength = next.frames === extent.frames;
     extent = next;
-    width = scroller.clientWidth - headWidth;
-    height = scroller.clientHeight;
-    top = scroller.scrollTop;
-    scroll = scroller.scrollLeft;
-    exact = settledScroll(exact, scroll);
-    grid.style.setProperty("--view", `${width}px`);
+    // At the origin, a changed length cannot clamp the scroll. The size observer
+    // supplies the viewport geometry without laying out every clip during an edit.
+    if (opened || resized || holding || scroll || top) {
+      width = scroller.clientWidth - headWidth;
+      height = scroller.clientHeight;
+      top = scroller.scrollTop;
+      scroll = scroller.scrollLeft;
+      exact = settledScroll(exact, scroll);
+      grid.style.setProperty("--view", `${width}px`);
+    }
     fit = fitPpf(extent.frames, width, extent.fps);
-    if (opened || (fitted && sameLength && !gesturing)) write(fit);
-    fitted = ppf === fit;
+    if (opened || (fitted && sameLength && !gesturing && !holding)) write(fit);
+    // A held view keeps whether it was fitted, so a later resize of the window still refits it.
+    if (!holding) fitted = ppf === fit;
+    holding = false;
     if (owed !== null && !sameLength) centre(owed);
     onChange(false);
   }
@@ -371,6 +379,10 @@ export function createViewport(
         beforeFit = ppf;
         zoom(fit, anchorNear(playhead), true);
       } else if (beforeFit) zoom(beforeFit, anchorNear(playhead), true);
+    },
+    /** Keeps the zoom and scroll through the next change of width, so the frames stay put. */
+    hold() {
+      holding = true;
     },
     /** The zoom and scroll now, to return to with `place`. */
     placement: (): ViewPlacement => ({ ppf, scroll: exact, fitted }),

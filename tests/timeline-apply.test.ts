@@ -9,11 +9,15 @@ import {
 } from "../src/shared/timeline/apply";
 import type { ClipOrigin } from "../src/shared/timeline/apply";
 import { CommandSchema } from "../src/shared/timeline/schema";
+import { resolveClip } from "../src/shared/timeline/clipTiming";
+import { encode, frames } from "../src/shared/timeline/piece";
 import { editLabel } from "../src/shared/timeline/labels";
 import { countingIds } from "./clip-ids";
 import { syncOffsets } from "../src/shared/timeline/sync";
 import { volumePoints } from "../src/shared/timeline/mix";
 import { editKeys } from "../src/client/edit/keys";
+import { pasteAttributes } from "../src/client/edit/pasteAttributes";
+import { nearestEditPoint } from "../src/client/timeline/selection";
 import type {
   Clip,
   CommandInput,
@@ -1240,7 +1244,7 @@ test("moves overwrite partial and full clips without rippling or changing the mo
     later: [0, 210, 30],
   });
   expect(result.clips.find((item) => item.id === "tail")?.mediaStart).toBe(
-    4 + 1 / 3,
+    4.333333,
   );
   expect(result.clips.find((item) => item.id === "moving")).toMatchObject({
     mediaStart: 2,
@@ -2223,7 +2227,7 @@ test("slide moves a clip between its neighbours, which trim to follow with their
   const source = Object.fromEntries(
     slid.clips.map((item) => [item.id, item.mediaStart]),
   );
-  expect([source.a, source.b, source.c]).toEqual([0, 1, 3 + 10 / 30]);
+  expect([source.a, source.b, source.c]).toEqual([0, 1, 3.333333]);
   expect(() => run(state, { type: "slide", clipIds: ["b"], by: 30 })).toThrow(
     "talk.mp4 can slide at most 29 frames later: then clip c would be shorter than one frame.",
   );
@@ -2308,7 +2312,7 @@ test("slide trims each neighbour's linked sound with its picture, and the sound'
   const source = Object.fromEntries(
     slid.clips.map((item) => [item.id, item.mediaStart]),
   );
-  expect([source.c, source["c-sound"]]).toEqual([2 + 10 / 30, 2 + 10 / 30]);
+  expect([source.c, source["c-sound"]]).toEqual([2.333333, 2.333333]);
   // The sound has less source after its out point than the picture.
   const short = timeline(
     interview().clips.map((item) =>
@@ -2355,7 +2359,7 @@ test("clips next to each other slide as one block, and a clip between them refus
   });
   const [a, b, c] = slid.clips.map((item) => item.mediaStart!);
   expect([a, b]).toEqual([1, 3]);
-  expect(c).toBeCloseTo(6 + 5 / 30, 9);
+  expect(c).toBe(6.166667);
   expect(() =>
     run(state, { type: "slide", clipIds: ["a", "c"], by: 5 }),
   ).toThrow(
@@ -2470,4 +2474,447 @@ test("link needs two different clips", () => {
   expect(() => run(apart, { type: "link", clipIds: ["a", "a"] })).toThrow(
     "Linking takes two or more different clips.",
   );
+});
+
+test("setTiming keeps matching linked source maps across 636 in-points and 3,816 speed changes", () => {
+  const map = (clip: Clip, fps: Timeline["fps"]) => {
+    const { c, tau, zero } = resolveClip(clip, fps);
+    return { c, tau, zero };
+  };
+  const rates = [24, 25, 30, 50, 60].map((num) => ({ num, den: 1 }));
+  rates.push({ num: 30_000, den: 1001 });
+  let inPoints = 0;
+  let speedChanges = 0;
+  for (const fps of rates) {
+    const source = { c: -1000, tau: 0, zero: 0 };
+    const inPoint = (start: number) =>
+      encode(source, 1, frames(start, fps), fps).mediaStart / 1e6;
+    const picture = clip("picture", 0, 120, 120, {
+      link: "pair",
+      mediaStart: inPoint(120),
+    });
+    for (let offset = -53; offset <= 53; offset++) {
+      if (offset === 0) continue;
+      const soundStart = picture.start + offset;
+      const sound = clip("sound", 1, soundStart, 130, {
+        kind: "audio",
+        link: "pair",
+        mediaStart: inPoint(soundStart),
+      });
+      const state = { ...timeline([picture, sound], avTracks), fps };
+      const slip = run(state, {
+        type: "setTiming",
+        clipId: "picture",
+        mediaStart: 4.25,
+      });
+      expect(map(slip.clips[1], fps)).toEqual(map(slip.clips[0], fps));
+      inPoints++;
+      for (const playbackRate of [0.5, 0.75, 1.03125, 1.5, 2, 3.333333]) {
+        const speed = run(state, {
+          type: "setTiming",
+          clipId: "picture",
+          playbackRate,
+        });
+        expect(map(speed.clips[1], fps)).toEqual(map(speed.clips[0], fps));
+        speedChanges++;
+      }
+    }
+  }
+  expect({ inPoints, speedChanges }).toEqual({
+    inPoints: 636,
+    speedChanges: 3816,
+  });
+});
+
+test("setTiming preserves the in-point offset of a separately aligned linked source", () => {
+  const state = timeline(
+    [
+      clip("picture", 0, 0, 30, { link: "pair", mediaStart: 1 }),
+      clip("sound", 1, 0, 30, {
+        kind: "audio",
+        link: "pair",
+        src: "room.wav",
+        mediaStart: 2,
+      }),
+    ],
+    avTracks,
+  );
+  const edited = run(state, {
+    type: "setTiming",
+    clipId: "picture",
+    mediaStart: 1.5,
+  });
+  expect(edited.clips.map(({ mediaStart }) => mediaStart)).toEqual([1.5, 2.5]);
+});
+
+test("constant speed resizes an exact half-frame tie and ripples the following cut", () => {
+  const before = timeline([
+    clip("shot", 0, 0, 1, { playbackRate: 2.4 }),
+    clip("next", 0, 1, 30),
+  ]);
+  const after = run(before, {
+    type: "setTiming",
+    clipId: "shot",
+    playbackRate: 1.6,
+  });
+  expect(positions(after)).toEqual({ shot: [0, 0, 2], next: [0, 2, 30] });
+});
+
+test("speeding up a J-cut clears the sound tail and keeps the next pair in sync", () => {
+  const before = timeline([
+    clip("shot", 0, 30, 120, { link: "first", mediaStart: 1 }),
+    clip("sound", 1, 0, 120, { kind: "audio", link: "first" }),
+    clip("next-shot", 0, 150, 60, { link: "second", mediaStart: 1 }),
+    clip("next-sound", 1, 120, 60, { kind: "audio", link: "second" }),
+  ]);
+  const after = run(before, {
+    type: "setTiming",
+    clipId: "shot",
+    playbackRate: 2,
+  });
+  expect(positions(after)).toEqual({
+    shot: [0, 15, 60],
+    sound: [1, 0, 60],
+    "next-shot": [0, 90, 60],
+    "next-sound": [1, 60, 60],
+  });
+});
+
+test("slowing an L-cut at frame zero gives the same placement from either partner", () => {
+  const before = timeline([
+    clip("picture", 0, 10, 85, { link: "pair", mediaStart: 0.333333 }),
+    clip("sound", 1, 0, 105, { kind: "audio", link: "pair" }),
+  ]);
+  const slow = (clipId: string) =>
+    run(before, { type: "setTiming", clipId, playbackRate: 0.5 });
+  expect(slow("picture")).toEqual(slow("sound"));
+  expect(positions(slow("picture"))).toEqual({
+    picture: [0, 20, 170],
+    sound: [1, 0, 210],
+  });
+  const fast = run(before, {
+    type: "setTiming",
+    clipId: "picture",
+    playbackRate: 3,
+  });
+  const restored = run(fast, {
+    type: "setTiming",
+    clipId: "sound",
+    playbackRate: 1,
+  });
+  expect(positions(restored)).toEqual(positions(before));
+  expect(restored.clips.map(({ mediaStart }) => mediaStart)).toEqual([
+    0.333333, 0,
+  ]);
+});
+
+test("speeding up a separately aligned partner compensates for rounding its head", () => {
+  const before = timeline([
+    clip("picture", 0, 0, 90, { link: "pair" }),
+    clip("sound", 1, 10, 60, {
+      kind: "audio",
+      link: "pair",
+      src: "room.wav",
+      mediaStart: 2,
+    }),
+  ]);
+  const after = run(before, {
+    type: "setTiming",
+    clipId: "picture",
+    playbackRate: 3,
+  });
+  expect(positions(after).sound[1]).toBe(3);
+  expect(after.clips[1].mediaStart).toBe(1.966667);
+  const restored = run(after, {
+    type: "setTiming",
+    clipId: "sound",
+    playbackRate: 1,
+  });
+  expect(restored.clips[1].mediaStart).toBe(2);
+});
+
+test("a full-source clip can return to 100% after rounding its faster duration", () => {
+  const before = timeline([
+    clip("picture", 0, 0, 121, { sourceDuration: 121 / 30 }),
+    clip("next", 0, 121, 30),
+  ]);
+  for (const playbackRate of [2, 1.5, 0.3]) {
+    const faster = run(before, {
+      type: "setTiming",
+      clipId: "picture",
+      playbackRate,
+    });
+    const restored = run(faster, {
+      type: "setTiming",
+      clipId: "picture",
+      playbackRate: 1,
+    });
+    expect(positions(restored)).toEqual(positions(before));
+  }
+  const withNewInPoint = run(before, {
+    type: "setTiming",
+    clipId: "picture",
+    playbackRate: 1.5,
+    mediaStart: 1 / 30,
+  });
+  expect(positions(withNewInPoint)).toEqual({
+    picture: [0, 0, 80],
+    next: [0, 80, 30],
+  });
+});
+
+test("roll moves linked edges together and refuses missing handles or a locked partner", () => {
+  const state = timeline([
+    clip("left", 0, 0, 60, { link: "left-link", sourceDuration: 5 }),
+    clip("right", 0, 60, 60, { link: "right-link", mediaStart: 1 }),
+    clip("left-a", 1, 0, 60, { kind: "audio", link: "left-link" }),
+    clip("right-a", 1, 60, 60, {
+      kind: "audio",
+      link: "right-link",
+      mediaStart: 1,
+    }),
+  ]);
+  const roll = { type: "roll", from: "left", to: "right", by: 6 } as const;
+  const result = run(state, roll);
+  expect(positions(result)).toEqual({
+    left: [0, 0, 66],
+    right: [0, 66, 54],
+    "left-a": [1, 0, 66],
+    "right-a": [1, 66, 54],
+  });
+  expect(result.clips.find(({ id }) => id === "right")?.mediaStart).toBeCloseTo(
+    1.2,
+    6,
+  );
+  expect(() => run(state, { ...roll, by: -31 })).toThrow(
+    "before its source media",
+  );
+  expect(() =>
+    run(run(state, { type: "setTrack", index: 1, locked: true }), roll),
+  ).toThrow("locked");
+});
+
+test("swap preserves unlike clip lengths and refuses a transition on a neighbouring cut", () => {
+  const state = timeline([
+    clip("left", 0, 0, 60),
+    clip("right", 0, 60, 30),
+    clip("next", 0, 90, 30, { mediaStart: 1 }),
+  ]);
+  const swap = { type: "swap", from: "left", to: "right" } as const;
+  expect(positions(run(state, swap))).toEqual({
+    right: [0, 0, 30],
+    left: [0, 30, 60],
+    next: [0, 90, 30],
+  });
+  const faded = run(state, {
+    type: "setTransition",
+    from: "right",
+    to: "next",
+    transition: { duration: 30 },
+  });
+  expect(() => run(faded, swap)).toThrow("Remove the transitions");
+});
+
+test("trim linked false edits the named clip even when its partner is locked", () => {
+  const state = timeline(
+    [
+      clip("picture", 0, 0, 60, { link: "talk" }),
+      clip("sound", 1, 0, 60, { kind: "audio", link: "talk" }),
+    ],
+    [{ index: 1, kind: "audio", locked: true }],
+  );
+  const trim = {
+    type: "trim",
+    clipId: "picture",
+    edge: "end",
+    to: 42,
+  } as const;
+  expect(() => run(state, trim)).toThrow("locked");
+  expect(positions(run(state, { ...trim, linked: false }))).toEqual({
+    picture: [0, 0, 42],
+    sound: [1, 0, 60],
+  });
+});
+
+test("Shift brackets trim every eligible clip and close gaps only in Trim mode", () => {
+  const state = timeline(
+    [
+      clip("low", 0, 0, 60),
+      clip("low-next", 0, 60, 30),
+      clip("high", 1, 10, 70),
+      clip("high-next", 1, 80, 30),
+      clip("disabled", 2, 0, 90),
+      clip("title", 3, 100, 30, { kind: "element", mediaStart: null }),
+    ],
+    [{ index: 2, autoSelect: false }],
+  );
+  const keys = editKeys.editNudgeTrimStepTrimStart;
+  const target = { frame: 30, selection: new Set(["disabled"]) };
+  expect(positions(run(state, ...keys.commands(state, target)))).toEqual({
+    low: [0, 30, 30],
+    "low-next": [0, 60, 30],
+    high: [1, 30, 50],
+    "high-next": [1, 80, 30],
+    disabled: [2, 0, 90],
+    title: [3, 100, 30],
+  });
+  const ripple = keys.commands(state, { ...target, trim: "slip" });
+  expect(() => run(state, ...ripple)).toThrow("different lengths");
+  const isolated = run(state, {
+    type: "setTrack",
+    index: 3,
+    autoSelect: false,
+  });
+  expect(positions(run(isolated, ...ripple))).toEqual({
+    low: [0, 0, 30],
+    "low-next": [0, 30, 30],
+    high: [1, 10, 50],
+    "high-next": [1, 60, 30],
+    disabled: [2, 0, 90],
+    title: [3, 100, 30],
+  });
+  const linked = run(isolated, {
+    type: "link",
+    clipIds: ["low-next", "high-next"],
+  });
+  expect(() => run(linked, ...ripple)).toThrow("would move linked clips");
+});
+
+test("Shift+] ripples later and overlapping clips on other auto-select tracks like W", () => {
+  const state = timeline([
+    clip("a", 0, 0, 60),
+    clip("b", 0, 60, 60),
+    clip("title", 1, 90, 30, { kind: "element", mediaStart: null }),
+    clip("overlay", 2, 45, 30),
+  ]);
+  const target = {
+    frame: 30,
+    selection: new Set<string>(),
+    trim: "slip",
+  } as const;
+  const bracket = run(
+    state,
+    ...editKeys.editNudgeTrimStepTrimEnd.commands(state, target),
+  );
+  expect(positions(bracket)).toEqual({
+    a: [0, 0, 30],
+    b: [0, 30, 60],
+    title: [1, 60, 30],
+    overlay: [2, 30, 15],
+  });
+  expect(bracket.clips.find(({ id }) => id === "overlay")?.mediaStart).toBe(
+    0.5,
+  );
+  expect(bracket).toEqual(
+    run(state, {
+      type: "trim",
+      clipId: "a",
+      edge: "end",
+      to: 30,
+      ripple: true,
+    }),
+  );
+});
+
+test("V follows the enabled destination selector independently of auto-select", () => {
+  const state = timeline(
+    [
+      clip("lowest", 1, 0, 70),
+      clip("nearest", 2, 29, 50),
+      clip("sound", 3, 30, 90, { kind: "audio" }),
+    ],
+    [{ index: 0 }, { index: 1, autoSelect: false }],
+  );
+  const destinations = { video: 1, audio: 3 };
+  expect(nearestEditPoint(state, 30, destinations)).toEqual({
+    mode: "start",
+    to: "lowest",
+    from: undefined,
+  });
+  expect(nearestEditPoint(state, 30, { ...destinations, video: 2 })?.to).toBe(
+    "nearest",
+  );
+  expect(
+    nearestEditPoint(state, 30, { ...destinations, videoEnabled: false })?.to,
+  ).toBe("sound");
+  expect(nearestEditPoint(state, 30, { ...destinations, video: 0 })?.to).toBe(
+    "sound",
+  );
+  expect(
+    nearestEditPoint(state, 30, {
+      ...destinations,
+      videoEnabled: false,
+      audioEnabled: false,
+    }),
+  ).toBeNull();
+});
+
+test("one-sided nudges in Select refuse overlap and keep trimming their own edge", () => {
+  const state = timeline([clip("a", 0, 0, 60), clip("b", 0, 60, 60)]);
+  const target = {
+    frame: 60,
+    selection: new Set<string>(),
+    editPoint: { from: "a", to: "b", mode: "end" },
+  } as const;
+  const grow = editKeys.editNudgeTrimStepNudgeForward.commands;
+  const shorten = editKeys.editNudgeTrimStepNudgeReverse.commands;
+  expect(() => run(state, ...grow(state, target))).toThrow("would overlap");
+  const gap = run(state, ...shorten(state, target));
+  expect(positions(run(gap, ...shorten(gap, target)))).toEqual({
+    a: [0, 0, 58],
+    b: [0, 60, 60],
+  });
+  expect(
+    positions(run(state, ...grow(state, { ...target, trim: "slip" }))),
+  ).toEqual({
+    a: [0, 0, 61],
+    b: [0, 61, 60],
+  });
+});
+
+test("Paste Attributes replaces the animation tracks and skips speed ramps on either side", () => {
+  const ramp = JSON.stringify({
+    version: 1,
+    lanes: [
+      {
+        target: "rate",
+        points: [
+          { t: 0, v: 1 },
+          { t: 3, v: 1.5 },
+        ],
+      },
+    ],
+  });
+  const source = clip("source", 0, 0, 90, {
+    playbackRate: 0.75,
+    keyframes: {
+      position: [{ frame: 5, value: { x: 20, y: 10 }, ease: "linear" }],
+    },
+  });
+  const destination = clip("destination", 0, 90, 90, {
+    keyframes: { opacity: [{ frame: 0, value: 0.3, ease: "linear" }] },
+  });
+  for (const [from, to, skip] of [
+    [source, destination, 0],
+    [{ ...source, automation: ramp }, destination, 1],
+    [source, { ...destination, automation: ramp }, 1],
+  ] as const) {
+    const state = timeline([to]);
+    const { commands, skippedSpeed } = pasteAttributes(
+      state,
+      [from],
+      from.id,
+      new Set([to.id]),
+    );
+    expect(skippedSpeed).toBe(skip);
+    expect(run(state, ...commands).clips[0]).toMatchObject({
+      keyframes: source.keyframes,
+      automation: to.automation,
+      duration: skip ? 90 : 120,
+      playbackRate: skip ? 1 : 0.75,
+      x: null,
+      y: null,
+      opacity: null,
+    });
+  }
 });

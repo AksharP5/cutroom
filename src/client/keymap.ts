@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { resolvePresetKeys } from "./resolvePresetKeys";
 import type { MouseEvent, PointerEvent } from "react";
 
 /** The shortcut sheet's groups, in an order that fills its three columns evenly. */
@@ -164,6 +165,11 @@ export const keymap = {
     keys: ["Ctrl+X"],
   },
   editPaste: { area: "Edit", label: "Paste clips", keys: ["Ctrl+V"] },
+  editPasteAttributes: {
+    area: "Edit",
+    label: "Paste attributes",
+    keys: ["Alt+V"],
+  },
   editPasteInsert: {
     area: "Edit",
     label: "Paste insert",
@@ -178,6 +184,16 @@ export const keymap = {
     area: "Edit",
     label: "Overwrite with source at playhead",
     keys: ["F10"],
+  },
+  editInsertOverwriteActionReplace: {
+    area: "Edit",
+    label: "Replace from source",
+    keys: ["F11"],
+  },
+  editInsertOverwriteActionPlaceOnTop: {
+    area: "Edit",
+    label: "Place source on top",
+    keys: ["F12"],
   },
   editTrackDestinationSelectionTargetV: {
     area: "Tracks",
@@ -312,6 +328,16 @@ export const keymap = {
     label: "Select all clips",
     keys: ["Ctrl+A"],
   },
+  editSelectEditPoint: {
+    area: "Select",
+    label: "Select nearest edit point",
+    keys: ["V"],
+  },
+  editToggleEditPointType: {
+    area: "Select",
+    label: "Cycle edit point type",
+    keys: ["U"],
+  },
   editSelectItemAtPlayhead: {
     area: "Select",
     label: "Select clips at the playhead",
@@ -352,6 +378,27 @@ export const keymap = {
     label: "Ripple trim the end to the playhead",
     keys: ["W"],
   },
+  editNudgeTrimStepTrimStart: {
+    area: "Edit",
+    label: "Trim start to the playhead",
+    keys: ["Shift+["],
+  },
+  editNudgeTrimStepTrimEnd: {
+    area: "Edit",
+    label: "Trim end to the playhead",
+    keys: ["Shift+]"],
+  },
+  editNudgeSwapEditReverse: {
+    area: "Edit",
+    label: "Swap with previous clip",
+    keys: ["Ctrl+Shift+,"],
+  },
+  editNudgeSwapEditForward: {
+    area: "Edit",
+    label: "Swap with next clip",
+    keys: ["Ctrl+Shift+."],
+  },
+  clipFreezeFrame: { area: "Edit", label: "Freeze frame", keys: ["Shift+R"] },
   editBladeRazor: { area: "Edit", label: "Razor at the playhead", keys: ["E"] },
   editM2SplitClip: {
     area: "Edit",
@@ -376,34 +423,34 @@ export const keymap = {
   cutroomNextVersion: {
     area: "Edit",
     label: "Show the clip's next version",
-    keys: ["Alt+V"],
+    keys: ["Ctrl+Alt+]"],
   },
   cutroomPreviousVersion: {
     area: "Edit",
     label: "Show the clip's previous version",
-    keys: ["Alt+Shift+V"],
+    keys: ["Ctrl+Alt+["],
   },
   editNudgeTrimStepNudgeReverse: {
     area: "Edit",
-    label: "Nudge, slip or slide one frame left",
+    label: "Nudge or trim one frame left",
     keys: [","],
     repeat: true,
   },
   editNudgeTrimStepNudgeForward: {
     area: "Edit",
-    label: "Nudge, slip or slide one frame right",
+    label: "Nudge or trim one frame right",
     keys: ["."],
     repeat: true,
   },
   editNudgeTrimStepTrimMultiFrameLeft: {
     area: "Edit",
-    label: "Nudge, slip or slide five frames left",
+    label: "Nudge or trim five frames left",
     keys: ["Shift+,"],
     repeat: true,
   },
   editNudgeTrimStepTrimMultiFrameRight: {
     area: "Edit",
-    label: "Nudge, slip or slide five frames right",
+    label: "Nudge or trim five frames right",
     keys: ["Shift+."],
     repeat: true,
   },
@@ -424,6 +471,11 @@ export const keymap = {
     keys: ["Alt+."],
     repeat: true,
   },
+  editLinkedSelection: {
+    area: "Select",
+    label: "Linked selection",
+    keys: ["Ctrl+Shift+L"],
+  },
   editLink: { area: "Edit", label: "Link clips", keys: ["Ctrl+Alt+L"] },
   clipChangeClipDuration: {
     area: "Edit",
@@ -442,7 +494,7 @@ export const keymap = {
   },
   editAddTransition: {
     area: "Edit",
-    label: "Add transition at the nearest cut",
+    label: "Add transitions",
     keys: ["Ctrl+T"],
   },
   editAddVideoTransition: {
@@ -497,37 +549,26 @@ export const keymap = {
   },
 } satisfies Record<string, Binding>;
 
-/**
- * Keys the owner's Resolve preset binds to editing Cutroom does not have yet. Each answers with a
- * notice instead of nothing.
- */
-export const missing = {
-  editSelectEditPoint: { label: "edit point selection", keys: ["V"] },
-  editToggleEditPointType: { label: "edit point types", keys: ["U"] },
-  clipFreezeFrame: { label: "freeze frames", keys: ["Shift+R"] },
-} satisfies Record<string, { label: string; keys: readonly string[] }>;
-
-const missingKeys = new Map(
-  Object.values(missing).flatMap(({ label, keys }) =>
-    keys.map((key) => [key, `Cutroom has no ${label} yet (${key}).`]),
-  ),
-);
-
-/** The notice for a press of a missing key, under the same rules as the keys that work. */
+/** Shared feedback for preset keys the editor receives but does not implement. */
 export function missingNotice(event: KeyboardEvent) {
-  if (event.defaultPrevented || event.repeat || isTyping(event.target))
+  if (
+    event.defaultPrevented ||
+    event.repeat ||
+    event.code === "Tab" ||
+    /^(AudioVolume|Media)/.test(event.code) ||
+    isTyping(event.target) ||
+    (event.target instanceof Element && event.target.closest("[role=menu]"))
+  )
     return null;
   const combo = comboOf(event);
-  return (combo && missingKeys.get(combo)) ?? null;
+  if (combo && bindings.has(combo)) return null;
+  const presetCombo = comboOf(event, true);
+  // The browser dispatches the context menu event from this shortcut.
+  if (presetCombo === "Shift+F10") return null;
+  return presetCombo && resolvePresetKeys.has(presetCombo)
+    ? `Shortcut not yet supported (${presetCombo}).`
+    : null;
 }
-
-/** The sentence in `docs/keyboard.md` that lists the missing keys. */
-export const missingSentence = () =>
-  `These preset keys say Cutroom has no such editing yet: ${Object.values(
-    missing,
-  )
-    .map(({ label, keys }) => `${label} (${keys.map(code).join(", ")})`)
-    .join(", ")}.`;
 
 export type Action = keyof typeof keymap;
 
@@ -559,6 +600,8 @@ const named: Record<string, string> = {
   Period: ".",
   BracketLeft: "[",
   BracketRight: "]",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
 };
 
 /** The combo a key press makes, by key position so Shift never changes the key's name. */
@@ -567,12 +610,16 @@ export function comboOf(
     KeyboardEvent,
     "code" | "ctrlKey" | "altKey" | "shiftKey" | "metaKey"
   >,
+  distinguishNumpad = false,
 ): string | null {
   const key =
-    named[event.code] ??
-    /^Key([A-Z])$/.exec(event.code)?.[1] ??
-    /^(?:Digit|Numpad)(\d)$/.exec(event.code)?.[1] ??
-    /^F(?:[1-9]|1[0-2])$/.exec(event.code)?.[0];
+    (distinguishNumpad &&
+      event.code.startsWith("Numpad") &&
+      (event.code === "NumpadEqual" ? "Numpad=" : event.code)) ||
+    (named[event.code] ??
+      /^Key([A-Z])$/.exec(event.code)?.[1] ??
+      /^(?:Digit|Numpad)(\d)$/.exec(event.code)?.[1] ??
+      /^F(?:[1-9]|1[0-2])$/.exec(event.code)?.[0]);
   if (!key || event.metaKey) return null;
   return [
     event.ctrlKey && "Ctrl",
@@ -769,8 +816,20 @@ export const keymapAreas = () =>
     ),
   }));
 
-/** A handler is told which of its binding's keys was pressed, counted from zero. */
-type Handlers = Partial<Record<Action, (key: number) => void>>;
+/** Repeatable keyboard bindings carry the physical key through to its release. */
+export type HeldKey = Pick<KeyboardEvent, "code" | "key">;
+
+export function sameHeldKey(held: HeldKey, event: HeldKey) {
+  if (held.code && event.code) return held.code === event.code;
+  const key = event.key.toLowerCase();
+  return (
+    key === held.key.toLowerCase() || key === named[held.code]?.toLowerCase()
+  );
+}
+
+type Handlers = Partial<
+  Record<Action, (key: number, heldKey?: HeldKey) => void>
+>;
 
 /** The handlers on screen, first mounted first: the order their key listeners answer in. */
 const mounted = new Set<{ current: Handlers }>();
@@ -802,8 +861,11 @@ export function useKeymap(handlers: Handlers) {
       const handler = action && latest.current[action];
       if (!handler) return;
       event.preventDefault();
-      const { keys }: Binding = keymap[action];
-      handler(keys.indexOf(comboOf(event) ?? ""));
+      const { keys, repeat }: Binding = keymap[action];
+      handler(
+        keys.indexOf(comboOf(event) ?? ""),
+        repeat ? { code: event.code, key: event.key } : undefined,
+      );
     };
     window.addEventListener("keydown", press);
     return () => {

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,20 +23,29 @@ export async function sweepOwnedDirectories(directory: string, prefix: string) {
     if (!Number.isSafeInteger(pid) || pid > 2_147_483_647) continue;
     try {
       process.kill(pid, 0);
+      continue;
     } catch (error) {
       if (!(error instanceof Error && "code" in error)) throw error;
-      if (error.code === "ESRCH")
-        // Another user's or an unremovable directory must not stop new work from starting.
-        await rm(join(directory, entry.name), {
-          recursive: true,
-          force: true,
-        }).catch((failure: unknown) =>
-          console.warn(
-            `Could not remove the abandoned ${entry.name}:`,
-            failure instanceof Error ? failure.message : failure,
-          ),
-        );
-      else if (error.code !== "EPERM") throw error;
+      if (error.code === "EPERM") continue;
+      if (error.code !== "ESRCH") throw error;
+    }
+    // Another user's or an unremovable directory must not stop new work from starting.
+    const path = join(directory, entry.name);
+    try {
+      const stat = await lstat(path);
+      if (
+        !stat.isDirectory() ||
+        (process.getuid && stat.uid !== process.getuid())
+      )
+        continue;
+      await rm(path, { recursive: true, force: true });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        continue;
+      console.warn(
+        `Could not remove the abandoned ${entry.name}:`,
+        error instanceof Error ? error.message : error,
+      );
     }
   }
 }
@@ -49,16 +58,13 @@ export async function createOwnedDirectory(directory: string, prefix: string) {
 }
 
 /** Leave room for Chromium's Linux process singleton socket, including its terminating NUL. */
-export function browserTempRoot(ownedPrefix?: string) {
+export function chromiumSocketPathFits(root: string) {
+  if (process.platform !== "linux") return true;
+  const socket = join(root, "org.chromium.Chromium.XXXXXX", "SingletonSocket");
+  return Buffer.byteLength(socket) < 108;
+}
+
+export function browserTempRoot() {
   const root = tmpdir();
-  if (process.platform !== "linux") return root;
-  const directory = ownedPrefix
-    ? join(root, `${ownedPrefix}-${process.pid}-XXXXXX`)
-    : root;
-  const socket = join(
-    directory,
-    "org.chromium.Chromium.XXXXXX",
-    "SingletonSocket",
-  );
-  return Buffer.byteLength(socket) < 108 ? root : "/tmp";
+  return chromiumSocketPathFits(root) ? root : "/tmp";
 }

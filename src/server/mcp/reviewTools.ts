@@ -126,6 +126,29 @@ export function registerReviewTools(
     ({ projectId, noteId }) => act(projectId, noteId, { type: "accept" }),
   );
   server.registerTool(
+    "review_accept_all",
+    {
+      description: `Accept all pending agent edits in a composition, or in the whole project when composition is omitted. Review notes retain their statuses. Returns the number of accepted changes.${delegate}`,
+      inputSchema: {
+        ...project,
+        composition: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("HTML path. Omit for the whole project."),
+      },
+      annotations,
+    },
+    ({ projectId, composition }) =>
+      request(
+        `/projects/${id(projectId)}/review/changes/accept-all`,
+        "POST",
+        composition === undefined
+          ? { scope: "project" }
+          : { scope: "composition", composition },
+      ),
+  );
+  server.registerTool(
     "review_send_back",
     {
       description: `Return a done note to the queue with what still needs to change.${delegate}`,
