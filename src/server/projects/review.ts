@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ProjectHistory } from "@hyperframes/studio-server";
+import type { ProjectHistory } from "../history/projectHistory";
 import {
   mkdir,
   readdir,

@@ -1,5 +1,5 @@
 import { atomicTempPath } from "@hyperframes/core/atomic-file";
-import type { HistoryWho } from "@hyperframes/studio-server";
+import type { HistoryWho } from "../history/historyLog";
 import { randomUUID } from "node:crypto";
 import { constants, createWriteStream } from "node:fs";
 import {

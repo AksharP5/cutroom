@@ -1,3 +1,8 @@
+import { historyCache } from "../history/historyCache";
+import {
+  openProjectHistory,
+  readProjectHistory,
+} from "../history/projectHistory";
 import { fpsToFfmpegArg } from "@hyperframes/core";
 import { projectEditedAt } from "./edited";
 import { randomUUID } from "node:crypto";
@@ -14,11 +19,9 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import {
   applyFileMutations,
   fileContentVersion,
-  historyCache,
-  openProjectHistory,
-  readProjectHistory,
 } from "@hyperframes/studio-server";
-import type { FileMutationInput, HistoryWho } from "@hyperframes/studio-server";
+import type { FileMutationInput } from "@hyperframes/studio-server";
+import type { HistoryWho } from "../history/historyLog";
 import { z } from "zod";
 import {
   CreateProjectSchema,
