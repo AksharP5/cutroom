@@ -130,7 +130,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
 test.skipIf(
   process.platform !== "linux" || !browserExecutable() || !Bun.which("ffmpeg"),
 )(
-  "still capture and export start Chromium under a long Linux TMPDIR",
+  "still capture and export start Chromium with long Linux temp and cache paths",
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "cutroom-"));
     try {
@@ -145,7 +145,11 @@ test.skipIf(
           "^a saved canvas edit",
         ],
         {
-          env: { ...process.env, TMPDIR: temporaryRoot },
+          env: {
+            ...process.env,
+            TMPDIR: temporaryRoot,
+            XDG_CACHE_HOME: join(directory, "cache-".repeat(16)),
+          },
           stdout: "pipe",
           stderr: "pipe",
         },
