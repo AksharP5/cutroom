@@ -28,8 +28,8 @@ const timingAttributes = [
 function titleContract(
   document: DefaultTreeAdapterTypes.Document,
   html: string,
+  isReferenced: (id: string) => boolean,
 ) {
-  const references = html.replace(/\sdata-hf-id="[^"]*"/g, "");
   const elements: DefaultTreeAdapterTypes.Element[] = [];
   const collect = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
     for (const node of nodes) {
@@ -82,7 +82,7 @@ function titleContract(
               child.tagName === "br" &&
               child.attrs.every(
                 ({ name, value }) =>
-                  name === "data-hf-id" && !references.includes(value),
+                  name === "data-hf-id" && !isReferenced(value),
               )
             ),
         )
@@ -137,9 +137,26 @@ function timingOf(
   dependencies: string,
 ): PreviewTiming {
   const clips: PreviewTiming["clips"] = [];
+  // The pinned compiler stamps short base-36 IDs. Look for all of those
+  // substrings in one pass, including in CSS or JavaScript and inside longer IDs.
+  // Authored IDs can be arbitrary strings, so retain their exact substring check.
+  const references = html.replace(/\sdata-hf-id="[^"]*"/g, "");
+  let generatedReferences: Set<string> | undefined;
+  const isReferenced = (id: string) => {
+    if (id.length !== 7 || !/^hf-[0-9a-z]{4}$/.test(id))
+      return references.includes(id);
+    generatedReferences ??= new Set(
+      Array.from(
+        references.matchAll(/hf-(?=([0-9a-z]{4}))/g),
+        ([, suffix]) => `hf-${suffix}`,
+      ),
+    );
+    return generatedReferences.has(id);
+  };
   const { titleData, expectedStyle, styles, elements } = titleContract(
     document,
     html,
+    isReferenced,
   );
   // The compiler may merge the owned rules into an adjacent stylesheet. Match only
   // the exact generated CSS, once, and retain everything around it in the structure hash.
@@ -210,7 +227,6 @@ function timingOf(
     createHash("sha256").update(value).digest("hex");
   // Generated HF ids include timing in their hash. Retain any id referenced by
   // scripts/CSS/markup; changing one of those must still reload the document.
-  const references = html.replace(/\sdata-hf-id="[^"]*"/g, "");
   const clipNodes: DefaultTreeAdapterTypes.Element[] = [];
   const maybeAdjustment = html.includes("data-cutroom-adjustment");
   let hasAdjustment = false;
@@ -267,7 +283,7 @@ function timingOf(
       )
         node.attrs = node.attrs.filter(({ name }) => name !== "content");
       const hfId = attrs.get("data-hf-id");
-      if (hfId && !references.includes(hfId))
+      if (hfId && !isReferenced(hfId))
         node.attrs = node.attrs.filter(({ name }) => name !== "data-hf-id");
       if (node.tagName === "head")
         node.childNodes = node.childNodes.filter(
