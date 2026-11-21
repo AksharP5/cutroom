@@ -77,7 +77,7 @@ async function fixture(
         await request.get(`/api/cutroom/projects/${project.id}/timeline`)
       ).json(),
     );
-  const edit = async (commands: CommandInput[]) => {
+  const edit = async (commands: CommandInput[], label = "Timing test") => {
     const view = await read();
     const response = await request.post(
       `/api/cutroom/projects/${project.id}/commands`,
@@ -85,7 +85,7 @@ async function fixture(
         data: {
           composition: "index.html",
           expectedRevision: view.revision,
-          label: "Timing test",
+          label,
           commands,
         },
       },
@@ -590,10 +590,14 @@ test("an undo that starts an animation on another clip reloads and matches a fre
   await seek(page, 40);
   const lifted = await live(page);
   let previous = await token(page);
-  await edit([{ type: "remove", clipIds: ["v1"], ripple: false }]);
+  await edit([{ type: "remove", clipIds: ["v1"], ripple: false }], "Lift v1");
   await waitForPreview(page, { after: previous });
   await waitForPreview(page);
   expect(await live(page)).toBe(lifted);
+  // The lift was saved outside this page, so Undo waits until the page shows it.
+  await expect(
+    page.getByRole("button", { name: "Undo", exact: true }),
+  ).toHaveAttribute("aria-description", "Lift v1");
   previous = await token(page);
   await page.getByRole("button", { name: /^Current time/ }).focus();
   await page.keyboard.press("Control+z");
