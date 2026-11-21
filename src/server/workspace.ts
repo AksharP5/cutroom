@@ -264,27 +264,28 @@ export function createWorkspaceRoutes(options: {
               timers.delete(filename);
               void (async () => {
                 const path = filename.replaceAll("\\", "/");
-                const file = await projectPath(project, path)
-                  .then(async (absolute) => ({
-                    info: await stat(absolute),
-                    absolute,
-                  }))
-                  .catch((error: unknown) => {
-                    if (
-                      isMissing(error) ||
-                      (error instanceof HttpError &&
-                        [403, 404].includes(error.status))
-                    )
-                      return null;
-                    throw error;
-                  });
+                const resolveFile = (relative: string) =>
+                  projectPath(project, relative)
+                    .then(async (absolute) => ({
+                      info: await stat(absolute),
+                      absolute,
+                    }))
+                    .catch((error: unknown) => {
+                      if (
+                        isMissing(error) ||
+                        (error instanceof HttpError &&
+                          [403, 404].includes(error.status))
+                      )
+                        return null;
+                      throw error;
+                    });
+                const file = await resolveFile(path);
                 // A temp sibling is an echo only when its published file still
                 // matches a grouped edit from this tab.
-                const published = isAtomicTempPath(path)
-                  ? join(project.path, path.slice(0, path.lastIndexOf(".hf")))
-                  : file?.info.isFile()
-                    ? file.absolute
-                    : null;
+                const published =
+                  origin && isAtomicTempPath(path)
+                    ? await resolveFile(path.slice(0, path.lastIndexOf(".hf")))
+                    : file;
                 await stream.writeSSE({
                   data: JSON.stringify({
                     changed: path,
@@ -292,8 +293,11 @@ export function createWorkspaceRoutes(options: {
                       ? fileFingerprint(path, file.info)
                       : null,
                     ...(origin &&
-                      published &&
-                      (await isTimelineWriteEcho(published, origin)) && {
+                      published?.info.isFile() &&
+                      (await isTimelineWriteEcho(
+                        published.absolute,
+                        origin,
+                      )) && {
                         timelineSaveEcho: true,
                       }),
                   }),

@@ -286,6 +286,117 @@ test("a refused held slip rolls back the whole gesture once", async ({
   expect(await sourceFrame()).toBe(initial);
 });
 
+test("a held edit survives reloading before keyup", async ({
+  page,
+  request,
+}) => {
+  const { hold, initial, release, sourceFrame } = await openSlipProject({
+    page,
+    request,
+  });
+  let prompted = false;
+  page.once("dialog", async (dialog) => {
+    prompted = dialog.type() === "beforeunload";
+    await dialog.accept();
+  });
+  await hold(6);
+  expect(await sourceFrame()).toBe(initial);
+  await page.reload();
+  await expect.poll(sourceFrame).toBe(initial + 6);
+  expect(prompted).toBe(true);
+  await release();
+});
+
+test("blur and a project switch save a hold while its key is down", async ({
+  page,
+  request,
+}) => {
+  const { hold, initial, release, sourceFrame } = await openSlipProject({
+    page,
+    request,
+  });
+  const other = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Another project" },
+      })
+    ).json(),
+  );
+  await hold(3);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect.poll(sourceFrame).toBe(initial + 3);
+  await release();
+  await hold(3);
+  expect(await sourceFrame()).toBe(initial + 3);
+  await page.evaluate((id) => {
+    location.hash = `#project/${id}`;
+  }, other.id);
+  await expect(
+    page.getByRole("button", { name: "Another project" }),
+  ).toBeVisible();
+  await expect.poll(sourceFrame).toBe(initial + 6);
+  await release();
+});
+
+test("a different edit and Undo keep their order when a trim key is down", async ({
+  page,
+  request,
+}) => {
+  const { api, hold, initial, sourceFrame, view } = await openSlipProject({
+    page,
+    request,
+  });
+  const paths: string[] = [];
+  page.on("request", (event) => {
+    const path = new URL(event.url()).pathname;
+    if (
+      event.method() === "POST" &&
+      (path === `${api}/commands` || path === `${api}/history/undo`)
+    )
+      paths.push(path.slice(api.length + 1));
+  });
+  await hold(3);
+  await page.keyboard.up("Alt");
+  await page.keyboard.press("m");
+  await expect.poll(async () => (await view()).timeline.markers.length).toBe(1);
+  expect(await sourceFrame()).toBe(initial + 3);
+  await page.keyboard.up("Comma");
+
+  await hold(3);
+  await page.keyboard.up("Alt");
+  const undone = page.waitForResponse(
+    (event) =>
+      event.request().method() === "POST" &&
+      new URL(event.url()).pathname === `${api}/history/undo`,
+  );
+  await page.keyboard.press("Control+z");
+  expect((await undone).ok()).toBe(true);
+  await expect.poll(sourceFrame).toBe(initial + 3);
+  expect(paths).toEqual(["commands", "commands", "commands", "history/undo"]);
+  await page.keyboard.up("Comma");
+  expect((await view()).timeline.markers).toHaveLength(1);
+});
+
+test("releasing one physical key keeps the other key's hold unsaved", async ({
+  page,
+  request,
+}) => {
+  const { hold, initial, sourceFrame } = await openSlipProject({
+    page,
+    request,
+  });
+  await hold(3);
+  await page.keyboard.down("Period");
+  await page.keyboard.down("Period");
+  await expect.poll(sourceFrame).toBe(initial + 3);
+  await page.keyboard.up("Comma");
+  await page.waitForTimeout(350);
+  expect(await sourceFrame()).toBe(initial + 3);
+  await page.keyboard.up("Alt");
+  await page.keyboard.up("Period");
+  await expect.poll(sourceFrame).toBe(initial + 1);
+});
+
 test("a held slip retries once after an unrelated edit wins the revision", async ({
   page,
   request,
@@ -367,12 +478,12 @@ test("an outside edit to the held clip keeps its own source timing", async ({
   });
   expect(outside.ok()).toBe(true);
   await expect(page.getByTitle(/^Agent slip/)).toBeVisible();
+  const refused = page.getByRole("alert").filter({
+    hasText: "An agent changed those clips first.",
+  });
+  await expect(refused).toHaveCount(1);
   await hold(3);
   await release();
-  await expect(
-    page.getByRole("alert").filter({
-      hasText: "An agent changed those clips first.",
-    }),
-  ).toHaveCount(1);
+  await expect(refused).toHaveCount(1);
   expect(await sourceFrame()).toBe(initial + 1);
 });

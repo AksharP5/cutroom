@@ -27,6 +27,7 @@ import {
 } from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
 import { isTyping, keymap, useKeymap } from "../keymap";
+import type { HeldKey } from "../keymap";
 import { leaveComposition, openHost } from "../edit/compositions";
 import { noteNumbers } from "../review";
 import type { Action } from "../keymap";
@@ -150,8 +151,7 @@ export function ProjectTimeline({
       }));
   }, [timeline]);
   useEffect(() => {
-    const release = (event: KeyboardEvent) =>
-      finishHeldEdit(event.code || event.key);
+    const release = (event: KeyboardEvent) => finishHeldEdit(event);
     const blur = () => finishHeldEdit();
     window.addEventListener("keyup", release, true);
     window.addEventListener("blur", blur);
@@ -166,7 +166,7 @@ export function ProjectTimeline({
   const edits = Object.entries(editKeys).map(
     ([action, { label, commands }]) => [
       action,
-      (_binding: number, heldKey?: string) => {
+      (_binding: number, heldKey?: HeldKey) => {
         revealTimeline();
         // The store's selection, not this render's: a click just before the key has not rendered.
         const {

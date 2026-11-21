@@ -145,6 +145,98 @@ test("V and U trim the selected edit point with linked sound and one undo per pr
   await expect(page.locator("[data-edit-edge]")).toHaveCount(0);
 });
 
+test("another tab sees a held roll only after it is saved", async ({
+  page,
+  request,
+}) => {
+  const { project, path, read } = await linkedShots(request);
+  const editURL = `/#project/${project.id}`;
+  const other = await page.context().newPage();
+  try {
+    await other.goto(editURL);
+    await seekFrame(other, 60);
+    await other.keyboard.press("v");
+    const selection = '[data-edit-edge="v1:start"]';
+    await expect(other.locator(selection)).toHaveAttribute("data-frame", "60");
+    await page.goto(editURL);
+    await page.bringToFront();
+    await seekFrame(page, 60);
+    await page.keyboard.press("v");
+    const posted = page.waitForRequest(
+      (event) =>
+        event.method() === "POST" &&
+        new URL(event.url()).pathname === `${path}/commands`,
+    );
+    for (let n = 0; n < 4; n++) await page.keyboard.down("Period");
+    await expect(page.locator(selection)).toHaveAttribute("data-frame", "64");
+    await expect(other.locator(selection)).toHaveAttribute("data-frame", "60");
+    await page.keyboard.up("Period");
+    expect((await posted).postDataJSON()).toMatchObject({
+      label: expect.stringMatching(/^Rolled the cut.* by 4 frames right$/),
+      commands: [{ type: "roll", by: 4 }],
+    });
+    await expect(other.locator(selection)).toHaveAttribute("data-frame", "64");
+    expect(
+      (await read()).timeline.clips.find(({ id }) => id === "v1")?.start,
+    ).toBe(64);
+  } finally {
+    await other.close();
+  }
+});
+
+test("a refused held roll restores the original playhead", async ({
+  page,
+  request,
+}) => {
+  const { project, path } = await linkedShots(request);
+  await page.goto(`/#project/${project.id}`);
+  await seekFrame(page, 60);
+  const time = page.getByRole("button", { name: /^Current time/ });
+  await page.keyboard.press("v");
+  await page.route(`**${path}/commands`, (route) =>
+    route.fulfill({
+      status: 422,
+      json: { error: "The held roll was refused." },
+    }),
+  );
+  for (let n = 0; n < 4; n++) await page.keyboard.down("Period");
+  await expect(time).toContainText("00:00:02:04");
+  await page.keyboard.up("Period");
+  await expect(page.getByRole("alert")).toContainText(
+    "The held roll was refused.",
+  );
+  await expect(time).toContainText("00:00:02:00");
+});
+
+test("a held one-sided trim records the full ripple in history", async ({
+  page,
+  request,
+}) => {
+  const { project, path, read } = await linkedShots(request);
+  await page.goto(`/#project/${project.id}`);
+  await seekFrame(page, 60);
+  await page.keyboard.press("v");
+  await page.keyboard.press("u");
+  await page.keyboard.press("t");
+  for (let n = 0; n < 3; n++) await page.keyboard.down("Period");
+  await page.keyboard.up("Period");
+  await expect
+    .poll(
+      async () =>
+        (await read()).timeline.clips.find(({ id }) => id === "v0")?.duration,
+    )
+    .toBe(63);
+  await expect
+    .poll(
+      async () => (await (await request.get(`${path}/history`)).json()).entries,
+    )
+    .toEqual([
+      expect.objectContaining({
+        label: "Ripple trimmed end to 00:00:02:03",
+      }),
+    ]);
+});
+
 test("Alt+V applies the copied attributes and Shift+R holds the whole picture clip", async ({
   page,
   request,

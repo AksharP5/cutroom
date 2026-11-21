@@ -48,6 +48,8 @@ import {
 } from "./animationFeedback";
 import { noteNumbers } from "../review";
 import { dispatchNote, queueNoteChange } from "./noteStore";
+import { sameHeldKey } from "../keymap";
+import type { HeldKey } from "../keymap";
 
 /** The project's entry composition, which the editor opens first. */
 export const ROOT_COMPOSITION = "index.html";
@@ -115,6 +117,7 @@ interface Edit {
    */
   anchors: ReturnType<typeof editAnchors>;
   gesture: boolean;
+  held?: boolean;
   grouped?: boolean;
   failure: string | null;
   /** Resolves when this save has left the queue, including when it was refused. */
@@ -141,14 +144,21 @@ type RepeatedCommand = Extract<
   { type: "move" | "roll" | "slide" | "slip" | "trim" }
 >;
 
+type OnEditApplied = (
+  timeline: Timeline,
+  commands: readonly Command[],
+  origins: ReadonlyMap<string, ClipOrigin>,
+) => void;
+
 /** A held key can edit the same targets repeatedly before saving on release. */
 interface HeldEdit {
   edit: Edit;
-  physicalKey: string;
+  physicalKey: HeldKey;
   key: string;
   before: Timeline;
   after: Timeline;
   combined: RepeatedCommand[];
+  onApply: OnEditApplied | undefined;
   updateFeedback: (
     commands: readonly Command[],
     before: Timeline,
@@ -161,9 +171,14 @@ interface HeldEdit {
 
 let heldEdit: HeldEdit | null = null;
 
-export function finishHeldEdit(physicalKey?: string) {
+export function hasPendingTimelineSaves() {
+  return pending.length > 0 || pendingHistory.size > 0;
+}
+
+export function finishHeldEdit(physicalKey?: HeldKey) {
   const hold = heldEdit;
-  if (!hold || (physicalKey && hold.physicalKey !== physicalKey)) return;
+  if (!hold || (physicalKey && !sameHeldKey(hold.physicalKey, physicalKey)))
+    return;
   heldEdit = null;
   try {
     const { before, after, edit, combined } = hold;
@@ -232,6 +247,15 @@ function clearOutsideNotice() {
   outsideStarted = 0;
   outsideClips = new Map();
   outsideActors = new Set();
+}
+
+const heldEditRefusal = "An agent changed those clips first.";
+
+function invalidateHeldEdit(hold: HeldEdit | null) {
+  if (!hold) return;
+  hold.invalidated = true;
+  lastToast = heldEditRefusal;
+  showToast(lastToast);
 }
 
 function noticeOutside(before: TimelineView, after: TimelineView) {
@@ -453,7 +477,7 @@ function shown(projectId: string): TimelineView | null {
         !sameRate(edit.fps, current.fps) ||
         anchorsChanged(edit.anchors, current)
       ) {
-        if (hold) hold.invalidated = true;
+        invalidateHeldEdit(hold);
         return current;
       }
       try {
@@ -468,7 +492,7 @@ function shown(projectId: string): TimelineView | null {
         return next;
       } catch (error) {
         if (error instanceof TimelineError) {
-          if (hold) hold.invalidated = true;
+          invalidateHeldEdit(hold);
           return current;
         }
         throw error;
@@ -643,11 +667,11 @@ async function refreshOpenTimeline(
 export const loadTimeline = (projectId: string, signal: AbortSignal) =>
   enqueue(() => refreshOpenTimeline(projectId, signal));
 
-/** The first event waits for the rest of its save's file notifications. */
+/** The first file event gives related events time to join the same read. */
 const REFRESH_QUIET_MS = 100;
 let refresh: { signal: AbortSignal; done: Promise<void> } | null = null;
 
-/** Read after the already queued saves. A draft held key can stay unsaved while these changes show. */
+/** Read after queued saves. Outside changes still show during an unsaved hold. */
 export function refreshTimeline(projectId: string, signal: AbortSignal) {
   if (refresh?.signal === signal) return refresh.done;
   const next = {
@@ -687,16 +711,24 @@ async function send(edit: Edit) {
     if (anchorsChanged(edit.anchors, base.timeline)) throw changed;
     try {
       let historyId: string | undefined;
+      const request = json("POST", {
+        composition: base.composition,
+        expectedRevision: base.revision,
+        label: edit.label,
+        commands: edit.commands,
+      });
+      // An in-flight held edit may need to finish after the tab closes.
+      if (
+        edit.held &&
+        typeof request.body === "string" &&
+        new TextEncoder().encode(request.body).length <= 64 * 1024
+      )
+        request.keepalive = true;
       const result = await api(
         `${project(edit.projectId)}/commands`,
         TimelineViewSchema,
         {
-          ...json("POST", {
-            composition: base.composition,
-            expectedRevision: base.revision,
-            label: edit.label,
-            commands: edit.commands,
-          }),
+          ...request,
           headers: {
             [TAB_ORIGIN_HEADER]: tabOrigin,
             ...(edit.grouped && { [GROUPED_EDIT_HEADER]: "1" }),
@@ -819,20 +851,22 @@ export async function editTimeline(
   /** A mouse gesture keeps the timeline it was pressed on, even across server answers. */
   basis?: Timeline,
   /** Runs with the accepted optimistic edit, before another key can act on it. */
-  onApply?: (
-    timeline: Timeline,
-    commands: readonly Command[],
-    origins: ReadonlyMap<string, ClipOrigin>,
-  ) => void,
+  onApply?: OnEditApplied,
   onCommit?: (view: TimelineView) => void,
-  heldKey?: string,
+  heldKey?: HeldKey,
 ) {
   const { view, projectId: open } = useTimeline.getState();
   if (!view || open !== projectId) return false;
-  if (heldKey === heldEdit?.physicalKey && heldEdit?.invalidated) return false;
+  if (
+    heldKey &&
+    heldEdit?.invalidated &&
+    sameHeldKey(heldEdit.physicalKey, heldKey)
+  )
+    return false;
   // A success clears the refusal this edit followed, never one shown while it was saving.
   const followed = lastToast;
   let edit: Edit | null = null;
+  let draft: HeldEdit | undefined;
   let accepted = false;
   const saved = Promise.withResolvers<void>();
   const outcome = heldKey ? Promise.withResolvers<boolean>() : null;
@@ -846,7 +880,7 @@ export async function editTimeline(
     const { commands, creates } = named;
     const repetition =
       heldKey && basis === undefined && !creates.size
-        ? repeatedEdit(heldKey, commands)
+        ? repeatedEdit(heldKey.code || heldKey.key, commands)
         : undefined;
     const group = heldEdit;
     if (
@@ -869,7 +903,7 @@ export async function editTimeline(
         view: { ...view, timeline: named.timeline },
         history: pendingEditHistory,
       });
-      onApply?.(named.timeline, commands, named.origins);
+      group.onApply?.(named.timeline, commands, named.origins);
       return await group.result;
     }
     const anchors = editAnchors(from, named.timeline, commands);
@@ -906,6 +940,7 @@ export async function editTimeline(
       creates,
       anchors,
       gesture: basis !== undefined,
+      held: repetition !== undefined,
       failure: null,
       saved: saved.promise,
       dropped: false,
@@ -939,8 +974,7 @@ export async function editTimeline(
       // An edit that made a clip this one names was refused, and both were taken back.
       if (made.dropped) return;
       try {
-        if (draft?.invalidated)
-          throw new Error("An agent changed those clips first.");
+        if (draft?.invalidated) throw new Error(heldEditRefusal);
         const result = await send(made);
         revision = result?.revision;
         historyId = result?.historyId;
@@ -1000,7 +1034,6 @@ export async function editTimeline(
       )
         onCommit?.(confirmed.view);
     };
-    let draft: HeldEdit | undefined;
     let save: Promise<void>;
     if (heldKey && repetition && outcome) {
       finishHeldEdit();
@@ -1013,6 +1046,7 @@ export async function editTimeline(
         before: from,
         after: timeline,
         combined: repetition.commands,
+        onApply,
         updateFeedback,
         invalidated: false,
         start: () => {
@@ -1080,7 +1114,8 @@ export async function editTimeline(
       error instanceof Error ? error.message : String(error),
       view.timeline,
     );
-    showToast(lastToast);
+    if (!draft?.invalidated || useWorkspace.getState().toast !== lastToast)
+      showToast(lastToast);
     return accepted;
   } finally {
     saved.resolve();

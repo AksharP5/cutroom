@@ -50,6 +50,8 @@ import { SelectMenu } from "../components/SelectMenu";
 import {
   receiveAnimationFeedback,
   editTimeline,
+  finishHeldEdit,
+  hasPendingTimelineSaves,
   loadTimeline,
   openTimeline,
   refreshTimeline,
@@ -137,13 +139,22 @@ export function EditPage({
       beforeProjectChange: () => voiceover.canLeave() && codeCanLeave(),
     });
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!useCode.getState().edited) return;
+      finishHeldEdit();
+      if (!useCode.getState().edited && !hasPendingTimelineSaves()) return;
       event.preventDefault();
       event.returnValue = "";
     };
+    const hide = () => finishHeldEdit();
+    const visibility = () => {
+      if (document.visibilityState === "hidden") hide();
+    };
     window.addEventListener("beforeunload", beforeUnload);
+    window.addEventListener("pagehide", hide);
+    document.addEventListener("visibilitychange", visibility);
     return () => {
       window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("pagehide", hide);
+      document.removeEventListener("visibilitychange", visibility);
       useWorkspace.setState({ beforeProjectChange: null });
     };
   }, [voiceover]);
