@@ -816,8 +816,20 @@ export const keymapAreas = () =>
     ),
   }));
 
-/** A handler is told which of its binding's keys was pressed, counted from zero. */
-type Handlers = Partial<Record<Action, (key: number) => void>>;
+/** Repeatable keyboard bindings carry the physical key through to its release. */
+export type HeldKey = Pick<KeyboardEvent, "code" | "key">;
+
+export function sameHeldKey(held: HeldKey, event: HeldKey) {
+  if (held.code && event.code) return held.code === event.code;
+  const key = event.key.toLowerCase();
+  return (
+    key === held.key.toLowerCase() || key === named[held.code]?.toLowerCase()
+  );
+}
+
+type Handlers = Partial<
+  Record<Action, (key: number, heldKey?: HeldKey) => void>
+>;
 
 /** The handlers on screen, first mounted first: the order their key listeners answer in. */
 const mounted = new Set<{ current: Handlers }>();
@@ -849,8 +861,11 @@ export function useKeymap(handlers: Handlers) {
       const handler = action && latest.current[action];
       if (!handler) return;
       event.preventDefault();
-      const { keys }: Binding = keymap[action];
-      handler(keys.indexOf(comboOf(event) ?? ""));
+      const { keys, repeat }: Binding = keymap[action];
+      handler(
+        keys.indexOf(comboOf(event) ?? ""),
+        repeat ? { code: event.code, key: event.key } : undefined,
+      );
     };
     window.addEventListener("keydown", press);
     return () => {

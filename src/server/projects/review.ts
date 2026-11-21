@@ -63,6 +63,8 @@ import {
   sourceResolved,
 } from "./reviewLedger";
 import type { Entry, Ledger } from "./reviewLedger";
+import { fileContentVersion } from "@hyperframes/studio-server";
+import { rememberTimelineWrite } from "../timeline/watch";
 
 const items = z.array(
   ReviewStateSchema.extend({
@@ -114,11 +116,12 @@ function writableLedger({ targets, edits }: Ledger): Ledger {
   };
 }
 
-async function atomicWrite(path: string, raw: string) {
+async function atomicWrite(path: string, raw: string, origin?: string) {
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, raw, { mode: 0o600, flag: "wx" });
     await rename(temporary, path);
+    rememberTimelineWrite(path, () => fileContentVersion(raw), origin);
   } finally {
     await rm(temporary, { force: true });
   }
@@ -221,7 +224,11 @@ export function createReviewService(store: ProjectStore) {
     });
 
   /** Writes the ledger, when it changed, before review.json, so a rerun finds moved rows already there. */
-  const writeState = async (project: Project, state: ReviewFile) => {
+  const writeState = async (
+    project: Project,
+    state: ReviewFile,
+    origin?: string,
+  ) => {
     await mkdir(await projectStatePath(project, ".cutroom", true), {
       recursive: true,
     });
@@ -233,6 +240,7 @@ export function createReviewService(store: ProjectStore) {
       await atomicWrite(
         await projectStatePath(project, REVIEW_LEDGER_PATH, true),
         ledgerRaw,
+        origin,
       );
     }
     const raw =
@@ -242,6 +250,7 @@ export function createReviewService(store: ProjectStore) {
       await atomicWrite(
         await projectStatePath(project, REVIEW_STATE_PATH, true),
         raw,
+        origin,
       );
     remember(project, raw, ledgerRaw, state);
   };
@@ -540,6 +549,7 @@ export function createReviewService(store: ProjectStore) {
     noteIds: string[],
     label?: string,
     batchLabels?: string[],
+    origin?: string,
   ) => {
     const entry = (await store.history(project)).list().at(-1);
     const ledger = writableLedger(state.ledger);
@@ -573,7 +583,7 @@ export function createReviewService(store: ProjectStore) {
       ),
       batchLabels,
     );
-    await writeState(project, { ...state, ledger });
+    await writeState(project, { ...state, ledger }, origin);
   };
 
   type AssetSnapshot = Map<
@@ -826,6 +836,7 @@ export function createReviewService(store: ProjectStore) {
         create?: boolean;
         label?: string | ((result: T) => string);
         batchLabels?: (result: T) => string[] | undefined;
+        origin?: string;
       } = {},
     ) =>
       serialize(project, async () => {
@@ -897,6 +908,7 @@ export function createReviewService(store: ProjectStore) {
             ? options.label(result)
             : options.label,
           options.batchLabels?.(result),
+          options.origin,
         );
         return result;
       }),

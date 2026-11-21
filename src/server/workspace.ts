@@ -22,6 +22,7 @@ import {
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
+import { isAtomicTempPath } from "@hyperframes/core/atomic-file";
 import { fileFingerprint } from "../shared/media";
 import { version } from "../shared/version";
 import { HttpError } from "../shared/errors";
@@ -34,6 +35,7 @@ import { VIEW_PATH } from "./projects/view";
 import type { FileChange } from "./hyperframes/api";
 import type { createHyperframesApi } from "./hyperframes/api";
 import type { createVariableRoutes } from "./projects/variables";
+import { isTimelineWriteEcho } from "./timeline/watch";
 
 export function createWorkspaceRoutes(options: {
   projects: ProjectStore;
@@ -262,23 +264,42 @@ export function createWorkspaceRoutes(options: {
               timers.delete(filename);
               void (async () => {
                 const path = filename.replaceAll("\\", "/");
-                const info = await projectPath(project, path)
-                  .then((absolute) => stat(absolute))
-                  .catch((error: unknown) => {
-                    if (
-                      isMissing(error) ||
-                      (error instanceof HttpError &&
-                        [403, 404].includes(error.status))
-                    )
-                      return null;
-                    throw error;
-                  });
+                const resolveFile = (relative: string) =>
+                  projectPath(project, relative)
+                    .then(async (absolute) => ({
+                      info: await stat(absolute),
+                      absolute,
+                    }))
+                    .catch((error: unknown) => {
+                      if (
+                        isMissing(error) ||
+                        (error instanceof HttpError &&
+                          [403, 404].includes(error.status))
+                      )
+                        return null;
+                      throw error;
+                    });
+                const file = await resolveFile(path);
+                // A temp sibling is an echo only when its published file still
+                // matches a grouped edit from this tab.
+                const published =
+                  origin && isAtomicTempPath(path)
+                    ? await resolveFile(path.slice(0, path.lastIndexOf(".hf")))
+                    : file;
                 await stream.writeSSE({
                   data: JSON.stringify({
                     changed: path,
-                    version: info?.isFile()
-                      ? fileFingerprint(path, info)
+                    version: file?.info.isFile()
+                      ? fileFingerprint(path, file.info)
                       : null,
+                    ...(origin &&
+                      published?.info.isFile() &&
+                      (await isTimelineWriteEcho(
+                        published.absolute,
+                        origin,
+                      )) && {
+                        timelineSaveEcho: true,
+                      }),
                   }),
                 });
               })().catch((error: unknown) => {

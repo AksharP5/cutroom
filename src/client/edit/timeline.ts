@@ -5,6 +5,7 @@ import {
   TimelineError,
   apply,
   applyAll,
+  canonicalTimeline,
   copyClips,
   randomClipId,
 } from "../../shared/timeline/apply";
@@ -12,6 +13,7 @@ import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
   AnimationFeedbackSchema,
   EDIT_HISTORY_HEADER,
+  GROUPED_EDIT_HEADER,
   TAB_ORIGIN_HEADER,
   CommandSchema,
   ClipboardSchema,
@@ -46,6 +48,8 @@ import {
 } from "./animationFeedback";
 import { noteNumbers } from "../review";
 import { dispatchNote, queueNoteChange } from "./noteStore";
+import { sameHeldKey } from "../keymap";
+import type { HeldKey } from "../keymap";
 
 /** The project's entry composition, which the editor opens first. */
 export const ROOT_COMPOSITION = "index.html";
@@ -113,6 +117,8 @@ interface Edit {
    */
   anchors: ReturnType<typeof editAnchors>;
   gesture: boolean;
+  held?: boolean;
+  grouped?: boolean;
   failure: string | null;
   /** Resolves when this save has left the queue, including when it was refused. */
   saved: Promise<void>;
@@ -132,6 +138,98 @@ const answers = new Map<string, TimelineView>();
 /** Edits shown already and not yet answered, oldest first. */
 let pending: Edit[] = [];
 const pendingHistory = new Map<string, Set<Promise<void>>>();
+
+type RepeatedCommand = Extract<
+  Command,
+  { type: "move" | "roll" | "slide" | "slip" | "trim" }
+>;
+
+type OnEditApplied = (
+  timeline: Timeline,
+  commands: readonly Command[],
+  origins: ReadonlyMap<string, ClipOrigin>,
+) => void;
+
+/** A held key can edit the same targets repeatedly before saving on release. */
+interface HeldEdit {
+  edit: Edit;
+  physicalKey: HeldKey;
+  key: string;
+  before: Timeline;
+  after: Timeline;
+  combined: RepeatedCommand[];
+  onApply: OnEditApplied | undefined;
+  updateFeedback: (
+    commands: readonly Command[],
+    before: Timeline,
+    after: Timeline,
+  ) => void;
+  invalidated: boolean;
+  start: () => void;
+  result: Promise<boolean>;
+}
+
+let heldEdit: HeldEdit | null = null;
+
+export function hasPendingTimelineSaves() {
+  return pending.length > 0 || pendingHistory.size > 0;
+}
+
+export function finishHeldEdit(physicalKey?: HeldKey) {
+  const hold = heldEdit;
+  if (!hold || (physicalKey && !sameHeldKey(hold.physicalKey, physicalKey)))
+    return;
+  heldEdit = null;
+  try {
+    const { before, after, edit, combined } = hold;
+    if (edit.commands.length === combined.length) return;
+    edit.grouped = true;
+    edit.label = editLabel(combined, before, edit.label);
+    edit.anchors = editAnchors(before, after, edit.commands);
+    hold.updateFeedback(combined, before, after);
+
+    let created = false;
+    const projected = applyAll(before, combined, {
+      clipboards,
+      composition: edit.composition,
+      onCreate: () => {
+        created = true;
+      },
+    });
+    // An overwrite or source boundary can give merged commands a different result.
+    if (
+      !created &&
+      JSON.stringify(canonicalTimeline(projected)) ===
+        JSON.stringify(canonicalTimeline(after))
+    )
+      edit.commands = combined;
+  } catch (error) {
+    if (!(error instanceof TimelineError)) throw error;
+    // The queued steps were admitted separately. Keep them when their sum is refused.
+  } finally {
+    hold.start();
+  }
+}
+
+function repeatedEdit(physicalKey: string, commands: Command[]) {
+  const eligible = (command: Command): command is RepeatedCommand =>
+    command.type === "move" ||
+    command.type === "roll" ||
+    command.type === "slide" ||
+    command.type === "slip" ||
+    command.type === "trim";
+  if (!commands.every(eligible)) return;
+  const targets = commands.map((command) => {
+    if (command.type === "trim") {
+      const { to, ...target } = command;
+      return target;
+    }
+    const { by, ...target } = command;
+    return target;
+  });
+  return { key: JSON.stringify([physicalKey, targets]), commands };
+}
+
 /** The header toast this queue last showed, cleared by the next edit that lands. */
 let lastToast = "";
 let dismissRipple = () => {};
@@ -149,6 +247,15 @@ function clearOutsideNotice() {
   outsideStarted = 0;
   outsideClips = new Map();
   outsideActors = new Set();
+}
+
+const heldEditRefusal = "An agent changed those clips first.";
+
+function invalidateHeldEdit(hold: HeldEdit | null) {
+  if (!hold) return;
+  hold.invalidated = true;
+  lastToast = heldEditRefusal;
+  showToast(lastToast);
 }
 
 function noticeOutside(before: TimelineView, after: TimelineView) {
@@ -219,6 +326,11 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
  * newer view.
  */
 function enqueue<T>(step: () => Promise<T>) {
+  finishHeldEdit();
+  return serialize(step);
+}
+
+function serialize<T>(step: () => Promise<T>) {
   const run = queue.then(step);
   queue = run.then(
     () => {},
@@ -230,7 +342,10 @@ function enqueue<T>(step: () => Promise<T>) {
 /** A preview of an intermediate save would compete with the remaining writes in a burst. */
 export function afterEditBurst(projectId: string, composition: string) {
   const saves = pending.filter(
-    (edit) => edit.projectId === projectId && edit.composition === composition,
+    (edit) =>
+      edit !== heldEdit?.edit &&
+      edit.projectId === projectId &&
+      edit.composition === composition,
   );
   const history = pendingHistory.get(projectId);
   const writes: Promise<void>[] = [];
@@ -352,19 +467,34 @@ function shown(projectId: string): TimelineView | null {
         edit.projectId === projectId && edit.composition === view.composition,
     )
     .reduce((current, edit) => {
+      const hold = heldEdit?.edit === edit ? heldEdit : null;
+      if (hold?.invalidated) return current;
+      if (hold?.before === current) return hold.after;
+      if (hold)
+        edit.anchors = editAnchors(hold.before, hold.after, edit.commands);
       if (
         createsAudioGroup(edit.commands) ||
         !sameRate(edit.fps, current.fps) ||
         anchorsChanged(edit.anchors, current)
-      )
+      ) {
+        invalidateHeldEdit(hold);
         return current;
+      }
       try {
-        return applyAll(current, edit.commands, {
+        const next = applyAll(current, edit.commands, {
           clipboards,
           composition: edit.composition,
         });
+        if (hold) {
+          hold.before = current;
+          hold.after = next;
+        }
+        return next;
       } catch (error) {
-        if (error instanceof TimelineError) return current;
+        if (error instanceof TimelineError) {
+          invalidateHeldEdit(hold);
+          return current;
+        }
         throw error;
       }
     }, view.timeline);
@@ -537,26 +667,21 @@ async function refreshOpenTimeline(
 export const loadTimeline = (projectId: string, signal: AbortSignal) =>
   enqueue(() => refreshOpenTimeline(projectId, signal));
 
-/** How long the first project file event waits for the rest of its burst. */
-const BURST_MS = 100;
-/** The read that will answer every file event received before it starts, for one open editor. */
+/** The first file event gives related events time to join the same read. */
+const REFRESH_QUIET_MS = 100;
 let refresh: { signal: AbortSignal; done: Promise<void> } | null = null;
 
-/**
- * Reads the timeline again after a project file changed. One edit writes several files (the
- * composition, `cutroom.json`, review state, and their temporary copies), each announced
- * separately; the first event opens a short window and one queued read answers all of them. An
- * event that arrives once that read has started may describe a later write, so it opens the next.
- */
+/** Read after queued saves. Outside changes still show during an unsaved hold. */
 export function refreshTimeline(projectId: string, signal: AbortSignal) {
   if (refresh?.signal === signal) return refresh.done;
   const next = {
     signal,
-    done: new Promise((resolve) => setTimeout(resolve, BURST_MS)).then(() =>
-      enqueue(async () => {
-        if (refresh === next) refresh = null;
-        await refreshOpenTimeline(projectId, signal);
-      }),
+    done: new Promise((resolve) => setTimeout(resolve, REFRESH_QUIET_MS)).then(
+      () =>
+        serialize(async () => {
+          if (refresh === next) refresh = null;
+          await refreshOpenTimeline(projectId, signal);
+        }),
     ),
   };
   refresh = next;
@@ -586,17 +711,28 @@ async function send(edit: Edit) {
     if (anchorsChanged(edit.anchors, base.timeline)) throw changed;
     try {
       let historyId: string | undefined;
+      const request = json("POST", {
+        composition: base.composition,
+        expectedRevision: base.revision,
+        label: edit.label,
+        commands: edit.commands,
+      });
+      // An in-flight held edit may need to finish after the tab closes.
+      if (
+        edit.held &&
+        typeof request.body === "string" &&
+        new TextEncoder().encode(request.body).length <= 64 * 1024
+      )
+        request.keepalive = true;
       const result = await api(
         `${project(edit.projectId)}/commands`,
         TimelineViewSchema,
         {
-          ...json("POST", {
-            composition: base.composition,
-            expectedRevision: base.revision,
-            label: edit.label,
-            commands: edit.commands,
-          }),
-          headers: { [TAB_ORIGIN_HEADER]: tabOrigin },
+          ...request,
+          headers: {
+            [TAB_ORIGIN_HEADER]: tabOrigin,
+            ...(edit.grouped && { [GROUPED_EDIT_HEADER]: "1" }),
+          },
         },
         (headers) => {
           historyId = headers.get(EDIT_HISTORY_HEADER) ?? undefined;
@@ -715,20 +851,25 @@ export async function editTimeline(
   /** A mouse gesture keeps the timeline it was pressed on, even across server answers. */
   basis?: Timeline,
   /** Runs with the accepted optimistic edit, before another key can act on it. */
-  onApply?: (
-    timeline: Timeline,
-    commands: readonly Command[],
-    origins: ReadonlyMap<string, ClipOrigin>,
-  ) => void,
+  onApply?: OnEditApplied,
   onCommit?: (view: TimelineView) => void,
+  heldKey?: HeldKey,
 ) {
   const { view, projectId: open } = useTimeline.getState();
   if (!view || open !== projectId) return false;
+  if (
+    heldKey &&
+    heldEdit?.invalidated &&
+    sameHeldKey(heldEdit.physicalKey, heldKey)
+  )
+    return false;
   // A success clears the refusal this edit followed, never one shown while it was saving.
   const followed = lastToast;
   let edit: Edit | null = null;
+  let draft: HeldEdit | undefined;
   let accepted = false;
   const saved = Promise.withResolvers<void>();
+  const outcome = heldKey ? Promise.withResolvers<boolean>() : null;
   try {
     const from = basis ?? view.timeline;
     if (!sameRate(from.fps, view.timeline.fps))
@@ -737,8 +878,36 @@ export async function editTimeline(
     if (!input.length) return false;
     const named = name(input, from, view.composition);
     const { commands, creates } = named;
+    const repetition =
+      heldKey && basis === undefined && !creates.size
+        ? repeatedEdit(heldKey.code || heldKey.key, commands)
+        : undefined;
+    const group = heldEdit;
+    if (
+      repetition &&
+      group?.key === repetition.key &&
+      group.edit.projectId === projectId &&
+      group.edit.composition === view.composition &&
+      group.after === from &&
+      group.edit.commands.length + commands.length <= 1000
+    ) {
+      group.edit.commands.push(...commands);
+      group.combined = repetition.commands.map((step, index) => {
+        const previous = group.combined[index]!;
+        return step.type === "trim" || previous.type === "trim"
+          ? step
+          : { ...step, by: previous.by + step.by };
+      });
+      group.after = named.timeline;
+      useTimeline.setState({
+        view: { ...view, timeline: named.timeline },
+        history: pendingEditHistory,
+      });
+      group.onApply?.(named.timeline, commands, named.origins);
+      return await group.result;
+    }
     const anchors = editAnchors(from, named.timeline, commands);
-    if (anchorsChanged(anchors, view.timeline))
+    if (from !== view.timeline && anchorsChanged(anchors, view.timeline))
       throw new Error("An agent changed those clips first.");
     const timeline =
       from === view.timeline
@@ -771,6 +940,7 @@ export async function editTimeline(
       creates,
       anchors,
       gesture: basis !== undefined,
+      held: repetition !== undefined,
       failure: null,
       saved: saved.promise,
       dropped: false,
@@ -778,9 +948,17 @@ export async function editTimeline(
     const made = edit;
     dismissRipple();
     rippleRevision = null;
-    const feedback =
-      overwriteFeedback(view.timeline, timeline, commands) ||
-      rippleFeedback(view.timeline, timeline, commands, clipboards);
+    let feedback = "";
+    const updateFeedback = (
+      commands: readonly Command[],
+      before: Timeline,
+      after: Timeline,
+    ) => {
+      feedback =
+        overwriteFeedback(before, after, commands) ||
+        rippleFeedback(before, after, commands, clipboards);
+    };
+    updateFeedback(commands, view.timeline, timeline);
     // Other edits can look up this bus as soon as it appears in the inspector.
     // Publish only the persisted ID from the server.
     pending.push(made);
@@ -792,10 +970,11 @@ export async function editTimeline(
     let report = "";
     let revision: string | undefined;
     let historyId: string | undefined;
-    await enqueue(async () => {
+    const commit = async () => {
       // An edit that made a clip this one names was refused, and both were taken back.
       if (made.dropped) return;
       try {
+        if (draft?.invalidated) throw new Error(heldEditRefusal);
         const result = await send(made);
         revision = result?.revision;
         historyId = result?.historyId;
@@ -854,7 +1033,32 @@ export async function editTimeline(
         confirmed.view.revision === revision
       )
         onCommit?.(confirmed.view);
-    });
+    };
+    let save: Promise<void>;
+    if (heldKey && repetition && outcome) {
+      finishHeldEdit();
+      const write = Promise.withResolvers<void>();
+      made.commands = [...commands];
+      draft = heldEdit = {
+        edit: made,
+        physicalKey: heldKey,
+        key: repetition.key,
+        before: from,
+        after: timeline,
+        combined: repetition.commands,
+        onApply,
+        updateFeedback,
+        invalidated: false,
+        start: () => {
+          void serialize(commit).then(write.resolve, write.reject);
+        },
+        result: outcome.promise,
+      };
+      save = write.promise;
+    } else {
+      save = enqueue(commit);
+    }
+    await save;
     if (!made.dropped && useTimeline.getState().projectId === projectId) {
       if (report) {
         lastToast = report;
@@ -910,10 +1114,12 @@ export async function editTimeline(
       error instanceof Error ? error.message : String(error),
       view.timeline,
     );
-    showToast(lastToast);
+    if (!draft?.invalidated || useWorkspace.getState().toast !== lastToast)
+      showToast(lastToast);
     return accepted;
   } finally {
     saved.resolve();
+    outcome?.resolve(accepted);
   }
 }
 

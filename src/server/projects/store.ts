@@ -34,6 +34,7 @@ import type {
 } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
 import { guardFreezeHistory } from "./freezeHistory";
+import { rememberTimelineWrite } from "../timeline/watch";
 import { isMissing, projectPath, projectWritePath } from "./path";
 
 export { isMissing, projectPath } from "./path";
@@ -312,9 +313,20 @@ export async function createProjectStore(options: {
       expectedVersion: fileContentVersion(before),
     };
   };
-  const writeFiles = (project: Project, mutations: FileMutationInput[]) => {
+  const writeFiles = (
+    project: Project,
+    mutations: FileMutationInput[],
+    origin?: string,
+  ) => {
     try {
-      applyFileMutations(project.path, mutations);
+      const saved = applyFileMutations(project.path, mutations);
+      for (const [index, file] of saved.entries())
+        if (file.changed)
+          rememberTimelineWrite(
+            mutations[index]!.absPath,
+            () => file.version,
+            origin,
+          );
     } catch (error) {
       if (
         error instanceof Error &&
@@ -331,10 +343,11 @@ export async function createProjectStore(options: {
     project: Project,
     value: ProjectDocument,
     additional: FileMutationInput[] = [],
+    origin?: string,
   ) => {
     ProjectDocumentSchema.parse(value);
     const mutation = await documentMutation(project, value);
-    writeFiles(project, [...additional, mutation]);
+    writeFiles(project, [...additional, mutation], origin);
     documentReads.set(value, mutation.after);
   };
   return {

@@ -50,6 +50,8 @@ import { SelectMenu } from "../components/SelectMenu";
 import {
   receiveAnimationFeedback,
   editTimeline,
+  finishHeldEdit,
+  hasPendingTimelineSaves,
   loadTimeline,
   openTimeline,
   refreshTimeline,
@@ -84,6 +86,9 @@ const previewChangeSchema = z.object({
   path: z.string(),
   affectsPreview: z.boolean(),
   affectedCompositions: z.array(z.string()).nullable(),
+});
+const projectFileEventSchema = z.object({
+  timelineSaveEcho: z.literal(true).optional(),
 });
 
 const report = (error: unknown) => reportEditorError("timeline", error);
@@ -134,13 +139,22 @@ export function EditPage({
       beforeProjectChange: () => voiceover.canLeave() && codeCanLeave(),
     });
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!useCode.getState().edited) return;
+      finishHeldEdit();
+      if (!useCode.getState().edited && !hasPendingTimelineSaves()) return;
       event.preventDefault();
       event.returnValue = "";
     };
+    const hide = () => finishHeldEdit();
+    const visibility = () => {
+      if (document.visibilityState === "hidden") hide();
+    };
     window.addEventListener("beforeunload", beforeUnload);
+    window.addEventListener("pagehide", hide);
+    document.addEventListener("visibilitychange", visibility);
     return () => {
       window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("pagehide", hide);
+      document.removeEventListener("visibilitychange", visibility);
       useWorkspace.setState({ beforeProjectChange: null });
     };
   }, [voiceover]);
@@ -189,7 +203,13 @@ export function EditPage({
     const stopProject = subscribeProjectEvents(
       projectId,
       "message",
-      () => void refreshTimeline(projectId, closing.signal),
+      (event) => {
+        const changed = projectFileEventSchema.safeParse(
+          JSON.parse(event.data),
+        );
+        if (!changed.success || !changed.data.timelineSaveEcho)
+          void refreshTimeline(projectId, closing.signal);
+      },
     );
     // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
     const stopAnimationFeedback = subscribeProjectEvents(

@@ -73,6 +73,8 @@ export function editAnchors(
         type === "trim" ||
         type === "trimPlayhead" ||
         type === "roll" ||
+        type === "slide" ||
+        type === "slip" ||
         type === "swap" ||
         type === "setTiming" ||
         type === "insert" ||
