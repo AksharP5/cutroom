@@ -144,8 +144,8 @@ test("a region-free adjustment layer keeps a grade without changing its source s
   });
 });
 
-test("a grade on an adjustment layer follows its span on either export path", () => {
-  const html = edit(page(shot), [
+const adjustedShot = () =>
+  edit(page(shot), [
     { type: "setTrack", index: 1, kind: "video" },
     {
       type: "insert",
@@ -155,6 +155,9 @@ test("a grade on an adjustment layer follows its span on either export path", ()
     },
     { type: "setClip", clipId: "look", grade: look },
   ]);
+
+test("a grade on an adjustment layer follows its span on either export path", () => {
+  const html = adjustedShot();
   const plan = planDirectExport(html, { num: 30, den: 1 }, null);
   if ("reason" in plan) throw new Error(plan.reason);
   expect(
@@ -188,6 +191,53 @@ test("a grade on an adjustment layer follows its span on either export path", ()
   expect(
     plain.segments.map(({ kind, start, end }) => [kind, start, end]),
   ).toEqual([["source", 0, 300]]);
+});
+
+test("an adjustment below a fully covering clip leaves that clip ungraded", () => {
+  const html = adjustedShot().replace(
+    shot,
+    shot.replace('data-track-index="0"', 'data-track-index="2"'),
+  );
+  expect(html).toContain('data-track-index="2"');
+  const plan = planDirectExport(html, { num: 30, den: 1 }, null);
+  if ("reason" in plan) throw new Error(plan.reason);
+  expect(
+    plan.segments.every(
+      (segment) =>
+        segment.kind === "source" &&
+        segment.src === "shot.mp4" &&
+        !segment.adjustments?.length,
+    ),
+  ).toBe(true);
+});
+
+test.each([
+  [
+    "inline style",
+    (html: string) =>
+      html.replace('id="look"', 'id="look" style="opacity:0.5"'),
+  ],
+  [
+    "region",
+    (html: string) =>
+      edit(html, [
+        { type: "setClip", clipId: "look", region: { effect: "blur" } },
+      ]),
+  ],
+] as const)("a graded adjustment with %s uses browser capture", (_, author) => {
+  const plan = planDirectExport(
+    author(adjustedShot()),
+    { num: 30, den: 1 },
+    null,
+  );
+  if ("reason" in plan) throw new Error(plan.reason);
+  expect(
+    plan.segments.map(({ kind, start, end }) => [kind, start, end]),
+  ).toEqual([
+    ["source", 0, 60],
+    ["capture", 60, 90],
+    ["source", 90, 300],
+  ]);
 });
 
 test("a razor cut and a freeze frame keep the grade", () => {
