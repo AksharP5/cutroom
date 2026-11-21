@@ -323,7 +323,9 @@ export function createReviewService(store: ProjectStore) {
     } catch (error) {
       refusal = { error };
     }
-    const visible = new Set(next.map((item) => item.id));
+    const statuses = new Map<string, ReviewItem["review"]["status"]>();
+    for (const item of next)
+      if (!statuses.has(item.id)) statuses.set(item.id, item.review.status);
     const written: ReviewFile = {
       schemaVersion: 1,
       clipEdits: acceptEdits(
@@ -334,11 +336,7 @@ export function createReviewService(store: ProjectStore) {
               (edit) =>
                 !edit.accepted &&
                 edit.noteIds.length &&
-                edit.noteIds.every(
-                  (id) =>
-                    next.find((item) => item.id === id)?.review.status ===
-                    "accepted",
-                ),
+                edit.noteIds.every((id) => statuses.get(id) === "accepted"),
             )
             .map((edit) => edit.id),
         ),
@@ -353,7 +351,7 @@ export function createReviewService(store: ProjectStore) {
           ...(review.status !== "open" && { content }),
         })),
         // Drafts removed by undo keep their entry in case redo brings them back.
-        ...state.items.filter((item) => !visible.has(item.id)),
+        ...state.items.filter((item) => !statuses.has(item.id)),
       ],
     };
     // Parsed and built objects order their keys differently; only a real change is written.
@@ -477,18 +475,25 @@ export function createReviewService(store: ProjectStore) {
     const state = await readState(project);
     const pendingIds = new Set(pendingRows.map((edit) => edit.id));
     const at = new Date().toISOString();
+    const recorded = new Set<string | null>();
+    const baselines = new Map<string | null, string>();
+    for (const edit of state.clipEdits) {
+      if (edit.composition !== composition) continue;
+      if (entry && edit.historyId === entry.id) {
+        recorded.add(edit.clipId);
+        continue;
+      }
+      if (
+        pendingIds.has(edit.id) &&
+        edit.signature?.startsWith("v3:") &&
+        edit.beforeSignature !== undefined &&
+        !baselines.has(edit.clipId)
+      )
+        baselines.set(edit.clipId, edit.beforeSignature);
+    }
     state.clipEdits.push(
       ...[...changed]
-        .filter(
-          (id) =>
-            !state.clipEdits.some(
-              (edit) =>
-                entry &&
-                edit.historyId === entry.id &&
-                edit.composition === composition &&
-                edit.clipId === id,
-            ),
-        )
+        .filter((id) => !recorded.has(id))
         .map((clipId, index, ids) => ({
           ...(index === ids.length - 1 && batchLabels && { batchLabels }),
           id: randomUUID(),
@@ -501,17 +506,7 @@ export function createReviewService(store: ProjectStore) {
           historyId: entry?.id,
           signature: after.get(clipId) ?? missingSignature,
           beforeSignature:
-            state.clipEdits.find(
-              (edit) =>
-                edit.composition === composition &&
-                edit.clipId === clipId &&
-                pendingIds.has(edit.id) &&
-                edit.signature?.startsWith("v3:") &&
-                edit.beforeSignature !== undefined &&
-                !(entry && edit.historyId === entry.id),
-            )?.beforeSignature ??
-            before.get(clipId) ??
-            missingSignature,
+            baselines.get(clipId) ?? before.get(clipId) ?? missingSignature,
           noteIds,
           at,
           by: actor ? ("agent" as const) : ("human" as const),

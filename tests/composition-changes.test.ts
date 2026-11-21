@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { SourceSchema } from "../src/shared/project";
-import { sourceClipVersions } from "../src/server/projects/changes";
+import {
+  compositionVersions,
+  sourceClipVersions,
+} from "../src/server/projects/changes";
 import { projectFixture } from "./project-fixture";
 import { createReviewService } from "../src/server/projects/review";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
@@ -284,6 +287,34 @@ test.each(["clip", "composition"])(
     }
   },
 );
+
+test("linked sound fingerprints reach every member, including voiceover", async () => {
+  const html = `<main data-composition-id="main" data-duration="5">
+    <video id="picture" src="picture.mp4" data-start="0" data-duration="5" data-link="dialogue"></video>
+    <audio id="sound" src="sound.wav" data-start="0" data-duration="5" data-link="dialogue"></audio>
+    <audio id="voice" src="voice.wav" data-start="0" data-duration="5" data-link="dialogue" data-cutroom-kind="voiceover"></audio>
+    <audio id="room" src="room.wav" data-start="0" data-duration="5" data-link="room"></audio>
+  </main>`;
+  const f = await setup(html);
+  try {
+    const voice = `${f.project.path}/voice.wav`;
+    await writeFile(voice, "original");
+    const before = await compositionVersions(f.project, "index.html");
+    await writeFile(voice, "replacement with different bytes");
+    const after = await compositionVersions(f.project, "index.html");
+    const changed = [...after.versions.keys()].filter(
+      (id) => before.versions.get(id) !== after.versions.get(id),
+    );
+    expect(changed).toEqual(["picture", "sound", "voice"]);
+    expect([...after.references.get("picture")!]).toEqual([
+      "picture.mp4",
+      "sound.wav",
+      "voice.wav",
+    ]);
+  } finally {
+    await f.close();
+  }
+});
 
 test("every source byte is covered, including anonymous clips, invalid timelines and DOM order", () => {
   const before = sourceClipVersions(source, "index.html");
