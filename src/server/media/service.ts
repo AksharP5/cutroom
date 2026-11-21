@@ -558,6 +558,7 @@ export function createMediaService(
               kind,
               source,
               directory: scratch,
+              ...(kind === "pieces" && { projectDir: project.path }),
               ffmpeg,
               ffprobe,
               info,

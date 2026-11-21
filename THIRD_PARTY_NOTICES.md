@@ -16,6 +16,8 @@ Freeze frame follows the two-second hold in public `@hyperframes/studio-server` 
 
 Cutroom also applies version-checked loading transforms to HyperFrames producer 0.9.26 in `src/server/hyperframes/renderIsolation.ts`. Browser discovery excludes media under `data-hidden`, preserving static parsing's visibility and audio exclusions. Entry and sub-composition compilation accept effective source supplied by Cutroom's render worker, so persisted track mixing also covers outside HTML edits without rewriting project files. The same compilation hooks select a freeze frame's export PNG when preview and export use different SDR colour conversions. Dependency files remain unchanged.
 
+The render isolation also uses Cutroom's source picture ordinals in the HyperFrames extraction and frame lookup stages. It reuses the published FFmpeg extraction limits, image encode settings and colour filters. A marked render carries its picture slots through the producer's local render plan.
+
 The same transforms let `renderSpan` render MOV and WebM ranges with the producer's own chunk encoders. `src/server/hyperframes/gif.ts` follows the producer's GIF encode stage (`palettegen`/`paletteuse` settings and its frame-clearing pass through `@hyperframes/core`), building the palette from every pixel instead of changed pixels.
 
 The same file applies one version-checked loading transform to Apache-2.0 `@puppeteer/browsers` 3.2.2 in the render worker: browsers stay in the worker's process group instead of starting their own sessions, so stopping an export also stops its browsers. Dependency files remain unchanged.
