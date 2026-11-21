@@ -102,6 +102,11 @@ const cutroomTools: Record<
     kind: "project",
     object: () => "media files",
   },
+  media_import: {
+    verb: ["Imported", "Importing", "Import"],
+    kind: "edit",
+    object: (target) => target ?? "media files",
+  },
   media_rename: {
     verb: ["Renamed", "Renaming", "Rename"],
     kind: "edit",
@@ -345,6 +350,11 @@ const cutroomTools: Record<
     verb: ["Accepted", "Accepting", "Accept"],
     kind: "queue",
     object: note,
+  },
+  review_accept_all: {
+    verb: ["Accepted", "Accepting", "Accept"],
+    kind: "queue",
+    object: () => "all pending agent changes",
   },
   review_send_back: {
     verb: ["Sent back", "Sending back", "Send back"],

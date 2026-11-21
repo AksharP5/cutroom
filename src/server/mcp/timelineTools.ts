@@ -114,9 +114,10 @@ export function registerTimelineTools(
     projectId: string,
     composition: string,
     signal?: AbortSignal,
+    clipEdits = false,
   ) => {
     const read = await fetchLocal(
-      `/api/cutroom${timelinePath(projectId, composition)}`,
+      `/api/cutroom${timelinePath(projectId, composition)}${clipEdits ? "&clipEdits=1" : ""}`,
       { signal },
     );
     if (!read.ok)
@@ -160,9 +161,19 @@ export function registerTimelineTools(
       annotations: readOnly,
     },
     async ({ projectId, composition, from, to, tracks, clipEdits }) => {
-      const result = await readView(projectId, composition);
+      const result = await readView(
+        projectId,
+        composition,
+        undefined,
+        clipEdits,
+      );
       if (!result.ok) return result.failure;
-      const { clipEdits: ledger, timeline, ...view } = result.view;
+      const {
+        clipEdits: ledger,
+        reviewEntries: _reviewEntries,
+        timeline,
+        ...view
+      } = result.view;
       const reply = {
         ...view,
         ...(clipEdits && { clipEdits: ledger }),

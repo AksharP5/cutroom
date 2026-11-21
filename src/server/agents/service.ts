@@ -110,7 +110,8 @@ export class AgentService {
     this.t3 = new T3Chats(options.review, options.t3Runner);
     this.nativeSessions = options.nativeSessions ?? new NativeSessions();
     this.factory =
-      options.runtimeFactory ?? createNativeRuntimeFactory(options.studioUrl);
+      options.runtimeFactory ??
+      createNativeRuntimeFactory(options.studioUrl, options.dataDir);
   }
 
   async load() {

@@ -111,7 +111,7 @@ test("a rendered GSAP tween edit produces one composition row and no clip underl
   await page.screenshot({ path: testInfo.outputPath("after.png") });
   await expect(page.locator("[data-agent-change]")).toHaveCount(0);
   const view = TimelineViewSchema.parse(
-    await (await request.get(`${base}/timeline`)).json(),
+    await (await request.get(`${base}/timeline?clipEdits=1`)).json(),
   );
   expect(view.agentChanges).toEqual([]);
   expect(view.clipEdits?.filter((edit) => edit.by === "agent")).toHaveLength(1);
@@ -143,7 +143,7 @@ test("a rendered GSAP tween edit produces one composition row and no clip underl
     path: testInfo.outputPath("shared-agent-change.png"),
   });
   await page
-    .getByRole("button", { name: "Accept agent changes", exact: true })
+    .getByRole("button", { name: "Accept all agent changes", exact: true })
     .click();
   await expect(shared).toHaveCount(0);
 });
@@ -208,7 +208,7 @@ for (const [name, before, after, expectedX] of [
       contentType: "application/json",
     });
     await page
-      .getByRole("button", { name: "Accept agent changes", exact: true })
+      .getByRole("button", { name: "Accept all agent changes", exact: true })
       .click();
     await expect(rows).toHaveCount(0);
   });
@@ -303,16 +303,16 @@ test("replacing rendered media reviews its clip and keeps owner replacements unm
   await expect.poll(pixel).toEqual([0, 0, 254]);
   await expect(page.locator("[data-agent-change]")).toHaveCount(1);
   const view = TimelineViewSchema.parse(
-    await (await request.get(`${base}/timeline`)).json(),
+    await (await request.get(`${base}/timeline?clipEdits=1`)).json(),
   );
   expect(view.agentChanges).toEqual(["title"]);
   await page.getByRole("button", { name: "Review", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Accept agent changes", exact: true }),
+    page.getByRole("button", { name: "Accept all agent changes", exact: true }),
   ).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("asset-after.png") });
   await page
-    .getByRole("button", { name: "Accept agent changes", exact: true })
+    .getByRole("button", { name: "Accept all agent changes", exact: true })
     .click();
   await expect(page.locator("[data-agent-change]")).toHaveCount(0);
   expect((await request.delete(`${media}/files/card.png`)).ok()).toBe(true);
@@ -320,7 +320,7 @@ test("replacing rendered media reviews its clip and keeps owner replacements unm
   await expect.poll(pixel).toEqual([253, 0, 0]);
   expect(
     TimelineViewSchema.parse(
-      await (await request.get(`${base}/timeline`)).json(),
+      await (await request.get(`${base}/timeline?clipEdits=1`)).json(),
     ).agentChanges,
   ).toEqual([]);
   await expect(page.locator("[data-agent-change]")).toHaveCount(0);

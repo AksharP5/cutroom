@@ -19,6 +19,8 @@ export const AgentNameSchema = z.string().trim().min(1).max(200);
 
 /** Outside project history and the preview watcher, so status changes are never undone. */
 export const REVIEW_STATE_PATH = ".cutroom/review.json";
+/** Which clips agent edits changed, kept apart so builds that predate it still read review.json. */
+export const REVIEW_LEDGER_PATH = ".cutroom/review-ledger.json";
 
 export const reviewReplyGuidance =
   "Mention review notes when this turn changed one, when the user explicitly asks about review notes, or when needed to explain a blocker. Describe changes briefly. Otherwise do not recap untouched notes or say that they remain queued.";
@@ -316,3 +318,8 @@ export const NotebookSchema = z.object({
   transcriptVersion: z.string(),
 });
 export type Notebook = z.infer<typeof NotebookSchema>;
+
+export const ReviewAcceptAllSchema = z.discriminatedUnion("scope", [
+  z.object({ scope: z.literal("project") }),
+  z.object({ scope: z.literal("composition"), composition: z.string().min(1) }),
+]);

@@ -25,7 +25,7 @@ import { strokePath } from "../edit/notes";
 import { frameCaptureUrl, noteNumbers, toReviewStatuses } from "../review";
 import { useFps } from "../workspace";
 import { useTimeline } from "../edit/timeline";
-import { pendingEdit, reviewRows } from "../edit/inspector/changes";
+import { useProjectReviewChanges } from "../edit/reviewChanges";
 import { Modal } from "./Modal";
 import { TimecodeText } from "./TimecodeText";
 
@@ -175,6 +175,7 @@ function noteTimecode(item: ReviewItem, rate: number | Error | undefined) {
 
 export function ReviewPanel({
   projectId,
+  visible,
   items,
   reviewError,
   draft,
@@ -188,6 +189,7 @@ export function ReviewPanel({
   onSend,
 }: {
   projectId: string;
+  visible: boolean;
   items: ReviewItem[];
   reviewError?: string;
   draft: EditorReviewDraft | null;
@@ -201,15 +203,13 @@ export function ReviewPanel({
   onSend: () => void;
 }) {
   const view = useTimeline((state) => state.view);
-  const recoveryEdits = useTimeline((state) => state.recoveryEdits);
-  const edits = recoveryEdits ?? view?.clipEdits;
-  const hasChanges = edits?.some(pendingEdit);
-  const compositionChanges = reviewRows(
-    edits?.filter(
-      (edit) =>
-        (recoveryEdits !== null || edit.clipId === null) && pendingEdit(edit),
-    ) ?? [],
-  );
+  const { hasChanges, compositionChanges } = useProjectReviewChanges(
+    projectId,
+    visible,
+  ) ?? {
+    hasChanges: false,
+    compositionChanges: [],
+  };
   const draftFps = useFps();
   const noteFps = useNoteFps(projectId, items);
   const [body, setBody] = useState("");
@@ -591,9 +591,10 @@ export function ReviewPanel({
               {changes && (
                 <button
                   className="text-button"
+                  title="Accept pending agent edits across this project"
                   onClick={() => void run(onAcceptChanges)}
                 >
-                  Accept agent changes
+                  Accept all agent changes
                 </button>
               )}
             </header>

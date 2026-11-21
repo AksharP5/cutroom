@@ -1,8 +1,7 @@
-import {
-  EDIT_LABEL_LIMIT,
-  joinEditLabels,
-} from "../../../shared/timeline/labels";
-import type { TimelineView } from "../../../shared/timeline/schema";
+import { EDIT_LABEL_LIMIT, joinEditLabels } from "./labels";
+import { z } from "zod";
+import { ClipEditSchema } from "./schema";
+import type { TimelineView } from "./schema";
 
 type ClipEdits = NonNullable<TimelineView["clipEdits"]>;
 export const pendingEdit = (edit: ClipEdits[number]) =>
@@ -48,6 +47,7 @@ export function ledgerChanges(edits: ClipEdits, clipIds?: ReadonlySet<string>) {
           : `and ${labels.length - 1} more`;
     return {
       ...edit,
+      groupId: key,
       id: members[0]!.id,
       label: labels[0] ?? raw,
       more,
@@ -73,7 +73,31 @@ export function reviewRows(edits: ClipEdits) {
   return [...rows.values()];
 }
 
-export type ChangeRow = ReturnType<typeof ledgerChanges>[number];
+export const InspectorChangeSchema = ClipEditSchema.extend({
+  groupId: z.string(),
+  more: z.string().nullable(),
+  details: z.string(),
+  revealClipId: z.string().optional(),
+});
+export type InspectorChange = z.infer<typeof InspectorChangeSchema>;
+export const ReviewChangesSchema = z.object({
+  hasChanges: z.boolean(),
+  compositionChanges: z.array(
+    z.object({ id: z.string(), label: z.string(), count: z.number() }),
+  ),
+});
+export const ChangeDetailsInputSchema = z.discriminatedUnion("view", [
+  z.object({
+    view: z.literal("inspector"),
+    clipIds: z.array(z.string()).optional(),
+  }),
+  z.object({ view: z.literal("review"), includeClips: z.boolean() }),
+]);
+export const AcceptRowSchema = z.object({
+  groupId: z.string(),
+  composition: z.string(),
+  clipIds: z.array(z.string()).optional(),
+});
 
 /** `limit` recent rows, making room for every pending agent edit even when it is older. */
 export function shownChanges<T extends ClipEdits[number]>(

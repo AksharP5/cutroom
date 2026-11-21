@@ -8,7 +8,7 @@ import { showSource } from "../source";
 import { ROOT_COMPOSITION } from "../timeline";
 import { transport } from "../transport";
 import { ChangeList } from "./ChangeList";
-import { ledgerChanges } from "./changes";
+import type { InspectorChange } from "../../../shared/timeline/reviewChanges";
 import { VariablesSection } from "./VariablesSection";
 
 /** With nothing selected, the inspector describes the timeline: its format, markers and history. */
@@ -22,7 +22,7 @@ export function TimelineOverview({
   projectId: string;
   name: string;
   view: TimelineView;
-  edits: NonNullable<TimelineView["clipEdits"]>;
+  edits: InspectorChange[];
   /** Passed to the Changes list: see `ChangeList`. */
   hold: boolean;
 }) {
@@ -113,7 +113,7 @@ export function TimelineOverview({
       <ChangeList
         projectId={projectId}
         timeline={timeline}
-        edits={ledgerChanges(edits)}
+        edits={edits}
         limit={8}
         hold={hold}
       />

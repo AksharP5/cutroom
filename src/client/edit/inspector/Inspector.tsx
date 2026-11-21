@@ -60,7 +60,7 @@ import {
   rounded,
   useClipFrame,
 } from "./Keyframes";
-import { ledgerChanges } from "./changes";
+import { useInspectorChanges } from "../reviewChanges";
 import { SelectionSummary } from "./SelectionSummary";
 import { ChangeList } from "./ChangeList";
 import { TimelineOverview } from "./TimelineOverview";
@@ -457,12 +457,17 @@ export function Inspector({
       clip.id
         .replaceAll(/[-_]+/g, " ")
         .replace(/^./, (letter) => letter.toUpperCase()));
-  const edits = subject
-    ? ledgerChanges(
-        view?.clipEdits ?? [],
-        new Set(subject.members.map((member) => member.id)),
-      )
-    : [];
+  const changeClips = subject
+    ? subject.members.map((member) => member.id)
+    : selection.ids.size > 1
+      ? [...selection.ids]
+      : undefined;
+  const changes =
+    useInspectorChanges(
+      projectId,
+      open && !!timeline && selection.transition === undefined,
+      changeClips,
+    ) ?? [];
   const track =
     timeline &&
     clip &&
@@ -525,7 +530,8 @@ export function Inspector({
             key={selection.anchor}
             projectId={projectId}
             timeline={timeline}
-            edits={ledgerChanges(view?.clipEdits ?? [], selection.ids)}
+            edits={changes}
+            clipIds={changeClips}
             limit={3}
             hold={holdChanges}
           />
@@ -592,7 +598,7 @@ export function Inspector({
           projectId={projectId}
           name={projectName}
           view={view}
-          edits={view.clipEdits ?? []}
+          edits={changes}
           hold={holdChanges}
         />
       ) : (
@@ -621,7 +627,8 @@ export function Inspector({
             key={selection.anchor}
             projectId={projectId}
             timeline={timeline}
-            edits={edits}
+            edits={changes}
+            clipIds={changeClips}
             limit={3}
             times={false}
             hold={holdChanges}
