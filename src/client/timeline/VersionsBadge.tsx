@@ -21,6 +21,7 @@ import {
   closeVersions,
   hoverVersion,
   openVersions,
+  primeVersions,
   useVersions,
 } from "../edit/versions";
 import "./versions.css";
@@ -63,6 +64,8 @@ export function VersionsBadge({
           event.stopPropagation();
           wasOpen.current = useVersions.getState().open === clip.id;
         }}
+        onPointerEnter={() => primeVersions(clip.id)}
+        onPointerLeave={() => primeVersions(null)}
         onDoubleClick={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation();

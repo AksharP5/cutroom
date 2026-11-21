@@ -225,8 +225,14 @@ export function versionMedia(
   };
 }
 
-/** The next playable row in menu and keyboard order. */
-export function nextAudition(available: readonly number[], current: number) {
-  if (available.length < 2) return undefined;
-  return available.find((index) => index > current) ?? available[0];
+/** The playable rows either side of the current one in menu and keyboard order, wrapping. */
+export function auditionNeighbours(
+  available: readonly number[],
+  current: number,
+) {
+  if (available.length < 2) return [];
+  const after = available.find((index) => index > current) ?? available[0]!;
+  const before =
+    available.findLast((index) => index < current) ?? available.at(-1)!;
+  return [...new Set([before, after])].filter((index) => index !== current);
 }

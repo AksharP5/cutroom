@@ -92,13 +92,16 @@ export async function addMediaVersion(
 }
 
 /**
- * The preview can audition the versions of one clip. Media loads only the current and next
- * playable take while its list is open. A selected title or scene can also be prepared before
- * its list opens. The compiler builds the active version the same way it builds it for export.
+ * The preview can audition the versions of one clip. While its list is open, media keeps the
+ * saved take, the shown take and the rows either side of it loaded. The document carrying them
+ * starts loading when the pointer reaches the clip's versions button, and a selected title or
+ * scene is prepared the same way. The compiler builds the active version as export does.
  */
 export const useVersions = create(() => ({
   /** The clip whose versions list is open. */
   open: null as string | null,
+  /** The clip whose versions button the pointer rests on, so its list is likely to open. */
+  primed: null as string | null,
   /** The version the pointer or keys rest on in that list, which the picture plays. */
   hovered: null as number | null,
   /** The clip whose versions the shown document carries, and that document. */
@@ -114,8 +117,8 @@ const findClip = (id: string | null) =>
 
 /** The clip whose versions the next preview document should carry, or null. */
 export function auditionClip(): string | null {
-  const { open } = useVersions.getState();
-  if (open) return open;
+  const { open, primed } = useVersions.getState();
+  if (open ?? primed) return open ?? primed;
   const { selection } = useTimeline.getState();
   if (selection.ids.size !== 1) return null;
   const [id = null] = selection.ids;
@@ -171,11 +174,18 @@ export function hoverVersion(clip: Clip, index: number | null) {
   if (!returnTo.playing) transport.dispatch({ type: "toggle" });
 }
 
+/** Start loading a clip's versions while the pointer is on its button, or stop with null. */
+export function primeVersions(clipId: string | null) {
+  const { open, primed } = useVersions.getState();
+  if (clipId === null ? open === primed : primed === clipId) return;
+  useVersions.setState({ primed: clipId });
+}
+
 export function openVersions(clipId: string) {
   useVersions.setState({ open: clipId, hovered: null });
 }
 
 export function closeVersions() {
   stopAudition();
-  useVersions.setState({ open: null, hovered: null });
+  useVersions.setState({ open: null, hovered: null, primed: null });
 }

@@ -6,7 +6,7 @@ import type { FootageColour, PipelinePlan } from "../../shared/pipeline";
 import type { Clip, TimelineView, Version } from "../../shared/timeline/schema";
 import {
   activeVersion,
-  nextAudition,
+  auditionNeighbours,
   versionSourceAt,
 } from "../../shared/timeline/versions";
 import { framesBefore } from "../../shared/timeline/transition";
@@ -361,10 +361,11 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         ? []
         : [index],
     );
-    const next = nextAudition(eligible, selected);
+    // Moving one row either way finds its decoder open; the saved take uses the main decoder.
+    const neighbours = auditionNeighbours(eligible, selected);
     const resident = new Set([
       eligible.includes(selected) ? selected : undefined,
-      next,
+      ...neighbours,
     ]);
     for (const [index, take] of warming.takes) {
       if (resident.has(index)) continue;
@@ -421,8 +422,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         () => {},
       );
     }
-    // The original take borrows the main pipeline's decoder when it is next.
-    if (next === warming.initial && warming.clip.src) {
+    // The original take borrows the main pipeline's decoder whenever another row is shown.
+    if (selected !== warming.initial && warming.clip.src) {
       const src = warming.clip.src;
       const original = clip.versions[activeVersion(warming.clip)]!;
       void source(src).then(

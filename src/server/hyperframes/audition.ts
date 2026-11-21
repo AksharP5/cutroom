@@ -6,7 +6,7 @@ import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import {
   activeVersion,
   mediaVersions,
-  nextAudition,
+  auditionNeighbours,
   versionPartners,
   versionStart,
 } from "../../shared/timeline/versions";
@@ -56,7 +56,7 @@ const OWN_ATTRIBUTES = new Set([
 const AUDITION_STYLE = `<style data-cutroom-audition>[data-cutroom-version]:not([data-cutroom-shown]),[data-cutroom-version]:not([data-cutroom-shown]) *,video[data-cutroom-version]:not([data-cutroom-shown]) + canvas[data-cutroom-video-hold]{visibility:hidden!important;opacity:0!important;pointer-events:none!important}</style>`;
 function installAudition(
   source: string,
-  nextAudition: (available: number[], current: number) => number | undefined,
+  neighbours: (available: number[], current: number) => number[],
 ) {
   const win = window as Window & {
     __cutroomAuditionGains?: WeakMap<HTMLMediaElement, GainNode>;
@@ -73,6 +73,8 @@ function installAudition(
   win.__cutroomAuditionGains = new WeakMap();
   const sources = new Map<HTMLMediaElement, string>();
   let selected: number | undefined;
+  /** The saved take, which the picture returns to when the pointer leaves the list. */
+  let initial: number | undefined;
   let outgoing: number | undefined;
   const hostsOf = () =>
     Array.from(
@@ -89,18 +91,22 @@ function installAudition(
       const shown = hosts.find((host) =>
         host.hasAttribute("data-cutroom-shown"),
       );
-      if (shown) selected = Number(shown.dataset.cutroomVersion);
+      if (shown) selected = initial = Number(shown.dataset.cutroomVersion);
     }
     if (selected === undefined) return;
     const available = [
       ...new Set(hosts.map((host) => Number(host.dataset.cutroomVersion))),
     ].sort((a, b) => a - b);
-    const next = nextAudition(available, selected);
+    // Moving one row either way, or back to the saved take, finds its decoder already open.
+    const warm = new Set([
+      selected,
+      initial,
+      ...neighbours(available, selected),
+    ]);
     for (const [media, src] of sources) {
       const index = Number(media.dataset.cutroomVersion);
       const needed =
-        index === selected ||
-        index === next ||
+        warm.has(index) ||
         media.hasAttribute("data-cutroom-shown") ||
         (media instanceof HTMLAudioElement && index === outgoing);
       const resident = win.__cutroomAuditionResident?.(media, needed) ?? needed;
@@ -178,7 +184,7 @@ function installAudition(
     else show();
   });
 }
-const AUDITION_SCRIPT = `<script data-cutroom-audition>(${installAudition.toString()})(${JSON.stringify(AUDITION_MESSAGE)}, ${nextAudition.toString()})</script>`;
+const AUDITION_SCRIPT = `<script data-cutroom-audition>(${installAudition.toString()})(${JSON.stringify(AUDITION_MESSAGE)}, ${auditionNeighbours.toString()})</script>`;
 
 type Element = DefaultTreeAdapterTypes.Element;
 
