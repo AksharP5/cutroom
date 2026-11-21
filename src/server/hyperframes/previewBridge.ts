@@ -460,9 +460,14 @@ function installPreviewBridge(
   // Finished entrance effects disappear from getAnimations(), but the pinned runtime
   // can still retain their handles. Collect them before the parent's first seek.
   const rememberTitleAnimations = (pageAnimations?: Animation[]) => {
-    if (!initialTiming || !win.__player) return;
+    if (
+      !initialTiming ||
+      !win.__player ||
+      !liveClips.some((clip) => clip.titleAttributes)
+    )
+      return;
     const byTarget = new Map<Element, Animation[]>();
-    for (const animation of pageAnimations ?? []) {
+    for (const animation of pageAnimations ?? document.getAnimations()) {
       const effect = animation.effect;
       // Match Element.getAnimations() without its per-element style flush.
       if (
@@ -480,10 +485,8 @@ function installPreviewBridge(
       const element = clipElement(clip.id);
       if (!element) continue;
       const handles = titleAnimations.get(clip.id) ?? new Set<Animation>();
-      const animations = pageAnimations
-        ? (byTarget.get(element) ?? [])
-        : element.getAnimations();
-      for (const animation of animations) handles.add(animation);
+      for (const animation of byTarget.get(element) ?? [])
+        handles.add(animation);
       titleAnimations.set(clip.id, handles);
     }
   };
@@ -3865,8 +3868,7 @@ function installPreviewBridge(
             // Resolve new font metrics before recreating animation effects.
             for (const element of changedTitles)
               element.getBoundingClientRect();
-            if (liveClips.some((clip) => clip.titleAttributes))
-              rememberTitleAnimations(document.getAnimations());
+            rememberTitleAnimations();
             if (changedTitles.size) await document.fonts.ready;
             // Recreate the changed title's CSS animations before seeking. The pinned
             // adapter retains handles across name/rule changes and can revive canceled
