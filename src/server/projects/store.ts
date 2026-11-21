@@ -186,6 +186,11 @@ export async function createProjectStore(options: {
       projectDir,
       historyRoot: join(dataDir, "history"),
       undoScope: "everyone",
+      onError: (error) =>
+        console.warn(
+          "Cutroom history:",
+          error instanceof Error ? error.message : String(error),
+        ),
       beforeReplay: async (changes, readBlob, context) => {
         await guardFreezeHistory(
           { path: projectDir },

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { HistoryWho } from "@hyperframes/studio-server";
+import type { HistoryWho } from "../history/historyLog";
 import type { Context } from "hono";
 import {
   AGENT_HEADER,

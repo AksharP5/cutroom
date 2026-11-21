@@ -1,6 +1,6 @@
 import { resolvePreviewCompositionSrc } from "@hyperframes/core/compiler";
 import { collectSubCompositionSrcs } from "@hyperframes/parsers/asset-resolution";
-import type { HistoryFileChange } from "@hyperframes/studio-server";
+import type { HistoryFileChange } from "../history/historyLog";
 import { realpath } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import { HttpError } from "../../shared/errors";

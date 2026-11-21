@@ -1,10 +1,8 @@
 import { expect, test } from "bun:test";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  fileContentVersion,
-  openProjectHistory,
-} from "@hyperframes/studio-server";
+import { fileContentVersion } from "@hyperframes/studio-server";
+import { openProjectHistory } from "../src/server/history/projectHistory";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { historyCandidate } from "../src/server/projects/history";
 import {
@@ -270,7 +268,7 @@ test("replay refuses an outside write after candidate selection and rolls back e
     await expect(
       history.revert(
         who,
-        async () => ({
+        () => ({
           steps: [
             {
               id: entry!.id,
@@ -348,7 +346,7 @@ test("an interrupted replay and torn log tail recover without changing history I
       expect(await readFile(index, "utf8")).toBe(newer);
       const result = await current.revert(
         latest.who,
-        async () => ({
+        () => ({
           steps: [
             {
               id: latest.id,

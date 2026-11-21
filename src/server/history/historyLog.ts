@@ -18,6 +18,8 @@ export interface HistoryWho {
   kind: "person" | "agent" | "outside";
   /** Shown in the History list: "You", the agent's name, "Outside". */
   name: string;
+  /** Stable identity for this editor, independent of the display name. */
+  key?: string;
 }
 
 /** A file's sha256 before and after; null is "did not exist", so a create or delete undoes like any edit. */
@@ -47,6 +49,10 @@ export interface HistoryEntry {
   files: HistoryFileChange[];
   /** Set on an undo: the entry it reverted. Redo is undoing the undo. */
   undoes?: string;
+  replay?: "ordinary" | "explicit" | "group";
+  category?: "marker" | "media" | "text" | "import";
+  requestId?: string;
+  incomplete?: true;
   /** Set on a restore: the point (an entry id, or START) the files were made equal to. */
   restoredTo?: string;
 }
@@ -62,6 +68,7 @@ export interface HistoryLog {
   entries: HistoryEntry[];
   pins: Set<string>;
   keepsLedger?: boolean;
+  unterminated?: true;
 }
 
 export type LogRecord =
@@ -94,6 +101,7 @@ export function readLog(
     const record = line ? parseRecord(line) : null;
     if (record) applyRecord(log, record);
     else if (line && index < lines.length - 1) onUnreadable(index + 1);
+    if (line && index === lines.length - 1) log.unterminated = true;
   });
   return log;
 }

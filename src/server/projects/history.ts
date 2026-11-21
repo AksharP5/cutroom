@@ -1,14 +1,14 @@
-import {
-  HistoryRefusedError,
-  STUDIO_SIGNATURE_MANIFEST_PATHS,
-} from "@hyperframes/studio-server";
+import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
+import { HistoryRefusedError } from "../history/projectHistory";
 import type {
   HistoryEntry,
   HistoryFileChange,
-  HistoryListItem,
   HistoryWho,
+} from "../history/historyLog";
+import type {
+  HistoryListItem,
   ProjectHistory,
-} from "@hyperframes/studio-server";
+} from "../history/projectHistory";
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { dirname, relative, sep } from "node:path";
@@ -829,7 +829,7 @@ export async function replayHistory(
           try {
             const result = await history.revert(
               who,
-              async (standing, hash) => {
+              (standing, hash) => {
                 if (
                   standing.length !== entries.length ||
                   standing.at(-1)?.id !== head ||
