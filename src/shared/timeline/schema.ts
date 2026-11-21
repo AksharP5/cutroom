@@ -341,6 +341,10 @@ export const ClipSchema = z.object({
   /** Seconds into the source for video, audio, and sub-compositions; null for other clips. */
   mediaStart: z.number().nonnegative().nullable(),
   playbackRate: z.number().positive(),
+  /** Unrounded source width in timeline frame units, retained across speed edits. */
+  speedSpan: z
+    .object({ frames, rate: z.number().positive(), phase: z.number() })
+    .optional(),
   src: z.string().nullable(),
   /** Length of the source media in seconds when it could be probed; video and audio only. */
   sourceDuration: z.number().positive().nullable(),

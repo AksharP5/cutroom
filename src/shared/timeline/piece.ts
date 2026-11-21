@@ -271,13 +271,26 @@ function sourcePeriodFloor(curve: Curve, fps: Fps) {
   return Number(period);
 }
 
-/** Rescale a frame offset for a constant speed edit, rounding exact half frames up. */
-export function retimedFrames(offset: number, before: number, after: number) {
+/** Scale a source edge around the group start, rounding exact half frames up. */
+export function retimedFrames(
+  offset: number,
+  before: number,
+  after: number,
+  phase: number,
+  span?: { frames: number; rate: number },
+) {
   const oldRate = decimalFraction(before);
   const newRate = decimalFraction(after);
-  return Number(
-    halfUp(BigInt(offset) * oldRate.n * newRate.d, oldRate.d * newRate.n),
+  const head = add(
+    fraction(BigInt(offset) * oldRate.n, oldRate.d),
+    decimalFraction(phase),
   );
+  const width = span && decimalFraction(span.rate);
+  const edge =
+    span && width
+      ? add(head, fraction(BigInt(span.frames) * width.n, width.d))
+      : head;
+  return Number(halfUp(edge.n * newRate.d, edge.d * newRate.n));
 }
 
 function microsOf(time: ExactTime) {

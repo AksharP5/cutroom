@@ -1246,19 +1246,44 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           );
       }
       const ids = new Set(targets.map(({ id }) => id));
-      const selected = readClipSource(target);
-      const anchor = frames(target.start, fps);
+      const groupStart = Math.min(...targets.map(({ start }) => start));
       const rate = command.playbackRate ?? target.playbackRate;
-      const editedInPoint =
-        command.mediaStart === undefined
-          ? selected.stored
-          : { mediaStart: Number(attrMicros(command.mediaStart)) };
-      const sourceMaps = selected.lane
+      const startFor = (clip: Clip) =>
+        targets.length === 1 ||
+        command.playbackRate === undefined ||
+        command.playbackRate === clip.playbackRate
+          ? clip.start
+          : groupStart +
+            Math.max(
+              0,
+              retimedFrames(
+                clip.start - groupStart,
+                clip.playbackRate,
+                command.playbackRate,
+                clip.speedSpan?.phase ?? 0,
+              ),
+            );
+      const selected = readClipSource(target);
+      const selectedStart = frames(target.start, fps);
+      const previousMap = selected.lane
         ? null
-        : {
-            previous: decode(selected.stored, target.playbackRate, anchor, fps),
-            edited: decode(editedInPoint, rate, anchor, fps),
-          };
+        : decode(selected.stored, target.playbackRate, selectedStart, fps);
+      const anchor = frames(
+        command.playbackRate !== undefined && command.mediaStart === undefined
+          ? groupStart
+          : startFor(target),
+        fps,
+      );
+      const editedMap =
+        previousMap &&
+        decode(
+          command.mediaStart === undefined
+            ? encode(previousMap, target.playbackRate, anchor, fps)
+            : { mediaStart: Number(attrMicros(command.mediaStart)) },
+          rate,
+          anchor,
+          fps,
+        );
       const sourceShift =
         command.mediaStart === undefined
           ? 0
@@ -1266,19 +1291,21 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const changed = new Map(
         targets.map((clip) => {
           const playbackRate = command.playbackRate ?? clip.playbackRate;
-          // Scale both edges around the selected in-point so a linked J/L cut follows the content.
-          const edge = (at: number) =>
-            target.start +
-            retimedFrames(at - target.start, clip.playbackRate, playbackRate);
-          const start = edge(clip.start);
-          const duration = Math.max(1, edge(clipEnd(clip)) - start);
+          const speedChanged = playbackRate !== clip.playbackRate;
+          const head = clip.start - groupStart;
+          const span = clip.speedSpan ?? {
+            frames: clip.duration,
+            rate: clip.playbackRate,
+            phase: 0,
+          };
+          const phase = targets.length === 1 ? 0 : span.phase;
           const source = readClipSource(clip);
           const current =
-            sourceMaps &&
+            previousMap &&
             !source.lane &&
             clip.playbackRate === target.playbackRate
               ? clip === target
-                ? sourceMaps.previous
+                ? previousMap
                 : decode(
                     source.stored,
                     clip.playbackRate,
@@ -1286,28 +1313,82 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                     fps,
                   )
               : null;
-          const timing =
-            sourceMaps &&
+          const sharesMap =
             current &&
-            current.c === sourceMaps.previous.c &&
-            current.zero === sourceMaps.previous.zero
+            previousMap &&
+            current.c === previousMap.c &&
+            current.zero === previousMap.zero;
+          // Independently aligned partners keep their phase when their head rounds to a frame.
+          const oldOffset = frameTime(head, fps) * clip.playbackRate;
+          const mediaStart = clip.mediaStart! + sourceShift;
+          let start = startFor(clip);
+          let rounding =
+            frameTime(start - groupStart, fps) * playbackRate - oldOffset;
+          if (
+            speedChanged &&
+            !sharesMap &&
+            mediaStart >= 0 &&
+            round6(mediaStart + rounding) < 0
+          ) {
+            // Use the first feasible frame when rounding down would need media before source zero.
+            start += Math.ceil(
+              -(mediaStart + rounding) / frameTime(1, fps) / playbackRate,
+            );
+            rounding =
+              frameTime(start - groupStart, fps) * playbackRate - oldOffset;
+          }
+          const duration = speedChanged
+            ? Math.max(
+                1,
+                groupStart +
+                  retimedFrames(
+                    head,
+                    clip.playbackRate,
+                    playbackRate,
+                    phase,
+                    span,
+                  ) -
+                  start,
+              )
+            : clip.duration;
+          const timing =
+            sharesMap && editedMap
               ? writeClipSource(
                   source,
-                  encode(sourceMaps.edited, rate, frames(start, fps), fps),
+                  encode(editedMap, rate, frames(start, fps), fps),
                 )
               : retimeClipSource(
                   {
                     ...clip,
-                    mediaStart: clip.mediaStart! + sourceShift,
+                    mediaStart: mediaStart + rounding,
                     playbackRate,
                   },
                   start,
                   fps,
                 );
-          return [
-            clip.id,
-            { ...clip, start, duration, playbackRate, ...timing },
-          ] as const;
+          const resized = {
+            ...clip,
+            start,
+            duration,
+            playbackRate,
+            ...timing,
+            ...(speedChanged && {
+              speedSpan: {
+                ...span,
+                phase: round6(
+                  phase +
+                    head * clip.playbackRate -
+                    (start - groupStart) * playbackRate,
+                ),
+              },
+            }),
+          };
+          if (speedChanged)
+            resized.duration = Math.max(
+              1,
+              duration + Math.min(0, framesAfterOut(resized, fps)),
+            );
+          return [clip.id, resized] as const;
         }),
       );
       const retimed = clips.map((clip) => changed.get(clip.id) ?? clip);
@@ -2658,8 +2739,10 @@ function windowClip(
   const duration = end - start;
   if (duration <= 0) return { ...clip, start, duration };
   const mix = windowMix(clip, start - clip.start, duration, fps, mode);
+  const { speedSpan, ...original } = clip;
   return {
-    ...clip,
+    ...original,
+    ...(duration === clip.duration && speedSpan && { speedSpan }),
     ...mix,
     start,
     duration,

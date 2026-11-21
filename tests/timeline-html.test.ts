@@ -1226,3 +1226,32 @@ test("a ramp source-in edit moves the source while keeping the curve phase and d
     edit(html, [{ type: "setTiming", clipId: "ramp", playbackRate: 2 }]),
   ).toThrow("has a speed ramp");
 });
+
+test("round trips through saved constant speeds preserve a clip's source width and following cut", () => {
+  let html = composition(
+    '<video id="shot" src="shot.mp4" data-start="0" data-duration="4.033333" data-track-index="0"></video><video id="next" src="next.mp4" data-start="4.033333" data-duration="1" data-track-index="0"></video>',
+  );
+  for (const [playbackRate, duration] of [
+    [2, 61],
+    [1, 121],
+    [3, 40],
+    [1, 121],
+    [0.3, 403],
+    [1, 121],
+    [1.5, 81],
+    [1, 121],
+  ]) {
+    html = edit(html, [{ type: "setTiming", clipId: "shot", playbackRate }]);
+    const [shot, next] = parseComposition(html, emptyTimelineSettings())
+      .timeline.clips;
+    expect([shot.duration, next.start]).toEqual([duration, duration]);
+  }
+  html = edit(html, [{ type: "setTiming", clipId: "shot", playbackRate: 2 }]);
+  html = edit(html, [
+    { type: "trim", clipId: "shot", edge: "end", to: 52, ripple: true },
+  ]);
+  html = edit(html, [{ type: "setTiming", clipId: "shot", playbackRate: 1 }]);
+  const [shot, next] = parseComposition(html, emptyTimelineSettings()).timeline
+    .clips;
+  expect([shot.duration, next.start]).toEqual([104, 104]);
+});
