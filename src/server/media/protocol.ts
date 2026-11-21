@@ -27,7 +27,7 @@ export const MediaInfoSchema = z.object({
       height: z.number().int().positive(),
       pixelAspect: z.number().positive(),
       fps: z.number().positive(),
-      exactFps: ProjectRateSchema.optional(),
+      matchFps: ProjectRateSchema.optional(),
       duration: z.number().nonnegative(),
       codec: z.string(),
       alpha: z.boolean(),

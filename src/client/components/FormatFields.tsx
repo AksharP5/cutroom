@@ -1,5 +1,12 @@
 import { useId, useState } from "react";
-import { rateLabel, sameRate } from "../../shared/projectFormat";
+import {
+  pictureSizeRule,
+  PictureSizeSchema,
+  projectRates,
+  ProjectRateSchema,
+  rateLabel,
+  sameRate,
+} from "../../shared/projectFormat";
 import type { ProjectFormat } from "../../shared/projectFormat";
 import { SelectMenu } from "./SelectMenu";
 
@@ -16,16 +23,6 @@ const sizes = [
 ];
 const sizeOptions = [...sizes, { value: "custom", label: "Custom" }];
 
-const rates = [
-  { num: 24000, den: 1001 },
-  { num: 24, den: 1 },
-  { num: 25, den: 1 },
-  { num: 30000, den: 1001 },
-  { num: 30, den: 1 },
-  { num: 50, den: 1 },
-  { num: 60000, den: 1001 },
-  { num: 60, den: 1 },
-];
 const rateKey = ({ num, den }: ProjectFormat["fps"]) => `${num}/${den}`;
 
 export function FormatFields({
@@ -45,11 +42,15 @@ export function FormatFields({
         ({ width, height }) =>
           width === format.width && height === format.height,
       )?.value ?? "custom");
-  const known = rates.find((rate) => sameRate(rate, format.fps));
-  const options = (known ? rates : [...rates, format.fps]).map((rate) => ({
-    value: rateKey(rate),
-    label: `${rateLabel(rate)} fps`,
-  }));
+  const known = projectRates.find((rate) => sameRate(rate, format.fps));
+  const options = (known ? projectRates : [...projectRates, format.fps]).map(
+    (rate) => ({
+      value: rateKey(rate),
+      label: `${rateLabel(rate)} fps`,
+    }),
+  );
+  const invalidSize =
+    size === "custom" && !PictureSizeSchema.safeParse(format).success;
   return (
     <div className="format-fields">
       <div>
@@ -81,7 +82,7 @@ export function FormatFields({
           value={rateKey(known ?? format.fps)}
           disabled={disabled}
           onChange={(value) => {
-            const fps = rates.find((rate) => rateKey(rate) === value);
+            const fps = projectRates.find((rate) => rateKey(rate) === value);
             if (fps) onChange({ ...format, fps });
           }}
         />
@@ -97,6 +98,8 @@ export function FormatFields({
               type="number"
               min={240}
               max={7680}
+              step={2}
+              aria-describedby={invalidSize ? `${id}-size-help` : undefined}
               required
               disabled={disabled}
               value={format[field] || ""}
@@ -106,6 +109,16 @@ export function FormatFields({
             />
           </div>
         ))}
+      {invalidSize && (
+        <p className="field-help" id={`${id}-size-help`}>
+          {pictureSizeRule}
+        </p>
+      )}
+      {!ProjectRateSchema.safeParse(known ?? format.fps).success && (
+        <p className="field-help">
+          Choose a supported frame rate to apply this format.
+        </p>
+      )}
     </div>
   );
 }

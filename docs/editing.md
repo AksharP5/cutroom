@@ -8,11 +8,11 @@ Settings keeps a New editor switch as a way back to the embedded HyperFrames edi
 
 ## Project format
 
-**New project** remembers your last size and frame rate. Choose 1080p or 4K landscape, 1080 × 1920 vertical, 1080 × 1080 square, or a custom size. The rate menu runs from 23.976 to 60 fps and saves fractional rates exactly.
+**New project** remembers your last size and frame rate. Choose 1080p or 4K landscape, 1080 × 1920 vertical, 1080 × 1080 square, or a custom size. Custom dimensions are even, from 240 to 7680 pixels per side, up to 7680 × 4320 pixels total. The rate menu offers 16 to 120 fps and saves fractional rates exactly.
 
-With nothing selected in the main timeline, choose **Inspector > Format > Edit**. Changing size changes the canvas. A new rate takes each clip’s original start and end in seconds and snaps them to the nearest frame, with ties going to the later frame. The dialog shows how many edges move and by how much. If a clip would disappear, a transition cannot fit, or some timing cannot be saved on the new grid, the dialog shows the reason before writing anything.
+With nothing selected in the main timeline, choose **Inspector > Format > Edit**. Changing size changes the canvas. A new rate snaps each clip’s original start and end to its nearest frame, with ties going to the later frame. It trims inward if the nearest edge would extend past the source. The source stays timed to the same point in the project, so linked picture and sound stay in sync. The dialog shows how many clip edges move and the largest timing shift. If a clip, transition or pair of keyframes cannot fit, the dialog shows the reason before writing anything.
 
-When you drop the first video onto an empty main timeline, **Match** offers its size and exact rate if they differ from the project. The match changes the format of the placed edit. Undo restores the previous format and keeps the dropped clip. Variable-rate media without a matching native rate does not offer a match.
+When you drop the first video onto an empty main timeline, **Match** offers its size and nearest supported rate if they differ from the project. The source’s average rate must be within 0.5% of that rate. Undo restores the previous format and keeps the dropped clip.
 
 ## Editor
 

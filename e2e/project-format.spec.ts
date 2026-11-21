@@ -253,3 +253,63 @@ test("the first drop offers a format match, then the viewer and export show all 
     expect(label).toBe(frame);
   }
 });
+
+test("the first drop offers a supported rate near variable-rate footage's average", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Variable-rate recording" },
+      })
+    ).json(),
+  );
+  const source = join(project.path, "variable.mp4");
+  // Drop one of 360 pictures and keep the timestamps of the rest.
+  await run("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=blue:s=320x240:r=60:d=6",
+    "-vf",
+    "select='not(eq(n,120))'",
+    "-fps_mode",
+    "vfr",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-threads",
+    "1",
+    "-video_track_timescale",
+    "60000",
+    source,
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    '<main id="main" data-composition-id="main" data-width="1920" data-height="1080"></main>',
+  );
+  await page.goto(`/#project/${project.id}`);
+  await startMediaDrag(
+    page,
+    page.getByRole("listitem", { name: "variable.mp4" }),
+  );
+  const lane = (await page.locator(".tl-lane.video").first().boundingBox())!;
+  await page.mouse.move(lane.x + 2, lane.y + lane.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.locator(".toast")).toContainText("320 × 240 · 59.94 fps");
+  await page.getByRole("button", { name: "Match", exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        TimelineViewSchema.parse(
+          await (
+            await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+          ).json(),
+        ).timeline.fps,
+    )
+    .toEqual({ num: 60000, den: 1001 });
+});

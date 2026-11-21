@@ -1,3 +1,4 @@
+import { rateLabel } from "../projectFormat";
 import { activeVersion } from "./versions";
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
 import { localMediaPath } from "../media";
@@ -650,7 +651,7 @@ export function editLabel(
         return `${pending ? "Keep" : "Kept"} ${version}${named ? ` of ${target([command.clipId])}` : ""} and ${pending ? "drop" : "dropped"} the others`;
       }
       case "setFormat":
-        return "Changed project format";
+        return `${pending ? "Change" : "Changed"} project format to ${command.width} × ${command.height}, ${rateLabel(command.fps)} fps`;
       case "setRange":
         return pending
           ? [

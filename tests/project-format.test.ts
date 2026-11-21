@@ -1,12 +1,27 @@
 import { expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { sourceTimeAt } from "@hyperframes/core/speed-ramp";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { ProjectSchema } from "../src/shared/project";
+import { parseComposition } from "../src/server/timeline/composition";
+import { planFormat } from "../src/server/timeline/format";
+import {
+  matchProjectRate,
+  ProjectFormatSchema,
+} from "../src/shared/projectFormat";
+import { resolveClip } from "../src/shared/timeline/clipTiming";
+import {
+  frames,
+  secondsOf,
+  sourceAt,
+  sourceSampleOffset,
+} from "../src/shared/timeline/piece";
+import type { Fps } from "../src/shared/timeline/schema";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { projectFixture } from "./project-fixture";
 
@@ -105,9 +120,16 @@ test("MCP creates exact rates and shares the format preview, write, and undo his
       ...args,
       expectedRevision: (await read()).revision,
       commands: [command],
-      fullTimeline: true,
+      replyFormat: "compact",
     });
     expect(TimelineViewSchema.parse(mixed).timeline).toEqual(after.timeline);
+    expect(mixed).toMatchObject({
+      size: after.size,
+      changes: { fps: format.fps },
+    });
+    expect((await fixture.store.history(project)).list().at(-1)?.label).toBe(
+      "Changed project format to 1080 × 1920, 24 fps",
+    );
     expect(await readFile(index, "utf8")).toBe(written);
   } finally {
     await client.close();
@@ -221,56 +243,261 @@ test("a rate change keeps cut, transition, marker and range times together", asy
   }
 });
 
-test("regridding a speed ramp keeps its in-point and curve phase together", async () => {
+const size = { width: 1920, height: 1080 };
+const rate = (num: number, den = 1): Fps => ({ num, den });
+
+test.each([
+  [rate(60), rate(24)],
+  [rate(24), rate(30)],
+  [rate(25), rate(30)],
+  [rate(30), rate(60000, 1001)],
+  [rate(30000, 1001), rate(60000, 1001)],
+])(
+  "regridding from %j to %j keeps each linked piece on its original source map",
+  async (from, to) => {
+    const fixture = await projectFixture();
+    fixture.app.route(
+      "/api/cutroom",
+      createTimelineRoutes(fixture.store, fixture.review),
+    );
+    try {
+      const project = await fixture.store.create({ name: "Two linked J cuts" });
+      const index = join(project.path, "index.html");
+      const videoFrame = Math.round(from.num / from.den) + 1;
+      const audioFrame = videoFrame - 4;
+      const piece = (tag: "video" | "audio", ramp: boolean) => {
+        const time =
+          ((tag === "video" ? videoFrame : audioFrame) * from.den) / from.num;
+        // Both pieces share one curve with zero at timeline 0.
+        const lane = {
+          target: "rate",
+          points: [
+            { t: 0, v: 0.5 },
+            { t: 4, v: 2 },
+          ],
+        };
+        const source = ramp ? 0.5 + sourceTimeAt(lane, time) : time + 0.006345;
+        const automation = ramp
+          ? JSON.stringify({
+              version: 1,
+              lanes: [{ ...lane, offset: Number(time.toFixed(6)) }],
+            })
+          : "";
+        const link = ramp ? "ramped" : "plain";
+        return `<${tag} id="${link}-${tag}" src="take.mp4" data-link="${link}" data-track-index="${(ramp ? 2 : 0) + (tag === "audio" ? 1 : 0)}" data-start="${time.toFixed(6)}" data-duration="2" data-media-start="${source.toFixed(6)}" ${tag === "video" ? "muted" : ""} ${ramp ? `data-automation='${automation}'` : ""}></${tag}>`;
+      };
+      const html = `<main data-composition-id="main" data-fps="${from.num}/${from.den}">${piece("video", false)}${piece("audio", false)}${piece("video", true)}${piece("audio", true)}</main>
+`;
+      await writeFile(index, html);
+      const path = `/projects/${project.id}`;
+      const read = async () =>
+        TimelineViewSchema.parse(
+          await (await fixture.request(`${path}/timeline`)).json(),
+        );
+      const before = await read();
+      const edit = await fixture.request(`${path}/commands`, "POST", {
+        expectedRevision: before.revision,
+        commands: [{ type: "setFormat", fps: to, ...size }],
+      });
+      const body = await edit.json();
+      expect(edit.status, JSON.stringify(body)).toBe(200);
+      const after = TimelineViewSchema.parse(body);
+      for (const link of ["plain", "ramped"]) {
+        const video = after.timeline.clips.find(
+          ({ id }) => id === `${link}-video`,
+        )!;
+        const audio = after.timeline.clips.find(
+          ({ id }) => id === `${link}-audio`,
+        )!;
+        expect(audio.start).toBeLessThan(video.start);
+        for (const clip of [video, audio]) {
+          const oldClip = before.timeline.clips.find(
+            ({ id }) => id === clip.id,
+          )!;
+          expect(clip.start).toBe(
+            Math.round(
+              (oldClip.start * from.den * to.num) / (from.num * to.den),
+            ),
+          );
+          const oldPiece = resolveClip(oldClip, from);
+          const newPiece = resolveClip(clip, to);
+          if (link === "plain") {
+            expect(sourceSampleOffset(newPiece)).toBe(
+              sourceSampleOffset(oldPiece),
+            );
+          }
+          for (let frame = video.start; frame < video.start + 12; frame++) {
+            const position = frames(frame, to);
+            const oldValue = sourceAt(oldPiece, position);
+            const newValue = sourceAt(newPiece, position);
+            if (typeof oldValue === "number" && typeof newValue === "number") {
+              expect(Math.abs(newValue - oldValue)).toBeLessThan(1e-6);
+            } else if (
+              typeof oldValue !== "number" &&
+              typeof newValue !== "number"
+            ) {
+              expect(
+                Math.abs(secondsOf(newValue) - secondsOf(oldValue)),
+              ).toBeLessThan(2e-6);
+            } else throw new Error("The clip changed source map type.");
+          }
+        }
+        const videoPiece = resolveClip(video, to);
+        const audioPiece = resolveClip(audio, to);
+        expect(sourceAt(audioPiece, frames(video.start, to))).toEqual(
+          sourceAt(videoPiece, frames(video.start, to)),
+        );
+      }
+      expect(
+        (await fixture.request(`${path}/history/undo`, "POST")).status,
+      ).toBe(200);
+      expect(await readFile(index, "utf8")).toBe(html);
+      expect((await read()).timeline).toEqual(before.timeline);
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+test("regridding keeps the original sample at a half-sample tie", () => {
+  const from = rate(24);
+  const to = rate(30);
+  const lengths = new Map<string, number>();
+  const settings = {
+    tracks: [],
+    markers: [],
+    soloAudioGroups: [],
+    range: { in: null, out: null },
+  };
+  const parsed = parseComposition(
+    '<main data-composition-id="main" data-fps="24"><audio id="take" src="take.wav" data-start="0.083333" data-duration="1" data-media-start="0.041469"></audio></main>',
+    settings,
+  );
+  const regridded = planFormat(parsed, settings, lengths, { ...size, fps: to });
+  expect(sourceSampleOffset(resolveClip(parsed.timeline.clips[0]!, from))).toBe(
+    -2010n,
+  );
+  expect(
+    sourceSampleOffset(resolveClip(regridded.timeline.clips[0]!, to)),
+  ).toBe(-2010n);
+});
+
+test.each([
+  [62 / 60, 62 / 60],
+  [63 / 60, 1.04],
+])(
+  "the end snaps inward from %f seconds with %f seconds of media",
+  (end, length) => {
+    const lengths = new Map([["take.mp4", length]]);
+    const html = `<main data-composition-id="main" data-fps="60"><video id="take" src="take.mp4" data-start="0" data-duration="${end.toFixed(6)}"></video></main>`;
+    const settings = {
+      tracks: [],
+      markers: [],
+      soloAudioGroups: [],
+      range: { in: null, out: null },
+    };
+    const parsed = parseComposition(html, settings, { mediaLengths: lengths });
+    const { timeline, preview } = planFormat(parsed, settings, lengths, {
+      ...size,
+      fps: rate(24),
+    });
+    expect(timeline.clips[0]).toMatchObject({
+      start: 0,
+      duration: 24,
+      mediaStart: 0,
+    });
+    expect(preview.maxShiftMs).toBeCloseTo((end - 1) * 1000);
+  },
+);
+
+test("preview measures timing controls and keeps a one-frame fade", async () => {
   const fixture = await projectFixture();
   fixture.app.route(
     "/api/cutroom",
     createTimelineRoutes(fixture.store, fixture.review),
   );
   try {
-    const project = await fixture.store.create({ name: "Speed ramp" });
-    const automation = JSON.stringify({
-      version: 1,
-      lanes: [
-        {
-          target: "rate",
-          points: [
-            { t: 0, v: 0.5 },
-            { t: 4, v: 2 },
-          ],
-        },
-      ],
-    });
+    const project = await fixture.store.create({ name: "Fast fade" });
     await writeFile(
       join(project.path, "index.html"),
-      `<main data-composition-id="main" data-fps="30"><video id="ramp" src="ramp.mp4" muted data-start="0.02" data-duration="5" data-automation='${automation}'></video></main>`,
+      '<main data-composition-id="main" data-fps="60"><audio id="tone" src="tone.wav" data-start="0" data-duration="2"></audio><div id="card" data-timeline-label="End card" data-start="0" data-duration="2"></div></main>',
     );
     const path = `/projects/${project.id}`;
-    const before = TimelineViewSchema.parse(
-      await (await fixture.request(`${path}/timeline`)).json(),
+    const read = async () =>
+      TimelineViewSchema.parse(
+        await (await fixture.request(`${path}/timeline`)).json(),
+      );
+    const edit = async (commands: unknown[]) =>
+      fixture.request(`${path}/commands`, "POST", {
+        expectedRevision: (await read()).revision,
+        commands,
+      });
+    const format = { ...size, fps: rate(24) };
+    const preview = async () =>
+      fixture.request(`${path}/format-preview`, "POST", {
+        expectedRevision: (await read()).revision,
+        format,
+      });
+    const settings = await edit([
+      { type: "setMarker", id: "beat", frame: 1, duration: 0 },
+      { type: "setRange", in: 0, out: 60 },
+    ]);
+    expect(settings.status, await settings.text()).toBe(200);
+    const marker = await (await preview()).json();
+    expect(marker).toMatchObject({ movedEdges: 0 });
+    expect(marker.maxShiftMs).toBeCloseTo(1000 / 60);
+    const fade = await edit([{ type: "setClip", clipId: "tone", fadeIn: 1 }]);
+    expect(fade.status, await fade.text()).toBe(200);
+    const fading = await (await preview()).json();
+    expect(fading).toMatchObject({ movedEdges: 0 });
+    expect(fading.maxShiftMs).toBeCloseTo(25);
+    const applied = await edit([{ type: "setFormat", ...format }]);
+    const body = await applied.json();
+    expect(applied.status, JSON.stringify(body)).toBe(200);
+    expect(
+      TimelineViewSchema.parse(body).timeline.clips.find(
+        ({ id }) => id === "tone",
+      )?.fadeIn,
+    ).toBe(1);
+
+    expect((await fixture.request(`${path}/history/undo`, "POST")).status).toBe(
+      200,
     );
-    const edit = await fixture.request(`${path}/commands`, "POST", {
-      expectedRevision: before.revision,
-      commands: [
-        {
-          type: "setFormat",
-          fps: { num: 60, den: 1 },
-          width: 1920,
-          height: 1080,
+    const keyed = await edit([
+      {
+        type: "setClip",
+        clipId: "card",
+        keyframes: {
+          opacity: [0, 1].map((frame) => ({
+            frame,
+            value: frame,
+            ease: "linear",
+          })),
         },
-      ],
-    });
-    const body = await edit.json();
-    expect(edit.status, JSON.stringify(body)).toBe(200);
-    const after = TimelineViewSchema.parse(body);
-    const { mediaStart, automation: projected } = before.timeline.clips[0]!;
-    expect(after.timeline.clips[0]).toMatchObject({
-      start: 1,
-      duration: 300,
-      mediaStart,
-      automation: projected,
-    });
+      },
+    ]);
+    expect(keyed.status, await keyed.text()).toBe(200);
+    const refused = await preview();
+    expect(refused.status).toBe(422);
+    expect(await refused.text()).toContain(
+      "End card has opacity keyframes at clip frames 0 and 1",
+    );
   } finally {
     await fixture.close();
   }
+});
+
+test("project formats require exportable dimensions and supported exact rates", () => {
+  const valid = (width: number, height: number, fps: Fps) =>
+    ProjectFormatSchema.safeParse({ width, height, fps }).success;
+  expect(valid(7680, 4320, rate(96000, 1001))).toBe(true);
+  expect(valid(4320, 7680, rate(120))).toBe(true);
+  expect(valid(1921, 1080, rate(60))).toBe(false);
+  expect(valid(7680, 4322, rate(60))).toBe(false);
+  expect(valid(1920, 1080, rate(7, 3))).toBe(false);
+  expect(valid(1920, 1080, rate(9007199254740991, 9007199254740990))).toBe(
+    false,
+  );
+  expect(matchProjectRate(59.84)).toEqual(rate(60000, 1001));
+  expect(matchProjectRate(59.62)).toBeUndefined();
 });

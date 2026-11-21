@@ -74,11 +74,14 @@ export function FormatDialog({
   const summary =
     preview && rateChanged
       ? preview.movedEdges
-        ? `${preview.movedEdges} clip ${preview.movedEdges === 1 ? "edge moves" : "edges move"} to the new grid (up to ${Number(preview.maxShiftMs.toPrecision(3))} ms).`
+        ? `${preview.movedEdges} clip ${preview.movedEdges === 1 ? "edge moves" : "edges move"} to the new grid.`
         : view.timeline.clips.length
-          ? "All clip edges already line up with the new grid."
+          ? "All clip edges already line up."
           : ""
       : "";
+  const shift = preview?.maxShiftMs
+    ? `Largest timing shift is ${Number(preview.maxShiftMs.toPrecision(3))} ms.`
+    : "";
   const canSave = preview !== null && !stale && !saving;
 
   return createPortal(
@@ -115,9 +118,9 @@ export function FormatDialog({
           data-error={error ? "" : undefined}
         >
           {error ||
-            (!valid
-              ? "Enter a width and height from 240 to 7680 pixels."
-              : summary || (changed && !preview ? "Checking timeline…" : ""))}
+            (valid &&
+              ([summary, shift].filter(Boolean).join(" ") ||
+                (changed && !preview ? "Checking timeline…" : "")))}
         </p>
         <footer className="modal-actions">
           <button

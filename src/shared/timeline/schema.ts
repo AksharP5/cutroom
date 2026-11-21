@@ -727,7 +727,7 @@ export const CopyClipsSchema = z.object({
   expectedRevision: z.string().min(1),
 });
 
-export const SetFormatSchema = ProjectFormatSchema.extend({
+export const SetFormatSchema = ProjectFormatSchema.safeExtend({
   type: z.literal("setFormat"),
 });
 

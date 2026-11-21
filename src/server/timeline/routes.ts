@@ -1,3 +1,4 @@
+import { ProjectFormatSchema } from "../../shared/projectFormat";
 import { planFormat } from "./format";
 import { extname } from "node:path";
 import { stat } from "node:fs/promises";
@@ -51,7 +52,6 @@ import {
   CommandBatchSchema,
   CopyClipsSchema,
   TimelineSettingsSchema,
-  SetFormatSchema,
   emptyTimelineSettings,
 } from "../../shared/timeline/schema";
 import type {
@@ -1034,7 +1034,7 @@ export function createTimelineRoutes(
       CommandBatchSchema.pick({
         composition: true,
         expectedRevision: true,
-      }).extend({ format: SetFormatSchema.omit({ type: true }) }),
+      }).extend({ format: ProjectFormatSchema }),
       await c.req.json(),
     );
     try {

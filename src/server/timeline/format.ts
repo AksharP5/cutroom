@@ -1,14 +1,18 @@
 import { sameRate } from "../../shared/projectFormat";
 import type { ProjectFormat } from "../../shared/projectFormat";
-import { normalizeTimeline, toFrames } from "../../shared/timeline/apply";
+import { normalizeTimeline } from "../../shared/timeline/apply";
+import { resolveClip, sourceAtEdge } from "../../shared/timeline/clipTiming";
 import { TimelineError } from "../../shared/timeline/errors";
 import { clipName } from "../../shared/timeline/labels";
 import {
   add,
   attrMicros,
   decodeLocal,
+  firstFrame,
   frames,
+  micros,
   nearestFrame,
+  positionAtSource,
   secondsOf,
   subtract,
 } from "../../shared/timeline/piece";
@@ -36,7 +40,6 @@ export function planFormat(
   if (sameRate(oldRate, fps)) return { timeline: before, preview };
 
   const snap = (time: ExactTime) => Number(nearestFrame(time, fps));
-  const local = (count: number) => snap(frames(count, oldRate));
   const authored = (seconds: number | string) =>
     decodeLocal(attrMicros(seconds), oldRate);
   const windows = new Map(
@@ -52,11 +55,10 @@ export function planFormat(
     ),
   );
 
-  function edge(time: ExactTime) {
-    const frame = snap(time);
+  function measure(time: ExactTime, frame: number, clipEdge = false) {
     const shift = subtract(frames(frame, fps), time);
     if (shift.n) {
-      preview.movedEdges++;
+      if (clipEdge) preview.movedEdges++;
       preview.maxShiftMs = Math.max(
         preview.maxShiftMs,
         Math.abs(secondsOf(shift)) * 1000,
@@ -65,6 +67,11 @@ export function planFormat(
     return frame;
   }
 
+  const local = (count: number, minimum = 0) => {
+    const time = frames(count, oldRate);
+    return measure(time, Math.max(minimum, snap(time)));
+  };
+
   function retimeTransition(
     transition: Transition | null,
     cut: ExactTime,
@@ -72,11 +79,10 @@ export function planFormat(
     name: string,
   ) {
     if (!transition) return null;
-    const before =
-      snappedCut -
-      snap(subtract(cut, frames(framesBefore(transition), oldRate)));
-    const after =
-      snap(add(cut, frames(framesAfter(transition), oldRate))) - snappedCut;
+    const oldStart = subtract(cut, frames(framesBefore(transition), oldRate));
+    const oldEnd = add(cut, frames(framesAfter(transition), oldRate));
+    const before = snappedCut - measure(oldStart, snap(oldStart));
+    const after = measure(oldEnd, snap(oldEnd)) - snappedCut;
     const result = TransitionSchema.safeParse({
       ...transition,
       duration: before + after,
@@ -110,8 +116,34 @@ export function planFormat(
       window.end,
       frames(clip.transitionOut ? framesAfter(clip.transitionOut) : 0, oldRate),
     );
-    const start = edge(oldStart);
-    const end = edge(oldEnd);
+    let start = snap(oldStart);
+    let end = snap(oldEnd);
+    const piece = clip.mediaStart !== null && resolveClip(clip, oldRate, true);
+    const sourceStart = piece && positionAtSource(piece, micros(-1));
+    const sourceEnd =
+      piece &&
+      clip.sourceDuration !== null &&
+      parsed.elements.get(clip.id)?.attrs.loop === undefined &&
+      positionAtSource(piece, micros(attrMicros(clip.sourceDuration) + 1n));
+    // The old grid could show the last partial source frame. Fit that
+    // interval to the new grid, while keeping intentional source overhangs.
+    const playableEnd =
+      sourceEnd &&
+      firstFrame(window.end, oldRate) <= firstFrame(sourceEnd, oldRate) &&
+      sourceEnd;
+    // A nearest edge can extend a trim outside the source. Snap inward
+    // when there is no media left on that side.
+    if (sourceStart && subtract(frames(start, fps), sourceStart).n < 0n)
+      start++;
+    if (playableEnd && subtract(frames(end, fps), playableEnd).n > 0n) {
+      const nearest = snap(playableEnd);
+      end =
+        subtract(frames(nearest, fps), playableEnd).n > 0n
+          ? nearest - 1
+          : nearest;
+    }
+    measure(oldStart, start, true);
+    measure(oldEnd, end, true);
     if (end <= start)
       throw new TimelineError(
         "out_of_bounds",
@@ -124,21 +156,55 @@ export function planFormat(
         "unsupported",
         `Cannot preserve the referenced start on ${name}.`,
       );
+    const source = sourceAtEdge(
+      clip,
+      frames(clip.start, oldRate),
+      frames(start, fps),
+      oldRate,
+      fps,
+    );
+    // The speed span records a prior edit in units of the old frame grid.
+    const { speedSpan: _speedSpan, ...original } = clip;
+    const fadeIn = local(clip.fadeIn, clip.fadeIn > 0 ? 1 : 0);
+    const fadeOut = local(clip.fadeOut, clip.fadeOut > 0 ? 1 : 0);
+    if (fadeIn)
+      measure(add(oldStart, frames(clip.fadeIn, oldRate)), start + fadeIn);
+    if (fadeOut)
+      measure(subtract(oldEnd, frames(clip.fadeOut, oldRate)), end - fadeOut);
     const next = {
-      ...clip,
+      ...original,
+      ...source,
+      // The source map is stored in whole microseconds.
+      mediaStart:
+        source.mediaStart !== null && source.mediaStart >= -1e-6
+          ? Math.max(0, source.mediaStart)
+          : source.mediaStart,
       start,
       duration: end - start,
-      fadeIn: local(clip.fadeIn),
-      fadeOut: local(clip.fadeOut),
+      fadeIn,
+      fadeOut,
       transitionIn: retimeTransition(clip.transitionIn, oldStart, start, name),
       transitionOut: retimeTransition(clip.transitionOut, oldEnd, end, name),
       keyframes:
         keyframes &&
         Object.fromEntries(
-          Object.entries(keyframes).map(([property, points]) => [
-            property,
-            points.map((point) => ({ ...point, frame: local(point.frame) })),
-          ]),
+          Object.entries(keyframes).map(([property, points]) => {
+            let previousFrame: number | undefined;
+            return [
+              property,
+              points.map((point, index) => {
+                const time = add(oldStart, frames(point.frame, oldRate));
+                const frame = measure(time, snap(time)) - start;
+                if (previousFrame === frame)
+                  throw new TimelineError(
+                    "unsupported",
+                    `${name} has ${property} keyframes at clip frames ${points[index - 1]!.frame} and ${point.frame} that both land on frame ${frame} at the new rate.`,
+                  );
+                previousFrame = frame;
+                return { ...point, frame };
+              }),
+            ];
+          }),
         ),
       region: region && {
         ...region,
@@ -166,30 +232,15 @@ export function planFormat(
         "out_of_bounds",
         `${name} needs more media before its start at the new rate.`,
       );
-    const sourceEnd = physical.sourceDuration;
     if (
-      sourceEnd !== null &&
-      physical.mediaStart !== null &&
-      parsed.elements.get(clip.id)?.attrs.loop === undefined &&
-      !clip.automation
-    ) {
-      const previous = elementClip(clip, oldRate);
-      const playable = toFrames(
-        (sourceEnd - physical.mediaStart) / clip.playbackRate,
-        fps,
+      playableEnd &&
+      subtract(frames(physical.start + physical.duration, fps), playableEnd).n >
+        0n
+    )
+      throw new TimelineError(
+        "out_of_bounds",
+        `The transition on ${name} needs more media after its end at the new rate.`,
       );
-      const wasPlayable =
-        previous.duration <=
-        toFrames(
-          (sourceEnd - (previous.mediaStart ?? 0)) / clip.playbackRate,
-          oldRate,
-        );
-      if (physical.duration > playable && wasPlayable)
-        throw new TimelineError(
-          "out_of_bounds",
-          `${name} would run past the end of its media at the new rate.`,
-        );
-    }
     return validated.data;
   });
 
@@ -212,8 +263,11 @@ export function planFormat(
     };
   });
 
-  const mark = (time: number | null) =>
-    time === null ? null : snap(authored(time));
+  const mark = (time: number | null) => {
+    if (time === null) return null;
+    const position = authored(time);
+    return measure(position, snap(position));
+  };
   const { in: inPoint, out: outPoint } = settings.range;
   const range = { in: mark(inPoint), out: mark(outPoint) };
   if (range.in !== null && range.out !== null && range.out <= range.in)
@@ -231,11 +285,12 @@ export function planFormat(
     );
   const markers = settings.markers.map(({ time, duration, ...marker }) => {
     const start = authored(time);
-    const frame = snap(start);
+    const end = add(start, authored(duration));
+    const frame = measure(start, snap(start));
     return {
       ...marker,
       frame,
-      duration: snap(add(start, authored(duration))) - frame,
+      duration: measure(end, snap(end)) - frame,
     };
   });
   return {

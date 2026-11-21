@@ -219,7 +219,7 @@ function MediaRow({
                 .object({
                   width: z.number(),
                   height: z.number(),
-                  exactFps: ProjectRateSchema.optional(),
+                  matchFps: ProjectRateSchema.optional(),
                 })
                 .optional(),
             })
@@ -227,7 +227,7 @@ function MediaRow({
           if (!closing.signal.aborted) {
             const format = ProjectFormatSchema.safeParse({
               ...info.video,
-              fps: info.video?.exactFps,
+              fps: info.video?.matchFps,
             });
             setVideoInfo({
               hasAudio: info.channels !== undefined,
