@@ -563,6 +563,8 @@ export function missingNotice(event: KeyboardEvent) {
   const combo = comboOf(event);
   if (combo && bindings.has(combo)) return null;
   const presetCombo = comboOf(event, true);
+  // The browser dispatches the context menu event from this shortcut.
+  if (presetCombo === "Shift+F10") return null;
   return presetCombo && resolvePresetKeys.has(presetCombo)
     ? `Shortcut not yet supported (${presetCombo}).`
     : null;
