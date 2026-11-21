@@ -769,8 +769,8 @@ export const keymapAreas = () =>
     ),
   }));
 
-/** A handler is told which of its binding's keys was pressed, counted from zero. */
-type Handlers = Partial<Record<Action, (key: number) => void>>;
+/** Handlers receive the binding index and whether the key is repeating. */
+type Handlers = Partial<Record<Action, (key: number, repeat: boolean) => void>>;
 
 /** The handlers on screen, first mounted first: the order their key listeners answer in. */
 const mounted = new Set<{ current: Handlers }>();
@@ -783,7 +783,7 @@ export function runAction(action: Action) {
   for (const handlers of mounted) {
     const handler = handlers.current[action];
     if (!handler) continue;
-    handler(0);
+    handler(0, false);
     return true;
   }
   return false;
@@ -803,7 +803,7 @@ export function useKeymap(handlers: Handlers) {
       if (!handler) return;
       event.preventDefault();
       const { keys }: Binding = keymap[action];
-      handler(keys.indexOf(comboOf(event) ?? ""));
+      handler(keys.indexOf(comboOf(event) ?? ""), event.repeat);
     };
     window.addEventListener("keydown", press);
     return () => {

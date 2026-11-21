@@ -144,7 +144,7 @@ export function ProjectTimeline({
   const edits = Object.entries(editKeys).map(
     ([action, { label, commands }]) => [
       action,
-      () => {
+      (_binding: number, repeat: boolean) => {
         revealTimeline();
         // The store's selection, not this render's: a click just before the key has not rendered.
         const {
@@ -172,6 +172,7 @@ export function ProjectTimeline({
             // A trim at the end shortens the timeline, and the transport parks on its last frame.
             parked = Math.min(frame, next.duration - 1);
           },
+          repeat ? action : undefined,
         ).then((accepted) => {
           saved();
           if (

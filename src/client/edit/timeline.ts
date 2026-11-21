@@ -97,6 +97,8 @@ interface Edit {
   anchors: ReturnType<typeof editAnchors>;
   gesture: boolean;
   failure: string | null;
+  /** Settles once the save has left the queue, even if it was refused. */
+  saved: Promise<void>;
   /** Set when an edit that made a clip this one names was refused; it is taken back with that one. */
   dropped: boolean;
 }
@@ -112,6 +114,54 @@ let confirmed: { projectId: string; view: TimelineView } | null = null;
 const answers = new Map<string, TimelineView>();
 /** Edits shown already and not yet answered, oldest first. */
 let pending: Edit[] = [];
+/** Only auto-repeat steps with the same targets may share one save and undo step. */
+interface RepeatedTrim {
+  edit: Edit;
+  key: string;
+  before: Timeline;
+  after: Timeline;
+  expires: number;
+  timer?: ReturnType<typeof setTimeout>;
+  ready: () => void;
+  result: Promise<boolean>;
+}
+
+const REPEAT_QUIET_MS = 90;
+const REPEAT_MAX_MS = 500;
+let repeatedTrim: RepeatedTrim | null = null;
+
+function flushRepeatedTrim() {
+  const trim = repeatedTrim;
+  if (!trim) return;
+  repeatedTrim = null;
+  clearTimeout(trim.timer);
+  trim.ready();
+}
+
+function scheduleRepeatedTrim(trim: RepeatedTrim) {
+  clearTimeout(trim.timer);
+  // Commit while a long hold continues, as well as when it stops.
+  trim.timer = setTimeout(
+    flushRepeatedTrim,
+    Math.max(0, Math.min(REPEAT_QUIET_MS, trim.expires - performance.now())),
+  );
+}
+
+function repeatedTrimKey(
+  repeat: string | undefined,
+  commands: readonly Command[],
+) {
+  if (!repeat || commands.length !== 1) return;
+  const command = commands[0]!;
+  if (command.type === "trim") {
+    const { to, ...target } = command;
+    return JSON.stringify([repeat, target]);
+  }
+  if (command.type === "slip" || ("from" in command && "by" in command)) {
+    const { by, ...target } = command;
+    return JSON.stringify([repeat, target]);
+  }
+}
 /** The header toast this queue last showed, cleared by the next edit that lands. */
 let lastToast = "";
 let dismissRipple = () => {};
@@ -198,6 +248,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
  * newer view.
  */
 function enqueue<T>(step: () => Promise<T>) {
+  flushRepeatedTrim();
   const run = queue.then(step);
   queue = run.then(
     () => {},
@@ -488,29 +539,54 @@ async function refreshOpenTimeline(
 export const loadTimeline = (projectId: string, signal: AbortSignal) =>
   enqueue(() => refreshOpenTimeline(projectId, signal));
 
-/** How long the first project file event waits for the rest of its burst. */
+/** How long project file events wait for the rest of a write's notifications. */
 const BURST_MS = 100;
-/** The read that will answer every file event received before it starts, for one open editor. */
-let refresh: { signal: AbortSignal; done: Promise<void> } | null = null;
+let refresh: {
+  signal: AbortSignal;
+  changedAt: number;
+  done: Promise<void>;
+} | null = null;
 
-/**
- * Reads the timeline again after a project file changed. One edit writes several files (the
- * composition, `cutroom.json`, review state, and their temporary copies), each announced
- * separately; the first event opens a short window and one queued read answers all of them. An
- * event that arrives once that read has started may describe a later write, so it opens the next.
- */
+/** The save gives this tab its view. Read for outside changes once the writes and
+ * notifications settle. */
 export function refreshTimeline(projectId: string, signal: AbortSignal) {
-  if (refresh?.signal === signal) return refresh.done;
+  if (refresh?.signal === signal) {
+    refresh.changedAt = performance.now();
+    return refresh.done;
+  }
   const next = {
     signal,
-    done: new Promise((resolve) => setTimeout(resolve, BURST_MS)).then(() =>
-      enqueue(async () => {
-        if (refresh === next) refresh = null;
-        await refreshOpenTimeline(projectId, signal);
-      }),
-    ),
+    changedAt: performance.now(),
+    done: Promise.resolve(),
   };
   refresh = next;
+  next.done = (async () => {
+    try {
+      while (!signal.aborted) {
+        const saves = pending.filter((edit) => edit.projectId === projectId);
+        if (saves.length) {
+          // Wait outside the queue. Those promises still need to run their saves.
+          await Promise.all(saves.map((edit) => edit.saved));
+          next.changedAt = performance.now();
+        }
+        const remaining = BURST_MS - (performance.now() - next.changedAt);
+        if (remaining > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remaining));
+          continue;
+        }
+        const read = await enqueue(async () => {
+          if (pending.some((edit) => edit.projectId === projectId))
+            return false;
+          if (refresh === next) refresh = null;
+          await refreshOpenTimeline(projectId, signal);
+          return true;
+        });
+        if (read) return;
+      }
+    } finally {
+      if (refresh === next) refresh = null;
+    }
+  })();
   return next.done;
 }
 
@@ -665,6 +741,7 @@ export async function editTimeline(
     commands: readonly Command[],
     origins: ReadonlyMap<string, ClipOrigin>,
   ) => void,
+  repeat?: string,
 ) {
   const { view, projectId: open } = useTimeline.getState();
   if (!view || open !== projectId) return false;
@@ -672,6 +749,8 @@ export async function editTimeline(
   const followed = lastToast;
   let edit: Edit | null = null;
   let accepted = false;
+  const saved = Promise.withResolvers<void>();
+  const outcome = repeat ? Promise.withResolvers<boolean>() : null;
   try {
     const from = basis ?? view.timeline;
     const input = z.array(CommandSchema).parse(build(from));
@@ -708,9 +787,23 @@ export async function editTimeline(
       anchors,
       gesture: basis !== undefined,
       failure: null,
+      saved: saved.promise,
       dropped: false,
     };
     const made = edit;
+    const repeatKey =
+      basis === undefined && !creates.size
+        ? repeatedTrimKey(repeat, commands)
+        : undefined;
+    const group =
+      repeatKey &&
+      repeatedTrim?.key === repeatKey &&
+      repeatedTrim.edit.projectId === projectId &&
+      repeatedTrim.edit.composition === view.composition &&
+      repeatedTrim.after === from &&
+      repeatedTrim.edit.commands.length < 1000
+        ? repeatedTrim
+        : null;
     dismissRipple();
     rippleRevision = null;
     const feedback =
@@ -720,12 +813,25 @@ export async function editTimeline(
     // Publish only the persisted ID from the server.
     if (!createsAudioGroup(commands))
       useTimeline.setState({ view: { ...view, timeline } });
-    pending.push(made);
+    if (!group) pending.push(made);
     onApply?.(timeline, commands, named.origins);
+    if (group) {
+      group.edit.commands = [...group.edit.commands, ...commands];
+      group.edit.anchors = editAnchors(
+        group.before,
+        timeline,
+        group.edit.commands,
+      );
+      group.after = timeline;
+      scheduleRepeatedTrim(group);
+      return await group.result;
+    }
+    const gate = repeatKey && outcome ? Promise.withResolvers<void>() : null;
     let report = "";
     let revision: string | undefined;
     let historyId: string | undefined;
-    await enqueue(async () => {
+    const save = enqueue(async () => {
+      if (gate) await gate.promise;
       // An edit that made a clip this one names was refused, and both were taken back.
       if (made.dropped) return;
       try {
@@ -769,12 +875,28 @@ export async function editTimeline(
         throw error;
       }
       pending = pending.filter((item) => item !== made);
-      // The answer is the view a read would return; only the undo history is still to read.
-      // Later writes, by anyone, announce themselves as project file events.
+      // The next save can already use the answer's revision. Publish history when
+      // the burst settles, or immediately when the engine needed to reconcile.
+      const more = () => pending.some((item) => item.projectId === projectId);
+      const reconcile = report || createsAudioGroup(made.commands);
+      if (more() && !reconcile) return;
       const history = await readHistory(projectId);
-      if (confirmed?.projectId === projectId)
+      if (confirmed?.projectId === projectId && (!more() || reconcile))
         settle(projectId, confirmed.view, history);
     });
+    if (repeatKey && outcome && gate) {
+      repeatedTrim = {
+        edit: made,
+        key: repeatKey,
+        before: from,
+        after: timeline,
+        expires: performance.now() + REPEAT_MAX_MS,
+        ready: gate.resolve,
+        result: outcome.promise,
+      };
+      scheduleRepeatedTrim(repeatedTrim);
+    }
+    await save;
     if (!made.dropped && useTimeline.getState().projectId === projectId) {
       if (report) {
         lastToast = report;
@@ -829,6 +951,9 @@ export async function editTimeline(
     );
     showToast(lastToast);
     return accepted;
+  } finally {
+    saved.resolve();
+    outcome?.resolve(accepted);
   }
 }
 
