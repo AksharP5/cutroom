@@ -42,6 +42,7 @@ const reads = [
   "export_status",
   "export_list",
   "timeline_read",
+  "timeline_format_preview",
   "clip_versions_list",
   "timeline_copy",
   "timeline_view",

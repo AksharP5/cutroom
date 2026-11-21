@@ -276,6 +276,11 @@ const cutroomTools: Record<
   },
   source_marks: { verb: read, kind: "project", object: () => "source marks" },
   timeline_read: { verb: read, kind: "project", object: () => "the timeline" },
+  timeline_format_preview: {
+    verb: ["Previewed", "Previewing", "Preview"],
+    kind: "project",
+    object: () => "the project format change",
+  },
   timeline_edit: {
     verb: edited,
     kind: "edit",
