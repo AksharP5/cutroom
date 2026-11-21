@@ -125,6 +125,17 @@ try {
         .find((p) => p.url().startsWith(base)),
     "the editor",
   );
+  const capture = await page.evaluate(
+    () =>
+      typeof Reflect.get(
+        CanvasRenderingContext2D.prototype,
+        "drawElementImage",
+      ) === "function" &&
+      typeof Reflect.get(HTMLCanvasElement.prototype, "requestPaint") ===
+        "function",
+  );
+  if (!capture)
+    throw new Error("Electron's adjustment grade capture is unavailable.");
   // This check exercises Chromium's native video uploads and the desktop colour switch.
   await page.addInitScript(() => {
     if (window === window.top)

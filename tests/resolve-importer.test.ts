@@ -57,7 +57,7 @@ test.skipIf(!Bun.which("python3"))(
               kind: "video",
               src: "camera #1.mov",
               mediaStart: 1.5,
-              duration: 48,
+              duration: 24,
               label: "Camera\u2028left\uD800",
               muted: true,
             },

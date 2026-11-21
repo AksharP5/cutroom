@@ -47,7 +47,7 @@ const sourceName = (src: string) =>
 
 /**
  * A clip's name as the timeline shows it. A title without a label goes by its first line, and an
- * adjustment layer by its effect.
+ * adjustment layer by its effect when it has one.
  */
 export function clipName(
   clip: Pick<Clip, "id" | "label" | "src" | "title" | "textPreview"> &
@@ -58,7 +58,8 @@ export function clipName(
   if (src !== null) return sourceName(src) ?? clip.id;
   return (
     (clip.title && clip.textPreview) ||
-    (clip.adjustment && clip.region && REGION_NAMES[clip.region.effect]) ||
+    (clip.adjustment &&
+      (clip.region ? REGION_NAMES[clip.region.effect] : "Adjustment layer")) ||
     clip.id
   );
 }
@@ -172,6 +173,12 @@ export function editLabel(
           ? `${command.ripple ? "Ripple trim" : "Trim"} ${command.edge} of ${target([command.clipId])} to ${time(command.to)}`
           : `${command.ripple ? "Ripple trimmed" : "Trimmed"} ${command.edge}${named ? ` of ${target([command.clipId])}` : ""} to ${time(command.to)}`;
       }
+      case "trimPlayhead":
+        return `${pending ? "Trim" : "Trimmed"} the ${command.edge} of ${target(command.clipIds)} to ${time(command.at)}${command.ripple ? ", with ripple" : ""}`;
+      case "roll":
+        return `${pending ? "Roll" : "Rolled"} the cut${named ? ` between ${target([command.from, command.to])}` : ""} by ${span(Math.abs(command.by))} ${command.by < 0 ? "left" : "right"}`;
+      case "swap":
+        return `${pending ? "Swap" : "Swapped"} ${named ? target([command.from, command.to]) : "adjacent clips"}`;
       case "split":
         return `Split${named ? ` ${target(command.clipIds ?? [])}` : ""} at ${time(command.at)}`;
       case "remove":
@@ -179,6 +186,8 @@ export function editLabel(
           ? `${command.ripple ? "Ripple delete" : "Lift"} ${target(command.clipIds)}`
           : `${command.ripple ? "Ripple deleted" : "Lifted"} ${named ? target(command.clipIds) : "clips"}`;
       case "freeze":
+        if (command.mode === "replace")
+          return `${pending ? "Hold" : "Held"} ${named ? target([command.clipId]) : "the clip"} on the frame at ${time(command.at)}`;
         return `${pending ? "Freeze" : "Froze"} ${named ? target([command.clipId]) : "frame"} at ${time(command.at)}`;
       case "closeGap": {
         const gap = timeline && gapAt(timeline, command.track, command.at);
@@ -200,7 +209,9 @@ export function editLabel(
             ? `title "${firstTextLine(command.clip.text)}"`
             : command.clip.kind === "adjustment"
               ? (command.clip.label ??
-                `${REGION_NAMES[command.clip.region.effect].toLowerCase()} layer`)
+                (command.clip.region
+                  ? `${REGION_NAMES[command.clip.region.effect].toLowerCase()} layer`
+                  : "adjustment layer"))
               : (command.clip.label ??
                 sourceName(command.clip.src) ??
                 command.clip.kind);
@@ -457,6 +468,8 @@ export function editLabel(
                 : `${pending ? "Add" : "Added"} ${command.property === "opacity" ? "an" : "a"} ${what} at ${at(command.frame)}`;
         return `${sentence}${named ? ` on ${target([command.clipId])}` : ""}`;
       }
+      case "setTransitions":
+        return `${pending ? "Add" : "Added"} ${command.cuts.length} ${command.cuts.length === 1 ? "transition" : "transitions"}`;
       case "setTransition": {
         const cut = named
           ? ` between ${target([command.from, command.to])}`

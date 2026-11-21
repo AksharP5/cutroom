@@ -1,3 +1,4 @@
+import { frames } from "../../shared/timeline/piece";
 import { create } from "zustand";
 import { frameTime, toFrames } from "../../shared/timeline/apply";
 import { SourceViewSchema, emptySourceMarks } from "../../shared/timeline/view";
@@ -7,6 +8,7 @@ import type { Timeline } from "../../shared/timeline/schema";
 import { placedMedia } from "../timeline/gesture";
 import type { MediaDrag } from "../timeline/mediaDrag";
 import { showToast } from "../workspace";
+import type { SourcePlacement } from "./placeMedia";
 import { placeAtPlayhead } from "./placeMedia";
 import { ROOT_COMPOSITION } from "./timeline";
 import { createTransport, transport, useTransport } from "./transport";
@@ -152,8 +154,9 @@ export function sourceRange(): MediaDrag | null {
 }
 
 /** Puts the loaded file's range on the timeline at the playhead. */
-export function placeSource(projectId: string, mode: "insert" | "overwrite") {
-  const media = sourceRange();
+export function placeSource(projectId: string, mode: SourcePlacement) {
+  const media = mode === "replace" ? useSource.getState().file : sourceRange();
+  const { frame, fps } = sourcePlayer.use.getState();
   if (!media) {
     showToast("Open a file from Media to place it.", null, {
       tone: "info",
@@ -172,7 +175,13 @@ export function placeSource(projectId: string, mode: "insert" | "overwrite") {
         closeSource();
         throw new Error("Source media is no longer available.");
       }
-      return placeAtPlayhead(projectId, media, mode, () => showSource(false));
+      return placeAtPlayhead(
+        projectId,
+        media,
+        mode,
+        () => showSource(false),
+        mode === "replace" ? frames(frame, fps) : undefined,
+      );
     })
     .catch((error: unknown) =>
       showToast(error instanceof Error ? error.message : String(error)),

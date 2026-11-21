@@ -205,10 +205,13 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
   // scripts/CSS/markup; changing one of those must still reload the document.
   const references = html.replace(/\sdata-hf-id="[^"]*"/g, "");
   const clipNodes: DefaultTreeAdapterTypes.Element[] = [];
+  const maybeAdjustment = html.includes("data-cutroom-adjustment");
+  let hasAdjustment = false;
   const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
     for (const node of nodes) {
       if (!("tagName" in node)) continue;
       const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
+      hasAdjustment ||= maybeAdjustment && attrs.has("data-cutroom-adjustment");
       const id = attrs.get("data-hf-cutroom-clip-id");
       if (id && isClip(node)) {
         const values = {
@@ -326,7 +329,10 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
         space: place.space,
       };
   }
-  const structure = hash(dependencies + serialize(document));
+  // A live document must install capture when its first adjustment arrives.
+  const structure = hash(
+    dependencies + serialize(document) + (hasAdjustment ? "\0adjustment" : ""),
+  );
 
   return {
     structure,

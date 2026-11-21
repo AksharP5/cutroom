@@ -80,6 +80,7 @@ export function clipMenuItems({
     { action: "editCut", disabled: none },
     { action: "editCopy", disabled: none },
     { action: "editPaste", disabled: !clipboard },
+    { action: "editPasteAttributes", disabled: !clipboard || none },
     { action: "editPasteInsert", disabled: !clipboard },
     "separator",
     {

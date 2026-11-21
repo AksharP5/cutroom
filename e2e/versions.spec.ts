@@ -210,10 +210,10 @@ test("an agent's four takes on one clip: hover plays each, a click switches, kee
       .poll(async () => (await read()).clips.find((c) => c.id === clipId)?.src)
       .toBe("compositions/line-fan.html");
 
-    // Alt+V shows the next take of the clip under the playhead.
+    // Ctrl+Alt+] shows the next take of the clip under the playhead.
     await page.locator(`[data-clip="${clipId}"]`).click();
     await seekFrame(page, 100);
-    await page.keyboard.press("Alt+V");
+    await page.keyboard.press("Control+Alt+BracketRight");
     await expect
       .poll(async () => (await read()).clips.find((c) => c.id === clipId)?.src)
       .toBe("compositions/line-wall.html");

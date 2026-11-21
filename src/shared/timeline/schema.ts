@@ -342,6 +342,10 @@ export const ClipSchema = z.object({
   /** Seconds into the source for video, audio, and sub-compositions; null for other clips. */
   mediaStart: z.number().nonnegative().nullable(),
   playbackRate: z.number().positive(),
+  /** Unrounded source width in timeline frame units, retained across speed edits. */
+  speedSpan: z
+    .object({ frames, rate: z.number().positive(), phase: z.number() })
+    .optional(),
   src: z.string().nullable(),
   /** Length of the source media in seconds when it could be probed; video and audio only. */
   sourceDuration: z.number().positive().nullable(),
@@ -422,7 +426,7 @@ export const ClipSchema = z.object({
     .boolean()
     .default(false)
     .describe(
-      "An adjustment layer: a clip that draws nothing itself and applies its region to every picture on the video tracks below it while it plays",
+      "An adjustment layer: a clip that draws nothing itself and applies its region and grade to the picture on the video tracks below it while it plays",
     ),
   style: ElementStyleSchema.default({}).describe(
     "The clip's inline look, as setClip.style writes it: text style on text elements, fill, corner radius, shadow, blur, layout size, and fit on video and images. A field is left out when the clip sets no inline value Cutroom can read; the composition's stylesheets and animation then decide it.",
@@ -430,7 +434,7 @@ export const ClipSchema = z.object({
   grade: GradeSchema.nullable()
     .default(null)
     .describe(
-      "The colour grade on a video or image clip, from HyperFrames' data-color-grading: adjust, wheels, curves, hueCurves, secondaries and a look lut, mixed by intensity. null is ungraded. Change it with setClip.grade; sourceRestrictions.grade says why it cannot be changed.",
+      "The colour grade on a video, image or adjustment layer, from HyperFrames' data-color-grading: adjust, wheels, curves, hueCurves, secondaries and a look lut, mixed by intensity. null is ungraded. Change it with setClip.grade; sourceRestrictions.grade says why it cannot be changed.",
     ),
   /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
   fadeIn: frame
@@ -695,9 +699,11 @@ export const InsertAdjustmentSchema = z.object({
   duration: frames.describe("Length on the timeline in frames"),
   region: RegionEditSchema.extend({
     effect: RegionSchema.shape.effect,
-  }).describe(
-    "The effect and its region. Omitted fields take the effect's defaults: a 0.5 s ease-in-out ramp at each end for a zoom; blur and highlight show at full strength from the first frame to the last.",
-  ),
+  })
+    .optional()
+    .describe(
+      "A region effect to add to the layer. Omit region to insert an empty adjustment layer for grading. A zoom defaults to a 0.5 s ease-in-out ramp at each end; blur and highlight show at full strength from the first frame to the last.",
+    ),
   label: label.optional(),
 });
 
@@ -773,10 +779,45 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .describe(
           "Keep the clip's start; cut and ripple participating tracks by the exact length change",
         ),
+      linked: z.boolean().default(true),
       ids: pieceIds,
     })
     .describe(
       "Trim one edge of a clip. Every linked partner's same edge moves by the same number of frames.",
+    ),
+  z
+    .object({
+      type: z.literal("trimPlayhead"),
+      clipIds,
+      edge: z.enum(["start", "end"]),
+      at: frame,
+      ripple: z.boolean().default(false),
+      linked: z.boolean().default(true),
+      ids: pieceIds,
+    })
+    .describe(
+      "Trim one edge of each named clip at the playhead. Equal ripple trims close time on all unlocked auto-select tracks.",
+    ),
+  z
+    .object({
+      type: z.literal("roll"),
+      from: clipId,
+      to: clipId,
+      by: z.number().int(),
+      linked: z.boolean().default(true),
+    })
+    .describe(
+      "Move the cut between two adjacent clips by this many frames, without rippling the timeline.",
+    ),
+  z
+    .object({
+      type: z.literal("swap"),
+      from: clipId,
+      to: clipId,
+      linked: z.boolean().default(true),
+    })
+    .describe(
+      "Swap two adjacent clips, with linked partners by default. Remove transitions touching the clips first.",
     ),
   z
     .object({
@@ -800,7 +841,13 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("freeze"),
       clipId,
-      at: frame.describe("A timeline frame strictly inside the video clip"),
+      at: frame.describe("A timeline frame within the video clip"),
+      mode: z
+        .enum(["insert", "replace"])
+        .default("insert")
+        .describe(
+          "Replace holds the entire video at this frame and keeps its original length and position.",
+        ),
       id: z
         .string()
         .regex(/^[a-zA-Z0-9_-]{1,80}$/)
@@ -808,7 +855,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       ids: pieceIds,
     })
     .describe(
-      "Insert a two-second still of a local video frame. Split the video and linked clips at that frame, then shift the right halves and later cuts on their tracks. The still is silent.",
+      "Freeze a local video frame. Insert adds a silent two-second still and ripples the video and linked tracks. Replace holds the picture for the original clip length and leaves linked audio in place.",
     ),
   z
     .object({
@@ -915,7 +962,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       ids: pieceIds,
     })
     .describe(
-      'Add a media clip; a title with clip.kind "title": words on screen with a preset entrance and exit that stay on the clip\'s edges through every edit; a scene with clip.kind "composition": a host clip that plays another composition file of the project from its start; or an adjustment layer with clip.kind "adjustment": a zoom, blur or highlight on a video track that applies to every picture below it while it plays.',
+      'Add a media clip; a title with clip.kind "title": words on screen with a preset entrance and exit that stay on the clip\'s edges through every edit; a scene with clip.kind "composition": a host clip that plays another composition file of the project from its start; or an adjustment layer with clip.kind "adjustment": a layer on a video track whose region or grade applies to the picture below it while it plays.',
     ),
   z
     .object({
@@ -1001,10 +1048,15 @@ export const CommandSchema = z.discriminatedUnion("type", [
       style: ElementStyleEditSchema.optional().describe(
         "Restyle any visual clip that is not a Cutroom title, written as inline CSS on its element: omitted fields keep their values, null removes one and hands it back to the composition's stylesheets. Text fields need an element clip, objectFit a video or image. Inline style draws over stylesheets but not over the composition's own animation of the same property.",
       ),
+      keyframes: KeyframesSchema.nullable()
+        .optional()
+        .describe(
+          "Replace the clip's complete set of animation tracks. Null clears the tracks.",
+        ),
       grade: GradeEditSchema.nullable()
         .optional()
         .describe(
-          "Change a video or image clip's colour grade: fields left out keep their values; null removes the whole grade. Check the picture with timeline_view.",
+          "Change a video, image or adjustment layer's colour grade: fields left out keep their values; null removes the whole grade. Check the picture with timeline_view.",
         ),
       enabled: z
         .boolean()
@@ -1093,6 +1145,23 @@ export const CommandSchema = z.discriminatedUnion("type", [
     ),
   z
     .object({
+      type: z.literal("setTransitions"),
+      cuts: z
+        .array(
+          z.object({
+            from: clipId,
+            to: clipId,
+            transition: TransitionSchema,
+          }),
+        )
+        .min(1)
+        .max(10_000),
+    })
+    .describe(
+      "Set transitions on several explicit cuts in one pass. Each cut must be on one track, and each transition must fit exactly. To choose default transitions between selected clips and skip cuts without handles, use timeline_add_transitions.",
+    ),
+  z
+    .object({
       type: z.literal("setTiming"),
       clipId,
       playbackRate: z
@@ -1104,7 +1173,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       mediaStart: z.number().nonnegative().optional(),
     })
     .describe(
-      "Set media speed or source in on a clip and its linked partners, keeping timeline duration. Source in is seconds. Refuses speed ramps, non-media clips, or insufficient source media.",
+      "Set the constant speed or source in (seconds) of a clip and its linked partners. Speed preserves the source span to the nearest timeline frame, resizes the clips, and ripples following time on unlocked auto-select tracks. A source in edit alone keeps duration. Edit a speed ramp in the composition source. Refuses non-media clips or insufficient source media.",
     ),
   z
     .object({

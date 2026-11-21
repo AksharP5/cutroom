@@ -30,6 +30,7 @@ import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
 import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import { formatTimecode } from "../../shared/timeline/timecode";
+import { pasteAttributes } from "./pasteAttributes";
 import { anchorsChanged, editAnchors } from "./anchors";
 import {
   outsideChanges,
@@ -51,6 +52,10 @@ export const ROOT_COMPOSITION = "index.html";
 
 const clipboards = new Map<string, readonly Clip[]>();
 const clipboardIds = new Map<string, string>();
+const clipboardSources = new Map<
+  string,
+  { id: string; fps: Timeline["fps"] }
+>();
 let clipboardTask = Promise.resolve();
 
 const HistorySchema = z.object({
@@ -77,6 +82,8 @@ export const useTimeline = create(() => ({
   selection: emptySelection as Selection,
   /** Dragged edges snap to clip edges, the playhead, markers, and in and out. Session state. */
   snapping: true,
+  /** Whether selection expands to a clip’s linked partners. Session state. */
+  linkedSelection: true,
   /** What the Trim tool's comma and period do, switched with S as in Resolve. Session state. */
   trimKeys: "slip" as "slip" | "slide",
 }));
@@ -254,6 +261,7 @@ function name(commands: Command[], timeline: Timeline, composition: string) {
       command.type !== "split" &&
       command.type !== "insert" &&
       command.type !== "trim" &&
+      command.type !== "trimPlayhead" &&
       command.type !== "remove" &&
       command.type !== "move"
     ) {
@@ -724,9 +732,13 @@ export async function editTimeline(
             ? (command.clipIds ?? [])
             : "clipId" in command && command.clipId !== undefined
               ? [command.clipId]
-              : command.type === "setTransition"
+              : command.type === "setTransition" ||
+                  command.type === "roll" ||
+                  command.type === "swap"
                 ? [command.from, command.to]
-                : [],
+                : command.type === "setTransitions"
+                  ? command.cuts.flatMap(({ from, to }) => [from, to])
+                  : [],
         ),
       ),
       creates,
@@ -936,7 +948,7 @@ export const hasClipboard = (projectId: string) => clipboardIds.has(projectId);
 /** Clipboard keys serialize copy/cut/paste, including a paste pressed before copy has answered. */
 export function clipboardEdit(
   projectId: string,
-  action: "copy" | "cut" | "overwrite" | "insert",
+  action: "copy" | "cut" | "overwrite" | "insert" | "attributes",
   at: number,
 ) {
   const { selection, view } = useTimeline.getState();
@@ -967,6 +979,13 @@ export function clipboardEdit(
         });
         clipboards.set(copied.id, copied.clips);
         clipboardIds.set(projectId, copied.id);
+        clipboardSources.set(copied.id, {
+          id:
+            selection.anchor && selection.ids.has(selection.anchor)
+              ? selection.anchor
+              : clipIds[0]!,
+          fps: seen.fps,
+        });
         if (action === "cut")
           await editTimeline(
             projectId,
@@ -979,6 +998,45 @@ export function clipboardEdit(
       const clipboardId = clipboardIds.get(projectId);
       if (!clipboardId) {
         showToast("Copy clips before pasting.");
+        return;
+      }
+      if (action === "attributes") {
+        if (view?.composition !== useTimeline.getState().view?.composition)
+          return;
+        const copied = clipboards.get(clipboardId);
+        const source = clipboardSources.get(clipboardId);
+        if (!copied || !source) return;
+        let skippedSpeed = 0;
+        let noChanges = false;
+        const accepted = await editTimeline(
+          projectId,
+          "Paste attributes",
+          (timeline) => {
+            if (
+              timeline.fps.num * source.fps.den !==
+              source.fps.num * timeline.fps.den
+            )
+              throw new TimelineError(
+                "unsupported",
+                "Paste requires timelines with the same frame rate.",
+              );
+            const result = pasteAttributes(
+              timeline,
+              copied,
+              source.id,
+              selection.ids,
+            );
+            skippedSpeed = result.skippedSpeed;
+            noChanges = result.commands.length === 0;
+            return result.commands;
+          },
+        );
+        if (skippedSpeed && (accepted || noChanges))
+          showToast(
+            "Speed skipped where the copied clip or a destination has a speed ramp.",
+            null,
+            { tone: "info", transient: true },
+          );
         return;
       }
       await editTimeline(

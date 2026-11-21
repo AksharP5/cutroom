@@ -10,7 +10,8 @@ import type { Fps } from "./schema.ts";
 export type ExactTime = Readonly<{ n: bigint; d: bigint }>;
 
 const MICROS = 1_000_000n;
-const SAMPLES = 48_000n;
+export const AUDIO_SAMPLE_RATE = 48_000;
+const SAMPLES = BigInt(AUDIO_SAMPLE_RATE);
 const FRAME_TOLERANCE = 1000n;
 const abs = (n: bigint) => (n < 0n ? -n : n);
 
@@ -249,7 +250,7 @@ export type SourceMap = { c: number; tau: number; zero: number };
 /** The stored in-point and optional ramp offset, both in whole microseconds. */
 export type StoredSource = { mediaStart: number; offset?: number };
 
-function decimalFraction(value: string | number): ExactTime {
+export function decimalFraction(value: string | number): ExactTime {
   const [decimal = "", exponent] = String(value)
     .trim()
     .toLowerCase()
@@ -273,6 +274,28 @@ function sourcePeriodFloor(curve: Curve, fps: Fps) {
       "A source map requires at least three microseconds per frame.",
     );
   return Number(period);
+}
+
+/** Scale a source edge around the group start, rounding exact half frames up. */
+export function retimedFrames(
+  offset: number,
+  before: number,
+  after: number,
+  phase: number,
+  span?: { frames: number; rate: number },
+) {
+  const oldRate = decimalFraction(before);
+  const newRate = decimalFraction(after);
+  const head = add(
+    fraction(BigInt(offset) * oldRate.n, oldRate.d),
+    decimalFraction(phase),
+  );
+  const width = span && decimalFraction(span.rate);
+  const edge =
+    span && width
+      ? add(head, fraction(BigInt(span.frames) * width.n, width.d))
+      : head;
+  return Number(halfUp(edge.n * newRate.d, edge.d * newRate.n));
 }
 
 function microsOf(time: ExactTime) {

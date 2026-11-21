@@ -60,6 +60,7 @@ export const MediaTaskSchema = z.object({
   kind: MediaKindSchema,
   source: z.string(),
   directory: z.string(),
+  projectDir: z.string().optional(),
   ffmpeg: z.string(),
   ffprobe: z.string(),
   info: MediaInfoSchema.optional(),

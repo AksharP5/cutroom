@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG } from "@hyperframes/engine";
+import { DEFAULT_CONFIG, extractMediaMetadata } from "@hyperframes/engine";
 import {
   encodeSourceParts,
   partEncoderArgs,
@@ -11,6 +11,7 @@ import {
 import { createRenderWorkers } from "../src/server/hyperframes/jobs";
 import { probeNvenc } from "../src/server/hyperframes/nvenc";
 import type { DirectPlan } from "../src/server/hyperframes/directSchema";
+import { sourcePictures } from "../src/server/media/pictureIndex";
 
 const fps = { num: 30, den: 1 };
 const plan = (width: number, height: number): DirectPlan => ({
@@ -86,6 +87,9 @@ test.skipIf(!Bun.which("ffmpeg"))(
         { stderr: "pipe" },
       );
       expect(await child.exited).toBe(0);
+      const metadata = await extractMediaMetadata(source);
+      const index = await sourcePictures(source);
+      if (!index) throw new Error("The generated source has no picture index.");
       // A gap between the runs makes two parts.
       const pieces = [
         { start: 0, end: 5, mediaStart: 0 },
@@ -94,6 +98,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
         kind: "source" as const,
         src: "source.mp4",
         path: source,
+        video: { metadata, source: index },
         ...run,
       }));
       const encode = (size: DirectPlan, workDir: string, crf?: number) => {

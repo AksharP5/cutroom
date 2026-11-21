@@ -25,6 +25,8 @@ import { mediaSettings } from "../../shared/media";
 import { proxyFilter, scaleFilter, scrubFilter, tileWidth } from "./settings";
 import { chromeColourGuess } from "../hyperframes/videoColour";
 import { localMediaInputOptions } from "./input";
+import { sourcePictures } from "./pictureIndex";
+import { secondsOf } from "../../shared/timeline/piece";
 
 const task = MediaTaskSchema.parse(await Bun.stdin.json());
 const abort = new AbortController();
@@ -316,74 +318,29 @@ try {
         "scrub.mp4",
       ]);
     } else if (task.kind === "pieces") {
-      const probe = z
-        .object({
-          streams: z.array(
-            z.object({
-              codec_type: z.string(),
-              codec_name: z.string().optional(),
-              time_base: z.string().regex(/^\d+\/\d+$/),
-            }),
-          ),
-          format: z.object({ start_time: z.string().optional() }),
-        })
-        .parse(
-          JSON.parse(
-            z
-              .string()
-              .parse(
-                await run([
-                  task.ffprobe,
-                  "-v",
-                  "error",
-                  ...localMediaInputOptions,
-                  "-show_entries",
-                  "stream=codec_type,codec_name,time_base:format=start_time",
-                  "-of",
-                  "json",
-                  task.source,
-                ]),
-              ),
-          ),
-        );
-      const timeBase = probe.streams.find(
-        (stream) => stream.codec_type === "video",
-      )!.time_base;
-      const tick = rational(timeBase, "/");
-      // Export, and FFmpeg by default, start the clock at the file's first timestamp.
-      const start = Number(probe.format.start_time ?? 0) || 0;
-      const startTicks = Math.sign(start) * Math.round(Math.abs(start) / tick);
-      const packets = z
-        .string()
-        .parse(
-          await run([
-            task.ffprobe,
-            "-v",
-            "error",
-            ...localMediaInputOptions,
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "packet=pts,flags",
-            "-of",
-            "csv=p=0",
-            task.source,
-          ]),
-        );
-      // Every frame's time, from the packets alone, which read in a fraction of the decode. A
-      // packet marked to be discarded, such as one an edit list trims, is not a frame.
+      const pictures = await sourcePictures(task.source, {
+        projectDir: task.projectDir,
+        signal: abort.signal,
+        probe: async (args) =>
+          z
+            .string()
+            .parse(
+              await run([task.ffprobe, "-v", "error", ...args, task.source]),
+            ),
+      });
+      if (!pictures)
+        throw new Error("The video has no presentation timestamps.");
+      const { timeBase, start, audio } = pictures.proxy;
+      const tick = secondsOf(pictures.tick);
+      // Editing proxies use FFmpeg's relative clock. Export keeps the native ticks.
+      const startTicks = BigInt(
+        Math.sign(start) * Math.round(Math.abs(start) / tick),
+      );
       const times = [
         ...new Set(
-          packets
-            .split("\n")
-            .map((line) => line.split(","))
-            .filter(
-              ([pts, flags]) =>
-                /^-?\d+$/.test(pts ?? "") && !flags?.includes("D"),
-            )
-            .map(([pts]) => (Number(pts) - startTicks) * tick),
+          pictures.packets.map(({ pts }) => Number(pts - startTicks) * tick),
         ),
-      ].sort((a, b) => a - b);
+      ];
       const { sampleOffsets, ...plan } = cutPieces(times, 1 / video.fps);
       const samples = new Float64Array(sampleOffsets.length + times.length);
       samples.set(sampleOffsets);
@@ -395,9 +352,7 @@ try {
           PiecesSchema.parse({
             timeBase,
             start,
-            audio:
-              probe.streams.find((stream) => stream.codec_type === "audio")
-                ?.codec_name ?? null,
+            audio,
             ...plan,
           }),
         ),

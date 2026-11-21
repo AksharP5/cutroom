@@ -833,6 +833,16 @@ export function connectPreview(
     get state() {
       return state;
     },
+    resize() {
+      if (!state.adjustment) return;
+      const bounds = frame.getBoundingClientRect();
+      const scale = Math.min(
+        bounds.width / frame.clientWidth,
+        bounds.height / frame.clientHeight,
+        1,
+      );
+      if (scale > 0) send("display-scale", { scale });
+    },
     inspect: async () => (await request("inspect")).state,
     checkRampAudio: async () => void (await request("check-ramp")),
     async waitForRamp() {

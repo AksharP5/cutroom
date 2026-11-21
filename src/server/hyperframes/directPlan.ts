@@ -1,4 +1,3 @@
-import { offsetSourceTime } from "../../shared/timeline/time.ts";
 import { transform, transformStyleAttribute } from "lightningcss";
 import type { Declaration, Rule, SelectorComponent } from "lightningcss";
 import { defaultTreeAdapter, parse } from "parse5";
@@ -7,6 +6,7 @@ import type { Fps } from "../../shared/timeline/schema.ts";
 import { emptyTimelineSettings } from "../../shared/timeline/schema.ts";
 import { GRADE_ATTRIBUTE, readGrade } from "../../shared/timeline/grade.ts";
 import {
+  ADJUSTMENT_ATTRIBUTE,
   REGION_ATTRIBUTE,
   REGION_STYLE_ATTRIBUTE,
   regionStyle,
@@ -18,6 +18,7 @@ import {
   TRANSITION_STYLE_ATTRIBUTE,
   transitionStyle,
 } from "../timeline/transitions.ts";
+import { isGradedAdjustment } from "./adjustmentCapture.ts";
 import { coversFrame, visibleRect } from "./directPlacement.ts";
 import type { DirectPlan, Placement, SourceSegment } from "./directSchema.ts";
 
@@ -502,6 +503,15 @@ export function planDirectExport(
     if (element.tagName === "audio") continue;
     if (element.tagName === "video" || element.tagName === "img")
       pictures.push(element);
+    const layer = attribute(element, ADJUSTMENT_ATTRIBUTE) !== undefined;
+    const adjustment = isGradedAdjustment(element);
+    if (
+      layer &&
+      !adjustment &&
+      attribute(element, REGION_ATTRIBUTE) === undefined
+    )
+      continue;
+    if (adjustment) effects.push({ start: first, end: last });
     visual.push({ element, start: first, end: last });
     if (transitions) {
       for (const edge of ["in", "out"] as const) {
@@ -634,12 +644,18 @@ export function planDirectExport(
       continue;
     }
     const src = attribute(top.element, "src")!;
-    const mediaStart = offsetSourceTime(
-      seconds(attribute(top.element, "data-media-start") ?? "0")!,
-      start - top.start,
-      fps,
-    );
-    segments.push({ kind: "source", start, end, src, mediaStart, ...drawn });
+    const mediaStart = seconds(
+      attribute(top.element, "data-media-start") ?? "0",
+    )!;
+    segments.push({
+      kind: "source",
+      start,
+      end,
+      src,
+      mediaStart,
+      ...(top.start !== start && { clipStart: top.start }),
+      ...drawn,
+    });
   }
   if (!segments.some((segment) => segment.kind === "source"))
     return { reason: reason ?? "no frame shows a plain video" };

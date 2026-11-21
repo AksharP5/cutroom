@@ -7,10 +7,15 @@ import {
   processCompositionAudio,
 } from "@hyperframes/engine";
 import type { AudioElement } from "@hyperframes/engine";
-import { rangeMix } from "../src/server/hyperframes/rangeAudio";
+import {
+  alignRangeAudio,
+  rangeMix,
+} from "../src/server/hyperframes/rangeAudio";
 import type { Fps } from "../src/shared/timeline/schema";
 
 const ntsc = { num: 30000, den: 1001 };
+const sample = (frame: number, fps: Fps = ntsc) =>
+  Math.round((frame * fps.den * 48000) / fps.num);
 const seconds = (frame: number, fps: Fps = ntsc) =>
   Number(((frame * fps.den) / fps.num).toFixed(6));
 
@@ -88,9 +93,9 @@ async function mixed(
 test("a range's mix covers only what is heard there, whole seconds earlier", () => {
   const mix = rangeMix({
     audios: elements(),
-    durationSeconds: 20,
-    startSeconds: seconds(300),
-    endSeconds: seconds(360),
+    durationSamples: 960_000,
+    startSample: sample(300),
+    endSample: sample(360),
   });
   expect(mix.audios.map((audio) => audio.id)).toEqual([
     "bed",
@@ -99,23 +104,27 @@ test("a range's mix covers only what is heard there, whole seconds earlier", () 
     "a1-audio",
     "a2-audio",
   ]);
-  expect(mix.startSeconds).toBe(1);
-  expect(mix.durationSeconds).toBeCloseTo(seconds(360) + 1 - 1, 9);
+  expect(mix.startSample).toBe(48_000);
+  expect(mix.sampleCount).toBe(sample(360));
 
   const quiet = rangeMix({
     audios: elements(),
-    durationSeconds: 20,
-    startSeconds: 15.2,
-    endSeconds: 15.9,
+    durationSamples: 960_000,
+    startSample: 729_600,
+    endSample: 763_200,
   });
   expect(quiet.audios).toEqual([]);
-  expect(quiet.startSeconds).toBe(14);
+  expect(quiet.startSample).toBe(672_000);
 });
 
 test("bus effects and group automation read the whole timeline, so they mix in full", () => {
   const audios = elements();
-  const range = { durationSeconds: 20, startSeconds: 10, endSeconds: 12 };
-  const full = { startSeconds: 0, durationSeconds: 20, audios };
+  const range = {
+    durationSamples: 960_000,
+    startSample: 480_000,
+    endSample: 576_000,
+  };
+  const full = { startSample: 0, sampleCount: 960_000, audios };
   const chain = '{"version":1,"nodes":[]}';
   expect(rangeMix({ ...range, audios, masterFxChain: chain })).toEqual(full);
   for (const group of [{ groupFxChain: chain }, { groupAutomation: chain }]) {
@@ -125,6 +134,54 @@ test("bus effects and group automation read the whole timeline, so they mix in f
     expect(rangeMix({ ...range, audios: grouped }).audios).toBe(grouped);
   }
 });
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "the marked MP4 keeps the final sample when the absolute edges round apart",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "range-audio-end-"));
+    try {
+      const videoPath = join(dir, "video.mp4");
+      const audioPath = join(dir, "mix.wav");
+      const outputPath = join(dir, "marked.mp4");
+      await ffmpeg([
+        "-f",
+        "lavfi",
+        "-i",
+        "color=s=64x48:r=30000/1001",
+        "-frames:v",
+        "2",
+        videoPath,
+      ]);
+      await ffmpeg(["-f", "lavfi", "-i", "sine=r=48000:d=1", audioPath]);
+      await alignRangeAudio({
+        videoPath,
+        audioPath,
+        outputPath,
+        fps: ntsc,
+        frames: { start: 4, end: 6 },
+        signal: new AbortController().signal,
+      });
+      const { stdout, stderr, exitCode } = Bun.spawnSync([
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=duration_ts,time_base",
+        "-of",
+        "csv=p=0",
+        outputPath,
+      ]);
+      if (exitCode !== 0) throw new Error(stderr.toString());
+      // Frame 4 is 6406.4 samples and frame 6 is 9609.6. The marked mix
+      // owns [6406, 9610), even though two frames from zero occupy 3203 samples.
+      expect(stdout.toString().trim()).toBe("1/48000,3204");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 test.skipIf(!Bun.which("ffmpeg"))(
   "a range mixes the same samples as the full mix, across offsets, cuts, rate, fades, gain, groups and loops",
@@ -167,24 +224,22 @@ test.skipIf(!Bun.which("ffmpeg"))(
         [ntsc, 0, 45],
         [ntsc, 560, 599],
       ] as const) {
-        const { num, den } = fps;
+        const { num } = fps;
         const mix = rangeMix({
           audios: elements(),
-          durationSeconds: 20,
-          startSeconds: (start * den) / num,
-          endSeconds: (end * den) / num,
+          durationSamples: 960_000,
+          startSample: sample(start, fps),
+          endSample: sample(end, fps),
         });
         const window = await mixed(
           dir,
           `range-${num}-${start}`,
           mix.audios,
-          mix.durationSeconds,
+          mix.sampleCount / 48000,
         );
-        const sample = (frame: number) =>
-          Math.round((frame * den * 48000) / num);
-        const from = sample(start) * 2;
-        const to = sample(end) * 2;
-        const offset = mix.startSeconds * 48000 * 2;
+        const from = sample(start, fps) * 2;
+        const to = sample(end, fps) * 2;
+        const offset = mix.startSample * 2;
         let difference = 0;
         let power = 0;
         for (let i = from; i < to; i++) {

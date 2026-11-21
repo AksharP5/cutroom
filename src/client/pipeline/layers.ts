@@ -18,6 +18,17 @@ export interface Shown {
   brightness: number;
 }
 
+type ShownAdjustment = {
+  clip: Clip;
+  /** Apply after this many pictures have been drawn. */
+  after: number;
+};
+
+type FrameLayers = {
+  pictures: Shown[];
+  adjustments?: ShownAdjustment[];
+};
+
 /**
  * Which drawable video clips show at a frame, bottom first, and how their transitions draw them.
  * HyperFrames draws the plan's other videos above them. Null when a video the plan never
@@ -28,7 +39,13 @@ export interface Shown {
  * `framesAfter` its last. Cutroom's transitions sheet animates it in element-local seconds. A cross
  * dissolve fades only the clip later in the document; a dip takes the picture to black and back.
  */
-function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
+function layerQuery(
+  timeline: Timeline,
+  plan: Plan,
+  from: number,
+  to: number,
+  draftClip?: string,
+) {
   const { fps } = timeline;
   const fractional = new Set(plan.fractional);
   const order = new Map(plan.order.map((id, index) => [id, index]));
@@ -63,7 +80,9 @@ function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
   };
   // The lookahead visits every frame in the window. Prepare its metadata and candidate
   // intervals once; ownership still sees the whole timeline, including clips outside it.
-  const candidates: { clip: Clip; first: number; end: number }[] = [];
+  type Candidate = { clip: Clip; first: number; end: number };
+  const candidates: Candidate[] = [];
+  let adjustmentCandidates: Candidate[] | undefined;
   for (const clip of timeline.clips) {
     if (isAudioKind(clip.kind) || !clip.enabled || off.has(clip.track))
       continue;
@@ -80,11 +99,18 @@ function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
       (clip.transitionOut ? framesAfter(clip.transitionOut) : 0) +
       pad;
     if (end <= from || first > to) continue;
+    if (clip.adjustment) {
+      if (clip.grade || clip.id === draftClip) {
+        (adjustmentCandidates ??= []).push({ clip, first, end });
+        continue;
+      }
+      if (!clip.region) continue;
+    }
     candidates.push({ clip, first, end });
   }
-  return (frame: number): Shown[] | null => {
+  return (frame: number): FrameLayers | null => {
     const shown: (Shown & { level: number; index: number })[] = [];
-    const hyperframes: { level: number; index: number }[] = [];
+    const hyperframes: { level: number; index: number; track: number }[] = [];
     for (const { clip, first, end } of candidates) {
       if (frame < first || frame >= end) continue;
       const level = plan.trackZ[String(clip.track)] ?? 0;
@@ -92,7 +118,7 @@ function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
       const fit = clip.kind === "video" ? ownerOf(clip) : "hyperframes";
       if (!fit) return null;
       if (fit === "hyperframes") {
-        hyperframes.push({ level, index });
+        hyperframes.push({ level, index, track: clip.track });
         continue;
       }
       if (clip.mediaStart === null) return null;
@@ -168,39 +194,76 @@ function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
       shown.some((layer) => hyperframes.some((other) => !below(layer, other)))
     )
       return null;
-    return shown
+    const pictures = shown
       .sort((a, b) => a.level - b.level || a.index - b.index)
       .map(({ level: _level, index: _index, ...rest }) => rest);
+    if (!adjustmentCandidates) return { pictures };
+
+    let graded: ShownAdjustment[] | undefined;
+    for (const { clip, first, end } of adjustmentCandidates) {
+      if (frame < first || frame >= end) continue;
+      if (clip.region || fractional.has(clip.id)) return null;
+      // An HTML layer beneath the adjustment needs the native compositor, as does a
+      // stacking order that cannot put the track boundary between two pipeline pictures.
+      if (hyperframes.some((other) => other.track < clip.track)) return null;
+      const next = pictures.findIndex(
+        (picture) => picture.clip.track >= clip.track,
+      );
+      const after = next === -1 ? pictures.length : next;
+      if (
+        pictures.slice(after).some((picture) => picture.clip.track < clip.track)
+      )
+        return null;
+      (graded ??= []).push({ clip, after });
+    }
+    graded?.sort((a, b) => a.clip.track - b.clip.track);
+    return { pictures, adjustments: graded };
   };
 }
 
 export function shownAt(timeline: Timeline, plan: Plan, frame: number) {
-  return layerQuery(timeline, plan, frame, frame)(frame);
+  return layerQuery(timeline, plan, frame, frame)(frame)?.pictures ?? null;
 }
 
-/**
- * The layers a frame draws: nothing shows beneath an opaque clip that fills the frame untouched.
- * Null when the frame needs HyperFrames.
- */
-function visible(all: Shown[] | null) {
-  if (!all) return null;
-  const covering = all.findLastIndex(
-    ({ clip, fit, opacity, brightness }) =>
-      opacity === 1 &&
-      brightness === 1 &&
-      fit !== "contain" &&
-      !clip.x &&
-      !clip.y &&
-      (clip.scaleX ?? 1) >= 1 &&
-      (clip.scaleY ?? 1) >= 1 &&
-      !clip.rotation &&
-      !Object.values(clip.crop ?? {}).some(Boolean),
+/** An opaque picture with no exposed edges covers everything beneath it. */
+export function coversFrame({ clip, fit, opacity, brightness }: Shown) {
+  return (
+    opacity === 1 &&
+    brightness === 1 &&
+    fit !== "contain" &&
+    !clip.x &&
+    !clip.y &&
+    (clip.scaleX ?? 1) >= 1 &&
+    (clip.scaleY ?? 1) >= 1 &&
+    !clip.rotation &&
+    !Object.values(clip.crop ?? {}).some(Boolean)
   );
-  return all.slice(Math.max(0, covering));
+}
+
+/** Hide pictures and adjustments that an opaque picture fully covers. */
+function visible(all: FrameLayers | null): FrameLayers | null {
+  if (!all) return null;
+  const covering = all.pictures.findLastIndex(coversFrame);
+  if (covering <= 0) return all;
+  return {
+    pictures: all.pictures.slice(covering),
+    adjustments: all.adjustments
+      ?.filter(({ after }) => after > covering)
+      .map(({ clip, after }) => ({ clip, after: after - covering })),
+  };
 }
 
 export function visibleAt(timeline: Timeline, plan: Plan, frame: number) {
-  return visible(shownAt(timeline, plan, frame));
+  return frameLayersAt(timeline, plan, frame)?.pictures ?? null;
+}
+
+export function frameLayersAt(
+  timeline: Timeline,
+  plan: Plan,
+  frame: number,
+  draftClip?: string,
+) {
+  return visible(layerQuery(timeline, plan, frame, frame, draftClip)(frame));
 }
 
 /** A clip that comes into view at `frame`: it starts there, or what covered it ends. */
@@ -222,9 +285,9 @@ export function appearances(
 ): Appearance[] {
   const at = layerQuery(timeline, plan, from, to);
   const found: Appearance[] = [];
-  let before = new Set(visible(at(from))?.map(({ clip }) => clip.id));
+  let before = new Set(visible(at(from))?.pictures.map(({ clip }) => clip.id));
   for (let frame = from + 1; frame <= to; frame++) {
-    const layers = visible(at(frame));
+    const layers = visible(at(frame))?.pictures;
     if (!layers) {
       before.clear();
       continue;

@@ -151,7 +151,8 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
   let previous = await token(page);
   await edit([
     { type: "setTiming", clipId: "v1", mediaStart: 1, playbackRate: 1.5 },
-    { type: "trim", clipId: "v1", edge: "end", to: 75, ripple: false },
+    // The speed edit ripples v2 to frame 51. Leave a one-frame gap before it.
+    { type: "trim", clipId: "v1", edge: "end", to: 50, ripple: false },
     { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
   ]);
   await waitForPreview(page, { after: previous });
@@ -162,8 +163,10 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
   const clips = (await read()).timeline.clips;
   expect(clips.find((c) => c.id === "a1")?.mediaStart).toBe(1);
   expect(clips.find((c) => c.id === "a1")?.playbackRate).toBe(1.5);
-  expect(clips.find((c) => c.id === "v1")?.duration).toBe(75);
-  expect(clips.find((c) => c.id === "a1")?.duration).toBe(75);
+  expect(clips.find((c) => c.id === "v1")?.duration).toBe(50);
+  expect(clips.find((c) => c.id === "a1")?.duration).toBe(50);
+  expect(clips.find((c) => c.id === "v2")?.start).toBe(51);
+  expect(clips.find((c) => c.id === "a2")?.start).toBe(51);
   const control = await page.context().newPage();
   try {
     // The patched page never reloads. Every control picture starts in another fresh document.
@@ -197,7 +200,7 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
       // The reference is a fresh render, not a second editor applying the next history step.
       await control.goto("about:blank");
     }
-    for (const frame of [0, 30, 31, 75, 76, 77]) {
+    for (const frame of [0, 30, 31, 49, 50, 51, 52]) {
       await seek(page, frame);
       const patched = await page.locator(".edit-picture").screenshot();
       await control.goto(`/#project/${project.id}`);
@@ -207,7 +210,7 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
       expect(patched.equals(fresh), `frame ${frame}`).toBe(true);
       expect(await corrections(page), `frame ${frame}`).toBe(0);
       expect(await live(page)).toBe(original);
-      if (frame === 76)
+      if (frame === 51)
         await info.attach("NTSC cut.png", {
           body: fresh,
           contentType: "image/png",

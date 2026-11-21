@@ -14,7 +14,7 @@ import { createCompositor } from "./compositor";
 import type { Layer } from "./compositor";
 import { SourceDecoder } from "./decoder";
 import { openRanges, readVideoTrack } from "./mp4";
-import { appearances, visibleAt } from "./layers";
+import { appearances, coversFrame, frameLayersAt } from "./layers";
 import type { Appearance, Shown } from "./layers";
 import { sourceCache } from "./sources";
 import { usePipeline } from "./setting";
@@ -245,6 +245,9 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     if (drawing) return;
     drawing = true;
     try {
+      // An edit publishes its new timeline and playhead in the same key event.
+      // Read them together so decoding does not start at the old playhead.
+      await Promise.resolve();
       while (wanted && !closing.signal.aborted) {
         wanted = false;
         const drawingPlan = plan;
@@ -287,10 +290,17 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   };
 
   const drawFrame = async (drawingPlan: Plan) => {
-    const view = useTimeline.getState().view;
+    const { view, selection } = useTimeline.getState();
     const { frame, state } = useTransport.getState();
     if (!view || view.composition !== "index.html") return;
-    const shown = visibleAt(view.timeline, drawingPlan, frame);
+    const { draft } = usePreviewGrade.getState();
+    const { bypass } = useGradeBypass.getState();
+    const shown = frameLayersAt(
+      view.timeline,
+      drawingPlan,
+      frame,
+      draft?.clipId,
+    );
     if (!shown) {
       stop("the layers at the playhead need to be composited together");
       if (state.kind === "playing") prepare(view, frame, LOOKAHEAD, OPENING);
@@ -298,25 +308,33 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     }
     const moving = state.kind === "scrubbing" || state.kind === "shuttle";
     const playing = state.kind === "playing";
-    const { draft } = usePreviewGrade.getState();
-    const { bypass } = useGradeBypass.getState();
     const { fileChanges } = useWorkspace.getState();
-    const textures = Promise.all(
-      shown.map(({ clip }) => {
-        const editing = draft?.clipId === clip.id;
-        const grade = editing ? draft.grade : clip.grade;
-        const key =
-          grade && !bypass
-            ? grades.identify(grade, view.composition, fileChanges, editing)
-            : null;
-        return key ? grades.get(key) : null;
-      }),
-    ).then(
-      (textures) => ({ textures }),
+    const textureOf = ({ clip }: Pick<Shown, "clip">) => {
+      const editing = draft?.clipId === clip.id;
+      const grade = editing ? draft.grade : clip.grade;
+      const key =
+        grade && !bypass
+          ? grades.identify(grade, view.composition, fileChanges, editing)
+          : null;
+      return key ? grades.get(key) : null;
+    };
+    const textures = Promise.all(shown.pictures.map(textureOf)).catch(
       (error: unknown) => ({ error }),
     );
+    const adjustments =
+      !bypass &&
+      shown.adjustments?.length &&
+      Promise.all(
+        shown.adjustments.map(async ({ clip, after }) => {
+          const grade = await textureOf({ clip });
+          return grade ? { after, grade } : null;
+        }),
+      ).then(
+        (results) => results.filter((item) => item !== null),
+        (error: unknown) => ({ error }),
+      );
     const pictures = await Promise.all(
-      shown.map(async (layer) => {
+      shown.pictures.map(async (layer) => {
         const found = await source(layer.clip.src!);
         if (!found.proxy) void found.askProxy();
         const index = indexAt(found, layer.time);
@@ -350,8 +368,18 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         plan === drawingPlan && !closing.signal.aborted && target.isAvailable();
       if (!canPaint()) return;
       const baked = await textures;
+      const effects = adjustments ? await adjustments : undefined;
       if (!canPaint()) return;
       if ("error" in baked) throw baked.error;
+      if (effects && "error" in effects) throw effects.error;
+      // An opaque full-frame shot without its own grade needs no intermediate copy.
+      const single = effects?.[0];
+      const fused =
+        single?.after === 1 &&
+        pictures.length === 1 &&
+        effects!.length === 1 &&
+        !baked[0] &&
+        coversFrame(pictures[0]!.layer);
       await target.draw(
         pictures.map(({ layer, found }, at) =>
           // The proxy is stored upright; a phone's file may be stored turned.
@@ -360,12 +388,13 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
             frames[at]!,
             from[at]!.rotation,
             found.intrinsic,
-            baked.textures[at]!,
+            fused ? single.grade : baked[at]!,
           ),
         ),
         drawingPlan.background ?? "#ffffff",
         drawingPlan.width,
         drawingPlan.height,
+        fused ? undefined : effects,
       );
       // HyperFrames keeps the picture if this upload lost its drawing context.
       if (!canPaint()) return;
@@ -425,7 +454,9 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     for (const { found, lane, index } of pictures) {
       if (moving) continue;
       found.playing = lane;
-      if (playing) lane.prefetch(index + 1, index + lane.room(8));
+      // Repeated keyboard trims can step through this opening at rest.
+      if (playing || selection.editPoint)
+        lane.prefetch(index + 1, index + lane.room(8));
     }
     if (playing) prepare(view, frame, LOOKAHEAD, OPENING);
     else if (!moving) prepare(view, frame, NEXT, PREPARED);

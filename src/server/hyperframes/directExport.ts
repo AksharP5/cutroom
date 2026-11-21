@@ -1,20 +1,17 @@
-import { offsetSourceTime } from "../../shared/timeline/time.ts";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
   buildEncoderArgs,
-  buildVideoLayerInput,
   concatVideoFiles,
   extractMediaMetadata,
   getEncoderPreset,
+  isHdrColorSpace,
   parseMasterFxChain,
   runFfmpeg,
+  sdrCanvasColourFilters,
 } from "@hyperframes/engine";
-import type {
-  AudioElement,
-  EngineConfig,
-  VideoMetadata,
-} from "@hyperframes/engine";
+import type { EngineConfig, VideoMetadata } from "@hyperframes/engine";
+import type { AudioMixElement } from "./audioClock.ts";
 import { alignRangeAudio, mixRangeAudio } from "./rangeAudio.ts";
 import { ExportStageError } from "./renderFailure.ts";
 import { projectPath } from "../projects/path.ts";
@@ -25,6 +22,10 @@ import type { DirectPlan, Placement, SourceSegment } from "./directSchema.ts";
 import { contentRect, placeOnFrame, visibleRect } from "./directPlacement.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportStage } from "../../shared/export.ts";
+import { frames, pictureAt, sourceAt } from "../../shared/timeline/piece.ts";
+import { localMediaInputOptions } from "../media/input.ts";
+import { sourcePictures, type SourcePictures } from "../media/pictureIndex.ts";
+import { ordinalDecode, picturePiece, picturesAt } from "./pictureSelection.ts";
 
 /** The planner's audio stage, which Cutroom's render isolation hands over when the producer loads. */
 export type AudioStage = (input: {
@@ -32,7 +33,7 @@ export type AudioStage = (input: {
   workDir: string;
   totalFrames: number;
   fps: Fps;
-  audios: AudioElement[];
+  audios: AudioMixElement[];
   masterFxChain?: string;
   ffmpegProcessTimeout: number;
   audioGain: number;
@@ -59,7 +60,10 @@ const PART_INPUTS = 8;
 
 type MediaInput = {
   path: string;
-  video?: Pick<VideoMetadata, "width" | "height" | "pixelFormat">;
+  video?: {
+    metadata: VideoMetadata;
+    source: SourcePictures;
+  };
 };
 /** A run with its file on disk and, when graded, the baked grade FFmpeg reads. */
 type Piece = SourceSegment & MediaInput & { cube?: string };
@@ -70,7 +74,7 @@ export type EncodedPart = { start: number; end: number; path: string };
  * Splits the source runs into parts of at most PART_FRAMES frames and PART_INPUTS sources. A part
  * never spans a gap, which frame capture fills.
  */
-function partition(pieces: Piece[], fps: Fps) {
+function partition(pieces: Piece[]) {
   const parts: Piece[][] = [];
   let part: Piece[] = [];
   let frames = 0;
@@ -90,11 +94,7 @@ function partition(pieces: Piece[], fps: Fps) {
         ...piece,
         start,
         end,
-        mediaStart: offsetSourceTime(
-          piece.mediaStart,
-          start - piece.start,
-          fps,
-        ),
+        clipStart: piece.clipStart ?? piece.start,
       });
       frames += end - start;
       start = end;
@@ -105,14 +105,15 @@ function partition(pieces: Piece[], fps: Fps) {
 
 /**
  * Checks every source the plan uses. Returns why the browser must draw it instead: FFmpeg reads
- * only constant-rate SDR video without alpha, which `buildVideoLayerInput` reproduces exactly as
- * frame extraction samples and colours it, and only at the composition's own aspect ratio.
+ * only indexed SDR video without alpha at the composition's own aspect ratio.
  */
 export async function prepareDirectExport(
   plan: DirectPlan,
   projectDir: string,
   entryFile: string,
   workDir: string,
+  fps: Fps,
+  signal: AbortSignal,
 ): Promise<{ pieces: Piece[] } | { reason: string }> {
   const segments = plan.segments.filter(
     (segment): segment is SourceSegment => segment.kind === "source",
@@ -136,14 +137,29 @@ export async function prepareDirectExport(
     if (metadata.rotation) return { reason: `${src} is rotated` };
     if (metadata.width * plan.height !== metadata.height * plan.width)
       return { reason: `${src} has a different aspect ratio` };
-    sources.set(src, {
-      path,
-      video: {
-        width: metadata.width,
-        height: metadata.height,
-        pixelFormat: metadata.pixelFormat,
-      },
-    });
+    if (
+      isHdrColorSpace(metadata.colorSpace) ||
+      metadata.hasAlpha ||
+      ["vp8", "vp9", "prores"].includes(metadata.videoCodec)
+    )
+      return { reason: `${src} needs HDR or alpha compositing` };
+    const source = await sourcePictures(path, { projectDir, signal });
+    if (!source) return { reason: `${src} has no presentation index` };
+    sources.set(src, { path, video: { metadata, source } });
+  }
+  for (const segment of segments) {
+    const video = sources.get(segment.src)?.video;
+    if (!video) continue;
+    const piece = directPiece(segment, fps, video.source);
+    if (
+      pictureAt(
+        video.source.index,
+        sourceAt(piece, frames(segment.start, fps)),
+      ) === null
+    )
+      return {
+        reason: `${segment.src} has no picture at the start of the segment`,
+      };
   }
   // One bake per distinct grade, at 65 points, written where every part's FFmpeg reads it.
   const cubes = new Map<string, string>();
@@ -170,6 +186,22 @@ export async function prepareDirectExport(
       ...(segment.grade && { cube: cubes.get(JSON.stringify(segment.grade)) }),
     })),
   };
+}
+
+function directPiece(segment: SourceSegment, fps: Fps, source: SourcePictures) {
+  const seconds = (frame: number) => (frame * fps.den) / fps.num;
+  return picturePiece(
+    {
+      id: segment.src,
+      src: segment.src,
+      start: seconds(segment.clipStart ?? segment.start),
+      end: seconds(segment.end),
+      mediaStart: segment.mediaStart,
+      playbackRate: 1,
+    },
+    fps,
+    source,
+  );
 }
 
 /**
@@ -220,6 +252,7 @@ function placed(
   after: string[],
   before: string[] = [],
   grading: string[] = [],
+  stream: number | "v" = "v",
 ) {
   const content = contentRect(fit, picture, frame);
   const shown = visibleRect(content, placement.crop, frame);
@@ -290,7 +323,7 @@ function placed(
       : []),
   ];
   return [
-    `[${index}:v]${picturePart.join(",")}[q${index}]`,
+    `[${index}:${stream}]${picturePart.join(",")}[q${index}]`,
     `color=c=${beneath}:s=${frame.width}x${frame.height}:r=${rate},format=gbrp[b${index}]`,
     `[b${index}][q${index}]${[
       "overlay=format=gbrp:shortest=1",
@@ -365,8 +398,7 @@ export function partEncoderArgs(
   return args;
 }
 
-/** Encodes one part's pieces in a single FFmpeg process. */
-async function encodePart(input: {
+type EncodePart = {
   pieces: Piece[];
   outputPath: string;
   fps: Fps;
@@ -376,10 +408,37 @@ async function encodePart(input: {
   signal: AbortSignal;
   timeout: number;
   onFrames: (frames: number) => void;
-}) {
+};
+
+/** Encodes one part's pieces in a single FFmpeg process, retrying only mismatched seeks. */
+async function encodePart(input: EncodePart) {
+  let reported = 0;
+  const report = (frames: number) => {
+    if (frames <= reported) return;
+    input.onFrames(frames - reported);
+    reported = frames;
+  };
+  const first = await encodePartAttempt(input, new Map(), report);
+  if (!first.size) return;
+  const second = await encodePartAttempt(input, first, report);
+  const missed = second.entries().next().value;
+  if (missed) {
+    const [index, ordinal] = missed;
+    throw new Error(
+      `Could not verify picture ${ordinal} in ${input.pieces[index]!.src} after retrying from the start of the source.`,
+    );
+  }
+}
+
+async function encodePartAttempt(
+  input: EncodePart,
+  retry: ReadonlyMap<number, number>,
+  report: (frames: number) => void,
+) {
   const { fps, width, height, pieces } = input;
-  const inputs: string[] = [];
+  const inputs = ["-loglevel", "info", "-copyts"];
   const chains: string[] = [];
+  const checks = new Map<number, ReturnType<typeof ordinalDecode>>();
   const rate = `${fps.num}/${fps.den}`;
   for (const [index, piece] of pieces.entries()) {
     const frames = piece.end - piece.start;
@@ -411,29 +470,65 @@ async function encodePart(input: {
     }
     // Resizing first can make older FFmpeg versions infer a different source matrix.
     // For plain footage, do the colour conversion at source size and resize afterwards.
-    const sampleSize = piece.placement ? frame : (piece.video ?? frame);
+    if (!piece.video)
+      throw new Error(`${piece.src} was planned without a presentation index.`);
+    const { metadata, source } = piece.video;
+    const slots = picturesAt(
+      directPiece(piece, fps, source),
+      source,
+      fps,
+      piece.start,
+      piece.end,
+    );
+    const ordinals: number[] = [];
+    const starts: number[] = [];
+    for (const [slot, ordinal] of slots.entries()) {
+      if (ordinal === null)
+        throw new Error(
+          `${piece.src} has no picture at export frame ${piece.start + slot}.`,
+        );
+      if (ordinals.at(-1) !== ordinal) {
+        ordinals.push(ordinal);
+        starts.push(slot);
+      }
+    }
+    const decode = ordinalDecode(source, ordinals, index, retry.has(index));
+    checks.set(index, decode);
+    inputs.push(...localMediaInputOptions, ...decode.args, "-i", piece.path);
+    // Set each selected ordinal on its first output slot. The extra EOF frame gives
+    // the fps filter a definite end, even when the final picture spans many slots.
+    starts.push(frames);
+    const slotAt = (start: number, end: number): string => {
+      if (end - start === 1) return String(starts[start]);
+      const mid = (start + end) >>> 1;
+      return `if(lt(N\\,${mid})\\,${slotAt(start, mid)}\\,${slotAt(mid, end)})`;
+    };
+    const slot = starts.every((frame, index) => frame === index)
+      ? "N"
+      : slotAt(0, starts.length);
+    const layer = [
+      ...decode.filters,
+      "tpad=stop_mode=clone:stop=1",
+      `settb=1/${fps.num}`,
+      `setpts=(${slot})*${fps.den}`,
+      `fps=${rate}:start_time=0`,
+      ...sdrCanvasColourFilters(metadata),
+    ];
+    const sampleSize = piece.placement ? frame : metadata;
+    if (
+      piece.placement &&
+      (metadata.width !== width || metadata.height !== height)
+    )
+      layer.push(`scale=${width}:${height}:flags=bicubic`);
     const resize =
       sampleSize.width === width && sampleSize.height === height
         ? null
         : `scale=${width}:${height}:flags=bicubic`;
     // Keep finer chroma until after resampling. Ordinary 4:2:0 needs no intermediate.
     const format =
-      resize && !/^yuvj?420p/.test(piece.video?.pixelFormat ?? "")
+      resize && !/^yuvj?420p/.test(metadata.pixelFormat ?? "")
         ? ["format=yuv444p", resize, deliveryFormat]
         : [deliveryFormat, ...(resize ? [resize] : [])];
-    const layer = await buildVideoLayerInput(
-      piece.path,
-      piece.mediaStart,
-      (frames * fps.den) / fps.num,
-      fps,
-      sampleSize,
-      "fill",
-    );
-    if (!layer)
-      throw new Error(
-        `FFmpeg cannot draw ${piece.src} from ${piece.mediaStart.toFixed(3)} s as the preview does.`,
-      );
-    inputs.push(...layer.inputArgs);
     const trim = [`trim=end_frame=${frames}`, "setpts=PTS-STARTPTS"];
     chains.push(
       piece.placement
@@ -445,10 +540,11 @@ async function encodePart(input: {
             frame,
             rate,
             trim,
-            layer.filters,
+            layer,
             gradeFilters(piece.cube),
+            source.stream,
           )
-        : `[${index}:v]${[...layer.filters, ...gradeFilters(piece.cube), deliveryMatrix, ...format, deliveryTags, ...trim].join(",")}[p${index}]`,
+        : `[${index}:${source.stream}]${[...layer, ...gradeFilters(piece.cube), deliveryMatrix, ...format, deliveryTags, ...trim].join(",")}[p${index}]`,
     );
   }
   const total = pieces.reduce((sum, piece) => sum + piece.end - piece.start, 0);
@@ -468,16 +564,25 @@ async function encodePart(input: {
       const counts = [...chunk.matchAll(/frame=\s*(\d+)/g)];
       const frames = Number(counts.at(-1)?.[1] ?? reported);
       if (frames > reported) {
-        input.onFrames(frames - reported);
         reported = frames;
+        report(frames);
       }
+      for (const decode of checks.values()) decode.read(chunk);
     },
   });
-  if (!result.success)
+  input.signal.throwIfAborted();
+  const mismatches = new Map(
+    [...checks]
+      .filter(([, decode]) => !decode.verified())
+      .map(([index, decode]) => [index, decode.first]),
+  );
+  const empty = /nothing was written|output file is empty/i.test(result.stderr);
+  if (!result.success && (!mismatches.size || !empty))
     throw new Error(
       `Encoding from the source failed: ${result.stderr.slice(-2000)}`,
     );
-  input.onFrames(total - reported);
+  if (!mismatches.size) report(total);
+  return mismatches;
 }
 
 type Encoding = {
@@ -508,7 +613,7 @@ export async function encodeSourceParts(
   const { plan, fps } = input;
   const partsDir = join(input.workDir, "parts");
   await mkdir(partsDir, { recursive: true });
-  const parts = partition(input.pieces, fps).map((pieces, index) => ({
+  const parts = partition(input.pieces).map((pieces, index) => ({
     pieces,
     start: pieces[0]!.start,
     end: pieces.at(-1)!.end,
@@ -580,7 +685,7 @@ export async function exportDirect(
     projectDir: string;
     outputPath: string;
     audioStage: AudioStage;
-    collectAudio: (html: string) => AudioElement[];
+    collectAudio: (html: string) => AudioMixElement[];
     progress: Progress;
   },
 ) {
