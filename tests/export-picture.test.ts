@@ -142,8 +142,16 @@ function split(html: string) {
 async function fixture(run: (root: string, render: Render) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), "export-picture-"));
   const scratchDir = root + "-scratch";
-  const capture = createRenderWorkers({ scratchDir, directExport: false });
-  const direct = createRenderWorkers({ scratchDir });
+  const workerPath =
+    process.env.GITHUB_ACTIONS === "true"
+      ? join(import.meta.dir, "fixtures/picture-render-worker.ts")
+      : undefined;
+  const capture = createRenderWorkers({
+    scratchDir,
+    workerPath,
+    directExport: false,
+  });
+  const direct = createRenderWorkers({ scratchDir, workerPath });
   let output = 0;
   try {
     await run(root, async (html, fps, expected, renderer, range) => {
