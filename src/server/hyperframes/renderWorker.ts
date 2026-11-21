@@ -174,6 +174,8 @@ try {
       input.projectDir,
       entryFile,
       join(input.scratchDir, "direct"),
+      request.options.fps,
+      abort.signal,
     ));
   if (direct && "reason" in direct) {
     if (input.direct?.captureRefusal)

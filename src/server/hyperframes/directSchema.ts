@@ -35,8 +35,9 @@ const SourceSegmentSchema = z.object({
   end: frame,
   /** Project-relative source path, as the clip's `src` names it. */
   src: z.string().min(1),
-  /** Source seconds shown on the segment's first frame. */
+  /** The authored in-point and its timeline anchor, even when a range starts later. */
   mediaStart: z.number().nonnegative(),
+  clipStart: frame.optional(),
   /** A still image's fit and pixel size, which the server reads from the file once planned. */
   still: z
     .object({
