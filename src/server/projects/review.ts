@@ -313,6 +313,8 @@ export function createReviewService(store: ProjectStore) {
       true,
     );
     if ((await readOptional(backup)) === null) await atomicWrite(backup, raw);
+    // An older build rewrote the files. The previous snapshot cannot skip either migration write.
+    snapshots.delete(project.path);
     await writeState(project, state);
     return state;
   };
