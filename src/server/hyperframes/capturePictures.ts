@@ -1,13 +1,23 @@
 import { createHash } from "node:crypto";
-import { basename } from "node:path";
+import { basename, isAbsolute, relative } from "node:path";
 import { normalizeRateSpec } from "@hyperframes/core";
 import { timeAtSourceTime } from "@hyperframes/core/speed-ramp";
 import { runFfmpeg, VideoSourceExtractionError } from "@hyperframes/engine";
-import type { VideoElement, VideoMetadata } from "@hyperframes/engine";
+import type { VideoElement } from "@hyperframes/engine";
 import { z } from "zod";
 import { sourcePictures } from "../media/pictureIndex.ts";
 import { localMediaInputOptions } from "../media/input.ts";
-import { secondsOf } from "../../shared/timeline/piece.ts";
+import {
+  attrMicros,
+  decodeLocal,
+  firstFrame,
+  resolvePiece,
+  secondsOf,
+} from "../../shared/timeline/piece.ts";
+import type { PlacedMedia } from "../../shared/timeline/piece.ts";
+import { placedMedia } from "../../shared/timeline/placedMedia.ts";
+import { frameCacheSource } from "./frameCache.ts";
+import { projectPath } from "../projects/path.ts";
 import { FpsSchema, type Fps } from "../../shared/timeline/schema.ts";
 import { ordinalDecode, picturePiece, picturesAt } from "./pictureSelection.ts";
 
@@ -17,10 +27,44 @@ export const PictureSlotsSchema = z.object({
   slots: z.array(z.number().int().nonnegative().nullable()),
 });
 
+// A render worker handles one document. Runtime-authored picture timing keeps
+// using the producer's discovered values when it differs from compilation.
+let authoredPictures = new Map<string, PlacedMedia>();
+
+export function bindPicturePlacement(
+  before: readonly VideoElement[],
+  after: readonly VideoElement[],
+  html: string,
+  subCompositions: ReadonlyMap<string, string>,
+) {
+  if (!after.length) {
+    authoredPictures.clear();
+    return;
+  }
+  const initial = new Map(before.map((video) => [video.id, video]));
+  const { placed } = placedMedia(html, subCompositions);
+  authoredPictures = new Map(
+    after.flatMap((video) => {
+      const prior = initial.get(video.id);
+      const piece = placed.get(`video:${video.id}`);
+      return prior &&
+        piece?.kind === "media" &&
+        prior.start === video.start &&
+        prior.end === video.end &&
+        prior.mediaStart === video.mediaStart &&
+        prior.loop === video.loop &&
+        prior.playbackRate === video.playbackRate &&
+        prior.src === video.src
+        ? [[video.id, piece] as const]
+        : [];
+    }),
+  );
+}
+
 export async function capturePictures(
   video: VideoElement,
   path: string,
-  metadata: VideoMetadata,
+  projectDir: string | undefined,
   fps: Fps,
   timelineEnd: number | undefined,
   range: { start: number; end: number } | undefined,
@@ -28,7 +72,19 @@ export async function capturePictures(
 ) {
   // Streams read remotely by a distributed renderer still use its range decoder.
   if (/^https?:\/\//i.test(path)) return null;
-  const source = await sourcePictures(path, metadata, signal);
+  // A marked render can decode a compiled copy. Only share its index when
+  // the project still owns the unchanged original that it copied.
+  const original = projectDir && frameCacheSource(path, projectDir);
+  const local = projectDir && original ? relative(projectDir, original) : "";
+  const reusable =
+    projectDir && local && !isAbsolute(local) && !/^\.\.(?:[\\/]|$)/.test(local)
+      ? await projectPath({ path: projectDir }, local).catch(() => undefined)
+      : undefined;
+  const indexed = await sourcePictures(reusable ?? path, {
+    signal,
+    projectDir: reusable ? projectDir : undefined,
+  });
+  const source = indexed && { ...indexed, path };
   if (!source || (!source.end && (video.loop || !Number.isFinite(video.end))))
     return null;
   const playbackRate = normalizeRateSpec(video.playbackRate);
@@ -40,10 +96,21 @@ export async function capturePictures(
     Number.isFinite(video.end) ? video.end : naturalEnd,
     timelineEnd ?? Infinity,
   );
-  const piece = picturePiece({ ...video, end, playbackRate }, fps, source);
+  const authored = authoredPictures.get(video.id);
+  const piece = authored
+    ? resolvePiece(authored, fps, source.end?.time)
+    : picturePiece({ ...video, end, playbackRate }, fps, source);
   if (video.loop && !piece.loop?.length) return null;
   const first = Math.max(0, Number(piece.frames.start), range?.start ?? 0);
-  const last = Math.min(Number(piece.frames.end), range?.end ?? Infinity);
+  const sceneEnd =
+    timelineEnd !== undefined && Number.isFinite(timelineEnd)
+      ? Number(firstFrame(decodeLocal(attrMicros(timelineEnd), fps), fps))
+      : Infinity;
+  const last = Math.min(
+    Number(piece.frames.end),
+    range?.end ?? Infinity,
+    sceneEnd,
+  );
   const selected = picturesAt(piece, source, fps, first, last);
   const ordinals = [
     ...new Set(
@@ -139,7 +206,7 @@ export async function extractPictures(input: {
           "ffmpeg_failed",
           false,
           "The decoded pictures did not match the source timestamps",
-          `Could not verify picture ${batch[0]} in ${basename(source.path)} after retrying from an earlier keyframe.`,
+          `Could not verify picture ${batch[0]} in ${basename(source.path)} after retrying from the start of the source.`,
         );
     }
   }

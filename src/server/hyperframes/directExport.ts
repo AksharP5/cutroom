@@ -146,7 +146,7 @@ export async function prepareDirectExport(
       ["vp8", "vp9", "prores"].includes(metadata.videoCodec)
     )
       return { reason: `${src} needs HDR or alpha compositing` };
-    const source = await sourcePictures(path, metadata, signal);
+    const source = await sourcePictures(path, { projectDir, signal });
     if (!source) return { reason: `${src} has no presentation index` };
     sources.set(src, { path, video: { metadata, source } });
   }
@@ -428,7 +428,7 @@ async function encodePart(input: EncodePart) {
   if (missed) {
     const [index, ordinal] = missed;
     throw new Error(
-      `Could not verify picture ${ordinal} in ${input.pieces[index]!.src} after retrying from an earlier keyframe.`,
+      `Could not verify picture ${ordinal} in ${input.pieces[index]!.src} after retrying from the start of the source.`,
     );
   }
 }

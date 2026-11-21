@@ -86,7 +86,7 @@ export function ordinalDecode(
     if (source.keys[mid]! <= first) lo = mid + 1;
     else hi = mid;
   }
-  const anchor = source.keys[lo - (retry ? 2 : 1)] ?? 0;
+  const anchor = retry ? 0 : (source.keys[lo - 1] ?? 0);
   const pts = nativeTimestamp(source, anchor);
   // -ss accepts microseconds. Round up so a keyframe on a fractional tick remains eligible.
   const seekUs = (pts.n * 1_000_000n + pts.d - 1n) / pts.d;

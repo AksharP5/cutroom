@@ -1,7 +1,21 @@
-import { stat } from "node:fs/promises";
-import { resolvePlayableVideoDuration, runFfprobe } from "@hyperframes/engine";
-import type { VideoMetadata } from "@hyperframes/engine";
-import { fileFingerprint } from "../../shared/media.ts";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
+import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { runFfprobe } from "@hyperframes/engine";
+import { z } from "zod";
+import { isMissing, projectStatePath } from "../projects/path.ts";
+import { FpsSchema } from "../../shared/timeline/schema.ts";
 import {
   add,
   decimalFraction,
@@ -12,7 +26,7 @@ import type { ExactTime, PictureIndex } from "../../shared/timeline/piece.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import { localMediaInputOptions } from "./input.ts";
 
-type Packet = { pts: bigint; duration: bigint | undefined; key: boolean };
+type Packet = { pts: bigint; duration?: bigint; key: boolean };
 type PlayableEnd = { time: ExactTime; from: "stream" | "packet" | "estimate" };
 export type SourcePictures = {
   path: string;
@@ -21,7 +35,8 @@ export type SourcePictures = {
   keys: readonly number[];
   tick: ExactTime;
   stream: number;
-  end: PlayableEnd | undefined;
+  end?: PlayableEnd;
+  proxy: { timeBase: string; start: number; audio: string | null };
 };
 
 const integer = (value: string | undefined) =>
@@ -76,16 +91,14 @@ function onGrid(packets: Packet[], tick: ExactTime, rate: Fps) {
 }
 
 async function readPictures(
-  path: string,
-  metadata: VideoMetadata,
-  signal?: AbortSignal,
-): Promise<SourcePictures | null> {
-  const streams = await runFfprobe(
-    path,
+  signal: AbortSignal | undefined,
+  probe: NonNullable<PictureOptions["probe"]>,
+): Promise<Omit<SourcePictures, "path"> | null> {
+  const streams = await probe(
     [
       ...localMediaInputOptions,
       "-show_entries",
-      "stream=index,codec_type,time_base,start_pts,start_time,duration_ts,duration,r_frame_rate:stream_disposition=attached_pic:format=format_name",
+      "stream=index,codec_type,codec_name,time_base,start_pts,start_time,duration_ts,duration,r_frame_rate,avg_frame_rate:stream_disposition=attached_pic:format=format_name,start_time,duration",
       "-of",
       "compact",
     ],
@@ -102,8 +115,7 @@ async function readPictures(
   const stream = Number(video.index);
   const duration = integer(video.duration_ts);
 
-  const raw = await runFfprobe(
-    path,
+  const raw = await probe(
     [
       ...localMediaInputOptions,
       "-select_streams",
@@ -114,7 +126,7 @@ async function readPictures(
       "compact",
     ],
     signal,
-    { maxChars: 64 * 1024 * 1024 },
+    true,
   );
   const presented: Packet[] = [];
   for (const packet of records(raw, "packet")) {
@@ -159,8 +171,15 @@ async function readPictures(
   const packetOffset = subtract(origin, streamStart);
   const rate = timeBase(video.r_frame_rate);
   const fps = rate && { num: Number(rate.n), den: Number(rate.d) };
+  const avg = timeBase(video.avg_frame_rate);
+  const nominal = rate && Number(rate.n) / Number(rate.d);
+  const average = avg && Number(avg.n) / Number(avg.d);
+  const vfr =
+    nominal &&
+    average &&
+    Math.abs(nominal - average) / Math.max(nominal, average) > 0.1;
   const index: PictureIndex =
-    fps && !metadata.isVFR && onGrid(presented, tick, fps)
+    fps && !vfr && onGrid(presented, tick, fps)
       ? {
           origin: add(ticks(first.pts, tick), packetOffset),
           rate: fps,
@@ -179,42 +198,225 @@ async function readPictures(
       ? subtract(ticks(last.pts + last.duration, tick), streamStart)
       : undefined;
   const exactLead = videoStart?.exact && earliest?.exact;
-  const estimate = resolvePlayableVideoDuration(metadata);
+  const estimate = decimal(format?.duration);
   let playable: PlayableEnd | undefined;
   if (streamDuration && streamDuration.n > 0n)
     playable = {
-      time: add(lead, streamDuration),
+      time: add(origin, streamDuration),
       from: exactLead && duration && duration > 0n ? "stream" : "estimate",
     };
   else if (lastEnd && lastEnd.n > 0n)
     playable = {
-      time: add(lead, lastEnd),
+      time: add(origin, lastEnd),
       from: exactLead ? "packet" : "estimate",
     };
-  else if (estimate > 0 && Number.isFinite(estimate))
-    playable = { time: decimalFraction(estimate), from: "estimate" };
+  else if (estimate && estimate.n > 0n)
+    playable = { time: estimate, from: "estimate" };
 
-  return { path, index, packets: presented, keys, tick, stream, end: playable };
+  return {
+    index,
+    packets: presented,
+    keys,
+    tick,
+    stream,
+    end: playable,
+    proxy: {
+      timeBase: video.time_base!,
+      start: Number(format?.start_time ?? 0) || 0,
+      audio:
+        av.find(({ codec_type }) => codec_type === "audio")?.codec_name ?? null,
+    },
+  };
 }
 
+const exactInteger = z
+  .string()
+  .regex(/^-?\d+$/)
+  .transform(BigInt);
+const exactTime = z.object({
+  n: exactInteger,
+  d: exactInteger.refine((d) => d > 0n),
+});
+const storedPictures = z
+  .object({
+    index: z.union([
+      z.object({ origin: exactTime, rate: FpsSchema, count: exactInteger }),
+      z.object({ times: z.array(exactTime) }),
+    ]),
+    packets: z.array(
+      z.object({
+        pts: exactInteger,
+        duration: exactInteger.optional(),
+        key: z.boolean(),
+      }),
+    ),
+    keys: z.array(z.number().int().nonnegative()),
+    tick: exactTime,
+    stream: z.number().int().nonnegative(),
+    end: z
+      .object({
+        time: exactTime,
+        from: z.enum(["stream", "packet", "estimate"]),
+      })
+      .optional(),
+    proxy: z.object({
+      timeBase: z.string().regex(/^\d+\/\d+$/),
+      start: z.number(),
+      audio: z.string().nullable(),
+    }),
+  })
+  .nullable();
+
+type PictureOptions = {
+  signal?: AbortSignal;
+  projectDir?: string;
+  probe?: (
+    args: string[],
+    signal?: AbortSignal,
+    packets?: boolean,
+  ) => Promise<string>;
+};
 const sources = new Map<string, Promise<SourcePictures | null>>();
 
-/** One demux pass per source revision, lazily when the export needs pictures. */
+async function mediaRevision(path: string) {
+  const info = await stat(path, { bigint: true });
+  return [path, info.size, info.mtimeNs, info.ctimeNs, info.dev, info.ino].join(
+    "\0",
+  );
+}
+
+async function readCachedPictures(artifact: string) {
+  try {
+    const data: unknown = JSON.parse(await readFile(artifact, "utf8"));
+    return storedPictures.safeParse(data);
+  } catch (error) {
+    if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
+    return null;
+  }
+}
+
+type PictureData = Omit<SourcePictures, "path">;
+async function cachePictures(
+  directory: string,
+  read: () => Promise<PictureData | null>,
+  signal: AbortSignal | undefined,
+) {
+  try {
+    await mkdir(directory, { recursive: true });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      ["EACCES", "EPERM", "EROFS"].includes(String(error.code))
+    )
+      return read();
+    throw error;
+  }
+  const artifact = join(directory, "picture-index.json");
+  const lock = join(directory, "picture-index.pending");
+  // The media and render workers can meet on a cold source. Only one scans it.
+  for (;;) {
+    signal?.throwIfAborted();
+    const cached = await readCachedPictures(artifact);
+    if (cached?.success) {
+      const now = new Date();
+      await utimes(directory, now, now).catch((error: unknown) => {
+        if (!isMissing(error)) throw error;
+      });
+      return cached.data;
+    }
+    const claim = await open(lock, "wx").catch((error: unknown) => {
+      if (!(
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "EEXIST"
+      ))
+        throw error;
+      return null;
+    });
+    if (!claim) {
+      const age = await stat(lock).then(
+        ({ mtimeMs }) => Date.now() - mtimeMs,
+        (error: unknown) => {
+          if (!isMissing(error)) throw error;
+          return 0;
+        },
+      );
+      // A force-stopped worker can leave its claim behind.
+      if (age > 120_000) await rm(lock, { force: true });
+      await delay(100, undefined, { signal });
+      continue;
+    }
+    const temp = join(directory, `.picture-${randomUUID()}.json`);
+    try {
+      const saved = await readCachedPictures(artifact);
+      if (saved?.success) return saved.data;
+      const result = await read();
+      await writeFile(
+        temp,
+        JSON.stringify(result, (_, value: unknown) =>
+          typeof value === "bigint" ? value.toString() : value,
+        ),
+        { flag: "wx" },
+      );
+      await rename(temp, artifact);
+      return result;
+    } finally {
+      await claim.close();
+      await Promise.all([rm(temp, { force: true }), rm(lock, { force: true })]);
+    }
+  }
+}
+
+/** The preview's media cache also holds the source packet index used by export. */
 export async function sourcePictures(
   path: string,
-  metadata: VideoMetadata,
-  signal?: AbortSignal,
+  options: PictureOptions = {},
 ) {
-  const key = fileFingerprint(path, await stat(path));
-  let pending = sources.get(key);
-  if (!pending) {
-    pending = readPictures(path, metadata, signal);
-    sources.set(key, pending);
-    pending.catch(() => {
-      if (sources.get(key) === pending) sources.delete(key);
-    });
-    if (sources.size > 16) sources.delete(sources.keys().next().value!);
-  }
+  const { signal, projectDir } = options;
+  const original = await realpath(path);
+  const revision = await mediaRevision(original);
+  const key = createHash("sha256")
+    .update(`picture-index-v1\0${revision}`)
+    .digest("hex");
+  const memoKey = `${projectDir ?? ""}\0${key}`;
+  const cached = sources.get(memoKey);
+  if (cached) return cached;
+
+  const probe =
+    options.probe ??
+    ((args, abort, packets) =>
+      runFfprobe(
+        original,
+        args,
+        abort,
+        packets ? { maxChars: 64 * 1024 * 1024 } : undefined,
+      ));
+  const read = async () => {
+    const data = await readPictures(signal, probe);
+    if ((await mediaRevision(original)) !== revision)
+      throw new Error("Source media changed while indexing its pictures.");
+    return data;
+  };
+  const pending = (async () => {
+    const data = projectDir
+      ? await cachePictures(
+          await projectStatePath(
+            { path: projectDir },
+            `.cutroom/cache/${key}`,
+            true,
+          ),
+          read,
+          signal,
+        )
+      : await read();
+    return data && { ...data, path: original };
+  })();
+  sources.set(memoKey, pending);
+  pending.catch(() => {
+    if (sources.get(memoKey) === pending) sources.delete(memoKey);
+  });
+  if (sources.size > 16) sources.delete(sources.keys().next().value!);
   return pending;
 }
 

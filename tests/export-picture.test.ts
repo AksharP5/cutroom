@@ -1,8 +1,17 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractMediaMetadata } from "@hyperframes/engine";
+import {
+  picturePiece,
+  picturesAt,
+  ordinalDecode,
+} from "../src/server/hyperframes/pictureSelection";
+import {
+  bindPicturePlacement,
+  capturePictures,
+  extractPictures,
+} from "../src/server/hyperframes/capturePictures";
 import { createRenderWorkers } from "../src/server/hyperframes/jobs";
 import { browserExecutable } from "../src/server/hyperframes/render";
 import { sourcePictures } from "../src/server/media/pictureIndex";
@@ -367,10 +376,7 @@ test.skipIf(!ready)(
         );
         expect(await labels(path)).toEqual(sequence(count));
         if (name === "p12.mkv")
-          expect(
-            (await sourcePictures(path, await extractMediaMetadata(path)))?.end
-              ?.from,
-          ).toBe("packet");
+          expect((await sourcePictures(path))?.end?.from).toBe("packet");
         const project = html(name, fps, expected.length);
         for (const renderer of ["capture", "direct"] as const) {
           await render(project, fps, expected, renderer);
@@ -392,13 +398,22 @@ test.skipIf(!ready)(
   "P13 and P13b: 2,000 exported frames wrap on the native end, including marked exports",
   async () => {
     await fixture(async (root, render) => {
-      for (const { name, fps, count, ticks, mediaStart } of [
+      for (const { name, fps, count, ticks, mediaStart, outputFrames } of [
         {
           name: "integer.mp4",
           fps: thirty,
           count: 60,
           ticks: 60000,
           mediaStart: 0.5,
+          outputFrames: 120,
+        },
+        {
+          name: "45-pictures-ntsc.mp4",
+          fps: ntsc,
+          count: 60,
+          ticks: 60060,
+          mediaStart: 0.5005,
+          outputFrames: 2000,
         },
         {
           name: "fraction.mp4",
@@ -406,6 +421,7 @@ test.skipIf(!ready)(
           count: 61,
           ticks: 61061,
           mediaStart: 0.5005,
+          outputFrames: 2000,
         },
       ]) {
         const path = join(root, name);
@@ -421,7 +437,10 @@ test.skipIf(!ready)(
         );
         expect(await labels(path)).toEqual(sequence(count));
         const cycle = count - 15;
-        const expected = sequence(2000, (frame) => 15 + (frame % cycle));
+        const expected = sequence(
+          outputFrames,
+          (frame) => 15 + (frame % cycle),
+        );
         const project = html(name, fps, expected.length, mediaStart, "loop");
         await render(project, fps, expected, "capture");
         await render(
@@ -460,10 +479,7 @@ test.skipIf(!ready)(
       expect(
         await probe(mixed, "-show_entries", "stream=start_pts,duration_ts"),
       ).toBe("9009,61061");
-      const mixedPictures = await sourcePictures(
-        mixed,
-        await extractMediaMetadata(mixed),
-      );
+      const mixedPictures = await sourcePictures(mixed);
       expect(mixedPictures?.end).toEqual({
         time: { n: 7007n, d: 3000n },
         from: "stream",
@@ -478,4 +494,147 @@ test.skipIf(!ready)(
     });
   },
   180_000,
+);
+
+test.skipIf(
+  !Bun.which("ffmpeg") || !Bun.which("ffprobe") || !Bun.which("node"),
+)(
+  "a late video-only NTSC loop wraps at the native end and reuses the media worker's index",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "native-loop-index-"));
+    try {
+      const path = join(root, "late.mp4");
+      await source(path, "30000/1001", 75, [
+        "-video_track_timescale",
+        "30000",
+        "-output_ts_offset",
+        "0.3003",
+        "-g",
+        "15",
+      ]);
+      expect(
+        await probe(path, "-show_entries", "stream=start_pts,duration_ts"),
+      ).toBe("9009,75075");
+      expect(await labels(path)).toEqual(sequence(75));
+      let scans = 0;
+      const index = await sourcePictures(path, {
+        projectDir: root,
+        probe: async (args, _signal, packets) => {
+          if (packets) scans++;
+          return (
+            await command(["ffprobe", "-v", "error", ...args, path])
+          ).toString();
+        },
+      });
+      expect(scans).toBe(1);
+      if (!index) throw new Error("The fixture has no picture index.");
+      expect(index.end?.time).toEqual({ n: 7007n, d: 2500n });
+      const piece = picturePiece(
+        {
+          id: "late",
+          src: path,
+          start: 0,
+          end: 70,
+          mediaStart: 0.8008,
+          playbackRate: 1,
+          loop: true,
+        },
+        ntsc,
+        index,
+      );
+      expect(picturesAt(piece, index, ntsc, 0, 2000)).toEqual(
+        sequence(2000, (frame) => 15 + (frame % 60)),
+      );
+      expect(ordinalDecode(index, [65], 0, false).args).toContain("-ss");
+      expect(ordinalDecode(index, [65], 0, true).args).toEqual([]);
+
+      const video = {
+        id: "picture",
+        src: "late.mp4",
+        start: 0,
+        end: (65 * 1001) / 30000,
+        mediaStart: 0.8008,
+        playbackRate: 1,
+        loop: true,
+        hasAudio: false,
+      };
+      bindPicturePlacement(
+        [video],
+        [video],
+        html("late.mp4", ntsc, 65, 0.8008, "loop"),
+        new Map(),
+      );
+      const plan = await capturePictures(
+        video,
+        path,
+        root,
+        ntsc,
+        video.end,
+        { start: 59, end: 62 },
+        undefined,
+      );
+      if (!plan)
+        throw new Error("The marked range did not get a picture plan.");
+      const images = join(root, "picked-%d.png");
+      await extractPictures({
+        plan,
+        decodeArgs: [],
+        filters: [],
+        encodeArgs: ["-threads", "1", "-y", images],
+        timeout: 5000,
+        done: () => {},
+      });
+      const decoded = await labels(images);
+      expect(
+        plan.lookup.slots.map((slot) => (slot === null ? null : decoded[slot])),
+      ).toEqual([74, 15, 16]);
+
+      const module = import.meta.resolve("../src/server/media/pictureIndex.ts");
+      const reopened = await command([
+        "node",
+        "--experimental-strip-types",
+        "--input-type=module",
+        "--eval",
+        `import { sourcePictures } from ${JSON.stringify(module)};
+         const [path, projectDir] = process.argv.slice(1);
+         const result = await sourcePictures(path, { projectDir, probe() { throw Error("Unexpected rescan"); } });
+         console.log(result?.packets.length, String(result?.end?.time.n), String(result?.end?.time.d));`,
+        path,
+        root,
+      ]);
+      expect(reopened.toString().trim()).toBe("75 7007 2500");
+
+      const replacement = join(root, "replacement.mp4");
+      await source(replacement, "30000/1001", 60);
+      await rename(replacement, path);
+      expect(
+        (await sourcePictures(path, { projectDir: root }))?.packets.length,
+      ).toBe(60);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  30_000,
+);
+
+test.skipIf(!ready)(
+  "marked capture crosses the late video-only loop at its native end",
+  async () => {
+    await fixture(async (root, render) => {
+      await source(join(root, "late.mp4"), "30000/1001", 75, [
+        "-video_track_timescale",
+        "30000",
+        "-output_ts_offset",
+        "0.3003",
+      ]);
+      await render(
+        html("late.mp4", ntsc, 65, 0.8008, "loop"),
+        ntsc,
+        [74, 15, 16],
+        "capture",
+        { start: 59, end: 62 },
+      );
+    });
+  },
+  120_000,
 );

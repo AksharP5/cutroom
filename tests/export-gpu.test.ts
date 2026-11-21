@@ -88,7 +88,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       );
       expect(await child.exited).toBe(0);
       const metadata = await extractMediaMetadata(source);
-      const index = await sourcePictures(source, metadata);
+      const index = await sourcePictures(source);
       if (!index) throw new Error("The generated source has no picture index.");
       // A gap between the runs makes two parts.
       const pieces = [

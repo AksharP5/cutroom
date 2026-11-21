@@ -402,7 +402,7 @@ export function registerRenderIsolation(
           source,
           "            alignClipStartToFirstOutputFrame(video, fps);",
           `            const cutroomPictures = await inExtractionSlot(() => capturePictures(
-                video, videoPath, metadata, configuredFps,
+                video, videoPath, ${JSON.stringify(range?.projectDir)}, configuredFps,
                 options.timelineEnd, ${JSON.stringify(range?.range?.frames)}, signal), signal);
             if (cutroomPictures) {
                 video.cutroomPictures = cutroomPictures.lookup;
@@ -532,7 +532,19 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { PictureSlotsSchema } from ${capturePictures};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { bindPicturePlacement, PictureSlotsSchema } from ${capturePictures};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = replaceOnce(
+          source,
+          "  const probeStart = Date.now();",
+          "  const cutroomAuthoredVideos = composition.videos.map((video) => ({ ...video }));\n  const probeStart = Date.now();",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "  const browserProbeMs = Date.now() - probeStart;",
+          "  bindPicturePlacement(cutroomAuthoredVideos, composition.videos, compiled.html, input.compiled.subCompositions);\n  const browserProbeMs = Date.now() - probeStart;",
+          url,
+        );
         source = replaceOnce(
           source,
           "      hasAudio: readBoolean(video.hasAudio, \`${field}.hasAudio\`)",
