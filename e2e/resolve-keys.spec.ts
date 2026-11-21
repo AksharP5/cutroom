@@ -181,12 +181,15 @@ test("preset keys Cutroom lacks say so instead of nothing", async ({
 }) => {
   const { select, notice } = await open(page, request);
   await select("shot-1");
-  await page.keyboard.press("v");
-  await expect(notice).toContainText(
-    "Cutroom has no edit point selection yet (V).",
-  );
-  await page.keyboard.press("Shift+r");
-  await expect(notice).toContainText(
-    "Cutroom has no freeze frames yet (Shift+R).",
-  );
+  await page.keyboard.press("F1");
+  await expect(
+    notice.filter({ hasText: "Shortcut not yet supported" }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Shift+Tab");
+  await expect(
+    notice.filter({ hasText: "Shortcut not yet supported" }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Control+F1");
+  await expect(notice).toContainText("Shortcut not yet supported (Ctrl+F1).");
 });

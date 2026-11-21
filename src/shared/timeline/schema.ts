@@ -773,10 +773,45 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .describe(
           "Keep the clip's start; cut and ripple participating tracks by the exact length change",
         ),
+      linked: z.boolean().default(true),
       ids: pieceIds,
     })
     .describe(
       "Trim one edge of a clip. Every linked partner's same edge moves by the same number of frames.",
+    ),
+  z
+    .object({
+      type: z.literal("trimPlayhead"),
+      clipIds,
+      edge: z.enum(["start", "end"]),
+      at: frame,
+      ripple: z.boolean().default(false),
+      linked: z.boolean().default(true),
+      ids: pieceIds,
+    })
+    .describe(
+      "Trim one edge of each named clip at the playhead. Equal ripple trims close time on all unlocked auto-select tracks.",
+    ),
+  z
+    .object({
+      type: z.literal("roll"),
+      from: clipId,
+      to: clipId,
+      by: z.number().int(),
+      linked: z.boolean().default(true),
+    })
+    .describe(
+      "Move the cut between two adjacent clips by this many frames, without rippling the timeline.",
+    ),
+  z
+    .object({
+      type: z.literal("swap"),
+      from: clipId,
+      to: clipId,
+      linked: z.boolean().default(true),
+    })
+    .describe(
+      "Swap two adjacent clips, with linked partners by default. Remove transitions touching the clips first.",
     ),
   z
     .object({
@@ -800,7 +835,13 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("freeze"),
       clipId,
-      at: frame.describe("A timeline frame strictly inside the video clip"),
+      at: frame.describe("A timeline frame within the video clip"),
+      mode: z
+        .enum(["insert", "replace"])
+        .default("insert")
+        .describe(
+          "Replace holds the entire video at this frame and keeps its original length and position.",
+        ),
       id: z
         .string()
         .regex(/^[a-zA-Z0-9_-]{1,80}$/)
@@ -808,7 +849,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       ids: pieceIds,
     })
     .describe(
-      "Insert a two-second still of a local video frame. Split the video and linked clips at that frame, then shift the right halves and later cuts on their tracks. The still is silent.",
+      "Freeze a local video frame. Insert adds a silent two-second still and ripples the video and linked tracks. Replace holds the picture for the original clip length and leaves linked audio in place.",
     ),
   z
     .object({
@@ -1001,6 +1042,11 @@ export const CommandSchema = z.discriminatedUnion("type", [
       style: ElementStyleEditSchema.optional().describe(
         "Restyle any visual clip that is not a Cutroom title, written as inline CSS on its element: omitted fields keep their values, null removes one and hands it back to the composition's stylesheets. Text fields need an element clip, objectFit a video or image. Inline style draws over stylesheets but not over the composition's own animation of the same property.",
       ),
+      keyframes: KeyframesSchema.nullable()
+        .optional()
+        .describe(
+          "Replace the clip's complete set of animation tracks. Null clears the tracks.",
+        ),
       grade: GradeEditSchema.nullable()
         .optional()
         .describe(

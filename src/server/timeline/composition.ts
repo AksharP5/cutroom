@@ -2557,6 +2557,9 @@ function insertMarkup(
       ([, value]) => value !== null,
     ),
     ...(keyframes ? [[KEYFRAMES_ATTRIBUTE, keyframes] as const] : []),
+    ...(clip.region
+      ? [[REGION_ATTRIBUTE, regionAttribute(clip.region, fps)] as const]
+      : []),
     ["data-start", String(toSeconds(clip.start, fps))],
     ["data-duration", String(toSeconds(clip.duration, fps))],
     ["data-track-index", String(clip.track)],
