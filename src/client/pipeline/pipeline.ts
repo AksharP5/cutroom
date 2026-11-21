@@ -315,21 +315,21 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
           : null;
       return key ? grades.get(key) : null;
     };
-    const textures = Promise.all([
-      Promise.all(shown.pictures.map(textureOf)),
-      Promise.all(
-        shown.adjustments.map(async (adjustment) => {
-          const grade = await textureOf(adjustment);
-          return grade ? { after: adjustment.after, grade } : null;
-        }),
-      ),
-    ]).then(
-      ([textures, adjustments]) => ({
-        textures,
-        adjustments: adjustments.filter((item) => item !== null),
-      }),
+    const textures = Promise.all(shown.pictures.map(textureOf)).catch(
       (error: unknown) => ({ error }),
     );
+    const adjustments =
+      !bypass &&
+      shown.adjustments?.length &&
+      Promise.all(
+        shown.adjustments.map(async ({ clip, after }) => {
+          const grade = await textureOf({ clip });
+          return grade ? { after, grade } : null;
+        }),
+      ).then(
+        (results) => results.filter((item) => item !== null),
+        (error: unknown) => ({ error }),
+      );
     const pictures = await Promise.all(
       shown.pictures.map(async (layer) => {
         const found = await source(layer.clip.src!);
@@ -365,15 +365,17 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         plan === drawingPlan && !closing.signal.aborted && target.isAvailable();
       if (!canPaint()) return;
       const baked = await textures;
+      const effects = adjustments ? await adjustments : undefined;
       if (!canPaint()) return;
       if ("error" in baked) throw baked.error;
+      if (effects && "error" in effects) throw effects.error;
       // An opaque full-frame shot without its own grade needs no intermediate copy.
-      const single = baked.adjustments[0];
+      const single = effects?.[0];
       const fused =
-        pictures.length === 1 &&
         single?.after === 1 &&
-        baked.adjustments.length === 1 &&
-        !baked.textures[0] &&
+        pictures.length === 1 &&
+        effects!.length === 1 &&
+        !baked[0] &&
         coversFrame(pictures[0]!.layer);
       await target.draw(
         pictures.map(({ layer, found }, at) =>
@@ -383,13 +385,13 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
             frames[at]!,
             from[at]!.rotation,
             found.intrinsic,
-            fused ? single.grade : baked.textures[at]!,
+            fused ? single.grade : baked[at]!,
           ),
         ),
         drawingPlan.background ?? "#ffffff",
         drawingPlan.width,
         drawingPlan.height,
-        fused ? [] : baked.adjustments,
+        fused ? undefined : effects,
       );
       // HyperFrames keeps the picture if this upload lost its drawing context.
       if (!canPaint()) return;

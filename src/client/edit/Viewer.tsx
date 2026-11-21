@@ -2,6 +2,7 @@ import { PROJECT_DOCUMENT_PATH } from "../../shared/project";
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -10,6 +11,7 @@ import { TrackGainPreviewSchema } from "../../shared/preview";
 import type { EditorMode } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
 import { frameTime } from "../../shared/timeline/apply";
+import { spanIndex } from "../../shared/timeline/spanIndex";
 import {
   compositionFps,
   NO_COMPOSITION_ROOT,
@@ -743,9 +745,9 @@ export function Viewer({
     const reloaded = connections.current.has(gen);
     connections.current.get(gen)?.dispose();
     connections.current.set(gen, preview);
-    preview.resize();
     try {
       const inspection = await preview.inspect();
+      preview.resize();
       // A pending footage-pipeline reply can keep inspection out of transport state.
       if (inspection.rampPending) {
         void preview
@@ -840,7 +842,7 @@ export function Viewer({
         !(await showLatest())
       )
         return;
-      const { width, height } = preview.state;
+      const { width, height, adjustment } = preview.state;
       if (!canPromote(gen)) return;
       transition({
         type: "prepared",
@@ -853,6 +855,7 @@ export function Viewer({
           width,
           height,
           shown,
+          adjustment,
         },
       });
     } catch (reason) {
@@ -952,7 +955,7 @@ export function Viewer({
             />
           );
         })}
-        {live &&
+        {live?.adjustment &&
           !pipelineActive &&
           (typeof Reflect.get(
             CanvasRenderingContext2D.prototype,
@@ -1010,20 +1013,25 @@ function AdjustmentGradeNotice() {
   const timeline = useTimeline((state) => state.view?.timeline);
   const draft = usePreviewGrade((state) => state.draft);
   const bypass = useGradeBypass((state) => state.bypass);
+  const active = useMemo(() => {
+    const tracks = new Set(
+      timeline?.tracks
+        .filter((track) => track.enabled)
+        .map(({ index }) => index),
+    );
+    return spanIndex(
+      timeline?.clips.flatMap((clip) =>
+        clip.adjustment &&
+        clip.enabled &&
+        tracks.has(clip.track) &&
+        (draft?.clipId === clip.id ? draft.grade : clip.grade)
+          ? [{ start: clip.start, end: clip.start + clip.duration }]
+          : [],
+      ) ?? [],
+    );
+  }, [timeline, draft]);
   const showing = useTransport(
-    ({ frame }) =>
-      !bypass &&
-      timeline?.clips.some(
-        (clip) =>
-          clip.adjustment &&
-          clip.enabled &&
-          clip.start <= frame &&
-          frame < clip.start + clip.duration &&
-          !!(draft?.clipId === clip.id ? draft.grade : clip.grade) &&
-          timeline.tracks.some(
-            (track) => track.index === clip.track && track.enabled,
-          ),
-      ),
+    ({ frame }) => !bypass && active(frame).length > 0,
   );
   return showing ? (
     <div className="edit-adjustment-notice" role="status">

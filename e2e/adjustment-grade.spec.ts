@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { APIRequestContext, Page } from "@playwright/test";
@@ -404,6 +404,68 @@ test("grades lower footage in the GPU pipeline without HTML-in-Canvas", async ({
   );
   expect(Math.max(...error)).toBeLessThanOrEqual(2);
   expect(graded[2]).toEqual(bypassed[2]!);
+
+  // The first shot has its own grade, so this uses the separate GPU adjustment pass.
+  await page.keyboard.press("Shift+d");
+  await seekFrame(page, 25);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-pipeline",
+    "on",
+  );
+  const composite = await viewerPixels(page);
+  const reference = await exportedPixels(request, project, 25, points);
+  const errors = composite.flatMap((pixel, i) =>
+    pixel.map((value, channel) => Math.abs(value - reference[i]![channel]!)),
+  );
+  expect(Math.max(...errors)).toBeLessThanOrEqual(6);
+});
+
+test("adds the first graded adjustment to a loaded plain preview", async ({
+  page,
+  request,
+}) => {
+  const project = await projectWithAdjustment(request, true, false);
+  const file = join(project.path, "index.html");
+  await writeFile(
+    file,
+    (await readFile(file, "utf8")).replace(/<div id="look"[^>]*><\/div>/, ""),
+  );
+  await page.addInitScript(() => {
+    if (self === top) localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  await page.goto("/#project/" + project.id);
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, 25);
+  await expect
+    .poll(async () => (await viewerPixels(page))[1])
+    .toEqual([144, 208, 48]);
+  const route = "/api/cutroom/projects/" + project.id;
+  const view = TimelineViewSchema.parse(
+    await (await request.get(route + "/timeline")).json(),
+  );
+  const edit = await request.post(route + "/commands", {
+    data: {
+      expectedRevision: view.revision,
+      commands: [
+        { type: "setTrack", index: 2, kind: "video" },
+        {
+          type: "insert",
+          at: 15,
+          track: 2,
+          clip: { kind: "adjustment", id: "first-look", duration: 60 },
+        },
+        {
+          type: "setClip",
+          clipId: "first-look",
+          grade: { adjust: { exposure: -1 } },
+        },
+      ],
+    },
+  });
+  expect(edit.ok(), await edit.text()).toBe(true);
+  await expect
+    .poll(async () => (await viewerPixels(page))[1])
+    .toEqual([72, 104, 24]);
 });
 
 test("trims a title under an active grade within the same viewer document", async ({

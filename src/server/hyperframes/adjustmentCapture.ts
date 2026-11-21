@@ -1,6 +1,7 @@
 import { parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { GRADE_ATTRIBUTE } from "../../shared/timeline/grade.ts";
+import type { spanIndex } from "../../shared/timeline/spanIndex.ts";
 
 export function isGradedAdjustment({ attrs }: DefaultTreeAdapterTypes.Element) {
   return (
@@ -36,7 +37,7 @@ export function adjustmentSources(html: string) {
 }
 
 /** Shared by the isolated viewer and the headless renderer. Serialized into the composition. */
-export function adjustmentCapture() {
+export function adjustmentCapture(index: typeof spanIndex) {
   const marker = "[data-cutroom-adjustment]";
   const attribute = "data-color-grading";
   const selector = marker + "[" + attribute + "]";
@@ -71,6 +72,9 @@ export function adjustmentCapture() {
     element: HTMLElement;
     root: HTMLElement;
     track: number;
+    start: number;
+    end: number;
+    order: number;
     value: string;
     grading: { lut?: { src?: string; intensity?: number } };
   };
@@ -92,14 +96,17 @@ export function adjustmentCapture() {
   const scenes = new Map<HTMLElement, Scene>();
   const fill =
     "position:absolute;inset:0;width:100%;height:100%;pointer-events:none";
-  let grades: Grade[] | undefined;
+  let grades: ReturnType<typeof read> | undefined;
+  const none: readonly Grade[] = [];
+  let prepared = none;
+  let preparedOwner: Element | null = null;
+  let drawing = new Map<HTMLElement, Map<number, Grade>>();
   let animation = 0;
   let serial = 0;
   let bypassed = false;
   let pipelineRoot: Element | null = null;
   let suspended = false;
   let displayScale = 1;
-  let at = 0;
   let request:
     | {
         drawn(scene: Scene): void;
@@ -108,8 +115,10 @@ export function adjustmentCapture() {
       }
     | undefined;
 
-  const read = () =>
-    [...document.querySelectorAll<HTMLElement>(selector)].flatMap((element) => {
+  const read = () => {
+    const layers = [
+      ...document.querySelectorAll<HTMLElement>(selector),
+    ].flatMap((element, order): Grade[] => {
       if (element.closest("[data-hidden]")) return [];
       // The compiler puts mounted scene tracks inside an inner layout root.
       const root = element.parentElement?.closest<HTMLElement>(
@@ -118,10 +127,14 @@ export function adjustmentCapture() {
       const track = Number(element.dataset.trackIndex);
       const value = element.getAttribute(attribute);
       if (!root || !Number.isFinite(track) || !value) return [];
+      const window = win.__hf?.clipWindow?.(element);
+      const start = window?.start ?? Number(element.dataset.start);
+      const end = window?.end ?? start + Number(element.dataset.duration);
+      if (!(start < end)) return [];
       try {
         const grading = JSON.parse(value) as Grade["grading"] | null;
         return grading && typeof grading === "object"
-          ? [{ element, root, track, value, grading }]
+          ? [{ element, root, track, start, end, order, value, grading }]
           : [];
       } catch (error) {
         console.warn(
@@ -131,19 +144,15 @@ export function adjustmentCapture() {
         return [];
       }
     });
+    return layers.length ? index(layers) : null;
+  };
 
-  const active = (time: number) => {
-    const result = new Map<HTMLElement, Map<number, Grade>>();
-    for (const grade of (grades ??= read())) {
-      const window = win.__hf?.clipWindow?.(grade.element);
-      const start = window?.start ?? Number(grade.element.dataset.start);
-      const end = window?.end ?? start + Number(grade.element.dataset.duration);
-      if (!(time >= start && time < end)) continue;
-      let list = result.get(grade.root);
-      if (!list) result.set(grade.root, (list = new Map()));
-      list.set(grade.track, grade);
-    }
-    return result;
+  const windows = () => {
+    if (grades !== undefined) return grades;
+    const next = read();
+    // Before the runtime initializes, a mounted scene may not yet know its root time.
+    if (win.__player || win.__hf?.clipWindow) grades = next;
+    return next;
   };
 
   const move = (parent: HTMLElement, child: Element, before: Node | null) => {
@@ -316,7 +325,7 @@ export function adjustmentCapture() {
     capture.addEventListener("paint", () => {
       if (!capture.isConnected) return;
       try {
-        const selected = active(at).get(root);
+        const selected = drawing.get(root);
         if (selected && draw(scene, selected)) request?.drawn(scene);
       } catch (error) {
         // Layout can change between the first request and the first paint record.
@@ -329,17 +338,29 @@ export function adjustmentCapture() {
 
   function prepare(time: number, required: boolean) {
     if (!supported && !required) return false;
-    at = time;
-    const selection =
-      suspended || bypassed
-        ? new Map<HTMLElement, Map<number, Grade>>()
-        : active(time);
-    if (pipelineRoot instanceof HTMLElement) selection.delete(pipelineRoot);
-    if (!supported && selection.size && required)
-      throw new Error(
-        "This Chromium build cannot capture adjustment layer grades.",
-      );
-    if (!supported) return false;
+    const active = suspended || bypassed ? none : (windows()?.(time) ?? none);
+    if (!supported) {
+      if (active.some(({ root }) => root !== pipelineRoot))
+        throw new Error(
+          "This Chromium build cannot capture adjustment layer grades.",
+        );
+      return false;
+    }
+    if (active === prepared && preparedOwner === pipelineRoot)
+      return scenes.size !== 0;
+    prepared = active;
+    preparedOwner = pipelineRoot;
+    const selection = new Map<HTMLElement, Map<number, Grade>>();
+    for (const grade of active) {
+      if (grade.root === pipelineRoot) continue;
+      let tracks = selection.get(grade.root);
+      if (!tracks) selection.set(grade.root, (tracks = new Map()));
+      // An authored overlap on one track takes the layer later in document order.
+      const current = tracks.get(grade.track);
+      if (!current || current.order < grade.order)
+        tracks.set(grade.track, grade);
+    }
+    drawing = selection;
     for (const [root, scene] of scenes) {
       const next = selection.get(root);
       if (
@@ -364,13 +385,17 @@ export function adjustmentCapture() {
   const follow = () => {
     animation = 0;
     // During playback, a change of interval also matters over a static picture.
-    if (bypassed || !(grades ??= read()).length) return;
+    if (bypassed || !windows()) return;
     if (!win.__player?.isPlaying()) {
       if (scenes.size) update();
       return;
     }
     prepare(win.__player.getTime(), false);
     animation = requestAnimationFrame(follow);
+  };
+
+  const followPlayback = () => {
+    if (supported && !animation) animation = requestAnimationFrame(follow);
   };
 
   return {
@@ -382,7 +407,7 @@ export function adjustmentCapture() {
     },
     suspend() {
       suspended = true;
-      update();
+      if (scenes.size) update();
       return () => {
         suspended = false;
         grades = undefined;
@@ -392,18 +417,16 @@ export function adjustmentCapture() {
     changed() {
       grades = undefined;
       update();
-      if (!animation) animation = requestAnimationFrame(follow);
+      followPlayback();
     },
     setOwnership(bypass: boolean, root: Element | null) {
       if (bypassed === bypass && pipelineRoot === root) return;
       bypassed = bypass;
       pipelineRoot = root;
       update();
-      if (!bypassed && !animation) animation = requestAnimationFrame(follow);
+      if (!bypassed) followPlayback();
     },
-    play() {
-      if (!animation) animation = requestAnimationFrame(follow);
-    },
+    play: followPlayback,
     async render(time: number) {
       if (!prepare(time, true)) return;
       const frame = Promise.withResolvers<void>();
@@ -434,9 +457,8 @@ export function adjustmentCapture() {
           request.needsLuts &&
           (await win.__hf?.colorGrading?.waitForActiveLuts())
         ) {
-          const selected = active(time);
           for (const scene of scenes.values()) {
-            const list = selected.get(scene.root);
+            const list = drawing.get(scene.root);
             if (list) draw(scene, list);
           }
         }

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { COLOR_GRADING_SOURCE_HIDDEN_ATTR } from "@hyperframes/core/color-grading";
 import { MEDIA_TRASH } from "../../shared/media.ts";
 import { adjustmentCapture } from "./adjustmentCapture.ts";
+import { spanIndex } from "../../shared/timeline/spanIndex.ts";
 import { previewPolicy } from "./isolation.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
 import type { RenderJob } from "@hyperframes/producer";
@@ -242,7 +243,7 @@ export function renderGradeRuntime(source: string, adjustment = false) {
   const style = document.createElement("style");
   style.textContent = ${JSON.stringify(hideGradedFrame)};
   document.head.append(style);
-${adjustment ? "window.__cutroomAdjustmentCapture = (" + adjustmentCapture.toString() + ")();" : ""}
+${adjustment ? "window.__cutroomAdjustmentCapture = (" + adjustmentCapture.toString() + ")(" + spanIndex.toString() + ");" : ""}
 }`;
 }
 

@@ -1127,7 +1127,7 @@ export function projectTimeline(
       transitionIn: edges.in,
       transitionOut: edges.out,
       fx: hasAudio ? readableFx(element.attrs["data-fx-chain"]) : [],
-      grade: canHaveGrade({ kind, adjustment })
+      grade: canHaveGrade(kind, adjustment)
         ? readableGrade(element.attrs[GRADE_ATTRIBUTE])
         : null,
       enabled:
@@ -2226,7 +2226,7 @@ function sourceRestrictions(
   const transform = isAudioKind(clip.kind) ? undefined : transformRestriction;
   const fx = fxRestriction(element.attrs["data-fx-chain"]);
   const graded = readGrade(element.attrs[GRADE_ATTRIBUTE]);
-  const grade = canHaveGrade(clip)
+  const grade = canHaveGrade(clip.kind, clip.adjustment)
     ? "restriction" in graded
       ? graded.restriction
       : element.attrs["data-color-group"]

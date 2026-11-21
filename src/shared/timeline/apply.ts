@@ -1400,7 +1400,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           ? target.region
           : regionFor(target, command.region, fps);
       if (command.grade !== undefined) {
-        if (!canHaveGrade(target))
+        if (!canHaveGrade(target.kind, target.adjustment))
           throw new TimelineError(
             "unsupported",
             `${clipName(target)} has no colour grade.`,
