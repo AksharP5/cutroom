@@ -116,6 +116,15 @@ export const MediaRemoveSchema = z.object({
     ),
 });
 
+export const MediaImportSchema = z.object({
+  paths: z
+    .array(z.string().min(1).max(4096))
+    .min(1)
+    .describe(
+      "Absolute paths to readable video, audio, or image files on this computer",
+    ),
+});
+
 /** Stat identity shared by review marks, media caches, and browser URLs. No media bytes are read. */
 export function fileFingerprint(
   path: string,

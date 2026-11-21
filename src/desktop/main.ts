@@ -5,6 +5,12 @@ import { isAbsolute, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import { z } from "zod";
+import {
+  cancelMediaImport,
+  importSocketPath,
+  requestMediaImport,
+} from "../local/mediaImport";
+import { MediaImportSchema } from "../shared/media";
 import { desktopPermission } from "./permissions";
 import {
   connectLocalServer,
@@ -90,6 +96,41 @@ async function start() {
     event.sender === window?.webContents &&
     event.senderFrame === window.webContents.mainFrame &&
     isApplicationUrl(event.senderFrame.url, baseUrl);
+  const imports = new Map<
+    string,
+    { controller: AbortController; projectId: string }
+  >();
+  const importSocket = importSocketPath(baseUrl, dataDir);
+  ipcMain.handle("cutroom:import-media", async (event, value: unknown) => {
+    if (!fromCutroom(event))
+      throw new Error("Only Cutroom can import local media.");
+    const { projectId, paths, id } = MediaImportSchema.extend({
+      projectId: z.string().min(1),
+      id: z.uuid(),
+    }).parse(value);
+    if (imports.has(id)) throw new Error("This import is already running.");
+    const controller = new AbortController();
+    imports.set(id, { controller, projectId });
+    try {
+      return await requestMediaImport(importSocket, projectId, paths, {
+        id,
+        signal: controller.signal,
+        progress: (progress) => {
+          if (!event.sender.isDestroyed())
+            event.sender.send("cutroom:import-progress", id, progress);
+        },
+      });
+    } finally {
+      imports.delete(id);
+    }
+  });
+  ipcMain.handle("cutroom:cancel-import", async (event, value: unknown) => {
+    if (!fromCutroom(event))
+      throw new Error("Only Cutroom can cancel a media import.");
+    const id = z.uuid().parse(value);
+    const active = imports.get(id);
+    if (active) await cancelMediaImport(importSocket, active.projectId, id);
+  });
   ipcMain.handle("cutroom:reveal", async (event, value: unknown) => {
     if (!fromCutroom(event)) throw new Error("Only Cutroom can reveal a file.");
     // Showing a file opens nothing; a missing one is refused here by name.
@@ -158,6 +199,7 @@ async function start() {
     });
   });
   window.on("closed", () => {
+    for (const { controller } of imports.values()) controller.abort();
     window = undefined;
   });
   await window.loadURL(baseUrl);

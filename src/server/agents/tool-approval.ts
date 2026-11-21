@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import {
   safeParse,
   getParseErrorMessage,
@@ -37,6 +38,17 @@ const plural = (total: number, one: string) =>
 /** The one more line an owner needs to decide on a Cutroom tool call, from its own arguments. */
 function approvalDetail(name: string, args: Record<string, unknown>) {
   switch (name) {
+    case "media_import": {
+      const paths = z.array(z.string()).parse(args.paths);
+      const folders = [...new Set(paths.map((path) => dirname(path)))];
+      const locations = folders
+        .join(", ")
+        .replace(
+          /[\p{Cc}\p{Cf}\u2028\u2029]/gu,
+          (character) => `\\u{${character.codePointAt(0)!.toString(16)}}`,
+        );
+      return `From ${locations}`;
+    }
     case "timeline_edit":
       return Array.isArray(args.commands) && args.commands.length > 1
         ? plural(args.commands.length, "change")

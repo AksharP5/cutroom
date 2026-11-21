@@ -311,6 +311,8 @@ Both MCP transports forward to the running server. They do not open a second pro
 
 Mutating editor and upstream routes require an exact allowed Cutroom `Origin`. The loopback `/mcp` endpoint also accepts native HTTP clients that omit `Origin`. If a client sends an opaque, foreign, or wrong-port origin, the server responds with 403. Both MCP transports supply the selected server origin when forwarding requests. Development additionally permits the two explicit Vite origins.
 
+Path-based media import uses a Unix socket under the Cutroom data directory. The socket trusts processes running as Cutroom's OS user. Electron supplies paths from disk-backed files selected or dropped by the owner. The stdio bridge pre-checks that it can open each source and sends its stat identity. The server opens the source and checks that identity again before linking or copying. The TCP listener has no path-import route, and the web server still starts if the Unix socket is unavailable.
+
 ## Background jobs and timeline media cache
 
 Render, transcription, waveform, filmstrip, scrub-proxy, and precise-frame jobs use `src/shared/jobs.ts`. Jobs move from `queued` to `running`, then `done` or `failed`. Cancellation enters `cancelling`, then `cancelled` only after cleanup succeeds. Cleanup failure takes precedence over cancellation and enters `failed`. Render and media cleanup errors also propagate through their cancel/shutdown calls. Running progress uses 0 to 1. The render adapter preserves `rendering` / `complete` and 0 to 100 progress; transcription preserves `running` / `complete` and 0 to 1. Transcription MCP status forwards the same HTTP response; there is no render-status MCP tool.
