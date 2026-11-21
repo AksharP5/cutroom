@@ -144,7 +144,6 @@ test.use({
       "--no-sandbox",
       "--mute-audio",
       "--enable-blink-features=CanvasDrawElement",
-      "--force-device-scale-factor=2",
     ],
   },
 });
@@ -233,6 +232,8 @@ test("uses CSS pixels while playing and restores the paused grade at full resolu
   const project = await projectWithAdjustment(request, true, false);
   await page.addInitScript(() => {
     if (self === top) localStorage.setItem("cutroom.footagePipeline", "false");
+    // The sandboxed preview has its own device scale on Chromium.
+    else Object.defineProperty(window, "devicePixelRatio", { value: 2 });
   });
   await page.goto("/#project/" + project.id);
   await waitForPreview(page, { timing: true });
