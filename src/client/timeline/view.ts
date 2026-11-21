@@ -310,7 +310,7 @@ export function createViewport(
     )
       onDragEnd();
   }
-  const resized = new ResizeObserver(() => measure(extent));
+  const resized = new ResizeObserver(() => measure(extent, true));
   const events = new AbortController();
   const { signal } = events;
   resized.observe(scroller);
@@ -339,16 +339,20 @@ export function createViewport(
    * rescales: an edit, undo or agent change leaves the ruler where the user put it, and Fit is
    * theirs to ask for.
    */
-  function measure(next: Extent) {
+  function measure(next: Extent, resized = false) {
     const opened = ppf === 0;
     const sameLength = next.frames === extent.frames;
     extent = next;
-    width = scroller.clientWidth - headWidth;
-    height = scroller.clientHeight;
-    top = scroller.scrollTop;
-    scroll = scroller.scrollLeft;
-    exact = settledScroll(exact, scroll);
-    grid.style.setProperty("--view", `${width}px`);
+    // At the origin, a changed length cannot clamp the scroll. The size observer
+    // supplies the viewport geometry without laying out every clip during an edit.
+    if (opened || resized || holding || scroll || top) {
+      width = scroller.clientWidth - headWidth;
+      height = scroller.clientHeight;
+      top = scroller.scrollTop;
+      scroll = scroller.scrollLeft;
+      exact = settledScroll(exact, scroll);
+      grid.style.setProperty("--view", `${width}px`);
+    }
     fit = fitPpf(extent.frames, width, extent.fps);
     if (opened || (fitted && sameLength && !gesturing && !holding)) write(fit);
     // A held view keeps whether it was fitted, so a later resize of the window still refits it.
