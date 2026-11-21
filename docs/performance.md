@@ -40,6 +40,8 @@ The benchmark reads the numbered pictures from Chromium's tab screencast. It rep
 
 `e2e/scale-performance.spec.ts` runs in the performance gate with GPU playback on and off. It uses two 75-second source files and checks the playback clock against 60 fps, at most 16 loaded native media elements, the numbered pictures after an early and late ripple delete, undo, redo and a ruler scrub, and ten persisted W trims followed by ten undos and ten redos. The headless gate catches stalls and lost edits with wider timing budgets than the headed target. The playback clock is sampled inside the browser so browser-driver delay stays outside the interval.
 
+With GPU playback on, the gate measures three ripples at each position and checks the original picture between samples. Each position has a 1,300 ms median budget. The pooled 80th percentile must stay below 1,550 ms, and any one ripple must show the new picture within 2,250 ms. Native playback uses one ripple at each position and an 8,000 ms cap.
+
 Five distinct duration edits to the same saved shot measured the isolated timing response after opening each project. The request included parsing the response and checking the saved duration. The GPU playback switch uses this same server path.
 
 | Clip count | Main `cdeeb359`, median (range) | Source timing, median (range) |

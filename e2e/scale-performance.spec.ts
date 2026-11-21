@@ -132,8 +132,8 @@ for (const pipeline of [false, true]) {
       expect(loaded).toBeLessThanOrEqual(16);
 
       const offset = 24;
-      // On a cold native preview the timing attempt can time out before a reload decodes.
-      const rippleBudgetMs = pipeline ? 1500 : 8000;
+      // Native playback can fall back to reloading and decoding the edited document.
+      const rippleBudgetMs = pipeline ? 2250 : 8000;
       const ripple = async (shot: number) => {
         const frame = shots[shot]!.start + offset;
         await seek(page, frame);
@@ -154,8 +154,19 @@ for (const pipeline of [false, true]) {
         ).toBeLessThan(rippleBudgetMs);
         return elapsed;
       };
+      const rippleSamples = async (shot: number) => {
+        const times: number[] = [];
+        const count = pipeline ? 3 : 1;
+        for (let run = 0; run < count; run++) {
+          times.push(await ripple(shot));
+          if (run === count - 1) break;
+          await page.keyboard.press("Control+z");
+          await expect.poll(picture).toBe(shots[shot]!.source + offset);
+        }
+        return times;
+      };
       const lateShot = 400;
-      const lateRippleMs = await ripple(lateShot);
+      const lateRipples = await rippleSamples(lateShot);
       for (const [key, source] of [
         ["Control+z", shots[lateShot]!.source],
         ["Control+Shift+z", shots[lateShot + 1]!.source],
@@ -166,7 +177,22 @@ for (const pipeline of [false, true]) {
       }
 
       const shot = 8;
-      const rippleMs = await ripple(shot);
+      const earlyRipples = await rippleSamples(shot);
+      console.log(JSON.stringify({ pipeline, earlyRipples, lateRipples }));
+      if (pipeline) {
+        for (const [location, times] of [
+          ["early", earlyRipples],
+          ["late", lateRipples],
+        ] as const) {
+          expect(
+            times.toSorted((a, b) => a - b)[1]!,
+            `${location} ripple median, ms`,
+          ).toBeLessThan(1300);
+        }
+        const pooled = [...earlyRipples, ...lateRipples].sort((a, b) => a - b);
+        const p80 = pooled[Math.ceil(pooled.length * 0.8) - 1]!;
+        expect(p80, "pooled ripple p80, ms").toBeLessThan(1550);
+      }
 
       const historySize = async () => {
         const response = await request.get(
@@ -264,8 +290,6 @@ for (const pipeline of [false, true]) {
           pipeline,
           loaded,
           playbackFramesPerSecond,
-          rippleMs,
-          lateRippleMs,
           trimKeysMs: keysMs,
           trimSavedMs: savedMs,
           undoMs: historyMs[0],
