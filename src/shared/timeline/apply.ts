@@ -1,7 +1,14 @@
 import { frameTime } from "./time";
-import { resolveClip, retimeClipSource, sourceAtEdge } from "./clipTiming";
+import {
+  readClipSource,
+  resolveClip,
+  retimeClipSource,
+  sourceAtEdge,
+  writeClipSource,
+} from "./clipTiming";
 import {
   attrMicros,
+  decode,
   encode,
   firstFrame,
   frames,
@@ -1231,18 +1238,52 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             "unsupported",
             `Clip ${clip.id} has no source timing.`,
           );
-        if (parseRateLane(clip.automation))
+        if (readClipSource(clip).lane)
           throw new TimelineError(
             "unsupported",
             `Clip ${clip.id} has a speed ramp. Change its rate lane in the composition source.`,
           );
       }
+      const selected = readClipSource(target);
+      const anchor = frames(target.start, fps);
+      const previousMap = decode(
+        selected.stored,
+        target.playbackRate,
+        anchor,
+        fps,
+      );
+      const rate = command.playbackRate ?? target.playbackRate;
+      const editedMap = decode(
+        command.mediaStart === undefined
+          ? selected.stored
+          : { mediaStart: Number(attrMicros(command.mediaStart)) },
+        rate,
+        anchor,
+        fps,
+      );
       return {
         ...timeline,
         clips: clips.map((clip) => {
           if (!targets.includes(clip)) return clip;
           const playbackRate = command.playbackRate ?? clip.playbackRate;
-          // Keep each partner's source at the selected clip's start in sync, including L-cuts.
+          const source = readClipSource(clip);
+          const start = frames(clip.start, fps);
+          if (clip.playbackRate === target.playbackRate) {
+            const current =
+              clip === target
+                ? previousMap
+                : decode(source.stored, clip.playbackRate, start, fps);
+            if (
+              current.c === previousMap.c &&
+              current.zero === previousMap.zero
+            )
+              return {
+                ...clip,
+                playbackRate,
+                ...writeClipSource(source, encode(editedMap, rate, start, fps)),
+              };
+          }
+          // Manually linked sources with different maps keep their existing sync offset.
           const mediaStart =
             clip.mediaStart! +
             (command.mediaStart === undefined

@@ -121,6 +121,8 @@ async function edit(
   return reply.parse(result).structuredContent.result.timeline;
 }
 
+// Byte equality covers on-grid inputs. Writing an intermediate edit can move
+// an off-grid neighbour onto the frame grid and change the next request's tail edge.
 for (const [name, commands] of [
   ["E1 dissolve then split", [dissolve, split]],
   ["E2 split then dissolve", [split, dissolve]],

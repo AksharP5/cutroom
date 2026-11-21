@@ -79,6 +79,7 @@ import {
   parseComposition,
   patchComposition,
   authoredAudioGroupContent,
+  timelineContent,
   timelineReadbackMatches,
   settingsOf,
 } from "./composition";

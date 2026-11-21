@@ -17,14 +17,41 @@ import { framesAfter, framesBefore, takesTransition } from "./transition";
 
 type SourceFields = Pick<Clip, "mediaStart" | "playbackRate" | "automation">;
 
+const automationCache = new Map<
+  string,
+  ReturnType<typeof parseClipAutomation>
+>();
+
+function parseClipAutomation(automation: string) {
+  const parsed = parseAutomation(automation);
+  return {
+    parsed,
+    lane: parsed.lanes.find(({ target }) => target === RATE_TARGET),
+  };
+}
+
+/** Keep point arrays stable so HyperFrames can reuse its cached ramp integrals. */
+function clipAutomation(automation: string) {
+  const cached = automationCache.get(automation);
+  if (cached) return cached;
+  const result = parseClipAutomation(automation);
+  automationCache.set(automation, result);
+  if (automationCache.size > 4096) {
+    const oldest = automationCache.keys().next();
+    if (!oldest.done) automationCache.delete(oldest.value);
+  }
+  return result;
+}
+
 /** The lane's offset belongs to its stored in-point, never to the resolver's curve. */
 export function readClipSource({
   mediaStart,
   playbackRate,
   automation,
 }: SourceFields) {
-  const parsed = automation ? parseAutomation(automation) : null;
-  const lane = parsed?.lanes.find(({ target }) => target === RATE_TARGET);
+  const { parsed, lane } = automation
+    ? clipAutomation(automation)
+    : { parsed: null, lane: undefined };
   const curve = lane
     ? { target: lane.target, points: lane.points }
     : playbackRate;

@@ -261,7 +261,7 @@ function decimalFraction(value: string | number): ExactTime {
 // The period can sit just below an integer even when a floating-point product
 // rounds up to it. The inclusive remainder range depends on this floor.
 function sourcePeriodFloor(curve: Curve, fps: Fps) {
-  const rate = typeof curve === "object" ? ONE : decimalRate(curve);
+  const rate = typeof curve === "object" ? ONE : decimalFraction(curve);
   const period =
     (rate.n * BigInt(fps.den) * MICROS) / (rate.d * BigInt(fps.num));
   if (period < 3n)
