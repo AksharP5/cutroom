@@ -21,6 +21,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `review_reorder`                                                | Move a note before another, or to the end, for the owner.                   |
 | `review_withdraw`                                               | Withdraw a note the owner's newer message cancels.                          |
 | `review_accept`, `review_send_back`, `review_reply`             | Act for the owner on done or blocked notes (outside clients only).          |
+| `review_accept_all`                                             | Accept pending agent edits in a composition or project for the owner.       |
 | `review_restore`, `review_release`                              | Re-queue a withdrawn note or a stuck claim.                                 |
 | `transcripts_list`, `transcript_import`, `transcript_edit`      | Read word timing, import a script, and cut or restore words.                |
 | `transcription_start`, `transcription_status`                   | Run and inspect local transcription.                                        |
@@ -537,7 +538,7 @@ Video with sound becomes a muted picture and a linked audio clip. Overwrite rout
 
 `timeline_edit` uses explicit commands and never reads these preferences. Respect the returned enable flags when constructing placement: with both on, insert video on `track: <video>` and use `linkedAudio: { track: <audio> }`. With audio off, set the video's `clip.muted: true` and omit `linkedAudio`. With video off and audio on, insert `kind: "audio"` from the same source and marked range on `track: <audio>`. Skip placement when no kind present in the source has an enabled destination.
 
-`setClip.opacity` sets static inline opacity from 0 to 1, canonical to six decimals; `null` removes the inline override. `setTiming` sets `playbackRate` or `mediaStart` in source seconds while keeping timeline duration and linked source sync. It refuses clips with a speed ramp. Edit the rate lane in the composition source. Both use the same commands and undo history as the inspector. Timeline reads include `agentChanges`, the clips still underlined for review. `timeline_read` with `clipEdits: true` adds `clipEdits`, the recent owner and agent edit ledger behind it; MCP replies leave it out otherwise, because it grows with every edit. The HTTP timeline route always includes it.
+`setClip.opacity` sets static inline opacity from 0 to 1, canonical to six decimals; `null` removes the inline override. `setTiming` sets `playbackRate` or `mediaStart` in source seconds while keeping timeline duration and linked source sync. It refuses clips with a speed ramp. Edit the rate lane in the composition source. Both use the same commands and undo history as the inspector. Timeline reads include `agentChanges`, the clips still underlined for review. `timeline_read` with `clipEdits: true` adds `clipEdits`, the recent owner and agent edit ledger behind it; MCP replies leave it out otherwise, because it grows with every edit. The editor timeline route includes it only when requested with `clipEdits=1`. The Inspector and Review request grouped detail separately.
 
 `setClip.x` and `setClip.y` are additive offsets in composition pixels, canonical to six decimals, not absolute canvas coordinates. Positive X moves right and positive Y moves down. Null or zero clears that axis; reads return null when an axis has no offset. `{type:"setClip", clipId:"title", x:null, y:null}` resets both in one undo step. Only the named visual clip moves; linked audio has no position and rejects position edits.
 
@@ -644,6 +645,8 @@ Claim a note before working on it, then complete it with a short note or block i
 MCP mutations use the same server commands as the interface. Edits to project files and note content appear in its undo history; review status lives outside it. File watchers update the visible preview and the Review panel.
 
 `review_reorder` takes `noteId` and `beforeId`. Set `beforeId` to another unfinished note or `null` for the end. This changes the saved owner order used by Review, note numbers, and the next agent digest. Cutroom's own agent cannot reorder; outside clients may act for the owner.
+
+An outside client can call `review_accept_all` with `projectId` and an optional project-relative `composition` path. Omit `composition` to accept pending agent edits across the project, as **Accept all agent changes** does in Review. The response is `{ accepted }`, the number of pending clip or composition changes accepted in one operation. Note statuses stay as they were. Undo and redo still apply to the original edits. Cutroom's own agent cannot run this tool.
 
 Pass `noteId` to `source_write`, `timeline_edit`, `clip_versions_set`, `clip_version_show`, `clip_version_keep`, `transcript_edit`, or `captions_edit` when the run has several claimed notes. It must name a note claimed by that run. With one claimed note it is automatic; ambiguous edits are refused before writing, so accepting one note never accepts another note's clips.
 

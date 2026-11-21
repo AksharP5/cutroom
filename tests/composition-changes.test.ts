@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { SourceSchema } from "../src/shared/project";
 import {
   compositionVersions,
@@ -68,7 +75,7 @@ test("a saved invalid clip envelope keeps the source reviewable and editable", a
         resolution: undefined,
       }),
     );
-    const rejected = await f.request(`${f.base}/timeline`);
+    const rejected = await f.request(`${f.base}/timeline?clipEdits=1`);
     expect(rejected.status).toBe(422);
     expect(await rejected.json()).toMatchObject({
       error: expect.stringContaining("Clip voice has invalid audio automation"),
@@ -83,7 +90,9 @@ test("a saved invalid clip envelope keeps the source reviewable and editable", a
     );
     expect(accepted.status).toBe(200);
     await f.save(earlier);
-    expect((await f.request(`${f.base}/timeline`)).status).toBe(200);
+    expect((await f.request(`${f.base}/timeline?clipEdits=1`)).status).toBe(
+      200,
+    );
     expect((await f.read()).clipEdits).toContainEqual(
       expect.objectContaining({ id: added!.id, accepted: true }),
     );
@@ -168,16 +177,41 @@ test.each(["changes", "clipEdits", "history-backed", "v2"])(
           historyId: history.list().at(-1)!.id,
         }),
       };
-      await mkdir(`${f.project.path}/.cutroom`, { recursive: true });
-      await writeFile(
-        `${f.project.path}/.cutroom/review.json`,
-        JSON.stringify({
-          schemaVersion: 1,
-          items: [],
-          ...(format === "changes" ? { changes: [row] } : { clipEdits: [row] }),
-        }),
+      const directory = `${f.project.path}/.cutroom`;
+      const path = `${directory}/review.json`;
+      const legacy = JSON.stringify({
+        schemaVersion: 1,
+        items: [],
+        ...(format === "changes" ? { changes: [row] } : { clipEdits: [row] }),
+      });
+      await mkdir(directory, { recursive: true });
+      // A project last opened by a build from before the ledger file.
+      await rm(`${directory}/review-ledger.json`, { force: true });
+      await writeFile(path, legacy);
+      const migrated = await f.read();
+      expect(migrated.agentChanges).toEqual(["title"]);
+      expect(migrated.clipEdits[0]).toMatchObject({
+        id: format === "changes" ? `legacy:index.html:title:${hash}` : row.id,
+        label: format === "changes" ? "Edited source" : row.label,
+        historyId: row.historyId,
+      });
+      expect(await readFile(`${directory}/review.v1.json`, "utf8")).toBe(
+        legacy,
       );
-      expect((await f.read()).agentChanges).toEqual(["title"]);
+      const first = await stat(path);
+      // Older builds still read review.json; the rows moved to the ledger file.
+      expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
+        schemaVersion: 1,
+        clipEdits: [],
+      });
+      expect(
+        JSON.parse(await readFile(`${directory}/review-ledger.json`, "utf8")),
+      ).toMatchObject({ schemaVersion: 1, ledger: { edits: [{}] } });
+      const fresh = createReviewService(f.store);
+      expect(await fresh.clipChanges(f.project, "index.html")).toEqual(
+        migrated,
+      );
+      expect((await stat(path)).ino).toBe(first.ino);
       await f.save(
         source
           .replace(">caption</div>", ">Earlier caption</div>")
@@ -470,6 +504,150 @@ test("several sub-composition clip edits produce one entry row without underlini
     const scene = await f.review.clipChanges(f.project, "scene.html");
     expect(scene.agentChanges).toEqual(["title", "caption"]);
     expect(scene.clipEdits).toHaveLength(2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("an older build's multi-edit review.json moves to the ledger once, even when interrupted, beside an earlier backup", async () => {
+  const f = await setup();
+  try {
+    const sign = (text: string) => text.padEnd(64, "0");
+    const row = (fields: Record<string, unknown>) => ({
+      composition: "index.html",
+      noteIds: [],
+      at: "2026-11-01T10:00:00.000Z",
+      accepted: false,
+      by: "agent",
+      agentName: "Codex",
+      ...fields,
+    });
+    // As main writes them: one row per clip per edit, a ripple sharing its history entry.
+    const clipEdits = [
+      row({
+        id: "r1",
+        clipId: "title",
+        historyId: "h1",
+        label: "Ripple delete",
+        beforeSignature: sign("a1"),
+        signature: sign("b1"),
+        batchLabels: ["Ripple delete", "Move"],
+      }),
+      row({
+        id: "r2",
+        clipId: "caption",
+        historyId: "h1",
+        label: "Ripple delete",
+        beforeSignature: sign("a2"),
+        signature: sign("b2"),
+      }),
+      row({
+        id: "r3",
+        clipId: "title",
+        historyId: "h2",
+        label: "Set opacity",
+        accepted: true,
+        beforeSignature: sign("b1"),
+        signature: sign("c1"),
+      }),
+      row({
+        id: "r4",
+        clipId: "caption",
+        historyId: "h3",
+        label: "Trim caption",
+        by: "human",
+        agentName: undefined,
+        accepted: true,
+      }),
+      row({
+        id: "r5",
+        clipId: "caption",
+        label: "Edited caption",
+        beforeSignature: sign("b2"),
+        signature: sign("d2"),
+      }),
+    ];
+    const directory = `${f.project.path}/.cutroom`;
+    const legacy = JSON.stringify({
+      schemaVersion: 1,
+      clipEdits,
+      changes: [],
+      items: [],
+    });
+    await mkdir(directory, { recursive: true });
+    await rm(`${directory}/review-ledger.json`, { force: true });
+    await writeFile(`${directory}/review.v1.json`, "an earlier backup\n");
+    await writeFile(`${directory}/review.json`, legacy);
+
+    const migrated = await f.read();
+    expect(migrated.agentChanges.toSorted()).toEqual(["caption", "title"]);
+    expect(
+      migrated.clipEdits
+        .map(({ id, accepted, by }) => [id, accepted, by])
+        .toSorted(),
+    ).toEqual([
+      ["r1", false, "agent"],
+      ["r2", false, "agent"],
+      ["r3", true, "agent"],
+      ["r4", true, "human"],
+      ["r5", false, "agent"],
+    ]);
+    // The earlier backup is kept; this file's bytes are saved beside it.
+    expect(await readFile(`${directory}/review.v1.json`, "utf8")).toBe(
+      "an earlier backup\n",
+    );
+    const backups = (await readdir(directory)).filter((name) =>
+      name.startsWith("review.v1.json."),
+    );
+    expect(backups).toHaveLength(1);
+    expect(await readFile(`${directory}/${backups[0]}`, "utf8")).toBe(legacy);
+    expect(
+      JSON.parse(await readFile(`${directory}/review.json`, "utf8")),
+    ).toEqual({
+      schemaVersion: 1,
+      clipEdits: [],
+      items: [],
+    });
+    const ledger = await readFile(`${directory}/review-ledger.json`, "utf8");
+
+    // Interrupted after the ledger was written: review.json still holds the old rows.
+    await writeFile(`${directory}/review.json`, legacy);
+    const again = await createReviewService(f.store).clipChanges(
+      f.project,
+      "index.html",
+    );
+    expect(again).toEqual(migrated);
+    // Nothing was moved twice.
+    expect(
+      JSON.parse(await readFile(`${directory}/review-ledger.json`, "utf8")),
+    ).toEqual(JSON.parse(ledger));
+  } finally {
+    await f.close();
+  }
+});
+
+test("Accept All settles the rows of a clip an agent added and then removed, so they can leave the ledger", async () => {
+  const f = await setup();
+  try {
+    const added = source.replace(
+      clip("caption"),
+      `${clip("caption")}${clip("extra")}`,
+    );
+    await f.save(added);
+    await f.save(source);
+    const before = await f.read();
+    // Back as it was before the agent: nothing to accept, and nothing settled yet.
+    expect(before.agentChanges).not.toContain("extra");
+    expect(before.clipEdits.filter((edit) => edit.clipId === "extra")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ accepted: false, resolution: "source" }),
+      ]),
+    );
+    await f.review.acceptChanges(f.project);
+    const after = await f.read();
+    const extra = after.clipEdits.filter((edit) => edit.clipId === "extra");
+    expect(extra.length).toBeGreaterThan(0);
+    expect(extra.every((edit) => edit.accepted)).toBe(true);
   } finally {
     await f.close();
   }

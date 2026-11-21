@@ -62,7 +62,7 @@ test("an invalid clip envelope keeps the picture, Review, and Undo usable", asyn
   const openReview = () =>
     page.getByRole("button", { name: "Review", exact: true }).click();
   const changes = page.getByRole("list", { name: "Composition changes" });
-  const accept = page.getByRole("button", { name: "Accept agent changes" });
+  const accept = page.getByRole("button", { name: "Accept all agent changes" });
   const undo = page.getByRole("button", { name: "Undo", exact: true });
   await openReview();
   await expect(changes).toContainText("Edit index.html");

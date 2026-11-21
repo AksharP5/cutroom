@@ -46,6 +46,7 @@ async function connect() {
     result,
     read,
     project,
+    request: fixture.request,
     async close() {
       await client.close();
       server.stop(true);
@@ -448,6 +449,96 @@ test("setClip scale, rotation and crop answer as changed fields and read back as
       (clip) => clip.id === "caption",
     );
     expect(caption).toMatchObject(transform);
+  } finally {
+    await mcp.close();
+  }
+});
+
+test("Accept All scopes review to the composition or project and preserves notes and undo", async () => {
+  const mcp = await connect();
+  const path = `/projects/${mcp.project.id}`;
+  try {
+    await writeFile(
+      join(mcp.project.path, "scene.html"),
+      '<main data-composition-id="scene" data-duration="2"><div id="card" class="clip" data-start="0" data-duration="2">Card</div></main>',
+    );
+    const { id: noteId } = z.object({ id: z.string() }).parse(
+      await mcp.result("review_add", {
+        body: "Rename the clips",
+        time: 0,
+        compositionPath: "index.html",
+      }),
+    );
+    await mcp.result("review_claim", { noteId });
+    for (const [composition, clipId] of [
+      ["index.html", "headline"],
+      ["scene.html", "card"],
+    ]) {
+      const { revision } = await mcp.read({ composition });
+      await mcp.result("timeline_edit", {
+        composition,
+        expectedRevision: revision,
+        noteId,
+        commands: [{ type: "setClip", clipId, label: "Agent label" }],
+      });
+    }
+    await mcp.result("review_complete", { noteId, note: "Renamed both clips" });
+    const ordinary = TimelineViewSchema.parse(
+      await (await mcp.request(`${path}/timeline`)).json(),
+    );
+    expect(ordinary.agentChanges).toEqual(["headline"]);
+    expect(ordinary.clipEdits).toBeUndefined();
+
+    const history = await mcp.result("history_list", {});
+    const details = await mcp.read({
+      composition: "scene.html",
+      clipEdits: true,
+    });
+    const scene = details.clipEdits?.find(({ clipId }) => clipId === "card");
+    if (!scene) throw new Error("Scene edit is missing from the ledger.");
+    expect(
+      await mcp.result("review_accept_all", { composition: "./scene.html" }),
+    ).toEqual({ accepted: 1 });
+    expect(
+      (await mcp.read({ composition: "scene.html" })).agentChanges,
+    ).toEqual([]);
+    expect((await mcp.read()).agentChanges).toEqual(["headline"]);
+    expect(await mcp.result("review_accept_all", {})).toEqual({ accepted: 1 });
+    const ledger = await readFile(
+      join(mcp.project.path, ".cutroom/review.json"),
+      "utf8",
+    );
+    expect(await mcp.result("review_accept_all", {})).toEqual({ accepted: 0 });
+    expect(
+      await readFile(join(mcp.project.path, ".cutroom/review.json"), "utf8"),
+    ).toBe(ledger);
+    expect(await mcp.result("history_list", {})).toEqual(history);
+    const queue = z
+      .object({
+        items: z.array(
+          z.object({
+            id: z.string(),
+            review: z.object({ status: z.string() }),
+          }),
+        ),
+      })
+      .parse(await mcp.result("review_list", {}));
+    expect(queue.items).toContainEqual({
+      id: noteId,
+      review: { status: "done" },
+    });
+
+    await mcp.result("history_undo", {});
+    expect(
+      (
+        await mcp.read({ composition: "scene.html", clipEdits: true })
+      ).clipEdits?.some((edit) => edit.id === scene.id),
+    ).toBe(false);
+    await mcp.result("history_redo", {});
+    expect(
+      (await mcp.read({ composition: "scene.html", clipEdits: true }))
+        .clipEdits,
+    ).toContainEqual({ ...scene, accepted: true });
   } finally {
     await mcp.close();
   }
