@@ -690,12 +690,7 @@ async function seekToShot(
   if (!picture && layout) {
     // JPEG screencasts can lose a marker bit. Confirm the parked picture with a
     // full-size PNG before treating an exact seek as a missed frame.
-    const pixels = (await page.screenshot()).toString("base64");
-    const [parked] = await decode(
-      decoder,
-      [{ time: Date.now(), data: pixels, deviceWidth: viewport.width }],
-      await ui.pictureBox(page),
-    );
+    const parked = await readParkedPicture(page, ui, decoder);
     if (parked && inShot(parked.number)) {
       console.warn(
         `Shot ${shot}: confirmed the parked picture in a full-size PNG.`,
@@ -719,6 +714,16 @@ async function seekToShot(
   }
   await sleep(400);
   return picture.number!;
+}
+
+async function readParkedPicture(page: Page, ui: Adapter, decoder: Page) {
+  const pixels = (await page.screenshot()).toString("base64");
+  const [parked] = await decode(
+    decoder,
+    [{ time: Date.now(), data: pixels, deviceWidth: viewport.width }],
+    await ui.pictureBox(page),
+  );
+  return parked;
 }
 
 async function waitPicture(
@@ -1050,6 +1055,14 @@ async function edits(
             pressed,
           )
         : null;
+    const pictureAfterWindow =
+      kind === "ripple" && !picture
+        ? await readParkedPicture(page, ui, decoder)
+        : undefined;
+    if (pictureAfterWindow)
+      console.warn(
+        `Shot ${shot}: ripple screencast missed frame ${expected}. The parked PNG showed ${pictureAfterWindow.number}.`,
+      );
     await sleep(500);
     const undoCondition =
       kind === "razor"
@@ -1071,6 +1084,14 @@ async function edits(
             undone,
           )
         : null;
+    const undoPictureAfterWindow =
+      kind === "ripple" && !undoPicture
+        ? await readParkedPicture(page, ui, decoder)
+        : undefined;
+    if (undoPictureAfterWindow)
+      console.warn(
+        `Shot ${shot}: undo screencast missed frame ${before}. The parked PNG showed ${undoPictureAfterWindow.number}.`,
+      );
     await cast.stop();
     samples.push({
       shot,
@@ -1078,6 +1099,8 @@ async function edits(
       picture: picture ? picture.time - pressed : null,
       undoTimeline: restored === null ? null : restored - undone,
       undoPicture: undoPicture ? undoPicture.time - undone : null,
+      pictureAfterWindow: pictureAfterWindow?.number,
+      undoPictureAfterWindow: undoPictureAfterWindow?.number,
     });
     await sleep(800);
   }
