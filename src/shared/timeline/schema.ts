@@ -341,6 +341,10 @@ export const ClipSchema = z.object({
   /** Seconds into the source for video, audio, and sub-compositions; null for other clips. */
   mediaStart: z.number().nonnegative().nullable(),
   playbackRate: z.number().positive(),
+  /** Unrounded source width in timeline frame units, retained across speed edits. */
+  speedSpan: z
+    .object({ frames, rate: z.number().positive(), phase: z.number() })
+    .optional(),
   src: z.string().nullable(),
   /** Length of the source media in seconds when it could be probed; video and audio only. */
   sourceDuration: z.number().positive().nullable(),
@@ -1100,7 +1104,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       mediaStart: z.number().nonnegative().optional(),
     })
     .describe(
-      "Set media speed or source in on a clip and its linked partners, keeping timeline duration. Source in is seconds. Refuses speed ramps, non-media clips, or insufficient source media.",
+      "Set the constant speed or source in (seconds) of a clip and its linked partners. Speed preserves the source span to the nearest timeline frame, resizes the clips, and ripples following time on unlocked auto-select tracks. A source in edit alone keeps duration. Edit a speed ramp in the composition source. Refuses non-media clips or insufficient source media.",
     ),
   z
     .object({

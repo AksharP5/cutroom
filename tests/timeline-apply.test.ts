@@ -2544,3 +2544,119 @@ test("setTiming preserves the in-point offset of a separately aligned linked sou
   });
   expect(edited.clips.map(({ mediaStart }) => mediaStart)).toEqual([1.5, 2.5]);
 });
+
+test("constant speed resizes an exact half-frame tie and ripples the following cut", () => {
+  const before = timeline([
+    clip("shot", 0, 0, 1, { playbackRate: 2.4 }),
+    clip("next", 0, 1, 30),
+  ]);
+  const after = run(before, {
+    type: "setTiming",
+    clipId: "shot",
+    playbackRate: 1.6,
+  });
+  expect(positions(after)).toEqual({ shot: [0, 0, 2], next: [0, 2, 30] });
+});
+
+test("speeding up a J-cut clears the sound tail and keeps the next pair in sync", () => {
+  const before = timeline([
+    clip("shot", 0, 30, 120, { link: "first", mediaStart: 1 }),
+    clip("sound", 1, 0, 120, { kind: "audio", link: "first" }),
+    clip("next-shot", 0, 150, 60, { link: "second", mediaStart: 1 }),
+    clip("next-sound", 1, 120, 60, { kind: "audio", link: "second" }),
+  ]);
+  const after = run(before, {
+    type: "setTiming",
+    clipId: "shot",
+    playbackRate: 2,
+  });
+  expect(positions(after)).toEqual({
+    shot: [0, 15, 60],
+    sound: [1, 0, 60],
+    "next-shot": [0, 90, 60],
+    "next-sound": [1, 60, 60],
+  });
+});
+
+test("slowing an L-cut at frame zero gives the same placement from either partner", () => {
+  const before = timeline([
+    clip("picture", 0, 10, 85, { link: "pair", mediaStart: 0.333333 }),
+    clip("sound", 1, 0, 105, { kind: "audio", link: "pair" }),
+  ]);
+  const slow = (clipId: string) =>
+    run(before, { type: "setTiming", clipId, playbackRate: 0.5 });
+  expect(slow("picture")).toEqual(slow("sound"));
+  expect(positions(slow("picture"))).toEqual({
+    picture: [0, 20, 170],
+    sound: [1, 0, 210],
+  });
+  const fast = run(before, {
+    type: "setTiming",
+    clipId: "picture",
+    playbackRate: 3,
+  });
+  const restored = run(fast, {
+    type: "setTiming",
+    clipId: "sound",
+    playbackRate: 1,
+  });
+  expect(positions(restored)).toEqual(positions(before));
+  expect(restored.clips.map(({ mediaStart }) => mediaStart)).toEqual([
+    0.333333, 0,
+  ]);
+});
+
+test("speeding up a separately aligned partner compensates for rounding its head", () => {
+  const before = timeline([
+    clip("picture", 0, 0, 90, { link: "pair" }),
+    clip("sound", 1, 10, 60, {
+      kind: "audio",
+      link: "pair",
+      src: "room.wav",
+      mediaStart: 2,
+    }),
+  ]);
+  const after = run(before, {
+    type: "setTiming",
+    clipId: "picture",
+    playbackRate: 3,
+  });
+  expect(positions(after).sound[1]).toBe(3);
+  expect(after.clips[1].mediaStart).toBe(1.966667);
+  const restored = run(after, {
+    type: "setTiming",
+    clipId: "sound",
+    playbackRate: 1,
+  });
+  expect(restored.clips[1].mediaStart).toBe(2);
+});
+
+test("a full-source clip can return to 100% after rounding its faster duration", () => {
+  const before = timeline([
+    clip("picture", 0, 0, 121, { sourceDuration: 121 / 30 }),
+    clip("next", 0, 121, 30),
+  ]);
+  for (const playbackRate of [2, 1.5, 0.3]) {
+    const faster = run(before, {
+      type: "setTiming",
+      clipId: "picture",
+      playbackRate,
+    });
+    const restored = run(faster, {
+      type: "setTiming",
+      clipId: "picture",
+      playbackRate: 1,
+    });
+    expect(positions(restored)).toEqual(positions(before));
+  }
+  const withNewInPoint = run(before, {
+    type: "setTiming",
+    clipId: "picture",
+    playbackRate: 1.5,
+    mediaStart: 1 / 30,
+  });
+  expect(positions(withNewInPoint)).toEqual({
+    picture: [0, 0, 80],
+    next: [0, 80, 30],
+  });
+});
