@@ -93,7 +93,7 @@ Timeline edits use frames at the composition's fps. Pass the `revision` from `ti
           "id": "caption-tail",
           "start": 120,
           "duration": 60,
-          "…": "every field"
+          "…": "other clip fields"
         }
       ],
       "changed": [{ "id": "caption", "duration": 60 }],
@@ -104,9 +104,19 @@ Timeline edits use frames at the composition's fps. Pass the `revision` from `ti
 }
 ```
 
-`changes.clips`, `changes.tracks`, `changes.markers` and `changes.authoredAudioGroups` each list `added` (complete objects, so the ids of razor pieces, inserts and pastes are known), `changed` (the id or track index with the new value of each field that changed; `null` means the field was cleared) and `removed` (ids or indexes). Groups and lists with nothing in them are left out. `changes.range` and `changes.duration` appear when the in/out range or the timeline length changed. `skippedClips` names clips an auto-select razor left whole, and `warnings` names clips on an edited track that track gain skips. Pass `fullTimeline: true` to also get the whole `timeline` and `agentChanges`, exactly as a read returns them. On a 13-clip project, adding a marker answers in about 0.3 KB instead of 36 KB; on 300 clips, a ripple delete answers in about 9 KB instead of 284 KB.
+`changes.clips`, `changes.tracks`, `changes.markers` and `changes.authoredAudioGroups` each list `added` objects, `changed` fields by ID or track index, and `removed` IDs or indexes. Added clips include the new IDs of razor pieces, inserts and pastes. Empty groups and lists are omitted. `changes.range`, `changes.duration` and `changes.main` appear when the in/out range, timeline length or Main bus changes. `skippedClips` names clips an auto-select razor left whole, and `warnings` names clips on an edited track that track gain skips.
 
-`timeline_read` takes optional `from` and `to` frames (half-open) and `tracks`, a list of track indexes, and then returns only the clips and markers that overlap that range on those tracks. `timeline.tracks`, `timeline.authoredAudioGroups`, the range, the duration and the revision always describe the whole timeline, so the revision is valid for an edit anywhere. A batch applies in order and atomically: if one command cannot apply exactly, the response names its index and error code, and nothing is written. The command list is the `CommandSchema` union in `src/shared/timeline/schema.ts`. [Editing behavior](editing.md#timeline-commands) describes the ripple, link, and lock rules.
+`timeline_read` takes optional `from` and `to` frames (half-open) and `tracks`, a list of track indexes. It returns every matching clip and the markers that overlap the frame range. Tracks, authored audio groups, the in/out range, duration and revision describe the whole timeline. The revision is valid for an edit anywhere.
+
+An unfiltered read whose clips pass 256 KiB of JSON returns `timeline.clipSummary` in place of `timeline.clips`. A clip is about 530 bytes, so that is about 490 clips: a project of a few hundred clips reads as before, and a 1,000-clip timeline answers with the summary. The summary gives the total clip count and each track's count, earliest clip start (`from`) and latest exclusive clip end (`to`). Empty tracks have a count of zero and null bounds. For example, if track 0 has clips between frames 0 and 29700, start with a window such as `{ "tracks": [0], "from": 0, "to": 600, "replyFormat": "compact" }`. Use smaller windows for dense tracks.
+
+Both tools accept `replyFormat`. The default, `"auto"`, keeps the original shape while the clip details stay under 256 KiB of JSON. Past that, an unfiltered read returns the summary and a filtered read returns compact clips, always including every match. An edit reply past that size is compact. `"compact"` always uses compact clip details when filters were supplied or the compact list fits in 256 KiB, and the summary otherwise. `"legacy"` returns the original clip fields and per-clip deltas at any size. Pass `fullTimeline: true` to `timeline_edit` to also get every clip and `agentChanges`. This keeps the original clip fields and per-clip deltas unless you explicitly request `"compact"`.
+
+Compact clip snapshots omit fields whose value is null. Read an omitted `playbackRate` as 1, `hasAudio` and `adjustment` as false, `enabled` as true, `fadeIn` and `fadeOut` as 0, `style` as `{}` and `fx` as `[]`. The rest of this guide describes those values by their original names. Explicit authored values such as `opacity: 1`, `volume: 0` and a media source start of 0 are included. In edit replies, compact `changes.clips.added` uses the same defaults. A `changed` entry always gives the new value, including resets such as `opacity: null`, `fadeIn: 0` or `fx: []`.
+
+Compact edits group 16 or more clips whose sole change is the same shift in start time, so a moved clip can be missing from `changed`: read `shifted` as well. For `changes.clips.shifted: [{ "by": -30, "ids": ["shot-2", "shot-3", "…"] }]`, subtract 30 frames from the previous start of every listed clip. Each ID appears in either `shifted` or `changed`. A clip that also lost its opacity override, for example, keeps an absolute patch such as `{ "id": "shot-1", "start": 0, "opacity": null }` in `changed`. The next revision applies to all changes in the reply.
+
+A batch applies in order and atomically. If one command cannot apply exactly, the response names its index and error code, and nothing is written. The command list is the `CommandSchema` union in `src/shared/timeline/schema.ts`. [Editing behavior](editing.md#timeline-commands) describes the ripple, link, and lock rules.
 
 Resolve's gap, slip, slide and link edits are commands too, each one undo step with the same reply:
 
