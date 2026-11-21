@@ -223,8 +223,11 @@ function writeMembers(
       last[1] = row.index;
     else entry.touched.push(row.index);
 
-    const before = rememberBaseline(ledger.targets[row.index]!, row.before);
-    if (before !== 0) (entry.before ??= {})[ordinal] = before;
+    // Only agent work is compared with the state before it; the owner's rows need no baseline.
+    if (metadata.by === "agent") {
+      const before = rememberBaseline(ledger.targets[row.index]!, row.before);
+      if (before !== 0) (entry.before ??= {})[ordinal] = before;
+    }
     if (row.after && /^v3:[a-f0-9]{64}$/.test(row.after)) {
       bytes.write(row.after.slice(3), ordinal * 32, 32, "hex");
       hasDigests = true;
@@ -245,6 +248,7 @@ function writeMembers(
   return entry;
 }
 
+/** Adds rows from a version 1 review.json to `ledger`, skipping rows it already holds. */
 export function migrateLedger(
   edits: LegacyEdit[],
   changes: {
@@ -253,6 +257,7 @@ export function migrateLedger(
     signature: string;
     noteIds: string[];
   }[],
+  ledger: Ledger = { targets: [], edits: [] },
 ): Ledger {
   // Older files can still carry the marks from before per-edit review.
   const open = new Map<string, LegacyEdit[]>();
@@ -283,12 +288,15 @@ export function migrateLedger(
     open.set(JSON.stringify([change.composition, change.clipId]), [row]);
   }
 
-  const ledger: Ledger = { targets: [], edits: [] };
+  const moved = new Set(
+    ledger.edits.flatMap((entry) => Object.values(entry.legacyIds ?? {})),
+  );
   const indexes = indexedTargets(ledger);
   let previous: string | undefined;
   let metadata: Omit<Entry, "touched"> | undefined;
   let rows: WriteMember[] = [];
   for (const edit of edits) {
+    if (moved.has(edit.id)) continue;
     const { historyId, at, by, agentName, noteIds } = edit;
     const key = JSON.stringify([
       historyId ?? edit.id,
@@ -392,6 +400,68 @@ export function appendEdit(
       return entries;
     }, [])
     .reverse();
+  compact(ledger);
+}
+
+/**
+ * Drops targets and baselines that no remaining row refers to, so accepting agent work and editing
+ * again does not grow the file. Renumbering changes the ids of rows recorded without a legacy id,
+ * so it runs only once the unused part outweighs the used part; the file stays within about
+ * twice its live size.
+ */
+function compact(ledger: Ledger) {
+  const used = new Map<number, Set<number>>();
+  for (const entry of ledger.edits)
+    for (const { index, ordinal } of members(ledger, entry)) {
+      const baselines = used.get(index) ?? new Set<number>();
+      used.set(index, baselines);
+      const before = entry.before?.[ordinal] ?? 0;
+      if (entry.by === "agent" && before !== -1) baselines.add(before);
+    }
+  const kept = [...used.values()].reduce((sum, set) => sum + set.size + 1, 0);
+  const total = ledger.targets.reduce(
+    (sum, target) => sum + target.baselines.length + 1,
+    0,
+  );
+  if (total - kept <= kept + 256) return;
+
+  const targets = new Map<number, number>();
+  const baselines = new Map<number, Map<number, number>>();
+  const next: Ledger["targets"] = [];
+  ledger.targets.forEach((target, index) => {
+    const referenced = used.get(index);
+    if (!referenced) return;
+    targets.set(index, next.length);
+    const renumbered = new Map<number, number>();
+    const signatures: string[] = [];
+    target.baselines.forEach((signature, old) => {
+      if (!referenced.has(old)) return;
+      renumbered.set(old, signatures.length);
+      signatures.push(signature);
+    });
+    baselines.set(index, renumbered);
+    next.push({ ...target, baselines: signatures });
+  });
+  // Kept indexes keep their order, so every run stays a run and every ordinal keeps its meaning.
+  ledger.edits = ledger.edits.map((entry) => {
+    const before: Record<string, number> = {};
+    if (entry.by === "agent")
+      for (const { index, ordinal } of members(ledger, entry)) {
+        const old = entry.before?.[ordinal] ?? 0;
+        const renumbered = old === -1 ? -1 : baselines.get(index)!.get(old)!;
+        if (renumbered !== 0) before[ordinal] = renumbered;
+      }
+    return {
+      ...entry,
+      touched: entry.touched.map((run) =>
+        typeof run === "number"
+          ? targets.get(run)!
+          : [targets.get(run[0])!, targets.get(run[1])!],
+      ),
+      before: Object.keys(before).length ? before : undefined,
+    };
+  });
+  ledger.targets = next;
 }
 
 function memberCount(entry: Entry) {

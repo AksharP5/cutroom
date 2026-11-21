@@ -22,6 +22,7 @@ import { z } from "zod";
 import { ProjectSchema, type Project } from "../shared/project";
 import {
   NotebookSchema,
+  REVIEW_LEDGER_PATH,
   REVIEW_STATE_PATH,
   ReviewItemSchema,
   type Notebook,
@@ -292,7 +293,8 @@ export function App() {
           setSourceRevision((value) => value + 1);
         else if (
           payload.changed !== "cutroom.json" &&
-          payload.changed !== REVIEW_STATE_PATH
+          payload.changed !== REVIEW_STATE_PATH &&
+          payload.changed !== REVIEW_LEDGER_PATH
         ) {
           useWorkspace.setState((state) => ({
             mediaRevision: state.mediaRevision + 1,

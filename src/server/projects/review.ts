@@ -21,6 +21,7 @@ import type {
 } from "../../shared/project";
 import {
   NoteContentSchema,
+  REVIEW_LEDGER_PATH,
   REVIEW_STATE_PATH,
   ReviewStateSchema,
   migrateLegacyStatus,
@@ -72,7 +73,11 @@ const items = z.array(
     framePath: NoteContentSchema.shape.framePath,
   }),
 );
-const LegacyReviewFileSchema = z.object({
+/**
+ * review.json stays at version 1, which every build reads. Builds before the compact ledger keep
+ * their own rows in `clipEdits`; this build moves any it finds into the ledger file.
+ */
+const ReviewFileSchema = z.object({
   schemaVersion: z.literal(1),
   clipEdits: z.array(LegacyEditSchema).default([]),
   changes: z
@@ -87,12 +92,17 @@ const LegacyReviewFileSchema = z.object({
     .default([]),
   items,
 });
-const ReviewFileSchema = z.object({
+/** Written only by builds of this ledger before it moved to its own file. */
+const CombinedFileSchema = z.object({
   schemaVersion: z.literal(2),
   ledger: LedgerSchema,
   items,
 });
-type ReviewFile = z.infer<typeof ReviewFileSchema>;
+const LedgerFileSchema = z.object({
+  schemaVersion: z.literal(1),
+  ledger: LedgerSchema,
+});
+type ReviewFile = { items: z.infer<typeof items>; ledger: Ledger };
 
 function writableLedger({ targets, edits }: Ledger): Ledger {
   return {
@@ -119,10 +129,10 @@ type Cause = { actor: ReviewActor; how: string };
 
 /** Review status is unreadable. Only review actions stop; transcripts and chat keep working. */
 export class ReviewFileError extends HttpError {
-  constructor() {
+  constructor(path = REVIEW_STATE_PATH) {
     super(
       422,
-      `Review status in ${REVIEW_STATE_PATH} is unreadable. Repair the file to keep reviewing; until then no note changes status and undo, redo, and restore are blocked so no sent request is lost.`,
+      `Review status in ${path} is unreadable. Repair the file to keep reviewing; until then no note changes status and undo, redo, and restore are blocked so no sent request is lost.`,
     );
   }
 }
@@ -189,71 +199,121 @@ export function createReviewService(store: ProjectStore) {
     return pending;
   };
 
-  // Leave the disk file authoritative. Reuse parsing only while its actual bytes match.
-  const snapshots = new Map<string, { raw: string; state: ReviewFile }>();
-  const remember = (project: Project, raw: string, state: ReviewFile) => {
+  // Leave the disk files authoritative. Reuse parsing only while their actual bytes match.
+  const snapshots = new Map<
+    string,
+    { raw: string | null; ledgerRaw: string | null; state: ReviewFile }
+  >();
+  const remember = (
+    project: Project,
+    raw: string | null,
+    ledgerRaw: string | null,
+    state: ReviewFile,
+  ) => {
     snapshots.delete(project.path);
-    snapshots.set(project.path, { raw, state });
+    snapshots.set(project.path, { raw, ledgerRaw, state });
     if (snapshots.size > 4) snapshots.delete(snapshots.keys().next().value!);
   };
+  const readOptional = (path: string) =>
+    readFile(path, "utf8").catch((error: unknown) => {
+      if (isMissing(error)) return null;
+      throw error;
+    });
 
+  /** Writes the ledger, when it changed, before review.json, so a rerun finds moved rows already there. */
   const writeState = async (project: Project, state: ReviewFile) => {
     await mkdir(await projectStatePath(project, ".cutroom", true), {
       recursive: true,
     });
-    const path = await projectStatePath(project, REVIEW_STATE_PATH, true);
-    const raw = JSON.stringify(state) + "\n";
-    await atomicWrite(path, raw);
-    remember(project, raw, state);
+    const known = snapshots.get(project.path);
+    let ledgerRaw = known?.ledgerRaw ?? null;
+    if (known?.state.ledger !== state.ledger) {
+      ledgerRaw =
+        JSON.stringify({ schemaVersion: 1, ledger: state.ledger }) + "\n";
+      await atomicWrite(
+        await projectStatePath(project, REVIEW_LEDGER_PATH, true),
+        ledgerRaw,
+      );
+    }
+    const raw =
+      JSON.stringify({ schemaVersion: 1, clipEdits: [], items: state.items }) +
+      "\n";
+    await atomicWrite(
+      await projectStatePath(project, REVIEW_STATE_PATH, true),
+      raw,
+    );
+    remember(project, raw, ledgerRaw, state);
   };
 
-  const readState = async (project: Project): Promise<ReviewFile> => {
-    const path = await projectStatePath(project, REVIEW_STATE_PATH, true);
-    const raw = await readFile(path, "utf8").catch((error: unknown) => {
-      if (isMissing(error)) return null;
-      throw error;
-    });
-    if (raw === null) {
-      snapshots.delete(project.path);
-      return {
-        schemaVersion: 2,
-        items: [],
-        ledger: { targets: [], edits: [] },
-      };
-    }
-    const cached = snapshots.get(project.path);
-    if (cached?.raw === raw) return cached.state;
+  const parse = <T>(
+    schema: z.ZodType<T>,
+    raw: string,
+    path: string,
+  ): T | undefined => {
     let json: unknown;
     try {
       json = JSON.parse(raw);
     } catch {
-      throw new ReviewFileError();
+      throw new ReviewFileError(path);
     }
-    const parsed = ReviewFileSchema.safeParse(json);
-    if (parsed.success) {
-      remember(project, raw, parsed.data);
-      return parsed.data;
+    return schema.safeParse(json).data;
+  };
+
+  const readState = async (project: Project): Promise<ReviewFile> => {
+    const path = await projectStatePath(project, REVIEW_STATE_PATH, true);
+    const [raw, ledgerRaw] = await Promise.all([
+      readOptional(path),
+      readOptional(await projectStatePath(project, REVIEW_LEDGER_PATH, true)),
+    ]);
+    const cached = snapshots.get(project.path);
+    if (cached && cached.raw === raw && cached.ledgerRaw === ledgerRaw)
+      return cached.state;
+    const empty: Ledger = { targets: [], edits: [] };
+    const saved =
+      ledgerRaw === null
+        ? empty
+        : parse(LedgerFileSchema, ledgerRaw, REVIEW_LEDGER_PATH)?.ledger;
+    if (!saved) throw new ReviewFileError(REVIEW_LEDGER_PATH);
+    if (raw === null) {
+      const state = { items: [], ledger: saved };
+      remember(project, raw, ledgerRaw, state);
+      return state;
     }
-    const legacy = LegacyReviewFileSchema.safeParse(json);
-    if (!legacy.success) throw new ReviewFileError();
-    const state: ReviewFile = {
-      schemaVersion: 2,
-      items: legacy.data.items,
-      ledger: migrateLedger(legacy.data.clipEdits, legacy.data.changes),
-    };
+    const file = parse(ReviewFileSchema, raw, REVIEW_STATE_PATH);
+    if (file && !file.clipEdits.length && !file.changes.length) {
+      const state = { items: file.items, ledger: saved };
+      remember(project, raw, ledgerRaw, state);
+      return state;
+    }
+    const combined = file
+      ? undefined
+      : parse(CombinedFileSchema, raw, REVIEW_STATE_PATH);
+    if (!file && !combined) throw new ReviewFileError();
+    // Rows an earlier build kept in review.json join the ledger once: rows already moved keep
+    // their ids, so a migration interrupted between the two writes is not repeated.
+    const state: ReviewFile = file
+      ? {
+          items: file.items,
+          ledger: migrateLedger(
+            file.clipEdits,
+            file.changes,
+            writableLedger(saved),
+          ),
+        }
+      : {
+          items: combined!.items,
+          ledger: ledgerRaw ? saved : combined!.ledger,
+        };
     // Keep the original bytes before replacing the file. A retry reuses an identical backup.
     const backup = await projectStatePath(
       project,
       ".cutroom/review.v1.json",
       true,
     );
-    const saved = await readFile(backup, "utf8").catch((error: unknown) => {
-      if (isMissing(error)) return null;
-      throw error;
-    });
-    if (saved !== raw)
+    const previous = await readOptional(backup);
+    if (previous !== raw)
       await atomicWrite(
-        saved === null ? backup : `${backup}.${randomUUID()}`,
+        previous === null ? backup : `${backup}.${randomUUID()}`,
         raw,
       );
     await writeState(project, state);
