@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { isClipOnScreenAt } from "@hyperframes/core/runtime/clip-window";
-import { applyAll, canonicalTimeline } from "../src/shared/timeline/apply";
+import {
+  applyAll,
+  canonicalTimeline,
+  toSeconds,
+} from "../src/shared/timeline/apply";
 import type { ClipOrigin } from "../src/shared/timeline/apply";
 import {
   CommandSchema,
@@ -15,6 +19,14 @@ import {
   timelineContent,
 } from "../src/server/timeline/composition";
 import type { CompositionScope } from "../src/server/timeline/composition";
+import { parseRateLane } from "@hyperframes/core/speed-ramp";
+import { resolveClip } from "../src/shared/timeline/clipTiming";
+import {
+  frames,
+  micros,
+  pictureAt,
+  sourceAt,
+} from "../src/shared/timeline/piece";
 import { countingIds } from "./clip-ids";
 
 const talk = `<video id="talk" src="talk.mp4" muted data-link="lk-1" data-sync-origin="lk-1" data-start="0" data-duration="6" data-media-start="1" data-track-index="0"></video>`;
@@ -114,10 +126,10 @@ test("overwrite moves read back exactly at 30000/1001 with linked cuts and sourc
   ).toEqual([
     ["under", 30, 10, 2.123456],
     ["moving", 40, 10, 1.234567],
-    ["under-tail", 50, 40, 3.458123],
+    ["under-tail", 50, 40, 3.458122],
     ["bed", 30, 10, 2.123456],
     ["sound", 40, 10, 1.234567],
-    ["bed-tail", 50, 40, 3.458123],
+    ["bed-tail", 50, 40, 3.458122],
   ]);
 });
 
@@ -1028,4 +1040,171 @@ test("uncertain stylesheet whitespace preserves source newlines and refuses a lo
       ]),
     ).toThrow("exact spacing");
   }
+});
+
+const rampPoints = [
+  { t: 0, v: 0.5 },
+  { t: 4, v: 2 },
+];
+const rampAttribute = (points = rampPoints, offset?: number) =>
+  JSON.stringify({ version: 1, lanes: [{ target: "rate", offset, points }] });
+
+test("P5: a near-grid 23.976 ramp starts at source picture zero", () => {
+  const { timeline } = parseComposition(
+    composition(
+      `<video id="ramp" src="ramp.mp4" muted data-start="0.041718" data-duration="2.002" data-media-start="0" data-automation='${rampAttribute([{ t: 0, v: 1 }])}'></video>`,
+      "24000/1001",
+    ),
+    emptyTimelineSettings(),
+  );
+  const [clip] = timeline.clips;
+  expect(clip).toMatchObject({ start: 1, mediaStart: 0 });
+  expect(parseRateLane(clip.automation)?.offset).toBeUndefined();
+  const piece = resolveClip(clip, timeline.fps);
+  const index = { origin: micros(0), rate: timeline.fps, count: 48n };
+  expect(
+    [1, 2].map((frame) =>
+      pictureAt(index, sourceAt(piece, frames(frame, timeline.fps))),
+    ),
+  ).toEqual([0n, 1n]);
+});
+
+test("P6–P7: splitting and adding a tail dissolve preserve all original source pictures", () => {
+  const settings = emptyTimelineSettings();
+  const html = composition(
+    `<video id="ramp" src="ramp.mp4" muted data-start="0" data-duration="5" data-track-index="0" data-automation='${rampAttribute()}'></video>
+<video id="next" src="next.mp4" muted data-start="5" data-duration="5" data-media-start="1" data-track-index="0"></video>`,
+  );
+  const { timeline: original } = parseComposition(html, settings);
+  const output = edit(html, [
+    { type: "split", at: 60, clipIds: ["ramp"], ids: { ramp: ["tail"] } },
+    {
+      type: "setTransition",
+      from: "tail",
+      to: "next",
+      transition: { duration: 10 },
+    },
+  ]);
+  const { timeline: edited } = parseComposition(output, settings);
+  const head = resolveClip(edited.clips[0], edited.fps, true);
+  const tailClip = edited.clips[1];
+  const tail = resolveClip(tailClip, edited.fps, true);
+  const uncut = resolveClip(original.clips[0], original.fps, true);
+  expect(tailClip.mediaStart).toBe(1.442795);
+  expect(parseRateLane(tailClip.automation)).toEqual({
+    target: "rate",
+    offset: 2,
+    points: rampPoints,
+  });
+  const index = { origin: micros(0), rate: edited.fps, count: 300n };
+  const picture = (piece: typeof head, frame: number) =>
+    pictureAt(index, sourceAt(piece, frames(frame, edited.fps)));
+  expect([picture(uncut, 60), picture(uncut, 120)]).toEqual([43n, 129n]);
+  for (let frame = 0; frame < 150; frame++)
+    expect(picture(frame < 60 ? head : tail, frame)).toBe(
+      picture(uncut, frame),
+    );
+  expect(tail.frames.end).toBe(155n);
+  expect(output).not.toContain("audioWindow");
+});
+
+for (const fps of [
+  { num: 30, den: 1 },
+  { num: 30000, den: 1001 },
+]) {
+  test(`300 saved trims at ${fps.num}/${fps.den} keep the same in-point as one trim`, () => {
+    const html = composition(
+      `<video id="shot" src="shot.mp4" muted data-start="0" data-duration="${toSeconds(600, fps)}" data-media-start="0.016685" data-track-index="0"></video>`,
+      `${fps.num}/${fps.den}`,
+    ).replace('data-duration="10"', 'data-duration="21"');
+    const commands = Array.from(
+      { length: 300 },
+      (_, index) =>
+        ({
+          type: "trim",
+          clipId: "shot",
+          edge: "start",
+          to: index + 1,
+        }) satisfies CommandInput,
+    );
+    const once = edit(html, [commands[299]]);
+    const each = commands.reduce(
+      (source, command) => edit(source, [command]),
+      html,
+    );
+    expect(each).toBe(once);
+  });
+}
+
+test("adding and removing a dissolve restores the canonical physical timing bytes", () => {
+  const html = composition(
+    `<video id="a" src="a.mp4" muted data-start="0" data-duration="2" data-media-start="1" data-track-index="0"></video>
+<video id="b" src="b.mp4" muted data-start="2" data-duration="8" data-media-start="2" data-track-index="0" data-automation='${rampAttribute()}'></video>`,
+  );
+  const dissolve = { type: "setTransition", from: "a", to: "b" } as const;
+  const withDissolve = edit(html, [
+    { ...dissolve, transition: { duration: 10 } },
+  ]);
+  expect(edit(withDissolve, [{ ...dissolve, transition: null }])).toBe(html);
+});
+
+test("an edit regrids an off-grid ramp and writes its projected rate offset with the in-point", () => {
+  const html = composition(
+    `<video id="ramp" src="ramp.mp4" muted data-start="0.02" data-duration="5" data-track-index="0" data-automation='${rampAttribute()}'></video>`,
+  );
+  const output = edit(html, [
+    { type: "trim", edge: "end", clipId: "ramp", to: 120 },
+  ]);
+  expect(output).toContain('data-start="0.033333"');
+  expect(output).toContain('"offset":0.013333');
+});
+
+test("a volume automation write uses the projected in-point and rate offset of an off-grid ramp", () => {
+  const html = composition(
+    `<audio id="ramp" src="ramp.wav" data-start="0.02" data-duration="5" data-automation='${rampAttribute()}'></audio>`,
+  );
+  const output = edit(html, [
+    {
+      type: "setClip",
+      clipId: "ramp",
+      automation: { volume: [{ frame: 0, gain: 0.5 }] },
+    },
+  ]);
+  expect(output).toContain('data-start="0.033333"');
+  expect(output).toContain('"offset":0.013333');
+});
+
+test("legacy windows can recover the original intercept and are dropped on a timing write", () => {
+  const lane = {
+    target: "rate",
+    offset: 2,
+    points: rampPoints,
+    audioWindow: { offset: 0, mediaStart: 0, duration: 5 },
+  };
+  const html = composition(
+    `<video id="ramp" src="ramp.mp4" muted data-start="2" data-duration="3" data-media-start="1.442796" data-automation='${JSON.stringify({ version: 1, lanes: [lane] })}'></video>`,
+  );
+  const [compatible] = parseComposition(html, emptyTimelineSettings()).timeline
+    .clips;
+  const [inconsistent] = parseComposition(
+    html.replace('"mediaStart":0', '"mediaStart":1'),
+    emptyTimelineSettings(),
+  ).timeline.clips;
+  expect(compatible.mediaStart).toBe(1.442795);
+  expect(inconsistent.mediaStart).toBe(1.442796);
+  expect(
+    edit(html, [{ type: "trim", edge: "start", clipId: "ramp", to: 61 }]),
+  ).not.toContain("audioWindow");
+  const mixEdit = edit(
+    html.replace("<video ", "<audio ").replace("</video>", "</audio>"),
+    [
+      {
+        type: "setClip",
+        clipId: "ramp",
+        automation: { volume: [{ frame: 0, gain: 0.5 }] },
+      },
+    ],
+  );
+  expect(mixEdit).toContain('data-media-start="1.442795"');
+  expect(mixEdit).not.toContain("audioWindow");
 });
