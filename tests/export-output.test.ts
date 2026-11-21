@@ -7,6 +7,7 @@ import {
   readdir,
   rename,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -295,22 +296,60 @@ test("an export's frames and range work go to the configured scratch folder, not
   }
 });
 
-test("starting the renderer removes scratch that a crashed server left behind", async () => {
+test("startup removes only PID-marked Cutroom scratch left by an exited server", async () => {
   const root = await mkdtemp(join(tmpdir(), "cutroom-export-sweep-"));
   const owner = Bun.spawn([process.execPath, "-e", "process.exit(0)"]);
   await owner.exited;
-  const crashed = join(root, `render-${owner.pid}-abcdef`);
-  const running = join(root, `render-${process.pid}-abcdef`);
-  for (const path of [crashed, running]) {
-    await mkdir(join(path, "frames"), { recursive: true });
-    await writeFile(join(path, "frames", "frame_00001.jpg"), "frame");
-  }
-  const workers = createRenderWorkers({ scratchDir: root });
   try {
-    await until(() => !existsSync(crashed));
-    expect(existsSync(join(running, "frames", "frame_00001.jpg"))).toBe(true);
+    const scratchDir = join(root, "scratch");
+    const oldScratch = join(scratchDir, `render-${owner.pid}-abcdef`);
+    const oldTemp = join(root, `cutroom-render-${owner.pid}-abcdef`);
+    const cache = join(root, "frame-cache");
+    const oversized = join(cache, "hfcache-v8-0123456789abcdef");
+    const kept = [
+      join(root, `cutroom-render-${process.pid}-abcdef`),
+      join(root, "cutroom-render-abcdef"),
+      join(root, `another-app-${owner.pid}-abcdef`),
+      join(root, `hyperframes-extract-cache-${process.getuid?.() ?? "u"}`),
+    ];
+    for (const path of [oldScratch, oldTemp, ...kept]) {
+      await mkdir(path, { recursive: true });
+      await writeFile(join(path, "keep"), "scratch");
+    }
+    await mkdir(oversized, { recursive: true });
+    await writeFile(join(oversized, ".hf-complete"), "");
+    await writeFile(join(oversized, "frame_00001.jpg"), "oversized frame");
+    if (process.platform !== "win32") {
+      const link = join(root, `cutroom-render-${owner.pid}-ghijkl`);
+      await symlink(kept[0], link, "dir");
+      kept.push(link);
+    }
+    const module = new URL(
+      "../src/server/hyperframes/jobs.ts",
+      import.meta.url,
+    );
+    const startup = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { createRenderWorkers } from ${JSON.stringify(module.href)};
+const [scratchDir, dir] = process.argv.slice(1);
+await createRenderWorkers({ scratchDir, frameCache: { dir, maxBytes: 4 } }).cancelAll();`,
+        scratchDir,
+        cache,
+      ],
+      {
+        env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root },
+        stderr: "inherit",
+      },
+    );
+    expect(await startup.exited).toBe(0);
+    expect(existsSync(oldScratch)).toBe(false);
+    expect(existsSync(oldTemp)).toBe(false);
+    expect(existsSync(oversized)).toBe(false);
+    for (const path of kept)
+      expect(await readFile(join(path, "keep"), "utf8")).toBe("scratch");
   } finally {
-    await workers.cancelAll();
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -90,6 +90,7 @@ import {
 } from "./thumbnails";
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { createRenderIndex } from "./renders";
+import { renderCacheConfig } from "./renderCache";
 import type { ExportRequest } from "./jobs";
 import { timedCaptureMedia } from "./captureWorkload";
 import { measureLoudness } from "../timeline/audio";
@@ -353,7 +354,8 @@ export function createHyperframesApi(
   const thumbnails = createThumbnailRenderer();
   const renderIndex = createRenderIndex();
   const renders = createRenderWorkers({
-    scratchDir: join(store.dataDir, "scratch"),
+    ...renderCacheConfig(),
+    legacyScratchDir: join(store.dataDir, "scratch"),
     gpu:
       process.env.CUTROOM_EXPORT_GPU === "0"
         ? undefined
@@ -366,10 +368,6 @@ export function createHyperframesApi(
               );
               return works;
             }),
-    frameCache: {
-      dir: join(store.dataDir, "cache", "frames"),
-      maxBytes: 2 * 1024 ** 3,
-    },
     workload: async (id, composition, sourceOverride) => {
       const { parsed, timeline } = await readComposition(id, composition);
       return {
