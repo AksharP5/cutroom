@@ -391,6 +391,8 @@ At fit, all 500 clips are on screen as one element each. A zoom step writes `--p
 
 ### Clip bodies
 
+During a ripple, the canvas sums the offsets of the moving clips by ID once per paint. Filmstrips and waveforms use those offsets to stay with their clip boxes, including when several edits animate together. The offline indicator also resolves each distinct source once per composition and file listing.
+
 Filmstrips and waveforms must not cost the timeline its frame rate. On November 10, 2026 the same 500-clip composition was opened over real media (a twelve-minute 720p H.264 file with sound, so 240 filmstrips and 240 waveforms) in Chromium 1720x1050, headless with hardware GL. Each gesture was driven one input event per animation frame. The first three columns are animation-frame intervals without tracing, two runs each; a late frame is an interval over 20 ms. Main thread per frame is thread time from a separate traced run, which also slows the page. Load average was 1 to 6.
 
 | Gesture                                       |  p95 before | p95 after |                Late before |    Late after | Main thread per frame, before to after |
