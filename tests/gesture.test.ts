@@ -1011,6 +1011,53 @@ test("a queued ripple delete survives a read of the same dissolve", () => {
   expect(anchorsChanged(anchors, withDissolve(16))).toBe(true);
 });
 
+test.each([
+  {
+    name: "crop",
+    properties: { crop: { top: 5, right: 0, bottom: 0, left: 0 } },
+    changed: { crop: { top: 6, right: 0, bottom: 0, left: 0 } },
+  },
+  {
+    name: "keyframes",
+    properties: {
+      keyframes: {
+        scale: [{ frame: 5, value: { x: 1.2, y: 1.2 }, ease: "linear" }],
+      },
+    },
+    changed: {
+      keyframes: {
+        scale: [{ frame: 5, value: { x: 1.3, y: 1.2 }, ease: "linear" }],
+      },
+    },
+  },
+] satisfies {
+  name: string;
+  properties: Partial<Clip>;
+  changed: Partial<Clip>;
+}[])(
+  "a queued ripple survives a read of the same $name",
+  ({ properties, changed }) => {
+    const timeline = sequence();
+    timeline.clips = timeline.clips.map((clip) =>
+      clip.id === "b" ? { ...clip, ...properties } : clip,
+    );
+    const commands = [
+      CommandSchema.parse({ type: "remove", clipIds: ["a"], ripple: true }),
+    ];
+    const anchors = editAnchors(
+      timeline,
+      applyAll(timeline, commands),
+      commands,
+    );
+    const readback = structuredClone(timeline);
+    expect(anchorsChanged(anchors, readback)).toBe(false);
+    readback.clips = readback.clips.map((clip) =>
+      clip.id === "b" ? { ...clip, ...changed } : clip,
+    );
+    expect(anchorsChanged(anchors, readback)).toBe(true);
+  },
+);
+
 test("a dragged volume point stays a frame from its neighbours and its gain follows the line under the pointer", () => {
   const timeline = sequence();
   const automation = JSON.stringify({
