@@ -69,6 +69,8 @@ jobs:
         if: matrix.shard
         env:
           SHARD: ${{ matrix.shard }}
+          # Give the render-heavy end of the suite fewer tests per shard.
+          PWTEST_SHARD_WEIGHTS: "37:23:21:19"
         run: bun run test:e2e --shard="$SHARD" --reporter=list,./e2e/teardown-watchdog.ts --global-timeout=1620000
       - if: matrix.suite == 'performance'
         run: bun run test:perf --reporter=list
