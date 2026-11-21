@@ -1,0 +1,385 @@
+/* The mixer: every audio track and bus beside Main. Values are tokens from tokens.css. */
+
+/* Closed: the meter column's head holds the Mixer button; L and R sit at the foot. */
+.tl-meters .mixer-toggle {
+  position: absolute;
+  top: 3px;
+  left: 5px;
+}
+.tl-meters:not(.tl-meters-compact) .tl-meter-channel > span {
+  top: auto;
+  bottom: -11px;
+}
+
+/* Open: the column becomes strips, at the timeline's own height. */
+.mixer {
+  display: flex;
+  flex: none;
+  max-width: 50%;
+  height: 100%;
+  border-left: var(--stroke-hair) solid var(--line);
+  background: var(--surface-panel);
+  font-size: var(--type-xs);
+}
+.mixer-scroll {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+.mixer-strip {
+  position: relative;
+  display: grid;
+  grid-template-rows: var(--size-ruler) 58px 20px 22px minmax(0, 1fr) 22px;
+  flex: none;
+  width: 72px;
+  border-right: var(--stroke-hair) solid var(--line-subtle);
+}
+.mixer-strip.main {
+  width: 80px;
+  border-right: 0;
+  border-left: var(--stroke-hair) solid var(--line);
+}
+/* Keep meter updates on the scrolling bank and pinned Main layers. */
+.mixer-scroll,
+.mixer-strip.main {
+  transform: translateZ(0);
+}
+.mixer-seam {
+  flex: none;
+  width: var(--stroke-hair);
+  background: var(--line);
+}
+.mixer-strip[data-drop] {
+  outline: var(--stroke-hair) solid var(--selection);
+  outline-offset: calc(-1 * var(--stroke-hair));
+}
+
+/* Name band, aligned with the ruler. */
+.mixer-name {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border-bottom: var(--stroke-hair) solid var(--line-subtle);
+  color: var(--text-primary);
+  font-size: var(--type-2xs);
+  font-weight: var(--weight-medium);
+  font-stretch: var(--stretch-condensed);
+  white-space: nowrap;
+}
+.mixer-name::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--overlay-hover);
+  opacity: 0;
+  pointer-events: none;
+}
+.mixer-strip:hover .mixer-name::before {
+  opacity: 1;
+}
+.mixer-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mixer-name b {
+  flex: none;
+  color: var(--text-secondary);
+  font: var(--weight-medium) var(--type-2xs) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+}
+.mixer-name .mixer-toggle {
+  margin-left: auto;
+  margin-right: calc(-1 * var(--space-1));
+}
+input.mixer-rename {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: var(--surface-raised);
+  font-family: var(--font-sans);
+}
+
+/* Effects: up to three names, then a count. */
+.mixer-fx {
+  display: grid;
+  grid-auto-rows: 18px;
+  align-content: start;
+  padding: var(--space-1) 0;
+  border-bottom: var(--stroke-hair) solid var(--line-subtle);
+}
+.mixer-fx button {
+  min-height: 0;
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  color: var(--text-primary);
+  font: var(--weight-regular) var(--type-2xs) / 18px var(--font-sans);
+  font-stretch: var(--stretch-condensed);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mixer-fx button[data-bypassed] {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+.mixer-fx button.quiet,
+.mixer-fx button:disabled {
+  color: var(--text-tertiary);
+}
+/* An empty band at rest: Add effect shows on approach. */
+.mixer-strip:not(:hover, :focus-within) .mixer-add {
+  opacity: 0;
+}
+
+/* Members: a bus's clip count; a track's destination when its clips play through buses. */
+.mixer-members {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--type-2xs);
+  white-space: nowrap;
+}
+.mixer-members button {
+  min-height: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--type-2xs);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 2px;
+}
+
+.mixer-switches {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: center;
+}
+
+/* Fader: scale left, track and cap centre, stereo meter right. */
+.mixer-fader {
+  position: relative;
+  margin: var(--space-2) 0 var(--space-1);
+  touch-action: none;
+}
+.mixer-scale {
+  position: absolute;
+  inset: 0 auto 0 2px;
+  width: 20px;
+  color: var(--text-tertiary);
+  font: var(--weight-medium) var(--type-micro) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  text-align: right;
+  pointer-events: none;
+}
+.mixer-scale span {
+  position: absolute;
+  right: 0;
+  margin-top: -0.5em;
+}
+.mixer-track {
+  position: absolute;
+  inset: 0 auto 0 34px;
+  width: 2px;
+  background: var(--line);
+}
+.mixer-cap {
+  position: absolute;
+  left: 25px;
+  width: 20px;
+  height: 10px;
+  translate: 0 -50%;
+  border-radius: 2px;
+  outline-offset: 2px;
+  background: var(--text-secondary);
+}
+.mixer-fader:active .mixer-cap {
+  will-change: transform;
+}
+.mixer-cap::after {
+  content: "";
+  position: absolute;
+  inset: 4.5px 0 auto;
+  height: var(--stroke-hair);
+  background: var(--surface-panel);
+}
+.mixer-fader:hover .mixer-cap:not([aria-disabled]),
+.mixer-cap:active:not([aria-disabled]) {
+  background: var(--text-primary);
+}
+.mixer-cap[aria-disabled="true"] {
+  background: var(--glyph-faint);
+}
+.mixer-meter {
+  position: absolute;
+  inset: 0 6px 0 auto;
+  display: flex;
+  gap: 2px;
+  pointer-events: none;
+}
+.main .mixer-meter {
+  right: 8px;
+}
+.mixer-channel {
+  position: relative;
+  width: 4px;
+}
+.main .mixer-channel {
+  width: 6px;
+}
+.mixer-meter i {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  background: repeating-linear-gradient(
+    to top,
+    var(--meter-off) 0 2px,
+    transparent 2px 3px
+  );
+}
+/* Slide the gradient by whole segments so the LEDs keep their height. */
+.mixer-meter span {
+  position: absolute;
+  inset: 0;
+  transform: translateY(100%);
+  background: repeating-linear-gradient(
+    to top,
+    var(--meter-on) 0 2px,
+    transparent 2px 3px
+  );
+}
+.mixer-meter b {
+  position: absolute;
+  inset: 0;
+  transform: translateY(100%);
+  background: linear-gradient(var(--meter-peak) 0 1px, transparent 1px);
+}
+/* The meter column's clip mark, latched above its bar until clicked or playback restarts. */
+.mixer-clip {
+  position: absolute;
+  top: -6px;
+  right: 0;
+  left: 0;
+  height: 4px;
+  padding: 0;
+  border: 0;
+  background: var(--meter-clip);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.mixer-clip:disabled {
+  visibility: hidden;
+}
+.mixer-strip:is([data-muted], [data-quiet]) .mixer-meter span {
+  background: repeating-linear-gradient(
+    to top,
+    var(--glyph-faint) 0 2px,
+    transparent 2px 3px
+  );
+}
+
+.mixer-value {
+  display: grid;
+  place-items: center;
+  border-top: var(--stroke-hair) solid var(--line-subtle);
+  color: var(--text-primary);
+  font: var(--weight-medium) var(--type-2xs) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+}
+.mixer-value[data-unity],
+.mixer-strip[data-muted] .mixer-value {
+  color: var(--text-tertiary);
+}
+.mixer-value small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font: var(--weight-regular) var(--type-micro) / 1 var(--font-sans);
+}
+.mixer-value input {
+  width: calc(100% - var(--space-2));
+  height: var(--size-field);
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: center;
+}
+
+/* The New bus strip. */
+.mixer-new {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  flex: none;
+  width: 72px;
+  padding: 6px var(--space-2);
+  border-right: var(--stroke-hair) solid var(--line-subtle);
+}
+.mixer-new .text-button {
+  justify-self: start;
+  padding: 0;
+  font-size: var(--type-xs);
+  font-weight: var(--weight-medium);
+}
+.mixer-new p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--type-2xs);
+  line-height: var(--leading-tight);
+}
+
+/* A bus's members while the pointer is on its strip. */
+.tl-mix[data-bus-member] {
+  outline: var(--stroke-selection) solid var(--selection-hover);
+  outline-offset: calc(-1 * var(--stroke-selection));
+  border-radius: var(--radius-clip);
+}
+
+/* The rack, floating beside its strip: the Inspector's rack on the popover surface. */
+.mixer-rack {
+  position: fixed;
+  inset: auto;
+  width: 264px;
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-float);
+  background: var(--surface-float);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  font-size: var(--type-sm);
+}
+.mixer-rack h2 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--type-sm);
+  font-weight: var(--weight-semibold);
+}
+.mixer-rack .inspector-field {
+  grid-template-columns: var(--size-inspector-label) 1fr;
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
+.mixer-rack .inspector-fx-number input {
+  width: 100%;
+  height: var(--size-field);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: var(--weight-medium) var(--type-2xs) var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  text-align: right;
+}

@@ -53,15 +53,15 @@ export function AudioGroupRouting({
   };
   return (
     <>
-      <FieldRow label="Group">
+      <FieldRow label="Bus">
         <SelectMenu
-          label="Audio group"
+          label="Bus"
           value={value}
           options={[
             ...(mixed ? [{ value: "mixed", label: "Mixed" }] : []),
             { value: "track", label: "Track mixing" },
             ...options,
-            { value: "new", label: "New group…" },
+            { value: "new", label: "New bus..." },
           ]}
           disabled={disabled}
           readOnly={saving}
@@ -75,7 +75,7 @@ export function AudioGroupRouting({
       {name !== null && (
         <form
           className="inspector-audio-group-form"
-          aria-label="New audio group"
+          aria-label="New bus"
           onSubmit={(event) => {
             event.preventDefault();
             if (!disabled && !saving && name.trim())
@@ -90,7 +90,7 @@ export function AudioGroupRouting({
         >
           <FieldRow label="Name">
             <input
-              aria-label="Audio group name"
+              aria-label="Bus name"
               type="text"
               value={name}
               maxLength={120}
@@ -116,7 +116,7 @@ export function AudioGroupRouting({
       {firstClip && group && (
         <ValueField
           key={group.id}
-          label="Group gain"
+          label="Bus gain"
           value={group.volume}
           initial={1}
           unit="gain"
@@ -133,13 +133,10 @@ export function AudioGroupRouting({
                 ),
             )
           }
-          tip={
-            group.sourceRestriction ??
-            "Changes every member of this authored audio group"
-          }
+          tip={group.sourceRestriction ?? "Changes every clip in this bus"}
           onCommit={(volume) => {
             if (volume !== null)
-              void editTimeline(projectId, "Edit audio group gain", () => [
+              void editTimeline(projectId, "Bus gain", () => [
                 {
                   type: "setAudioGroup",
                   clipId: firstClip.id,
