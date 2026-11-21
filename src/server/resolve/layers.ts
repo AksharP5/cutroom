@@ -26,8 +26,8 @@ const isZoomLayer = (clip: Clip) =>
   clip.adjustment && clip.region?.effect === "zoom";
 
 /**
- * Which picture clips need rendering, one render per video track: everything that draws but is
- * not media Resolve opens (`native`), except zoom layers, which travel as keyframes.
+ * Render each track's ordinary graphics together. An adjustment replaces lower
+ * tracks only for its own cut, so render it separately from transparent graphics.
  */
 export function layerTracks(
   timeline: Timeline,
@@ -35,6 +35,7 @@ export function layerTracks(
 ): LayerTrack[] {
   const { hidden } = trackMix(timeline);
   const byTrack = new Map<number, Clip[]>();
+  const layers: LayerTrack[] = [];
   for (const clip of timeline.clips) {
     if (
       isAudioKind(clip.kind) ||
@@ -44,17 +45,30 @@ export function layerTracks(
       hidden.has(clip.track)
     )
       continue;
-    byTrack.set(clip.track, [...(byTrack.get(clip.track) ?? []), clip]);
+    if (clip.adjustment) {
+      layers.push({
+        track: clip.track,
+        start: clip.start,
+        end: clip.start + clip.duration,
+        clips: [clip],
+        flatten: true,
+      });
+      continue;
+    }
+    const clips = byTrack.get(clip.track);
+    if (clips) clips.push(clip);
+    else byTrack.set(clip.track, [clip]);
   }
-  return [...byTrack]
-    .sort(([a], [b]) => a - b)
-    .map(([track, clips]) => ({
+  for (const [track, clips] of byTrack) {
+    layers.push({
       track,
       start: Math.min(...clips.map((clip) => clip.start)),
       end: Math.max(...clips.map((clip) => clip.start + clip.duration)),
       clips: clips.toSorted((a, b) => a.start - b.start),
-      flatten: clips.some((clip) => clip.adjustment),
-    }));
+      flatten: false,
+    });
+  }
+  return layers.sort((a, b) => a.track - b.track || a.start - b.start);
 }
 
 /**

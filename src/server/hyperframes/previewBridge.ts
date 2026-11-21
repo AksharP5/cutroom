@@ -1975,7 +1975,11 @@ function installPreviewBridge(
   };
   /** True when media comes back, so the runtime must seek again for it to load and draw. */
   const setPipeline = (active: boolean, drawn: Set<string>) => {
-    if (active) adjustment.block(true);
+    if (active)
+      adjustment.setOwnership(
+        gradeBypass,
+        document.querySelector(ROOT_COMPOSITION),
+      );
     pipelineActive = active;
     pipelineDrawn = drawn;
     writePipelineSheet();
@@ -2002,7 +2006,7 @@ function installPreviewBridge(
       win.__hf?.colorGrading?.refresh();
       if (gradeBypass) writeGradeBypass();
     }
-    adjustment.block(gradeBypass);
+    adjustment.setOwnership(gradeBypass, null);
     return released;
   };
   const holdStyle = document.createElement("style");
@@ -2983,6 +2987,7 @@ function installPreviewBridge(
     )
       return;
     const id = data.id;
+    let resumeAdjustment: (() => boolean) | undefined;
     const scrub =
       data.action === "seek" && "scrub" in data && data.scrub === true;
     // Every other command starts from the playhead's true time.
@@ -3146,11 +3151,24 @@ function installPreviewBridge(
           if (gradeBypass) writeGradeBypass();
           return;
         }
+        case "display-scale":
+          if (
+            "scale" in data &&
+            typeof data.scale === "number" &&
+            Number.isFinite(data.scale) &&
+            data.scale > 0 &&
+            data.scale <= 1
+          )
+            adjustment.resize(data.scale);
+          return;
         case "grade-bypass": {
           if (!("bypass" in data) || typeof data.bypass !== "boolean") return;
           gradeBypass = data.bypass;
           writeGradeBypass();
-          adjustment.block(pipelineActive || gradeBypass);
+          adjustment.setOwnership(
+            gradeBypass,
+            pipelineActive ? document.querySelector(ROOT_COMPOSITION) : null,
+          );
           return;
         }
         case "keyframe": {
@@ -3226,17 +3244,19 @@ function installPreviewBridge(
             await win.__hfWaitForSeekCompletion?.().catch(() => {});
             await new Promise((resolve) => requestAnimationFrame(resolve));
           }
-          if (
-            !initialTiming ||
-            adjustment.grouped ||
-            confirmedStructure === null ||
-            liveStructure() !== confirmedStructure
-          )
+          if (updatingTiming || win.__player?.isPlaying() || !win.__player)
+            throw new Error("Timing updates require a paused preview.");
+          if (!initialTiming || confirmedStructure === null)
             throw new Error(
               "The live preview document changed or requires a reload.",
             );
-          if (updatingTiming || win.__player?.isPlaying() || !win.__player)
-            throw new Error("Timing updates require a paused preview.");
+          // The capture canvases temporarily own the lower clips. Restore their
+          // original parent and whitespace before verifying or applying a patch.
+          resumeAdjustment = adjustment.suspend();
+          if (liveStructure() !== confirmedStructure)
+            throw new Error(
+              "The live preview document changed or requires a reload.",
+            );
           if (
             !("timing" in data) ||
             !data.timing ||
@@ -3823,6 +3843,9 @@ function installPreviewBridge(
             timingRevision = timing.revision;
             titleStyle = nextTitleStyle;
             parkRootVideos();
+            const graded = resumeAdjustment();
+            resumeAdjustment = undefined;
+            if (graded) await paint();
             scheduleObservation();
             scheduleBox();
           } finally {
@@ -4071,7 +4094,12 @@ function installPreviewBridge(
                 )
                   animatedTitles.add(clip.id);
             }
-            confirmedStructure = liveStructure();
+            const resume = adjustment.suspend();
+            try {
+              confirmedStructure = liveStructure();
+            } finally {
+              resume();
+            }
           }
           scheduleObservation();
           scheduleBox();
@@ -4080,9 +4108,10 @@ function installPreviewBridge(
           return;
       }
       reply(id);
-    })().catch((error: unknown) =>
-      reply(id, error instanceof Error ? error.message : String(error)),
-    );
+    })().catch((error: unknown) => {
+      resumeAdjustment?.();
+      reply(id, error instanceof Error ? error.message : String(error));
+    });
   });
 }
 

@@ -34,7 +34,7 @@ Video clips, images and adjustment layers have a Colour section, closed until op
 
 Choose **Add adjustment layer** in a video track's menu to grade several shots together. The layer spans In to Out if both marks are set. Otherwise it starts at the playhead and lasts three seconds. Select the layer and open Colour. Each picture gets its own grade first, then the adjustment grades the composited tracks beneath it. Higher adjustments take the result of lower ones, and titles above an adjustment keep their colour. Trim or move the layer to change where the look applies. The desktop viewer and exports draw the adjustment on the composited picture. In a browser without HTML-in-Canvas, the footage pipeline still draws adjustments over supported footage. For other pictures the viewer shows where the grade is available, and the layer remains editable.
 
-Resolve timeline export puts the graded composite in a rendered clip on the adjustment's track. The source clips and their individual grades travel separately, and higher tracks stay separate. Export again from Cutroom to change the baked look.
+Resolve timeline export puts the graded composite in a rendered clip on the adjustment's track. The source clips and their individual grades travel separately. Titles on the adjustment's track still export with transparency, and higher tracks stay separate. Export again from Cutroom to change the baked look.
 
 Colour wheels adjust shadows, midtones and highlights separately. Drag the handle toward a hue and farther from the centre for more colour. Hue and Amount accept exact values, and Level lifts or lowers that tonal range. A drag previews live and saves as one undo step. Escape cancels a drag. Reset clears the selected wheel.
 

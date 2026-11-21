@@ -739,6 +739,7 @@ export function Viewer({
     const reloaded = connections.current.has(gen);
     connections.current.get(gen)?.dispose();
     connections.current.set(gen, preview);
+    preview.resize();
     try {
       const inspection = await preview.inspect();
       // A pending footage-pipeline reply can keep inspection out of transport state.
@@ -867,6 +868,9 @@ export function Viewer({
         );
   const width = Math.max(0, Math.floor(fit.width * scale));
   const height = Math.max(0, Math.floor(fit.height * scale));
+  useLayoutEffect(() => {
+    for (const connection of connections.current.values()) connection.resize();
+  }, [width, height, fit.width, fit.height]);
   const box = {
     width,
     height,
@@ -1019,7 +1023,9 @@ function AdjustmentGradeNotice() {
   );
   return showing ? (
     <div className="edit-adjustment-notice" role="status">
-      This adjustment layer's grade appears in export and in the desktop app.
+      {window.cutroomDesktop
+        ? "This adjustment layer's grade appears in export."
+        : "This adjustment layer's grade appears in export and in the desktop app."}
     </div>
   ) : null;
 }

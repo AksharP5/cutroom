@@ -812,6 +812,10 @@ Every captured run of an export now shares one start of its capture browsers, si
 
 On the 300-clip timeline the shared capture holds 9.2 GB of Chromium with two browsers and 4.2 GB with one; the source parts' four FFmpeg encoders beside it hold 3.0 to 3.6 GB, which the browser plan now reserves, so with 19.5 GiB free it starts one browser instead of two. Against main, every one of the 10,500 frames shows the same source frame, with a mean difference of 0.97/255 (1.33 at worst) and at most 0.29/255 bias per channel, and the sound has the same 16,800,000 samples at 48.1 dB SNR, the two paths' AAC encodes. The interview's output is identical to main's. No browser start stalled in any of these exports.
 
+### Adjustment grade capture
+
+Review of #368 measured a 12-second synthetic 1080p30 MP4 at 9.6 s without a layer and 69.8 s with a 10-second graded adjustment. The 300 graded frames added about 201 ms each, or about six seconds per graded second at 30 fps. At that measured per-frame cost, 7,200 graded frames in a two-minute 60 fps span would add about 24 minutes. That last figure is an extrapolation. The browser captures only the adjustment's span and the other runs that need it.
+
 ### Placed clips and stills
 
 Clips the inspector moved, scaled, rotated, cropped or faded, and image stills, now draw from their sources too ([architecture](architecture.md#export-dialog)). The workload is the interview above with five cuts edited (punch-ins at 115 to 125%, three of them moved, and one cut at 60%, turned 4 degrees and moved, over the page colour), a 1080p PNG slide and a 4:3 JPEG photo over cuts, b-roll, the music bed and two titles, exported whole at Standard quality.

@@ -7,6 +7,7 @@ import type { Fps } from "../../shared/timeline/schema.ts";
 import { emptyTimelineSettings } from "../../shared/timeline/schema.ts";
 import { GRADE_ATTRIBUTE, readGrade } from "../../shared/timeline/grade.ts";
 import {
+  ADJUSTMENT_ATTRIBUTE,
   REGION_ATTRIBUTE,
   REGION_STYLE_ATTRIBUTE,
   regionStyle,
@@ -18,6 +19,7 @@ import {
   TRANSITION_STYLE_ATTRIBUTE,
   transitionStyle,
 } from "../timeline/transitions.ts";
+import { isGradedAdjustment } from "./adjustmentCapture.ts";
 import { coversFrame, visibleRect } from "./directPlacement.ts";
 import type { DirectPlan, Placement, SourceSegment } from "./directSchema.ts";
 
@@ -502,9 +504,8 @@ export function planDirectExport(
     if (element.tagName === "audio") continue;
     if (element.tagName === "video" || element.tagName === "img")
       pictures.push(element);
-    const layer = attribute(element, "data-cutroom-adjustment") !== undefined;
-    const adjustment =
-      layer && attribute(element, GRADE_ATTRIBUTE) !== undefined;
+    const layer = attribute(element, ADJUSTMENT_ATTRIBUTE) !== undefined;
+    const adjustment = isGradedAdjustment(element);
     if (
       layer &&
       !adjustment &&

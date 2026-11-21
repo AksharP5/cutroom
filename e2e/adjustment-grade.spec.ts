@@ -24,6 +24,7 @@ const points = [
 async function projectWithAdjustment(
   request: APIRequestContext,
   lowerTitle = true,
+  dissolve = true,
 ) {
   const response = await request.post("/api/cutroom/projects", {
     data: { name: "Adjustment grade", width, height, duration: 3 },
@@ -66,6 +67,7 @@ async function projectWithAdjustment(
       '<div id="upper" class="clip" data-start="0" data-duration="3" data-track-index="3" style="position:absolute;top:0;right:0;width:140px;height:90px;background:#ec40a0">Upper title</div>' +
       "</main></body></html>",
   );
+  if (!dissolve) return project;
   const route = "/api/cutroom/projects/" + project.id;
   const view = TimelineViewSchema.parse(
     await (await request.get(route + "/timeline")).json(),
@@ -361,4 +363,88 @@ test("grades lower footage in the GPU pipeline without HTML-in-Canvas", async ({
   );
   expect(Math.max(...error)).toBeLessThanOrEqual(2);
   expect(graded[2]).toEqual(bypassed[2]!);
+});
+
+test("trims a title under an active grade within the same viewer document", async ({
+  page,
+  request,
+}) => {
+  const project = await projectWithAdjustment(request, true, false);
+  const route = "/api/cutroom/projects/" + project.id;
+  const trim = async (to: number) => {
+    const view = TimelineViewSchema.parse(
+      await (await request.get(route + "/timeline")).json(),
+    );
+    const edit = await request.post(route + "/commands", {
+      data: {
+        expectedRevision: view.revision,
+        commands: [
+          { type: "trim", clipId: "lower", edge: "end", to, ripple: false },
+        ],
+      },
+    });
+    expect(edit.ok(), await edit.text()).toBe(true);
+  };
+  // Put the track stylesheet in the initial document before measuring an edit.
+  await trim(88);
+  await page.addInitScript(() => {
+    if (self === top) localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  await page.goto("/#project/" + project.id);
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, 30);
+  await expect
+    .poll(async () => (await viewerPixels(page))[1])
+    .toEqual([72, 104, 24]);
+  const frame = page.locator("iframe[data-live]");
+  const document = await frame.getAttribute("src");
+  const before = await page
+    .locator(".edit-stage")
+    .getAttribute("data-preview-ready");
+  await trim(20);
+  await waitForPreview(page, { after: before });
+  await expect
+    .poll(async () => {
+      const [centre, title] = await viewerPixels(page);
+      return JSON.stringify(centre) === JSON.stringify(title);
+    })
+    .toBe(true);
+  expect(await frame.getAttribute("src")).toBe(document);
+});
+
+test("keeps a mounted scene graded over the GPU footage pipeline", async ({
+  page,
+  request,
+}) => {
+  const project = await projectWithAdjustment(request, false, false);
+  await Promise.all([
+    writeFile(
+      join(project.path, "index.html"),
+      `<!doctype html><html><head><style>html,body{margin:0;background:#000}main{position:relative;width:100%;height:100%}</style></head><body>
+<main data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-duration="3" data-fps="30">
+  <video id="a" muted src="a.mp4" data-start="0" data-duration="3" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+  <div id="nested" class="clip" data-composition-id="scene" data-composition-src="scene.html" data-start="0" data-duration="3" data-track-index="1" data-width="320" data-height="180" style="position:absolute;top:0;left:0;width:320px;height:180px"></div>
+</main></body></html>`,
+    ),
+    writeFile(
+      join(project.path, "scene.html"),
+      `<template><div data-composition-id="scene" data-no-timeline data-duration="3" data-width="320" data-height="180" style="position:relative;width:320px;height:180px">
+  <div id="scene-picture" class="clip" data-start="0" data-duration="3" data-track-index="0" style="position:absolute;inset:0;background:#90d030"></div>
+  <div id="scene-look" class="clip" data-cutroom-adjustment data-start="0.5" data-duration="2" data-track-index="1" data-color-grading='{"adjust":{"exposure":-1}}'></div>
+</div></template>`,
+    ),
+  ]);
+  await page.addInitScript(() => {
+    if (self === top) localStorage.setItem("cutroom.footagePipeline", "true");
+  });
+  await page.goto("/#project/" + project.id);
+  await seekFrame(page, 30);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-pipeline",
+    "on",
+  );
+  const sample = [[0.1, 0.1]] as const;
+  await expect.poll(() => viewerPixels(page, sample)).toEqual([[72, 104, 24]]);
+  await page.keyboard.press("Shift+d");
+  await expect.poll(() => viewerPixels(page, sample)).toEqual([[144, 208, 48]]);
 });

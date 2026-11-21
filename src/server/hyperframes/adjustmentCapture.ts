@@ -1,5 +1,13 @@
 import { parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
+import { GRADE_ATTRIBUTE } from "../../shared/timeline/grade.ts";
+
+export function isGradedAdjustment({ attrs }: DefaultTreeAdapterTypes.Element) {
+  return (
+    attrs.some(({ name }) => name === "data-cutroom-adjustment") &&
+    attrs.some(({ name }) => name === GRADE_ATTRIBUTE)
+  );
+}
 
 /** Find grades and mounted compositions before the producer chooses its browser mode. */
 export function adjustmentSources(html: string) {
@@ -18,11 +26,7 @@ export function adjustmentSources(html: string) {
         ({ name }) => name === "data-composition-src",
       );
       if (scene?.value) scenes.add(scene.value);
-      if (
-        node.attrs.some(({ name }) => name === "data-cutroom-adjustment") &&
-        node.attrs.some(({ name }) => name === "data-color-grading")
-      )
-        graded = true;
+      graded ||= isGradedAdjustment(node);
     }
     if ("childNodes" in node) node.childNodes.forEach(visit);
     if ("content" in node) visit(node.content);
@@ -91,7 +95,10 @@ export function adjustmentCapture() {
   let grades: Grade[] | undefined;
   let animation = 0;
   let serial = 0;
-  let blocked = false;
+  let bypassed = false;
+  let pipelineRoot: Element | null = null;
+  let suspended = false;
+  let displayScale = 1;
   let at = 0;
   let request:
     | {
@@ -175,10 +182,15 @@ export function adjustmentCapture() {
     capture.remove();
   };
 
+  const captureSize = (root: HTMLElement) =>
+    [
+      Math.round(root.offsetWidth * devicePixelRatio * displayScale),
+      Math.round(root.offsetHeight * devicePixelRatio * displayScale),
+    ] as const;
+
   function draw(scene: Scene, selected: Map<number, Grade>) {
     const { root, bands, capture, context } = scene;
-    const width = Math.round(root.offsetWidth * devicePixelRatio);
-    const height = Math.round(root.offsetHeight * devicePixelRatio);
+    const [width, height] = captureSize(root);
     if (!width || !height)
       throw new Error("The adjustment layer has no composition size.");
     if (capture.width !== width || capture.height !== height) {
@@ -241,8 +253,7 @@ export function adjustmentCapture() {
     capture.setAttribute("content", "drawable");
     capture.setAttribute("data-hf-ignore", "");
     capture.style.cssText = fill;
-    capture.width = Math.round(root.offsetWidth * devicePixelRatio);
-    capture.height = Math.round(root.offsetHeight * devicePixelRatio);
+    [capture.width, capture.height] = captureSize(root);
     const context = capture.getContext("2d") as CaptureContext | null;
     if (!context)
       throw new Error("The adjustment layer's capture canvas is unavailable.");
@@ -314,9 +325,11 @@ export function adjustmentCapture() {
   function prepare(time: number, required: boolean) {
     if (!supported && !required) return false;
     at = time;
-    const selection = blocked
-      ? new Map<HTMLElement, Map<number, Grade>>()
-      : active(time);
+    const selection =
+      suspended || bypassed
+        ? new Map<HTMLElement, Map<number, Grade>>()
+        : active(time);
+    if (pipelineRoot instanceof HTMLElement) selection.delete(pipelineRoot);
     if (!supported && selection.size && required)
       throw new Error(
         "This Chromium build cannot capture adjustment layer grades.",
@@ -340,32 +353,45 @@ export function adjustmentCapture() {
   const update = (time = win.__player?.getTime() ?? 0) => {
     prepare(time, false);
     for (const { capture } of scenes.values()) capture.requestPaint();
+    return scenes.size !== 0;
   };
 
   const follow = () => {
     animation = 0;
     // During playback, a change of interval also matters over a static picture.
-    if (blocked || !(grades ??= read()).length || !win.__player?.isPlaying())
+    if (bypassed || !(grades ??= read()).length || !win.__player?.isPlaying())
       return;
     prepare(win.__player.getTime(), false);
     animation = requestAnimationFrame(follow);
   };
 
   return {
-    get grouped() {
-      return scenes.size !== 0;
-    },
     update,
+    resize(scale: number) {
+      if (displayScale === scale) return;
+      displayScale = scale;
+      update();
+    },
+    suspend() {
+      suspended = true;
+      update();
+      return () => {
+        suspended = false;
+        grades = undefined;
+        return update();
+      };
+    },
     changed() {
       grades = undefined;
       update();
       if (!animation) animation = requestAnimationFrame(follow);
     },
-    block(value: boolean) {
-      if (blocked === value) return;
-      blocked = value;
+    setOwnership(bypass: boolean, root: Element | null) {
+      if (bypassed === bypass && pipelineRoot === root) return;
+      bypassed = bypass;
+      pipelineRoot = root;
       update();
-      if (!blocked && !animation) animation = requestAnimationFrame(follow);
+      if (!bypassed && !animation) animation = requestAnimationFrame(follow);
     },
     play() {
       if (!animation) animation = requestAnimationFrame(follow);
@@ -373,12 +399,16 @@ export function adjustmentCapture() {
     async render(time: number) {
       if (!prepare(time, true)) return;
       const frame = Promise.withResolvers<void>();
+      const pixels = [...scenes.values()].reduce(
+        (sum, { capture }) => sum + capture.width * capture.height,
+        0,
+      );
       const timer = setTimeout(
         () =>
           frame.reject(
             new Error("Chromium did not paint the adjustment layer."),
           ),
-        2500,
+        2500 * Math.max(1, pixels / (1920 * 1080)),
       );
       const pending = new Set(scenes.values());
       request = {
