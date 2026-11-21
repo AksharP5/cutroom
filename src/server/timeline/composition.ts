@@ -85,6 +85,7 @@ import {
 } from "./versions";
 import {
   GRADE_ATTRIBUTE,
+  canHaveGrade,
   readGrade,
   writeGrade,
 } from "../../shared/timeline/grade";
@@ -1143,7 +1144,7 @@ export function projectTimeline(
       transitionIn: edges.in,
       transitionOut: edges.out,
       fx: hasAudio ? readableFx(element.attrs["data-fx-chain"]) : [],
-      grade: gradedKind(kind)
+      grade: canHaveGrade(kind, adjustment)
         ? readableGrade(element.attrs[GRADE_ATTRIBUTE])
         : null,
       enabled:
@@ -2214,9 +2215,6 @@ function textRestriction(
   return undefined;
 }
 
-/** HyperFrames grades pictures: video and image clips. */
-const gradedKind = (kind: Clip["kind"]) => kind === "video" || kind === "image";
-
 /** A clip's grade, or none when Cutroom cannot read it; `sourceRestrictions.grade` says why. */
 const readableGrade = (attribute: string | undefined) => {
   const read = readGrade(attribute);
@@ -2257,7 +2255,7 @@ function sourceRestrictions(
   const transform = isAudioKind(clip.kind) ? undefined : transformRestriction;
   const fx = fxRestriction(element.attrs["data-fx-chain"]);
   const graded = readGrade(element.attrs[GRADE_ATTRIBUTE]);
-  const grade = gradedKind(clip.kind)
+  const grade = canHaveGrade(clip.kind, clip.adjustment)
     ? "restriction" in graded
       ? graded.restriction
       : element.attrs["data-color-group"]
@@ -2439,7 +2437,7 @@ function compositionSize(root: SourceElement) {
   };
 }
 
-/** A new adjustment layer: an empty clip the region stylesheet lays over the frame. */
+/** A new adjustment layer occupies the frame without drawing a picture of its own. */
 function adjustmentMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
   const hidden = mixHides(mix, clip);
   return `<div${attributeMarkup([
@@ -2456,7 +2454,12 @@ function adjustmentMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
     ...(clip.label !== null
       ? [["data-timeline-label", clip.label] as const]
       : []),
-    [REGION_ATTRIBUTE, regionAttribute(clip.region!, fps)],
+    ...(clip.region
+      ? [[REGION_ATTRIBUTE, regionAttribute(clip.region, fps)] as const]
+      : []),
+    ...(clip.grade
+      ? [[GRADE_ATTRIBUTE, writeGrade(clip.grade)!] as const]
+      : []),
   ])}></div>`;
 }
 

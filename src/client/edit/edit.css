@@ -184,6 +184,16 @@
   visibility: hidden;
 }
 /* Over footage, so it keeps a dark backing to stay legible on any picture. */
+.edit-adjustment-notice {
+  position: absolute;
+  inset: auto var(--space-3) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  font: var(--type-xs) / var(--leading-body) var(--font-sans);
+  pointer-events: none;
+  text-align: center;
+}
 .edit-preparing {
   position: absolute;
   left: 50%;

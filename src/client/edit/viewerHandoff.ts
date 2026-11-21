@@ -4,6 +4,7 @@ export interface Picture {
   width: number;
   height: number;
   shown: number;
+  adjustment?: boolean;
 }
 
 interface Candidate {
