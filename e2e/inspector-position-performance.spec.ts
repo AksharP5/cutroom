@@ -20,6 +20,7 @@ const sum = (values: number[]) =>
   values.reduce((total, value) => total + value, 0);
 
 const scrubSteps = 90;
+const playbackMs = 2500;
 // Alternate which condition goes first, so a runner slowing down over a pair counts against
 // both. One playback run on CI ranges from 2 to 34 late frames with no change, so playback
 // pools six pairs. Runners differ several-fold in how many scrub frames arrive late (2% to
@@ -176,11 +177,13 @@ test(
         requestAnimationFrame(sample);
       });
       const editorCpuStart = await editorCpuMs();
+      let playbackStart: number | null = null;
       if (mode === "playback") {
         await page
           .getByRole("button", { name: "Play forward", exact: true })
           .click();
-        await page.waitForTimeout(2500);
+        playbackStart = await preview.evaluate(() => performance.now());
+        await page.waitForTimeout(playbackMs);
         await page.getByRole("button", { name: "Stop", exact: true }).click();
       } else {
         const ppf = await page
@@ -203,16 +206,28 @@ test(
       }
       await waitFrames(page, 2);
       const editorCpuEnd = await editorCpuMs();
-      const samples = await preview.evaluate(() => {
-        const stats = (window as unknown as MeasuredWindow).positionPerf;
-        stats.running = false;
-        stats.observer.disconnect();
-        return {
-          observations: stats.observations,
-          boxes: stats.boxes,
-          frames: stats.frames.slice(1),
-        };
-      });
+      const samples = await preview.evaluate(
+        (_, { playbackStart, playbackMs }) => {
+          const stats = (window as unknown as MeasuredWindow).positionPerf;
+          stats.running = false;
+          stats.observer.disconnect();
+          // Playwright's Stop click can extend the sample by another timer tick.
+          const observations =
+            playbackStart === null
+              ? stats.observations
+              : stats.observations.filter(
+                  ({ start }) =>
+                    start >= playbackStart &&
+                    start < playbackStart + playbackMs,
+                );
+          return {
+            observations,
+            boxes: stats.boxes,
+            frames: stats.frames.slice(1),
+          };
+        },
+        { playbackStart, playbackMs },
+      );
       results.push({
         run,
         mode,
