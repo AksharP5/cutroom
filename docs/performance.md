@@ -1046,7 +1046,7 @@ On one of the owner's OBS recordings (HEVC Main, 1080p60, 17.4 minutes, in Matro
 
 ### HEVC playback proxy size
 
-An SDR HEVC recording can use GPU footage playback when its finished editing proxy fits the pipeline's 2,073,600-pixel budget. The pipeline reads the actual dimensions from the MP4 track before configuring WebCodecs. Pending proxies can still play from pieces in HyperFrames, and raw 4K H.264 continues to play there.
+An opaque SDR source that uses an editing proxy, such as HEVC, ProRes or DNxHR, can use GPU footage playback when its finished proxy fits the pipeline's 2,073,600-pixel budget. The pipeline reads the actual dimensions from the MP4 track before configuring WebCodecs. Pending proxies can still play from pieces in HyperFrames, and raw 4K H.264 continues to play there.
 
 On November 20, 2026, Electron 45.2.3 played 30 seconds of a 3840 × 2160, 60 fps composition on a 60 Hz Wayland display. The synthetic source was 4K60 HEVC. The edit had 30 graded cuts and chapter titles. The pipeline server plan classified 0 video clips as drawable before the size change and 30 after. DevTools recorded a 1920 × 1080 H.264 decoder configuration in the running editor after the change. The display capture read the source's burned-in frame numbers.
 
@@ -1057,6 +1057,16 @@ On November 20, 2026, Electron 45.2.3 played 30 seconds of a 3840 × 2160, 60 fp
 | GPU, fresh profile, ancillary media on demand |                          58.9 |              23 |      167 ms |                                   14 |
 
 The one-minute machine load at the end of playback was 9.3 native, 8.8 for the warmed GPU run and 12.4 for the on-demand run. The editing proxy was finished for every pass. Warmed media also included the filmstrip and scrub proxy. The capture can miss a refresh, which lowers the observed picture rate and can add a gap. Compositor feedback showed 59.7 and 58.2 picture updates/s for the warmed and on-demand GPU passes. The earlier 14.1-second hold did not recur. The separate decoder scheduling test reproduced a shorter hold while the clock advanced and reduced it from 967 ms to 33 ms. [Decoder scheduling measurements](https://github.com/AksharP5/cutroom/pull/361)
+
+On November 21, three fresh Electron profiles replayed the [prepared 4K HEVC scenario](#4k-sources-and-editing-proxies) on the same 60 Hz Wayland display. The 30-cut edit had six titles and a muted music bed. Each 30-second playback window used the finished 1080p editing proxy, with the filmstrip and scrub proxy ready before opening. The calibration recovered 269 of 270 expected pictures and all six deliberate holds. All three playback windows passed the capture checks.
+
+| Run | Screen pictures/s | Gaps over 25 ms | Longest gap | Trailing hold | Pictures at risk from capture gaps | Machine load |
+| --- | ----------------: | --------------: | ----------: | ------------: | ---------------------------------: | -----------: |
+| 1   |             56.86 |              92 |    50.07 ms |       8.73 ms |                                  0 |         3.94 |
+| 2   |             53.80 |             183 |    50.42 ms |       0.12 ms |                                  0 |         4.67 |
+| 3   |             57.63 |              70 |    50.03 ms |       0.18 ms |                                  0 |         3.18 |
+
+The original 14.1-second hold occurred at a machine load of 18.4. These repeats ran at 3.18 to 4.67, and the cause of that earlier freeze remains unverified.
 
 ### Long recordings, piece by piece
 
