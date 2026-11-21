@@ -41,7 +41,13 @@ function approvalDetail(name: string, args: Record<string, unknown>) {
     case "media_import": {
       const paths = z.array(z.string()).parse(args.paths);
       const folders = [...new Set(paths.map((path) => dirname(path)))];
-      return oneLine(`From ${folders.join(", ")}`);
+      const locations = folders
+        .join(", ")
+        .replace(
+          /[\p{Cc}\p{Cf}\u2028\u2029]/gu,
+          (character) => `\\u{${character.codePointAt(0)!.toString(16)}}`,
+        );
+      return `From ${locations}`;
     }
     case "timeline_edit":
       return Array.isArray(args.commands) && args.commands.length > 1

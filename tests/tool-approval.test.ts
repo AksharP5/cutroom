@@ -288,4 +288,10 @@ test("media import approvals show the requested source folders", async () => {
     title: "Import 3 media files?",
     detail: "From /recordings, /external",
   });
+  const longFolder = `/recordings/${"x".repeat(240)}`;
+  expect(
+    await approve([`${longFolder}/clip.mp4`, "/external/\u202e/take.wav"]),
+  ).toMatchObject({
+    detail: `From ${longFolder}, /external/\\u{202e}`,
+  });
 });
