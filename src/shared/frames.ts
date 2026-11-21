@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod/mini";
 
 /** Seconds of floating-point slack when comparing a seek to a presentation timestamp. */
 export const presentationTimeTolerance = 1e-6;
@@ -9,9 +9,9 @@ export const presentationTimeTolerance = 1e-6;
  * frame can start up to half a millisecond after its slot). Null where export reads the file's
  * own times: variable frame rate, or no video stream.
  */
-export const FrameGridSchema = z
-  .object({ start: z.number().finite(), rate: z.number().finite().positive() })
-  .nullable();
+export const FrameGridSchema = z.nullable(
+  z.object({ start: z.number(), rate: z.number().check(z.positive()) }),
+);
 export type FrameGrid = z.infer<typeof FrameGridSchema>;
 
 /**

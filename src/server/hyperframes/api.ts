@@ -128,12 +128,26 @@ import { parseFps } from "@hyperframes/core";
 import {
   PROXY_PIECE_PARAM,
   framesOf,
+  pictureClockOf,
   proxyExposedHeaders,
   proxyPreview,
   proxySamplesPreview,
   scrubPreview,
 } from "../media/routes";
 import type { MediaService } from "../media/service";
+
+let pictureRuntime: Promise<string> | undefined;
+function previewPictureScript() {
+  pictureRuntime ??= Bun.build({
+    entrypoints: [
+      fileURLToPath(new URL("./previewPictureRuntime.ts", import.meta.url)),
+    ],
+    target: "browser",
+    format: "iife",
+    minify: true,
+  }).then(({ outputs }) => outputs[0]!.text());
+  return pictureRuntime;
+}
 
 export interface FileChange {
   projectId: string;
@@ -1153,6 +1167,27 @@ export function createHyperframesApi(
       headers.set("X-Content-Type-Options", "nosniff");
       headers.set("Referrer-Policy", "no-referrer");
     };
+    if (path === "picture-clock") {
+      const response = Response.json(
+        await pictureClockOf(
+          await store.get(projectId),
+          url.searchParams.get("path") ?? undefined,
+        ),
+        { headers: { "cache-control": "no-store" } },
+      );
+      isolate(response.headers);
+      return response;
+    }
+    if (path === "picture-runtime.js") {
+      const response = new Response(await previewPictureScript(), {
+        headers: {
+          "content-type": "application/javascript",
+          "cache-control": "private, max-age=3600",
+        },
+      });
+      isolate(response.headers);
+      return response;
+    }
     if (path === "frames") {
       const response = await framesOf(
         await store.get(projectId),
@@ -1344,6 +1379,11 @@ export function createHyperframesApi(
     if (response.ok && assetContentType)
       headers.set("Content-Type", assetContentType);
     isolate(headers);
+    if (assetContentType?.startsWith("video/") && headers.has("content-range"))
+      headers.set(
+        "Access-Control-Expose-Headers",
+        `${proxyExposedHeaders}, content-range`,
+      );
     if (!headers.get("content-type")?.includes("text/html"))
       return new Response(response.body, { status: response.status, headers });
     const compiled = await response.text();
@@ -1418,6 +1458,12 @@ export function createHyperframesApi(
         `${prefix}ramp-audio/${key}.wav`,
         window.duration,
       ]),
+      documentId &&
+        !audition &&
+        response.ok &&
+        (path === "preview" || path.startsWith("preview/comp/"))
+        ? `${prefix}picture-runtime.js`
+        : undefined,
     );
     if (timingOnly) {
       c.header("Cache-Control", "no-store");

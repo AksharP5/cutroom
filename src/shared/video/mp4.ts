@@ -393,20 +393,24 @@ export async function readVideoTrack(
 }
 
 /** Byte ranges of one URL, the way the media routes serve them. */
-export async function openRanges(url: string, signal: AbortSignal) {
+export async function openRanges(
+  url: string,
+  signal: AbortSignal,
+  requireRanges = false,
+) {
   const read: ReadRange = async (start, end) => {
     const response = await fetch(url, {
       headers: { range: `bytes=${start}-${end - 1}` },
       signal,
     });
-    if (response.status !== 206 && response.status !== 200)
+    if (response.status !== 206 && (requireRanges || response.status !== 200))
       throw new Error(`The media route answered ${response.status}.`);
     const bytes = new Uint8Array(await response.arrayBuffer());
     return response.status === 200 ? bytes.subarray(start, end) : bytes;
   };
   const probe = await fetch(url, { headers: { range: "bytes=0-0" }, signal });
   await probe.body?.cancel();
-  if (probe.status !== 206 && probe.status !== 200)
+  if (probe.status !== 206 && (requireRanges || probe.status !== 200))
     throw new Error(`The media route answered ${probe.status}.`);
   const total = Number(
     /\/(\d+)$/.exec(probe.headers.get("content-range") ?? "")?.[1] ??

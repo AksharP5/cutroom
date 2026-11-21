@@ -105,7 +105,13 @@ export function previewRuntimeScript() {
       throw new Error(
         "Cutroom's colour preview adapter no longer matches HyperFrames 0.9.26.",
       );
+  const pausedProvider = "t=ES({frames:{available:n.available,";
+  if (source.split(pausedProvider).length !== 2)
+    throw new Error("Cutroom's resting picture adapter no longer matches HyperFrames 0.9.26.");
   script = source
+    // The bridge verifies its own resting decode. Two independent frame providers can race
+    // at a cut, and the runtime can spend five seconds waiting for a failed native seek.
+    .replace(pausedProvider, "t=ES({frames:{available:()=>!window.__cutroomRestingPictureSeek&&n.available(),")
     // A standalone preview fetches its children. Use the same template and default order as the compiler.
     .replace(fetchedTemplate, 'A.querySelector("template")')
     .replace(

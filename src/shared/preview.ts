@@ -1,5 +1,6 @@
 import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { z } from "zod";
+import { PreviewPicturesSchema } from "./timeline/pictureClock";
 
 export type EditFrame = { clipId: string; time: number };
 
@@ -85,6 +86,7 @@ export const CompositionDiagnosticsSchema = z.object({
 });
 
 export const PreviewTimingSchema = z.object({
+  pictures: z.optional(z.nullable(PreviewPicturesSchema)),
   structure: z.string(),
   revision: z.string(),
   clips: z.array(

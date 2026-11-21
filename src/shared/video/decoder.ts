@@ -1,6 +1,26 @@
-import { presentationTimeTolerance } from "../../shared/frames";
+import { presentationTimeTolerance } from "../frames";
 import { LIMITS } from "./mp4";
+import { chromeColourGuess } from "../videoColour";
 import type { ReadRange, VideoTrack } from "./mp4";
+
+/** The colours Chrome draws a video with: its tags, and its guess for those it lacks. */
+export function videoTrackColour(
+  track: VideoTrack,
+  probe?: VideoColorSpaceInit,
+): VideoColorSpaceInit {
+  const guess = chromeColourGuess(
+    track.height,
+    track.codec.startsWith("avc") ? "h264" : "hevc",
+  );
+  const matrix = probe?.matrix ?? track.colour?.matrix ?? guess;
+  const fallback = matrix === "bt709" ? matrix : guess;
+  return {
+    primaries: probe?.primaries ?? track.colour?.primaries ?? fallback,
+    transfer: probe?.transfer ?? track.colour?.transfer ?? fallback,
+    matrix,
+    fullRange: probe?.fullRange ?? track.colour?.fullRange ?? false,
+  };
+}
 
 const BLOCK = 1 << 20;
 /** Media bytes kept per source: a few seconds of camera footage either side of the playhead. */
@@ -124,11 +144,12 @@ export class SourceDecoder {
     indexOf: ReadonlyMap<number, number>,
     colour: VideoColorSpaceInit,
     scrubProxy: boolean,
+    keep: number,
   ) {
     this.#track = track;
     // Every scrub proxy picture is a keyframe. Re-decoding one is cheap, and
     // random access gains nothing from keeping a frame-threaded decoder full.
-    this.#keep = scrubProxy ? 4 : KEPT;
+    this.#keep = keep;
     this.#sample = sample;
     this.#indexOf = indexOf;
     this.#config = {
@@ -153,12 +174,14 @@ export class SourceDecoder {
     size: number,
     colour: VideoColorSpaceInit,
     scrubProxy: boolean,
+    keep = scrubProxy ? 4 : KEPT,
   ) {
     const sample = blockReader(read, size);
     const indexOf = new Map<number, number>();
     for (const [index, sampleIndex] of track.shown.entries())
       indexOf.set(Math.round(track.samples[sampleIndex]!.time * 1e6), index);
-    return () => new SourceDecoder(track, sample, indexOf, colour, scrubProxy);
+    return () =>
+      new SourceDecoder(track, sample, indexOf, colour, scrubProxy, keep);
   }
 
   static supported(track: VideoTrack) {
@@ -228,6 +251,13 @@ export class SourceDecoder {
 
   get frameCount() {
     return this.#track.shown.length;
+  }
+
+  timestampAt(index: number) {
+    const sample = this.#track.shown[index];
+    return sample === undefined
+      ? undefined
+      : Math.round(this.#track.samples[sample]!.time * 1e6);
   }
 
   /** The presentation index shown at a media time, as a paused `<video>` shows it. */

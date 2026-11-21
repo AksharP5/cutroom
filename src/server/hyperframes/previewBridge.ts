@@ -17,11 +17,16 @@ import { TimelineError } from "../../shared/timeline/apply";
 import { canonicalText } from "../../shared/timeline/schema";
 import { previewTiming } from "./previewTiming";
 import type { PreviewTiming } from "../../shared/preview";
+import type { PreviewPictures } from "../../shared/timeline/pictureClock";
+import type { previewPictureRuntime } from "./previewPictureRuntime";
+import { previewPictures } from "./previewPictures";
 import type { EditFrame } from "../../shared/preview";
 import { frameSeek } from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
 
 interface PreviewWindow extends DiagnosticWindow {
+  __cutroomPictureRuntime?: typeof previewPictureRuntime;
+  __cutroomRestingPictureSeek?: boolean;
   /** HyperFrames' codec facts for the project's media, by root-relative path. */
   __HF_MEDIA_CODEC_MAP__?: Record<string, { browserHostile?: boolean }>;
   CSSNumericValue: {
@@ -169,7 +174,12 @@ function installPreviewBridge(
     | null,
   rampPending: boolean,
   rampWindows: [src: string, seconds: number][],
+  initialPictures: PreviewPictures | null,
 ) {
+  let pictures = initialPictures;
+  let picturePieces = new Map(
+    pictures?.pieces.map((piece) => [piece.id, piece]),
+  );
   const rampFiles = new Map(rampWindows);
   const animatedTitles = new Set<string>();
   const titleAnimations = new Map<string, Set<Animation>>();
@@ -290,7 +300,9 @@ function installPreviewBridge(
       };
       check();
     });
-  const seekRuntime = (time: number) => {
+  const seekRuntime = (time: number, resting = true) => {
+    win.__cutroomRestingPictureSeek = resting && !win.__player?.isPlaying() &&
+      !!picturePieces.size && !!win.__cutroomPictureRuntime;
     const generation = recordRuntime();
     try {
       win.__player?.seek(time);
@@ -2025,18 +2037,29 @@ function installPreviewBridge(
   const captureFrames = (
     videos: HTMLVideoElement[],
     samples: Map<HTMLVideoElement, ProxySample>,
+    targets?: Map<HTMLVideoElement, RestingPicture>,
+    recovered?: Map<HTMLVideoElement, VideoFrame>,
   ) => {
     const frames = new Map<HTMLVideoElement, VideoFrame>();
     try {
       for (const video of videos) {
+        const recovery = recovered?.get(video);
+        if (recovery) {
+          frames.set(video, recovery.clone());
+          continue;
+        }
         const frame = new VideoFrame(video);
         frames.set(video, frame);
         // Chromium can settle its seek clock while both APIs still carry the old picture.
         const sample = samples.get(video);
         const decoded = decodedSeeks.get(video);
         const presented = decoded?.timestamp;
-        const confirmed = sample ? decoded?.confirmed : undefined;
+        const target = targets?.get(video);
+        const confirmed = sample || target ? decoded?.confirmed : undefined;
         if (
+          (target &&
+            Math.abs(frame.timestamp / 1e6 - (sample?.start ?? target.start)) >
+              (sample ? 2e-6 : target.tolerance)) ||
           (sample && Math.abs(frame.timestamp - sample.start * 1e6) > 2) ||
           (decoded &&
             !(
@@ -2054,7 +2077,8 @@ function installPreviewBridge(
       }
       for (const video of videos) {
         const decoded = decodedSeeks.get(video);
-        if (decoded) decoded.confirmed = frames.get(video)!.timestamp;
+        if (decoded && !recovered?.has(video))
+          decoded.confirmed = frames.get(video)!.timestamp;
         if (decoded?.callback !== undefined) {
           cancelVideoFrame.call(video, decoded.callback);
           delete decoded.callback;
@@ -2103,11 +2127,13 @@ function installPreviewBridge(
       if (canvas.style.transition !== "none") canvas.style.transition = "none";
       // Keep the source aspect ratio so the browser applies object-fit and
       // object-position exactly as it does to the replaced video element.
-      let a = video.videoWidth;
-      let b = video.videoHeight;
+      const sourceWidth = video.videoWidth || frame.displayWidth;
+      const sourceHeight = video.videoHeight || frame.displayHeight;
+      let a = sourceWidth;
+      let b = sourceHeight;
       while (b) [a, b] = [b, a % b];
-      const unitWidth = video.videoWidth / a;
-      const unitHeight = video.videoHeight / a;
+      const unitWidth = sourceWidth / a;
+      const unitHeight = sourceHeight / a;
       const scale = Math.min(
         a,
         Math.max(
@@ -2128,12 +2154,12 @@ function installPreviewBridge(
       const width = own
         ? frame.displayWidth
         : style.objectFit === "none"
-          ? video.videoWidth
+          ? sourceWidth
           : unitWidth * scale;
       const height = own
         ? frame.displayHeight
         : style.objectFit === "none"
-          ? video.videoHeight
+          ? sourceHeight
           : unitHeight * scale;
       if (canvas.width !== width) canvas.width = width;
       if (canvas.height !== height) canvas.height = height;
@@ -2245,6 +2271,8 @@ function installPreviewBridge(
       ? Math.min(media, video.duration)
       : media;
   };
+  let recoveryRequest: AbortController | undefined;
+  const failedRestingVideos = new Set<HTMLVideoElement>();
   const holdPaused = async (version: number, shouldHold = () => true) => {
     const current = () =>
       version === pictureVersion && !win.__player?.isPlaying() && shouldHold();
@@ -2254,6 +2282,28 @@ function installPreviewBridge(
       throw new Error("The preview cannot confirm that it drew the frame.");
     let timer = 0;
     const corrected = new Set<HTMLVideoElement>();
+    const positioned = new Set<HTMLVideoElement>();
+    const retried = new Map<HTMLVideoElement, number>();
+    const recovered = new Map<HTMLVideoElement, VideoFrame>();
+    recoveryRequest?.abort();
+    const recovery = new AbortController();
+    recoveryRequest = recovery;
+    const recover = async (video: HTMLVideoElement, target: RestingPicture) => {
+      const frame = await win.__cutroomPictureRuntime
+        ?.recoverPicture(
+          video,
+          target,
+          AbortSignal.any([recovery.signal, AbortSignal.timeout(2500)]),
+        )
+        .catch(() => null);
+      if (!current()) {
+        frame?.close();
+        return null;
+      }
+      if (frame) recovered.set(video, frame);
+      return frame;
+    };
+
     try {
       await Promise.race([
         (async () => {
@@ -2261,29 +2311,75 @@ function installPreviewBridge(
           for (;;) {
             if (!current()) return;
             const videos = visibleVideos();
-            const failed = videos.find((video) => video.error);
-            if (failed)
+            // Frames are placed by each source's grid, which a new source reads first.
+            await Promise.all(videos.map(loadGrid));
+            if (!current()) return;
+            const targets = new Map<HTMLVideoElement, RestingPicture>();
+            const samples = new Map<HTMLVideoElement, ProxySample>();
+            await Promise.all(
+              videos.map(async (video) => {
+                const target = await restingPicture(video);
+                if (target) targets.set(video, target);
+                const sample = await proxySampleAt(
+                  video,
+                  target
+                    ? target.start + target.length / 4
+                    : framePosition(video, mediaTime.get.call(video)),
+                );
+                if (sample) samples.set(video, sample);
+              }),
+            );
+            if (!current()) return;
+            for (const video of videos) {
+              if (!video.error || recovered.has(video)) continue;
+              const target = targets.get(video);
+              if (target && video.error.code === MediaError.MEDIA_ERR_DECODE) {
+                const frame = await recover(video, target);
+                if (!current()) return;
+                if (frame) {
+                  failedRestingVideos.add(video);
+                  continue;
+                }
+              }
               throw new Error(
-                `The preview could not load ${failed.getAttribute("src")}.`,
+                `The preview could not load ${video.getAttribute("src")}. ${video.error.message}`,
               );
-            if (videos.some((video) => video.readyState < 2 || video.seeking)) {
+            }
+            if (
+              videos.some(
+                (video) =>
+                  !recovered.has(video) &&
+                  (video.readyState < 2 || video.seeking),
+              )
+            ) {
               await new Promise<void>((resolve) =>
                 requestAnimationFrame(() => resolve()),
               );
               continue;
             }
-            // Frames are placed by each source's grid, which a new source reads first.
-            await Promise.all(videos.map(loadGrid));
-            if (!current()) return;
-            // A grid that just came moved its videos; their frames are on the way.
-            if (videos.some((video) => video.seeking)) continue;
+            let moved = false;
+            for (const [video, target] of targets) {
+              if (positioned.has(video) || recovered.has(video)) continue;
+              positioned.add(video);
+              const sample = samples.get(video);
+              const at = target.start + target.length / 4;
+              const seek = clampMediaTime(
+                video,
+                Math.max(0, sample ? samplePosition(sample, at) : at),
+              );
+              if (Math.abs(nativeTime.get!.call(video) - seek) <= 1e-6)
+                continue;
+              seekMedia(video, mediaTime.get.call(video), seek);
+              moved = true;
+            }
+            if (moved) continue;
             // A video the runtime has not moved to this time would be held at its old frame,
             // for instance one that came back into view while its seek stalled, or one a step
             // of a frame moved less than the runtime's 20 ms tolerance at 50 fps and above.
             // Move it. Each video is moved at most once for this picture; if it is still off
             // once that seek has settled, the runtime's own placement stands.
             const stale = videos.flatMap((video) => {
-              const time = expectedMediaTime(video);
+              const time = targets.has(video) ? null : expectedMediaTime(video);
               return time !== null &&
                 !corrected.has(video) &&
                 Math.abs(
@@ -2311,32 +2407,61 @@ function installPreviewBridge(
               );
               continue;
             }
+            // A cut can finish placing its incoming video during a source or proxy read.
+            const visible = visibleVideos();
+            if (videos.length !== visible.length || videos.some((video, at) => video !== visible[at]))
+              continue;
             // A native element can paint nothing despite reporting HAVE_CURRENT_DATA.
             // Acquire every decoded frame before replacing any displayed picture.
-            const samples = new Map<HTMLVideoElement, ProxySample>();
-            await Promise.all(
-              videos.map(async (video) => {
-                const sample = await proxySampleAt(
-                  video,
-                  framePosition(video, mediaTime.get.call(video)),
-                );
-                if (sample) samples.set(video, sample);
-              }),
-            );
-            if (!current()) return;
-            if (videos.some((video) => video.seeking)) continue;
-            const frames = captureFrames(videos, samples);
+            const frames = captureFrames(videos, samples, targets, recovered);
             if (!frames) {
               // An editing proxy playing from its pieces has no frame to give after it loads
               // until it is sought, even to where it is. Seek each such video once.
               for (const video of videos) {
-                if (corrected.has(video)) continue;
+                if (recovered.has(video)) continue;
+                const target = targets.get(video);
+                const sample = samples.get(video);
+                const missing = () =>
+                  new Error(
+                    `The preview could not verify picture ${target?.ordinal} of ${scrubPath(video)}.`,
+                  );
+                let timestamp: number;
                 try {
-                  new VideoFrame(video).close();
+                  const frame = new VideoFrame(video);
+                  timestamp = frame.timestamp / 1e6;
+                  frame.close();
                 } catch {
-                  corrected.add(video);
-                  mediaTime.set.call(video, mediaTime.get.call(video));
+                  if (!corrected.has(video)) {
+                    corrected.add(video);
+                    mediaTime.set.call(video, mediaTime.get.call(video));
+                  }
+                  continue;
                 }
+                if (
+                  !target ||
+                  Math.abs(timestamp - (sample?.start ?? target.start)) <=
+                    (sample ? 2e-6 : target.tolerance)
+                )
+                  continue;
+                const retry = retried.get(video);
+                if (retry === undefined) {
+                  // Retry near the leading edge if Chromium decoded the next GOP.
+                  retried.set(video, performance.now());
+                  const at = target.start + target.length / 8;
+                  seekMedia(
+                    video,
+                    mediaTime.get.call(video),
+                    clampMediaTime(
+                      video,
+                      Math.max(0, sample ? samplePosition(sample, at) : at),
+                    ),
+                  );
+                  continue;
+                }
+                if (performance.now() - retry < 70) continue;
+                const frame = await recover(video, target);
+                if (!current()) return;
+                if (!frame) throw missing();
               }
               await new Promise<void>((resolve) =>
                 requestAnimationFrame(() => resolve()),
@@ -2385,6 +2510,8 @@ function installPreviewBridge(
       throw error;
     } finally {
       clearTimeout(timer);
+      recovery.abort();
+      for (const frame of recovered.values()) frame.close();
     }
   };
   // Scrub proxies: a small all-intra copy of each source, whose frames a moving playhead
@@ -2408,6 +2535,33 @@ function installPreviewBridge(
     } catch {
       return null;
     }
+  };
+  type RestingPicture = NonNullable<
+    ReturnType<typeof previewPictureRuntime.pictureForTime>
+  >;
+  const pictureClockFor = win.__cutroomPictureRuntime?.pictureClockCache(
+    (path) => `${capability}picture-clock?path=${encodeURIComponent(path)}`,
+  );
+  const restingPicture = async (video: HTMLVideoElement) => {
+    const runtime = win.__cutroomPictureRuntime;
+    const time = win.__player?.getTime();
+    const source = picturePieces.get(
+      video.getAttribute("data-hf-render-id") ?? clipId(video) ?? "",
+    );
+    const path = scrubPath(video);
+    if (
+      !runtime ||
+      !pictures ||
+      !source ||
+      time === undefined ||
+      !path ||
+      URL.parse(source.src, document.baseURI)?.pathname !==
+        URL.parse(video.currentSrc || video.src)?.pathname
+    )
+      return null;
+    const plan = pictures;
+    const clock = await pictureClockFor?.(path);
+    return clock && runtime.pictureForTime(plan, source, clock, time);
   };
   let discovering = false;
   /** Asks for every source's proxy, which also starts making the missing ones. */
@@ -3770,6 +3924,11 @@ function installPreviewBridge(
             // Let the runtime invalidate its descriptor cache before seeking.
             await Promise.resolve();
             if (inserts.length) await layoutPass(manifest);
+            // An in-place edit replaces the picture placement along with its timing.
+            pictures = win.__cutroomPictureRuntime?.readPlan("pictures" in timing ? timing.pictures : null) ?? null;
+            picturePieces = new Map(
+              pictures?.pieces.map((piece) => [piece.id, piece]),
+            );
             seekRuntime(data.time);
             document
               .querySelector('meta[name="cutroom-mix-signature"]')
@@ -3875,6 +4034,16 @@ function installPreviewBridge(
         case "play":
           clearEditPicture();
           pictureVersion += 1;
+          recoveryRequest?.abort();
+          win.__cutroomRestingPictureSeek = false;
+          for (const video of failedRestingVideos) {
+            if (
+              video.isConnected &&
+              video.error?.code === MediaError.MEDIA_ERR_DECODE
+            )
+              video.load();
+          }
+          failedRestingVideos.clear();
           for (const video of holds.keys()) releasePlaying(video);
           // Playback changes which clips show, as seeks do.
           recordRuntime();
@@ -3938,7 +4107,7 @@ function installPreviewBridge(
               deferSeeks(video);
             deferring = true;
             try {
-              seekRuntime(data.time);
+              seekRuntime(data.time, false);
             } finally {
               deferring = false;
             }
@@ -4156,6 +4325,7 @@ export function previewDocument(
   mixSignature?: string,
   rampPending = false,
   rampWindows: [src: string, seconds: number][] = [],
+  pictureScript?: string,
 ) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
@@ -4262,8 +4432,10 @@ export function previewDocument(
         source.slice(0, edit.offset) + edit.text + source.slice(edit.end),
       html,
     );
+  const pictures = pictureScript ? previewPictures(html) : null;
   const timing =
     dependencies === null ? null : previewTiming(normalized, dependencies);
+  if (timing && pictures) timing.pictures = pictures;
   // Escape '<' so authored words cannot terminate the bridge's script element.
   const args = JSON.stringify([
     sourceTexts,
@@ -4286,8 +4458,9 @@ export function previewDocument(
     },
     rampPending,
     rampWindows,
+    pictures,
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}${pictureScript && (pictures?.pieces.length || timing) ? `<script src="${pictureScript}"></script>` : ""}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LIMITS, readVideoTrack } from "../src/client/pipeline/mp4";
+import { LIMITS, readVideoTrack } from "../src/shared/video/mp4";
 
 async function run(args: string[]) {
   const child = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });

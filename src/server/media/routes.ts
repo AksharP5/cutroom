@@ -2,7 +2,7 @@ import { realpath, stat } from "node:fs/promises";
 import { extname, relative } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
-import { projectPath } from "../projects/path";
+import { projectPath, resolveProjectPath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import type { Project } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
@@ -11,6 +11,14 @@ import type { MediaService } from "./service";
 import { peakRange } from "./range";
 import { piecePlaylist } from "./pieces";
 import { frameGrid } from "./frames";
+
+import { extractMediaMetadata } from "@hyperframes/engine";
+import { fileFingerprint, mediaKind } from "../../shared/media";
+import { protectedPath } from "../../shared/sourcePaths";
+import { MAX_VFR_PICTURES, packTime } from "../../shared/timeline/pictureClock";
+import type { PackedPictureClock } from "../../shared/timeline/pictureClock";
+import { secondsOf } from "../../shared/timeline/piece";
+import { sourcePictures } from "./pictureIndex";
 
 const PathSchema = z.string().min(1).max(4096);
 const KeySchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -127,6 +135,15 @@ export function createMediaRoutes(
       await framesOf(await store.get(c.req.param("id")), c.req.query("path")),
     );
   });
+  api.get("/projects/:id/media/picture-clock", async (c) => {
+    c.header("cache-control", "no-store");
+    return c.json(
+      await pictureClockOf(
+        await store.get(c.req.param("id")),
+        c.req.query("path"),
+      ),
+    );
+  });
   // The footage pipeline's reads: a project video's own bytes, in ranges. Only video containers
   // outside hidden folders, checked on the path asked for and on the file a link resolves to.
   api.get("/projects/:id/media/source", async (c) => {
@@ -168,6 +185,65 @@ export function createMediaRoutes(
     );
   });
   return Object.assign(api, { media, dispose: () => media.dispose() });
+}
+
+const pictureClockReads = new Map<string, Promise<PackedPictureClock | null>>();
+const pictureClockSlots = [Promise.resolve(), Promise.resolve()];
+let pictureClockTurn = 0;
+
+async function readPictureClock(
+  path: string,
+): Promise<PackedPictureClock | null> {
+  const source = await sourcePictures(path, await extractMediaMetadata(path));
+  if (!source) return null;
+  const { index } = source;
+  if ("times" in index && index.times.length > MAX_VFR_PICTURES) return null;
+  return {
+    index:
+      "times" in index
+        ? { times: index.times.map(packTime) }
+        : {
+            ...index,
+            origin: packTime(index.origin),
+            count: Number(index.count),
+          },
+    end: source.end ? packTime(source.end.time) : null,
+    tick: secondsOf(source.tick),
+  };
+}
+
+/** The export index, with only the facts needed to select and verify a picture. */
+export async function pictureClockOf(
+  project: Project,
+  path: string | undefined,
+): Promise<PackedPictureClock | null> {
+  try {
+    const file = await resolveProjectPath(project, PathSchema.parse(path));
+    if (
+      protectedPath(file.path, false) ||
+      mediaKind(file.path)?.kind !== "video"
+    )
+      return null;
+    const info = await stat(file.absolute);
+    if (!info.isFile()) return null;
+    const key = fileFingerprint(file.absolute, info);
+    const pending = pictureClockReads.get(key);
+    if (pending) return pending;
+    // The first resting frame can need a whole-file demux. Share requests for a
+    // source and leave room for the workers decoding pictures and sound.
+    if (pictureClockReads.size >= 16) return null;
+    const slot = pictureClockTurn++ % pictureClockSlots.length;
+    const read = pictureClockSlots[slot]!.then(() =>
+      readPictureClock(file.absolute),
+    )
+      .catch(() => null)
+      .finally(() => pictureClockReads.delete(key));
+    pictureClockReads.set(key, read);
+    pictureClockSlots[slot] = read.then(() => {});
+    return read;
+  } catch {
+    return null;
+  }
 }
 
 /** A project video's frame grid; files that are not media answer 422. */

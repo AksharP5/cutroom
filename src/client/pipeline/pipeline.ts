@@ -1,6 +1,11 @@
 import { PipelineResponseSchema } from "../../shared/pipeline";
 import type { FootageColour, PipelinePlan } from "../../shared/pipeline";
 import type { TimelineView } from "../../shared/timeline/schema";
+import { attrMicros, frames } from "../../shared/timeline/piece";
+import {
+  pictureClockCache,
+  pictureFor,
+} from "../../shared/timeline/pictureClock";
 import { localMediaPath } from "../../shared/media";
 import { useGradeBypass, usePreviewGrade } from "../edit/preview";
 import { acquireGrades } from "./grades";
@@ -9,13 +14,13 @@ import { useTimeline } from "../edit/timeline";
 import { useTransport } from "../edit/transport";
 import { createCompositor } from "./compositor";
 import type { Layer } from "./compositor";
-import { SourceDecoder } from "./decoder";
-import { openRanges, readVideoTrack } from "./mp4";
+import { pictureSample } from "../../shared/video/pictureSample";
+import { SourceDecoder, videoTrackColour } from "../../shared/video/decoder";
+import { openRanges, readVideoTrack } from "../../shared/video/mp4";
 import { appearances, visibleAt } from "./layers";
 import type { Appearance, Shown } from "./layers";
 import { sourceCache } from "./sources";
 import { usePipeline } from "./setting";
-import { chromeColourGuess } from "../../shared/videoColour";
 import { FrameGridSchema, frameSeek } from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
 import { useWorkspace } from "../workspace";
@@ -36,6 +41,7 @@ interface Source {
   intrinsic: { width: number; height: number };
   /** Where export puts the file's frames, or null to show them at their own times. */
   grid: FrameGrid;
+  pictureClock: () => ReturnType<ReturnType<typeof pictureClockCache>>;
 }
 
 /** The frame a source shows at a media time: the one export writes there. */
@@ -65,25 +71,6 @@ const PREPARED = 3;
 const mediaUrl = (projectId: string, path: string) =>
   `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/source?path=${encodeURIComponent(path)}`;
 
-/** The colours Chrome draws a `<video>` with: its tags, and its guess for those it lacks. */
-function colourOf(
-  track: Awaited<ReturnType<typeof readVideoTrack>>,
-  probe?: FootageColour,
-): VideoColorSpaceInit {
-  const guess = chromeColourGuess(
-    track.height,
-    track.codec.startsWith("avc") ? "h264" : "hevc",
-  );
-  const matrix = probe?.matrix ?? track.colour?.matrix ?? guess;
-  const fallback = matrix === "bt709" ? "bt709" : guess;
-  return {
-    primaries: probe?.primaries ?? track.colour?.primaries ?? fallback,
-    transfer: probe?.transfer ?? track.colour?.transfer ?? fallback,
-    matrix,
-    fullRange: probe?.fullRange ?? track.colour?.fullRange ?? false,
-  };
-}
-
 async function openSource(
   url: string,
   signal: AbortSignal,
@@ -102,7 +89,7 @@ async function openSource(
       track,
       read,
       size,
-      colourOf(track, colour),
+      videoTrackColour(track, colour),
       scrubProxy,
     ),
     intrinsic: {
@@ -166,6 +153,11 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       preparing.delete(path);
     }
   };
+  const clockFor = pictureClockCache(
+    (path) =>
+      `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/picture-clock?path=${encodeURIComponent(path)}`,
+    closing.signal,
+  );
   const sources = sourceCache(async (src): Promise<Source> => {
     const path = localMediaPath("index.html", src);
     if (path === null)
@@ -209,6 +201,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       proxy: null,
       intrinsic,
       grid: await grid,
+      pictureClock: () => clockFor(path),
       // A proxy still being made answers 202. Moving seeks use the source until it exists, and
       // a draw that wants it asks again, at most every two seconds.
       askProxy: () => {
@@ -278,6 +271,37 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     };
   };
 
+  const restingIndex = async (
+    found: Source,
+    layer: Shown,
+    frame: number,
+    fps: TimelineView["timeline"]["fps"],
+  ) => {
+    const clock = await found.pictureClock();
+    if (!clock) return null;
+    const { clip } = layer;
+    const start = frames(clip.start, fps);
+    const window = { start, end: frames(clip.start + clip.duration, fps) };
+    const ordinal = pictureFor(
+      clock,
+      {
+        id: clip.id,
+        src: clip.src!,
+        path: "",
+        ownFps: fps,
+        origin: start,
+        local: window,
+        edge: window,
+        curve: clip.playbackRate ?? 1,
+        stored: { mediaStart: Number(attrMicros(clip.mediaStart!)) },
+      },
+      fps,
+      frame,
+    );
+    if (ordinal === null) throw new Error("The footage has no picture here.");
+    return pictureSample(found.playing, clock, ordinal);
+  };
+
   const drawFrame = async (drawingPlan: Plan) => {
     const view = useTimeline.getState().view;
     const { frame, state } = useTransport.getState();
@@ -311,7 +335,11 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       shown.map(async (layer) => {
         const found = await source(layer.clip.src!);
         if (!found.proxy) void found.askProxy();
-        const index = indexAt(found, layer.time);
+        const exact =
+          moving || playing
+            ? null
+            : await restingIndex(found, layer, frame, view.timeline.fps);
+        const index = exact?.index ?? indexAt(found, layer.time);
         const lane = laneFor(found, index);
         // Moving seeks draw the proxy, whose frame N is the source's frame N.
         const decoder = (moving ? found.proxy : null) ?? lane;
@@ -328,10 +356,21 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
             !lane.has(index) &&
             !lane.reaches(index),
           decoder,
-          request: decoder.frame(index, playing),
+          exact,
         };
       }),
     );
+    const requests = pictures.map(({ decoder, index, exact }) => {
+      const request = decoder.frame(index, playing);
+      if (!exact) return request;
+      return request.then((frame) => {
+        if (exact.timestamp === frame.timestamp) return frame;
+        frame.close();
+        throw new Error(
+          "The footage decoder did not present the selected picture.",
+        );
+      });
+    });
     const paint = async (
       frames: VideoFrame[],
       from: SourceDecoder[],
@@ -384,7 +423,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         pictures.map(({ cold, found, index }, at) =>
           cold
             ? found.proxy!.frame(index)
-            : pictures[at]!.request.then((frame) => frame.clone()),
+            : requests[at]!.then((frame) => frame.clone()),
         ),
       ).catch(() => []);
       try {
@@ -400,7 +439,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         for (const picture of standIns) picture.close();
       }
     }
-    const frames = await settle(pictures.map(({ request }) => request));
+    const frames = await settle(requests);
     try {
       if (pictures.some(({ cold }) => cold) && wanted) return;
       await paint(
