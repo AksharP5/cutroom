@@ -558,16 +558,20 @@ export async function replayHistory(
                 `Can't ${direction} ${original.label}. History did not capture all of its file changes.`,
               );
             if (
-              !editable(original) ||
-              (!isOwner(who) &&
-                (!belongsTo(original, who) ||
-                  (direction === "redo" && !belongsTo(target, who))))
+              !isOwner(who) &&
+              (!belongsTo(original, who) ||
+                (direction === "redo" && !belongsTo(target, who)))
             )
               throw new HttpError(
                 409,
                 "This history action isn't available to this editor.",
               );
             await validatePaths(project, target);
+            if (!editable(original))
+              throw new HttpError(
+                409,
+                "This history action isn't available to this editor.",
+              );
             label = original.label;
             originalId = original.id;
             const plan = replayPlan(history, currentHash);
