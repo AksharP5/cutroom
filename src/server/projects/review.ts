@@ -238,10 +238,11 @@ export function createReviewService(store: ProjectStore) {
     const raw =
       JSON.stringify({ schemaVersion: 1, clipEdits: [], items: state.items }) +
       "\n";
-    await atomicWrite(
-      await projectStatePath(project, REVIEW_STATE_PATH, true),
-      raw,
-    );
+    if (known?.raw !== raw)
+      await atomicWrite(
+        await projectStatePath(project, REVIEW_STATE_PATH, true),
+        raw,
+      );
     remember(project, raw, ledgerRaw, state);
   };
 
