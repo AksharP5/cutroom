@@ -245,22 +245,17 @@ test("uses CSS pixels while playing and restores the paused grade at full resolu
   const canvas = page
     .frameLocator("iframe[data-live]")
     .locator("canvas[layoutsubtree]");
-  const captureWidth = () =>
-    canvas.evaluate(
-      (element) => (element as HTMLCanvasElement).width,
-      undefined,
-      { timeout: 800 },
-    );
-  const full = await captureWidth();
+  const full = Number(await canvas.getAttribute("width"));
+  expect(full).toBeGreaterThan(1);
+  // Rounding an odd device-pixel width can put the CSS width on either side.
+  const cssWidth = new RegExp(
+    `^(?:${Math.floor(full / 2)}|${Math.ceil(full / 2)})$`,
+  );
 
   await page.getByRole("button", { name: "Play forward" }).click();
-  await expect
-    .poll(async () => Math.abs((await captureWidth()) * 2 - full), {
-      timeout: 1500,
-    })
-    .toBeLessThanOrEqual(1);
+  await expect(canvas).toHaveAttribute("width", cssWidth);
   await page.getByRole("button", { name: "Stop", exact: true }).click();
-  await expect.poll(captureWidth).toBe(full);
+  await expect(canvas).toHaveAttribute("width", String(full));
 
   await seekFrame(page, 25);
   await expect.poll(() => viewerPixels(page)).toEqual(paused);
