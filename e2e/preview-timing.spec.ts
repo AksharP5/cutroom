@@ -149,13 +149,20 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
   const { project, edit, read } = await fixture(request, page);
   const original = await live(page);
   let previous = await token(page);
-  await edit([
-    { type: "setTiming", clipId: "v1", mediaStart: 1, playbackRate: 1.5 },
-    // The speed edit ripples v2 to frame 51. Leave a one-frame gap before it.
-    { type: "trim", clipId: "v1", edge: "end", to: 50, ripple: false },
-    { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
-  ]);
+  await edit(
+    [
+      { type: "setTiming", clipId: "v1", mediaStart: 1, playbackRate: 1.5 },
+      // The speed edit ripples v2 to frame 51. Leave a one-frame gap before it.
+      { type: "trim", clipId: "v1", edge: "end", to: 50, ripple: false },
+      { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
+    ],
+    "Retime v1",
+  );
   await waitForPreview(page, { after: previous });
+  // The edit was saved outside this page, so Undo waits until the page shows it.
+  await expect(
+    page.getByRole("button", { name: "Undo", exact: true }),
+  ).toHaveAttribute("aria-description", "Retime v1");
   const picture = page.locator("iframe[data-live]").contentFrame();
   await expect(picture.locator("#v1")).toHaveAttribute("data-media-start", "1");
   await waitForPreview(page);
