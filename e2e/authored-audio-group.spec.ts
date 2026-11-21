@@ -50,7 +50,7 @@ test("Inspector changes an authored group's live and exported gain, and Undo res
   await page.locator('[data-clip="one"]').click();
   const inspector = page.getByRole("complementary", { name: "Inspector" });
   const gain = inspector.getByRole("textbox", {
-    name: "Group gain",
+    name: "Bus gain",
     exact: true,
   });
   await expect(gain).toBeVisible();
@@ -129,7 +129,7 @@ test("selected clips can make a named group, return to track mixing, and export 
   await page.goto(`/#project/${project.id}`);
   const clips = (id: string) => page.locator(`[data-clip="${id}"]`);
   const inspector = page.getByRole("complementary", { name: "Inspector" });
-  const group = inspector.getByRole("combobox", { name: "Audio group" });
+  const group = inspector.getByRole("combobox", { name: "Bus" });
   const read = async () =>
     TimelineViewSchema.parse(
       await (
@@ -144,11 +144,9 @@ test("selected clips can make a named group, return to track mixing, and export 
   await expect(group).toHaveText("Track mixing");
   await inspector.screenshot({ path: info.outputPath("before-group.png") });
   await group.click();
-  await page.getByRole("option", { name: "New group…" }).click();
-  const form = inspector.getByRole("form", { name: "New audio group" });
-  await form
-    .getByRole("textbox", { name: "Audio group name" })
-    .fill("Dialogue");
+  await page.getByRole("option", { name: "New bus..." }).click();
+  const form = inspector.getByRole("form", { name: "New bus" });
+  await form.getByRole("textbox", { name: "Bus name" }).fill("Dialogue");
   await form.getByRole("button", { name: "Create", exact: true }).click();
   await expect(group).toHaveText("Dialogue");
   await expect
@@ -170,7 +168,7 @@ test("selected clips can make a named group, return to track mixing, and export 
   await inspector.screenshot({ path: info.outputPath("after-group.png") });
 
   const gain = inspector.getByRole("textbox", {
-    name: "Group gain",
+    name: "Bus gain",
     exact: true,
   });
   await gain.fill("-12 dB");
@@ -217,8 +215,8 @@ test("selected clips can make a named group, return to track mixing, and export 
     { times: 1 },
   );
   await group.click();
-  await page.getByRole("option", { name: "New group…" }).click();
-  await form.getByRole("textbox", { name: "Audio group name" }).fill("Pickup");
+  await page.getByRole("option", { name: "New bus..." }).click();
+  await form.getByRole("textbox", { name: "Bus name" }).fill("Pickup");
   await form.getByRole("button", { name: "Create", exact: true }).click();
   await intercepted.promise;
   try {
@@ -271,14 +269,12 @@ test("one group control routes linked partners without changing a later pickup i
   await expect(
     inspector.getByRole("textbox", { name: "Gain", exact: true }),
   ).toHaveCount(2);
-  const group = inspector.getByRole("combobox", { name: "Audio group" });
+  const group = inspector.getByRole("combobox", { name: "Bus" });
   await expect(group).toHaveCount(1);
   await group.click();
-  await page.getByRole("option", { name: "New group…" }).click();
-  const form = inspector.getByRole("form", { name: "New audio group" });
-  await form
-    .getByRole("textbox", { name: "Audio group name" })
-    .fill("Dialogue");
+  await page.getByRole("option", { name: "New bus..." }).click();
+  const form = inspector.getByRole("form", { name: "New bus" });
+  await form.getByRole("textbox", { name: "Bus name" }).fill("Dialogue");
   await form.getByRole("button", { name: "Create", exact: true }).click();
   await expect(group).toHaveText("Dialogue");
   const read = async () =>
@@ -298,7 +294,7 @@ test("one group control routes linked partners without changing a later pickup i
     timeline.clips.map(({ authoredAudioGroupId }) => authoredAudioGroupId),
   ).toEqual([groupId, groupId]);
   const gain = inspector.getByRole("textbox", {
-    name: "Group gain",
+    name: "Bus gain",
     exact: true,
   });
   await gain.fill("-12 dB");

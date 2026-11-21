@@ -56,6 +56,8 @@ export function createViewport(
   let ppf = 0;
   let fit = 0;
   let fitted = true;
+  /** The next change of width keeps the zoom: the mixer opening or closing beside the lanes. */
+  let holding = false;
   let gesturing = false;
   let extent: Extent = { frames: 0, fps: { num: 30, den: 1 } };
   /** The scroller's offset, in the whole pixels it keeps. */
@@ -348,8 +350,10 @@ export function createViewport(
     exact = settledScroll(exact, scroll);
     grid.style.setProperty("--view", `${width}px`);
     fit = fitPpf(extent.frames, width, extent.fps);
-    if (opened || (fitted && sameLength && !gesturing)) write(fit);
-    fitted = ppf === fit;
+    if (opened || (fitted && sameLength && !gesturing && !holding)) write(fit);
+    // A held view keeps whether it was fitted, so a later resize of the window still refits it.
+    if (!holding) fitted = ppf === fit;
+    holding = false;
     if (owed !== null && !sameLength) centre(owed);
     onChange(false);
   }
@@ -371,6 +375,10 @@ export function createViewport(
         beforeFit = ppf;
         zoom(fit, anchorNear(playhead), true);
       } else if (beforeFit) zoom(beforeFit, anchorNear(playhead), true);
+    },
+    /** Keeps the zoom and scroll through the next change of width, so the frames stay put. */
+    hold() {
+      holding = true;
     },
     /** The zoom and scroll now, to return to with `place`. */
     placement: (): ViewPlacement => ({ ppf, scroll: exact, fitted }),

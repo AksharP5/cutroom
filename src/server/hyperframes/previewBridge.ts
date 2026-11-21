@@ -11,6 +11,7 @@ import {
 } from "@hyperframes/parsers/media-duration";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
+import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { compositionClipLocations } from "../timeline/composition";
 import type { CompositionScope } from "../timeline/composition";
 import { TimelineError } from "../../shared/timeline/apply";
@@ -44,7 +45,18 @@ interface PreviewWindow extends DiagnosticWindow {
     audioMeter?: {
       start(): void;
       stop(): void;
-      read(): { master: { l: number; r: number } };
+      read(): {
+        master: { l: number; r: number };
+        groups: Record<string, { l: number; r: number }>;
+      };
+      /** Cutroom's adapter: a group's fader, or Main's trim when the id is null. */
+      fade(id: string | null, gain: number): void;
+      /** Where automation holds each of these groups' faders now. */
+      faders(ids: string[]): Record<string, number>;
+      /** Peaks of clips entering a bus, by their track index. */
+      pre(): Record<string, { l: number; r: number }>;
+      /** Disconnect those taps while the mixer is closed. */
+      clearPre(): void;
     };
     /** HyperFrames' colour grading: graded pictures, and a compare that shows their source. */
     colorGrading?: {
@@ -155,8 +167,11 @@ function installPreviewBridge(
   plan: typeof liveUpdatePlan,
   seekInFrame: typeof frameSeek,
   createAdjustmentCapture: typeof adjustmentCapture,
-  /** The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does. */
-  [minRate, maxRate]: [number, number],
+  /**
+   * The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does, and one
+   * gain stage's ceiling, which a fader set in place must stay under.
+   */
+  [minRate, maxRate, maxGain]: [number, number, number],
   texts: [string, string[]][],
   initialTiming:
     | (Pick<
@@ -304,6 +319,18 @@ function installPreviewBridge(
       }
     }
   };
+  /** Faders a saved gain sets in place: Cutroom's track buses and buses without automation. */
+  const FADERS =
+    "hf-audio-group[id]:is([data-cutroom-track], :not([data-automation]))";
+  /** Matches `trackGainPreview`: a bus's level must be within one gain stage, +12 dB. */
+  const isFader = (element: Element) => {
+    if (!element.matches(FADERS)) return false;
+    if (element.hasAttribute("data-cutroom-track")) return true;
+    const level = Number(element.getAttribute("data-volume") ?? 1);
+    return level >= 0 && level <= maxGain;
+  };
+  const faders = (root: ParentNode) =>
+    [...root.querySelectorAll(FADERS)].filter(isFader);
   /** The copy of a live element in a clone of the document, found by its path from the root. */
   const cloneOf = (root: Element, element: Element) => {
     const path: number[] = [];
@@ -372,10 +399,7 @@ function installPreviewBridge(
     for (const media of root.querySelectorAll("video, audio"))
       media.setAttribute("preload", "none");
     // Gain checks and timing updates both set these faders in place.
-    for (const group of root.querySelectorAll(
-      "hf-audio-group[data-cutroom-track]",
-    ))
-      group.removeAttribute("data-volume");
+    for (const group of faders(root)) group.removeAttribute("data-volume");
     for (const element of [root, ...root.querySelectorAll("*")]) {
       const attributes = [...element.attributes].sort((a, b) =>
         a.name.localeCompare(b.name),
@@ -415,7 +439,7 @@ function installPreviewBridge(
   };
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
-  /** Resolves every Cutroom track fader in this document, or null when the set differs. */
+  /** Resolves every fader in this document, or null when the set differs. */
   const trackGains = (gains: unknown) => {
     if (!Array.isArray(gains)) return null;
     const changes: { element: Element; volume: string }[] = [];
@@ -432,15 +456,11 @@ function installPreviewBridge(
       )
         return null;
       const element = document.getElementById(gain.id);
-      if (
-        element?.tagName.toLowerCase() !== "hf-audio-group" ||
-        !element.hasAttribute("data-cutroom-track")
-      )
-        return null;
+      if (!element || !isFader(element)) return null;
       changes.push({ element, volume: String(gain.volume) });
     }
     return new Set(changes.map(({ element }) => element)).size ===
-      document.querySelectorAll("hf-audio-group[data-cutroom-track]").length
+      faders(document).length
       ? changes
       : null;
   };
@@ -1443,12 +1463,45 @@ function installPreviewBridge(
     }
   };
   let metering = false;
+  let stripMetering = false;
   let animation = 0;
+  /** A group's mixer strip: `track:<index>` for a Cutroom track bus, `bus:<id>` for a bus. */
+  const stripOf = (id: string) => {
+    const group = document.getElementById(id);
+    if (group?.tagName.toLowerCase() !== "hf-audio-group") return null;
+    const track = group.getAttribute("data-cutroom-track");
+    return track === null ? `bus:${id}` : `track:${track}`;
+  };
   const levels = () => {
     if (!metering) return;
     const meter = win.__hf?.audioMeter;
     meter?.start();
-    const level = win.__player?.isPlaying() ? meter?.read().master : null;
+    const read = win.__player?.isPlaying() ? meter?.read() : null;
+    const level = read?.master;
+    let details;
+    if (stripMetering && meter && read) {
+      const strips: Record<string, { l: number; r: number }> = {};
+      for (const [id, group] of Object.entries(read.groups)) {
+        const strip = stripOf(id);
+        if (strip) strips[strip] = group;
+      }
+      // A track's clips that play through buses still show on the track's strip.
+      for (const [track, level] of Object.entries(meter.pre())) {
+        const shown = strips[`track:${track}`];
+        strips[`track:${track}`] = shown
+          ? { l: Math.max(shown.l, level.l), r: Math.max(shown.r, level.r) }
+          : level;
+      }
+      const automated = [
+        ...document.querySelectorAll(
+          "hf-audio-group[data-automation]:not([data-cutroom-track])",
+        ),
+      ].map((group) => group.id);
+      details = {
+        strips,
+        ...(automated.length && { faders: meter.faders(automated) }),
+      };
+    }
     if (win.__player?.isPlaying())
       parent.postMessage(
         {
@@ -1466,6 +1519,7 @@ function installPreviewBridge(
         playing: Boolean(win.__player?.isPlaying()),
         l: level?.l ?? 0,
         r: level?.r ?? 0,
+        ...details,
       },
       "*",
     );
@@ -2987,6 +3041,59 @@ function installPreviewBridge(
     )
       return;
     const id = data.id;
+    // A mixer fader on its way: heard now, saved on release. It never moves the playhead.
+    if (data.action === "mix-draft") {
+      if (
+        !("volume" in data) ||
+        typeof data.volume !== "number" ||
+        !Number.isFinite(data.volume) ||
+        data.volume < 0 ||
+        !("strip" in data) ||
+        typeof data.strip !== "string"
+      )
+        return;
+      const [kind, key] = data.strip.split(/:(.*)/s);
+      const group =
+        kind === "track"
+          ? document.querySelector(
+              `hf-audio-group[data-cutroom-track="${CSS.escape(key ?? "")}"]`,
+            )?.id
+          : kind === "bus"
+            ? key
+            : null;
+      if (group) win.__hf?.audioMeter?.fade(group, data.volume);
+      if (kind !== "main") return;
+      // Main's draft is its whole gain. This document already plays its saved Main gain, the
+      // last gain on the root's chain that `data-cutroom-main-gain` names (`readMain`), so the
+      // trim after the chain makes up the difference.
+      let saved = 1;
+      const root = document.querySelector("[data-composition-id]");
+      try {
+        const nodes: unknown = JSON.parse(
+          root?.getAttribute("data-fx-chain") ?? "",
+        ).nodes;
+        const last: unknown = Array.isArray(nodes) ? nodes.at(-1) : null;
+        if (
+          last &&
+          typeof last === "object" &&
+          Reflect.get(last, "id") ===
+            root?.getAttribute("data-cutroom-main-gain") &&
+          Reflect.get(last, "type") === "gain" &&
+          Reflect.get(last, "enabled") !== false
+        )
+          saved =
+            10 **
+            (Number(
+              Reflect.get(Reflect.get(last, "params") ?? {}, "gain") ?? 0,
+            ) /
+              20);
+      } catch {
+        // No readable chain: no saved Main gain either.
+      }
+      if (Number.isFinite(saved) && saved > 0)
+        win.__hf?.audioMeter?.fade(null, data.volume / saved);
+      return;
+    }
     let resumeAdjustment: (() => boolean) | undefined;
     const scrub =
       data.action === "seek" && "scrub" in data && data.scrub === true;
@@ -3904,14 +4011,20 @@ function installPreviewBridge(
           // playhead seek then restores the picture, even when the source is still loading.
           pictureVersion += 1;
           return;
-        case "meter":
+        case "meter": {
           if (!("enabled" in data) || typeof data.enabled !== "boolean") return;
           metering = data.enabled;
+          const showStrips =
+            metering && "strips" in data && data.strips === true;
+          if (metering && stripMetering && !showStrips)
+            win.__hf?.audioMeter?.clearPre();
+          stripMetering = showStrips;
           cancelAnimationFrame(animation);
           animation = 0;
           if (metering) levels();
           else win.__hf?.audioMeter?.stop();
           break;
+        }
         case "play":
           clearEditPicture();
           pictureVersion += 1;
@@ -4334,7 +4447,7 @@ export function previewDocument(
     rampPending,
     rampWindows,
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${adjustmentCapture.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${adjustmentCapture.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE, MAX_AUDIO_GAIN])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

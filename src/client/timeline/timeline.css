@@ -1331,10 +1331,10 @@ input.tl-track-gain {
     transparent 2px 3px
   );
 }
-.tl-meter-channel:nth-child(2) {
+.tl-meter-channel:nth-child(1 of .tl-meter-channel) {
   right: 11px;
 }
-.tl-meter-channel:nth-child(3) {
+.tl-meter-channel:nth-child(2 of .tl-meter-channel) {
   right: 3px;
 }
 .tl-meter-channel > span {

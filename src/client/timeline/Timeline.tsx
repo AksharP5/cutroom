@@ -108,6 +108,10 @@ export interface TimelinePin {
 }
 export interface TimelineProps {
   timeline: TimelineData;
+  /** The open mixer, which takes the meter column's place and width from the lanes. */
+  mixer?: ReactNode;
+  /** Opens the mixer from the meter column. */
+  onMixer?(): void;
   viewSettings: TimelineViewSettings;
   onViewSettings(settings: TimelineViewSettings): void;
   /** The index of the track of each kind that media placed without a drag goes to. */
@@ -794,8 +798,17 @@ export function Timeline({
   onOpenPin,
   onOpenMarker,
   onOpenClip,
+  mixer,
+  onMixer,
 }: TimelineProps) {
   const [takeTrack, setTakeTrack] = useState<Track | null>(null);
+  const mixerOpen = mixer !== undefined;
+  const mixerWas = useRef(mixerOpen);
+  // The mixer takes its width from the lanes without rescaling them: the frames stay put.
+  useLayoutEffect(() => {
+    if (mixerWas.current !== mixerOpen) viewport.current?.hold();
+    mixerWas.current = mixerOpen;
+  }, [mixerOpen]);
   useLayoutEffect(() => {
     if (!recording) {
       setTakeTrack(null);
@@ -1658,7 +1671,7 @@ export function Timeline({
           </div>
         </div>
       </div>
-      <AudioMeters />
+      {mixer ?? <AudioMeters onMixer={onMixer} />}
     </div>
   );
 }

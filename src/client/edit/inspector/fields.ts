@@ -21,7 +21,7 @@ export type FieldUnit =
   "timecode" | "percent" | "gain" | "pixels" | "degrees" | "number" | "seconds";
 
 /** The gain floor shared with the timeline line: at or below it a clip is silent. */
-const SILENCE_DB = -60;
+export const SILENCE_DB = -60;
 export type TimingField = "start" | "duration" | "speed" | "sourceIn";
 
 /** Typed gain as linear gain: dB with or without the unit, and -∞ or anything from -60 dB down as silence. */
