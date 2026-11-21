@@ -160,6 +160,18 @@ Q and W ripple trim, E razors, X lifts, Shift+X ripple deletes, Alt+D turns clip
 
 Zoom runs from the whole timeline to 32px per frame. The slider in the ruler's corner is logarithmic; double-click it to fit. The timeline fits when a project opens and when you ask, with Shift+Z or that double-click. Edits keep the zoom you have: a long clip dropped in, a ripple, a paste, undo, redo and an agent's edit all change the timeline's length and leave the ruler's scale alone. When the timeline grows past the view, scroll or press Shift+Z to see the rest. Insert and Overwrite leave the playhead at the end of what they placed, and the view scrolls there at the same zoom when that is off screen. Zooming with the wheel or a pinch follows the input and holds the frame under the cursor still. The buttons, the slider's track, and the keys ease to the new zoom around the playhead. During playback the view pages when the playhead reaches 90% of the width. [Keys and gestures](keyboard.md).
 
+### Export storage
+
+Cutroom keeps reusable frames in `frames` and per-export working files in `scratch`, under the same cache directory:
+
+- Linux uses `$XDG_CACHE_HOME/cutroom` or `~/.cache/cutroom`.
+- macOS uses `~/Library/Caches/Cutroom`.
+- Windows uses `%LOCALAPPDATA%\Cutroom\Cache`.
+
+Cutroom removes working files after each export and clears abandoned working folders at startup. The reusable cache is limited to 2 GiB by default. Set `CUTROOM_EXPORT_CACHE_MB` before launching Cutroom to change the limit in MiB, or set it to `0` to discard all reusable frames after each export. Cutroom prunes at startup and after exports, so an export can temporarily use more space while it runs.
+
+The generic `hyperframes-extract-cache-<uid>` folder in OS temp belongs to HyperFrames Studio and the CLI as well. Cutroom leaves it in place. Older Cutroom versions also kept frames in `<data>/cache/frames`. You can delete that folder after closing any older instance.
+
 ## Audio effects
 
 Select the clips you want to mix together. In **Inspector → Audio → Bus**, choose an existing bus or **New bus...** and give it a name. The bus starts at 0 dB. Choose **Track mixing** to return the selected clips to their track's gain and effects. Routing changes keep clip gain, fades, and automation, and can be undone in one step. A bus is HyperFrames' `<hf-audio-group>`, which the code and agents still call an audio group.

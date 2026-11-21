@@ -20,6 +20,7 @@ import type { RenderJob } from "@hyperframes/producer";
 import { FpsSchema } from "../../shared/timeline/schema.ts";
 import { sampleGridAudio } from "./audioClock.ts";
 import { ExportStageError } from "./renderFailure.ts";
+import { lockFrameCache } from "./renderCache.ts";
 
 const Input = z.object({
   projectDir: z.string(),
@@ -33,6 +34,7 @@ const Input = z.object({
   range: ExportRangeSchema.nullish(),
   scopedMedia: z.boolean().default(false),
   scratchDir: z.string(),
+  frameCacheDir: z.string().optional(),
   /** Frames drawn wholly from the sources encode with NVENC, which the server's probe found working. */
   gpu: z.boolean(),
   /** The server's plan to draw every frame from the sources. The worker still checks each source. */
@@ -65,6 +67,18 @@ try {
   for await (const chunk of process.stdin)
     body += typeof chunk === "string" ? chunk : chunk.toString("utf8");
   const input = Input.parse(JSON.parse(body));
+  if (input.frameCacheDir) {
+    try {
+      const lock = lockFrameCache(input.frameCacheDir);
+      if (lock) {
+        process.env.HYPERFRAMES_EXTRACT_CACHE_DIR = input.frameCacheDir;
+        // Hold through process exit so a sweep cannot remove frames a browser still needs.
+        process.once("exit", () => lock.close());
+      }
+    } catch (error) {
+      console.warn("Could not open the export frame cache:", error);
+    }
+  }
   const entryPath = join(
     input.projectDir,
     input.options.entryFile ?? "index.html",
@@ -125,7 +139,6 @@ try {
     renderSpan,
     resolveConfig,
   } = await import("@hyperframes/producer");
-  const { gcExtractionCache } = await import("@hyperframes/engine");
   // It imports the engine, so it loads only once the isolation hooks are registered.
   const { encodeSourceParts, exportDirect, prepareDirectExport } =
     await import("./directExport.ts");
@@ -138,12 +151,6 @@ try {
         }
       : undefined,
   );
-  // Exports run one at a time, so no render is reading the shared frame cache while it shrinks.
-  if (engineConfig.extractCacheDir)
-    gcExtractionCache(engineConfig.extractCacheDir, {
-      maxBytes: engineConfig.extractCacheMaxBytes,
-      minAgeMs: 0,
-    });
   // A GIF is made from a ProRes 4444 render, which keeps its alpha. HyperFrames' own GIF builds
   // its palette from frame differences, which turns a title that appears and stays black.
   const { gifLoop, ...options } = input.options;
