@@ -175,8 +175,9 @@ for (const pipeline of [false, true]) {
           duration.get(`shot-${shot + 1 + index}`),
         );
       };
-      const undo = page.getByRole("button", { name: "Undo", exact: true });
-      const redo = page.getByRole("button", { name: "Redo", exact: true });
+      const toolbar = page.getByRole("toolbar", { name: "Tools", exact: true });
+      const undo = toolbar.getByRole("button", { name: "Undo", exact: true });
+      const redo = toolbar.getByRole("button", { name: "Redo", exact: true });
       await expect(undo).toBeEnabled();
       await expect(redo).toBeDisabled();
       const trimmed = [
