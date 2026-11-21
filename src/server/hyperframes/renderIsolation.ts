@@ -371,6 +371,40 @@ export function registerRenderIsolation(
     const filters = \`[\${index}:a]atrim=\${trim},\${volumeFilter}\${buildFadeFilters(track)},adelay=\${delay}|\${delay}\`;`,
           url,
         );
+        source = replaceOnce(
+          source,
+          "    const warmUp = fromSidecar ? Math.min(SIDECAR_WARM_UP_SECONDS, ffmpegStart) : 0;",
+          `    const warmUp = fromSidecar ? Math.min(SIDECAR_WARM_UP_SECONDS, ffmpegStart) : 0;
+    // An AAC input seek alone can jump forward to the next packet. Decode
+    // with preroll and trim on timestamps normalized to the input's start.
+    const exactAac = inputSeek && !fromSidecar && !readsUrl && metadata?.audioCodec === "aac";
+    const aacSeek = exactAac ? Math.max(0, ffmpegStart - 8192 / metadata.sampleRate) : 0;
+    const aacTrim = exactAac
+        ? \`atrim=start=\${start}:end=\${formatFilterNumber(ffmpegStart + sourceDuration)},asetpts=PTS-STARTPTS\`
+        : null;`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "warmUp > 0 ? `atrim=start=${warmUp},asetpts=PTS-STARTPTS` : timestampTrim,",
+          "aacTrim ?? (warmUp > 0 ? `atrim=start=${warmUp},asetpts=PTS-STARTPTS` : timestampTrim),",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "        ...(inputSeek\n            ? [",
+          `        ...(exactAac
+            ? ["-copyts", "-start_at_zero", ...(aacSeek > 0 ? ["-ss", formatFfmpegSeconds(aacSeek)] : [])]
+            : inputSeek
+            ? [`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "    if (normalizedPlaybackRate !== 1 || options?.padToDuration)",
+          "    if (exactAac || normalizedPlaybackRate !== 1 || options?.padToDuration)",
+          url,
+        );
         audioMixerLoaded = true;
         return { ...loaded, source };
       }

@@ -143,6 +143,22 @@ test.skipIf(!Bun.which("node") || !Bun.which("ffmpeg"))(
         }
       }
 
+      // S5 also covers an actual four-second shift before the cut at frame 180.
+      const late =
+        audio("head", "5.005", 'data-duration="1.001"', "0") +
+        audio("tail", "6.006", 'data-duration="1.001"', "1.001");
+      const lateWhole = await mixed(dir, "late-whole", ntsc, 210, late);
+      const lateMarked = await mixed(
+        dir,
+        "late-marked",
+        ntsc,
+        210,
+        late,
+        [165, 190],
+      );
+      expect(lateMarked.length).toBe(336_336 - 192_000);
+      expect(lateMarked).toEqual(lateWhole.subarray(192_000));
+
       // S1c: These are the authored fields before and after the frame-grid trim.
       const before = await mixed(
         dir,
@@ -210,6 +226,97 @@ test.skipIf(!Bun.which("node") || !Bun.which("ffmpeg"))(
       expect(held.length).toBe(144_000);
       expectSource(held, 0, 96_000, 0);
       expect(held.subarray(96_000).every((sample) => sample === 0)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!Bun.which("node") || !Bun.which("ffmpeg"))(
+  "S1 AAC audio-only through-cuts match the decoded source at zero sample lag",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "aac-cuts-"));
+    try {
+      const raw = Buffer.alloc(192_000 * 4);
+      let seed = 1729;
+      for (let i = 0; i < 192_000; i++) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        const sample = (seed >>> 20) - 2048;
+        raw.writeInt16LE(sample, i * 4);
+        raw.writeInt16LE(sample, i * 4 + 2);
+      }
+      await writeFile(join(dir, "source.raw"), raw);
+      await writeFile(join(dir, "scene.html"), "");
+      const m4a = join(dir, "source.m4a");
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "s16le",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-i",
+        join(dir, "source.raw"),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        m4a,
+      ]);
+      const decodedPath = join(dir, "decoded.raw");
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-i",
+        m4a,
+        "-f",
+        "s16le",
+        decodedPath,
+      ]);
+      const decoded = await readFile(decodedPath);
+      const sourceOffset = 2626;
+      const edges = [0, 1, 2, 3, 4, 5, 30, 45];
+      const clip = (from: number, to: number) =>
+        audio(
+          "part-" + from,
+          seconds(from).toFixed(6),
+          `data-duration="${seconds(to - from).toFixed(6)}"`,
+          (seconds(from) + sourceOffset / 48000).toFixed(6),
+        ).replace("source.wav", "source.m4a");
+      const split = await mixed(
+        dir,
+        "aac-split",
+        ntsc,
+        45,
+        edges
+          .slice(0, -1)
+          .map((from, i) => clip(from, edges[i + 1]!))
+          .join(""),
+      );
+      const whole = await mixed(dir, "aac-whole", ntsc, 45, clip(0, 45));
+      for (const frame of edges.slice(0, -1)) {
+        const at = Math.round(frame * 1601.6) + 160;
+        for (const pcm of [whole, split]) {
+          let best = -Infinity;
+          let bestLag = 0;
+          for (let lag = -2048; lag <= 2048; lag++) {
+            let dot = 0;
+            for (let i = at; i < at + 512; i++)
+              dot +=
+                pcm[i]! * decoded.readInt16LE((i + sourceOffset + lag) * 4);
+            if (dot > best) {
+              best = dot;
+              bestLag = lag;
+            }
+          }
+          expect(bestLag).toBe(0);
+        }
+      }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
