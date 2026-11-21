@@ -183,6 +183,9 @@ export async function createProjectStore(options: {
       undoScope: "everyone",
       beforeReplay: (changes, readBlob, context) =>
         guardFreezeHistory({ path: projectDir }, changes, readBlob, context),
+      // A moved folder or a deleted .hyperframes/history-id looks like a gone project.
+      // Undo history is only removed by the owner, never on a timer.
+      pruneGoneProjectsBudgetMs: 0,
     }),
   );
   const documentReads = new WeakMap<ProjectDocument, string | null>();
