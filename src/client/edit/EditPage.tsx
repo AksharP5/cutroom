@@ -85,6 +85,9 @@ const previewChangeSchema = z.object({
   affectsPreview: z.boolean(),
   affectedCompositions: z.array(z.string()).nullable(),
 });
+const projectFileEventSchema = z.object({
+  timelineSaveEcho: z.literal(true).optional(),
+});
 
 const report = (error: unknown) => reportEditorError("timeline", error);
 const notice = (text: string) =>
@@ -189,7 +192,13 @@ export function EditPage({
     const stopProject = subscribeProjectEvents(
       projectId,
       "message",
-      () => void refreshTimeline(projectId, closing.signal),
+      (event) => {
+        const changed = projectFileEventSchema.safeParse(
+          JSON.parse(event.data),
+        );
+        if (!changed.success || !changed.data.timelineSaveEcho)
+          void refreshTimeline(projectId, closing.signal);
+      },
     );
     // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
     const stopAnimationFeedback = subscribeProjectEvents(

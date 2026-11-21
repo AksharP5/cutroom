@@ -46,6 +46,7 @@ import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
   AnimationFeedbackSchema,
   EDIT_HISTORY_HEADER,
+  GROUPED_EDIT_HEADER,
   EDIT_SUMMARY_HEADER,
   TAB_ORIGIN_HEADER,
   TabOriginSchema,
@@ -260,6 +261,7 @@ export function createTimelineRoutes(
     project: Project,
     batch: CommandBatch,
     agent: boolean,
+    origin?: string,
   ) => {
     const { composition } = batch;
     const current = await read(project, composition);
@@ -630,8 +632,8 @@ export function createTimelineRoutes(
             if (Bun.deepEquals(settings, emptyTimelineSettings()))
               delete timelines[composition];
             else timelines[composition] = settings;
-            await store.writeDocument(project, document, files);
-          } else if (files.length) store.writeFiles(project, files);
+            await store.writeDocument(project, document, files, origin);
+          } else if (files.length) store.writeFiles(project, files, origin);
         });
         return {
           composition,
@@ -1064,6 +1066,10 @@ export function createTimelineRoutes(
           TabOriginSchema.optional(),
           c.req.header(TAB_ORIGIN_HEADER),
         ) ?? null;
+      const echoOrigin =
+        c.req.header(GROUPED_EDIT_HEADER) === "1"
+          ? (origin ?? undefined)
+          : undefined;
       const {
         view: { detectAnimation, ...result },
         encodedSummary,
@@ -1077,6 +1083,7 @@ export function createTimelineRoutes(
             project,
             batch,
             !!c.req.header(AGENT_HEADER),
+            echoOrigin,
           );
           const history = await store.history(project);
           const previous = history.list().at(-1)?.id;
@@ -1112,6 +1119,7 @@ export function createTimelineRoutes(
         {
           label: (result) => result.summary,
           batchLabels: (result) => result.batchLabels,
+          origin: echoOrigin,
         },
       );
       const response = {

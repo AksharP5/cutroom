@@ -1,14 +1,16 @@
+import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 
 /**
- * One edit writes several project files, each announced as a file event. The editor reads the
- * timeline once per change, not once per file, and still shows an agent's edit.
+ * One edit writes several project files. A burst of notifications gets one read,
+ * including in another tab that did not receive the command response.
  */
-test("each change reads the timeline once, and outside edits still show", async ({
+test("file events make one read and outside edits still show", async ({
   page,
   request,
 }) => {
@@ -61,11 +63,23 @@ test("each change reads the timeline once, and outside edits still show", async 
     return { ...reads };
   };
 
-  // The edit's own answer is the view; its file events bring the one read.
-  expect(await readsFor(() => page.keyboard.press("e"), 5)).toEqual({
-    timeline: 1,
-    history: 2,
-  });
+  const other = await page.context().newPage();
+  try {
+    await other.goto(`/#project/${project.id}`);
+    const otherClips = other
+      .getByRole("region", { name: "Timeline" })
+      .locator("[data-clip]");
+    await expect(otherClips).toHaveCount(4);
+    await page.bringToFront();
+    // The edit reads its history. The file notifications share one read.
+    expect(await readsFor(() => page.keyboard.press("e"), 5)).toEqual({
+      timeline: 1,
+      history: 2,
+    });
+    await expect(otherClips).toHaveCount(5);
+  } finally {
+    await other.close();
+  }
   // Undo answers without a view, so it reads once itself and once for its file events.
   expect(await readsFor(() => page.keyboard.press("Control+z"), 4)).toEqual({
     timeline: 2,
@@ -114,4 +128,251 @@ test("each change reads the timeline once, and outside edits still show", async 
       expect(response.ok()).toBe(true);
     }, 3),
   ).toEqual({ timeline: 1, history: 1 });
+
+  // Different paths reach the tab as separate events while an outside edit waits to show.
+  const twoShots = (await readFile(index, "utf8")).replace(
+    /<div[^>]*\bid="shot-3"[^>]*>Shot 3<\/div>/,
+    "",
+  );
+  let finishedWriting = false;
+  const writes = (async () => {
+    await writeFile(index, twoShots);
+    for (let i = 0; i < 40; i++) {
+      await writeFile(join(project.path, `progress-${i}.txt`), String(i));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    finishedWriting = true;
+  })();
+  try {
+    await expect(clips).toHaveCount(2);
+    expect(finishedWriting).toBe(false);
+  } finally {
+    await writes;
+  }
+});
+
+async function openSlipProject({
+  page,
+  request,
+}: {
+  page: Page;
+  request: APIRequestContext;
+}) {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Trim burst" },
+      })
+    ).json(),
+  );
+  execFileSync("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "anullsrc=r=48000:cl=mono",
+    "-t",
+    "3",
+    join(project.path, "sound.wav"),
+  ]);
+  const path = join(project.path, "index.html");
+  await writeFile(
+    path,
+    (await readFile(path, "utf8")).replace(
+      /(<main[^>]*>)[\s\S]*<\/main>/,
+      '$1\n<audio id="sound" src="sound.wav" data-start="0" data-duration="1" data-media-start="0.4" data-track-index="1"></audio>\n</main>',
+    ),
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  const view = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+  const sourceFrame = async () => {
+    const { timeline } = await view();
+    const mediaStart = timeline.clips.find(
+      ({ id }) => id === "sound",
+    )?.mediaStart;
+    return mediaStart === null || mediaStart === undefined
+      ? null
+      : Math.round((mediaStart * timeline.fps.num) / timeline.fps.den);
+  };
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="sound"]').click();
+  const initial = (await sourceFrame())!;
+  const toolbar = page.getByRole("toolbar", { name: "Tools", exact: true });
+  const undo = toolbar.getByRole("button", { name: "Undo", exact: true });
+  const redo = toolbar.getByRole("button", { name: "Redo", exact: true });
+  const hold = async (frames: number) => {
+    await page.keyboard.down("Alt");
+    for (let i = 0; i < frames; i++) await page.keyboard.down("Comma");
+  };
+  const release = async () => {
+    await page.keyboard.up("Alt");
+    await page.keyboard.up("Comma");
+  };
+  return { api, hold, initial, redo, release, sourceFrame, undo, view };
+}
+
+test("one held slip saves on release and undoes every repeated frame", async ({
+  page,
+  request,
+}) => {
+  const { api, hold, initial, redo, release, sourceFrame, undo } =
+    await openSlipProject({ page, request });
+  const saves: unknown[] = [];
+  let reads = 0;
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && path === `${api}/timeline`) reads++;
+    if (request.method() === "POST" && path === `${api}/commands`)
+      saves.push(request.postDataJSON());
+  });
+  await expect(undo).toBeDisabled();
+  await hold(6);
+  await expect(undo).toBeEnabled();
+  await expect(redo).toBeDisabled();
+  await page.waitForTimeout(650);
+  expect(saves).toEqual([]);
+  expect(await sourceFrame()).toBe(initial);
+  await release();
+  await expect.poll(sourceFrame).toBe(initial + 6);
+  await page.waitForTimeout(650);
+  expect(reads).toBe(0);
+  expect(saves).toEqual([
+    expect.objectContaining({
+      label: "Slipped 6 frames later in its source, without its linked clips",
+      commands: [expect.objectContaining({ type: "slip", by: 6 })],
+    }),
+  ]);
+
+  await page.keyboard.press("Control+z");
+  await expect.poll(sourceFrame).toBe(initial);
+  await expect(redo).toBeEnabled();
+  await page.keyboard.press("Alt+Comma");
+  await page.keyboard.press("Alt+Comma");
+  await expect.poll(sourceFrame).toBe(initial + 2);
+  await page.keyboard.press("Control+z");
+  await expect.poll(sourceFrame).toBe(initial + 1);
+  await page.keyboard.press("Control+z");
+  await expect.poll(sourceFrame).toBe(initial);
+});
+
+test("a refused held slip rolls back the whole gesture once", async ({
+  page,
+  request,
+}) => {
+  const { api, hold, initial, release, sourceFrame, undo } =
+    await openSlipProject({ page, request });
+  let refused = 0;
+  await page.route(`**${api}/commands`, async (route) => {
+    refused++;
+    await route.fulfill({
+      status: 422,
+      json: { error: "The held slip was refused." },
+    });
+  });
+  await hold(6);
+  await expect(undo).toBeEnabled();
+  await release();
+  await expect(
+    page.getByRole("alert", { name: "" }).filter({
+      hasText: "The held slip was refused.",
+    }),
+  ).toHaveCount(1);
+  await expect(undo).toBeDisabled();
+  expect(refused).toBe(1);
+  expect(await sourceFrame()).toBe(initial);
+});
+
+test("a held slip retries once after an unrelated edit wins the revision", async ({
+  page,
+  request,
+}) => {
+  const { api, hold, initial, release, sourceFrame, view } =
+    await openSlipProject({ page, request });
+  const responses: number[] = [];
+  await page.route(`**${api}/commands`, async (route) => {
+    if (!responses.length) {
+      const { revision } = await view();
+      const outside = await request.post(`${api}/commands`, {
+        data: {
+          expectedRevision: revision,
+          label: "Agent marker",
+          commands: [{ type: "setMarker", frame: 6, name: "Agent marker" }],
+        },
+      });
+      expect(outside.ok()).toBe(true);
+    }
+    const response = await route.fetch();
+    responses.push(response.status());
+    await route.fulfill({ response });
+  });
+  await hold(6);
+  await release();
+  await expect.poll(sourceFrame).toBe(initial + 6);
+  expect(responses).toEqual([409, 200]);
+  expect((await view()).timeline.markers.map(({ name }) => name)).toEqual([
+    "Agent marker",
+  ]);
+  await page.keyboard.press("Control+z");
+  await expect.poll(sourceFrame).toBe(initial);
+  expect((await view()).timeline.markers).toHaveLength(1);
+});
+
+test("an outside change appears while the slip key is still down", async ({
+  page,
+  request,
+}) => {
+  const { api, hold, initial, release, sourceFrame, view } =
+    await openSlipProject({ page, request });
+  await hold(3);
+  const { revision } = await view();
+  const outside = await request.post(`${api}/commands`, {
+    data: {
+      expectedRevision: revision,
+      label: "Agent marker",
+      commands: [{ type: "setMarker", frame: 6, name: "Agent marker" }],
+    },
+  });
+  expect(outside.ok()).toBe(true);
+  await expect(page.getByTitle(/^Agent marker/)).toBeVisible();
+  expect(await sourceFrame()).toBe(initial);
+  await hold(3);
+  await release();
+  await expect.poll(sourceFrame).toBe(initial + 6);
+  await page.keyboard.press("Control+z");
+  await expect.poll(sourceFrame).toBe(initial);
+  expect((await view()).timeline.markers).toHaveLength(1);
+});
+
+test("an outside edit to the held clip keeps its own source timing", async ({
+  page,
+  request,
+}) => {
+  const { api, hold, initial, release, sourceFrame, view } =
+    await openSlipProject({ page, request });
+  await hold(3);
+  const { revision } = await view();
+  const outside = await request.post(`${api}/commands`, {
+    data: {
+      expectedRevision: revision,
+      label: "Agent slip",
+      commands: [
+        { type: "slip", clipId: "sound", by: 1, linked: false },
+        { type: "setMarker", frame: 6, name: "Agent slip" },
+      ],
+    },
+  });
+  expect(outside.ok()).toBe(true);
+  await expect(page.getByTitle(/^Agent slip/)).toBeVisible();
+  await hold(3);
+  await release();
+  await expect(
+    page.getByRole("alert").filter({
+      hasText: "An agent changed those clips first.",
+    }),
+  ).toHaveCount(1);
+  expect(await sourceFrame()).toBe(initial + 1);
 });

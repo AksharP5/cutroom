@@ -19,7 +19,12 @@ import { addLayerCommands } from "../edit/regionCommands";
 import { addTransition, editKeys, trimmedPlayhead } from "../edit/keys";
 import { useTextEdit } from "../edit/preview";
 import { showSource, useSource } from "../edit/source";
-import { clipboardEdit, editTimeline, useTimeline } from "../edit/timeline";
+import {
+  clipboardEdit,
+  editTimeline,
+  finishHeldEdit,
+  useTimeline,
+} from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
 import { isTyping, keymap, useKeymap } from "../keymap";
 import { leaveComposition, openHost } from "../edit/compositions";
@@ -144,12 +149,24 @@ export function ProjectTimeline({
         selection: pruneSelection(timeline, current),
       }));
   }, [timeline]);
+  useEffect(() => {
+    const release = (event: KeyboardEvent) =>
+      finishHeldEdit(event.code || event.key);
+    const blur = () => finishHeldEdit();
+    window.addEventListener("keyup", release, true);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keyup", release, true);
+      window.removeEventListener("blur", blur);
+      finishHeldEdit();
+    };
+  }, [projectId, composition]);
 
   // The selection, playhead and timeline are read at the press, and the commands built from them.
   const edits = Object.entries(editKeys).map(
     ([action, { label, commands }]) => [
       action,
-      () => {
+      (_binding: number, heldKey?: string) => {
         revealTimeline();
         // The store's selection, not this render's: a click just before the key has not rendered.
         const {
@@ -180,6 +197,8 @@ export function ProjectTimeline({
             // A trim at the end shortens the timeline, and the transport parks on its last frame.
             parked = Math.min(frame, next.duration - 1);
           },
+          undefined,
+          heldKey,
         ).then((accepted) => {
           saved();
           if (

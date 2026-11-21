@@ -22,6 +22,7 @@ import {
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
+import { isAtomicTempPath } from "@hyperframes/core/atomic-file";
 import { fileFingerprint } from "../shared/media";
 import { version } from "../shared/version";
 import { HttpError } from "../shared/errors";
@@ -34,6 +35,7 @@ import { VIEW_PATH } from "./projects/view";
 import type { FileChange } from "./hyperframes/api";
 import type { createHyperframesApi } from "./hyperframes/api";
 import type { createVariableRoutes } from "./projects/variables";
+import { isTimelineWriteEcho } from "./timeline/watch";
 
 export function createWorkspaceRoutes(options: {
   projects: ProjectStore;
@@ -262,8 +264,11 @@ export function createWorkspaceRoutes(options: {
               timers.delete(filename);
               void (async () => {
                 const path = filename.replaceAll("\\", "/");
-                const info = await projectPath(project, path)
-                  .then((absolute) => stat(absolute))
+                const file = await projectPath(project, path)
+                  .then(async (absolute) => ({
+                    info: await stat(absolute),
+                    absolute,
+                  }))
                   .catch((error: unknown) => {
                     if (
                       isMissing(error) ||
@@ -273,12 +278,24 @@ export function createWorkspaceRoutes(options: {
                       return null;
                     throw error;
                   });
+                // A temp sibling is an echo only when its published file still
+                // matches a grouped edit from this tab.
+                const published = isAtomicTempPath(path)
+                  ? join(project.path, path.slice(0, path.lastIndexOf(".hf")))
+                  : file?.info.isFile()
+                    ? file.absolute
+                    : null;
                 await stream.writeSSE({
                   data: JSON.stringify({
                     changed: path,
-                    version: info?.isFile()
-                      ? fileFingerprint(path, info)
+                    version: file?.info.isFile()
+                      ? fileFingerprint(path, file.info)
                       : null,
+                    ...(origin &&
+                      published &&
+                      (await isTimelineWriteEcho(published, origin)) && {
+                        timelineSaveEcho: true,
+                      }),
                   }),
                 });
               })().catch((error: unknown) => {
