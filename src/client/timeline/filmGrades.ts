@@ -12,18 +12,17 @@ type Pending = {
   grade: GradeKey;
 };
 
-/** Bake the visible tiles first, then the rest of the canvas that will scroll into view. */
+/** Bake visible tiles first and prewarm as much of the canvas as fits in the cache. */
 export function filmGrades(projectId: string, redraw: () => void) {
   const cubes = acquireGrades(projectId);
   const stamps = new WeakMap<ImageBitmap, number>();
   const recent = new Map<string, ImageBitmap>();
   const lastByTile = new Map<string, string>();
-  const drawn = new Set<string>();
   const failed = new Map<number, Set<string>>();
   const active = new Set<string>();
   const visible = new Map<string, Pending>();
   const buffered = new Map<string, Pending>();
-  const inView = new Set<string>();
+  const retained = new Map<string, boolean>();
   let stamp = 0;
   let bytes = 0;
   let worker: Worker | undefined;
@@ -58,14 +57,19 @@ export function filmGrades(projectId: string, redraw: () => void) {
         continue;
       }
       const { key, image } = result;
+      const onscreen = retained.get(key);
+      if (onscreen === undefined) {
+        image.close();
+        continue;
+      }
       recent.set(key, image);
       bytes += image.width * image.height * 4;
-      if (inView.has(key)) visibleChanged = true;
+      if (onscreen) visibleChanged = true;
       else bufferChanged = true;
     }
     for (const [key, image] of recent) {
       if (bytes <= CACHE_BYTES) break;
-      if (drawn.has(key)) continue;
+      if (retained.has(key)) continue;
       recent.delete(key);
       bytes -= image.width * image.height * 4;
       image.close();
@@ -75,8 +79,7 @@ export function filmGrades(projectId: string, redraw: () => void) {
 
   function pump() {
     if (busy || closed || !settled) return;
-    // Paint a completed viewport at once. The rest of the canvas gets one paint after
-    // prewarming, so moving the viewport over it doesn't expose raw or half-graded tiles.
+    // Paint the viewport together, then update the canvas once prewarming completes.
     if (!visible.size && visibleChanged) {
       visibleChanged = false;
       redraw();
@@ -136,7 +139,6 @@ export function filmGrades(projectId: string, redraw: () => void) {
     if (!image) return;
     recent.delete(key);
     recent.set(key, image);
-    drawn.add(key);
     return image;
   }
 
@@ -146,8 +148,6 @@ export function filmGrades(projectId: string, redraw: () => void) {
       settled = atRest;
       visible.clear();
       buffered.clear();
-      inView.clear();
-      drawn.clear();
     },
     pause() {
       settled = false;
@@ -166,7 +166,13 @@ export function filmGrades(projectId: string, redraw: () => void) {
       }
       const tile = `${id}:${rect.join(":")}`;
       const key = `${tile}:${grade.key}`;
-      if (onscreen) inView.add(key);
+      if (settled && !closed && !failed.get(grade.key)?.has(key)) {
+        if (!visible.has(key) && (onscreen || !buffered.has(key))) {
+          if (onscreen) buffered.delete(key);
+          const queue = onscreen ? visible : buffered;
+          queue.set(key, { key, grade, source, rect });
+        }
+      }
       const lastKey = `${clip}:${tile}`;
       const image = useImage(key);
       if (image) {
@@ -176,28 +182,36 @@ export function filmGrades(projectId: string, redraw: () => void) {
         lastByTile.set(lastKey, key);
         return image;
       }
-      if (
-        settled &&
-        !closed &&
-        !active.has(key) &&
-        !failed.get(grade.key)?.has(key)
-      ) {
-        if (onscreen) {
-          buffered.delete(key);
-          visible.set(key, { key, grade, source, rect });
-        } else if (!visible.has(key))
-          buffered.set(key, { key, grade, source, rect });
-      }
       const previous = lastByTile.get(lastKey);
       return previous === undefined ? undefined : useImage(previous);
     },
-    endPaint: pump,
+    endPaint() {
+      if (!settled || closed) return;
+      // Admit the same tiles whether they are cached or missing. Prefetch must never
+      // evict a tile that this paint would immediately queue again.
+      retained.clear();
+      let available = CACHE_BYTES;
+      for (const queue of [visible, buffered]) {
+        for (const [key, { rect }] of queue) {
+          const size = rect[2] * rect[3] * 4;
+          if (size > available) {
+            queue.delete(key);
+            continue;
+          }
+          available -= size;
+          retained.set(key, queue === visible);
+          if (recent.has(key) || active.has(key)) queue.delete(key);
+        }
+      }
+      pump();
+    },
     dispose() {
       closed = true;
       worker?.terminate();
       cubes.dispose();
       visible.clear();
       buffered.clear();
+      retained.clear();
       for (const image of recent.values()) image.close();
       recent.clear();
       lastByTile.clear();
