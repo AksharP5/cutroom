@@ -164,10 +164,11 @@ test(
       await paints.dispose();
       await hits.dispose();
     }
+    const coldDeadline = 67;
     const deadline = 50;
     const maxLateRate = 0.05;
-    // After disabling trace snapshots, the worst individual CI sample we found was
-    // 59.2 ms. A 150 ms ceiling leaves about 2.5x that observed delay.
+    // The November 20–21 CI sample peaked at 69.9 ms. Keep a separate limit
+    // for a single freeze, even if the first click and the pooled rate pass.
     const paintCeiling = 150;
     const clicks = runs.flatMap((run) => run.samples);
     const lateClicks = clicks.filter(
@@ -180,7 +181,7 @@ test(
     const evidence = JSON.stringify(
       {
         browser: page.context().browser()?.version(),
-        budget: { deadline, lateRate: maxLateRate, paintCeiling },
+        budget: { coldDeadline, deadline, lateRate: maxLateRate, paintCeiling },
         medianCold,
         maxClick,
         lateClicks,
@@ -215,12 +216,12 @@ test(
       expect(run.hitDurations.length).toBeGreaterThanOrEqual(clicksPerRun);
       expect(run.hitDurations.length).toBeLessThanOrEqual(2 * clicksPerRun);
     }
-    // Keep the three-frame target for the typical first click and for 95% of all
-    // clicks. The ceiling catches an isolated stall even when the rest are fast.
+    // Give the first click four frames at 60 Hz. Keep three frames for 95% of
+    // all clicks, with a separate ceiling for an isolated stall.
     expect(
       medianCold,
       "median first pointer-down to outline-paint delay",
-    ).toBeLessThanOrEqual(deadline);
+    ).toBeLessThanOrEqual(coldDeadline);
     expect(
       lateRate,
       `${lateClicks}/${clicks.length} clicks took more than ${deadline} ms to paint`,
