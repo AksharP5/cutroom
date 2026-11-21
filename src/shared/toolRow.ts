@@ -286,6 +286,11 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => target ?? "the timeline",
   },
+  timeline_add_transitions: {
+    verb: ["Added", "Adding", "Add"],
+    kind: "edit",
+    object: () => "transitions",
+  },
   timeline_destinations: {
     verb: ["Checked", "Checking", "Check"],
     kind: "project",

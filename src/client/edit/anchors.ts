@@ -67,6 +67,7 @@ export function editAnchors(
   if (
     !commands.some(
       ({ type }) =>
+        type === "setTransitions" ||
         type === "paste" ||
         type === "remove" ||
         type === "trim" ||
@@ -123,6 +124,8 @@ export function editAnchors(
       // when the command was built. A retry must still check the intended clip.
       if (command.type === "setClip" && command.grade !== undefined)
         return [command.clipId];
+      if (command.type === "setTransitions")
+        return command.cuts.flatMap(({ from, to }) => [from, to]);
       return [];
     }),
   );

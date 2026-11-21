@@ -468,6 +468,8 @@ export function editLabel(
                 : `${pending ? "Add" : "Added"} ${command.property === "opacity" ? "an" : "a"} ${what} at ${at(command.frame)}`;
         return `${sentence}${named ? ` on ${target([command.clipId])}` : ""}`;
       }
+      case "setTransitions":
+        return `${pending ? "Add" : "Added"} ${command.cuts.length} ${command.cuts.length === 1 ? "transition" : "transitions"}`;
       case "setTransition": {
         const cut = named
           ? ` between ${target([command.from, command.to])}`

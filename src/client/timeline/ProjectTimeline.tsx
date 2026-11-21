@@ -245,7 +245,7 @@ export function ProjectTimeline({
       },
     );
   };
-  /** Adds the default transition at the nearest cut, saying so when the media made it shorter. */
+  /** Adds transitions and reports any cuts that kept their old transition or ran out of media. */
   const transitionKey = (scope: Parameters<typeof addTransition>[2]) => () => {
     revealTimeline();
     const target = {
@@ -253,12 +253,14 @@ export function ProjectTimeline({
       frame: clock.frame(),
     };
     let note: string | null = null;
+    let noChanges = false;
     void editTimeline(projectId, "Add transition", (current) => {
       const added = addTransition(current, target, scope);
       note = added.note;
+      noChanges = added.commands.length === 0;
       return added.commands;
     }).then((accepted) => {
-      if (accepted && note)
+      if ((accepted || noChanges) && note)
         showToast(note, null, { tone: "info", transient: true });
     });
   };

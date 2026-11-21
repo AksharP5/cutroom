@@ -727,7 +727,9 @@ export async function editTimeline(
                   command.type === "roll" ||
                   command.type === "swap"
                 ? [command.from, command.to]
-                : [],
+                : command.type === "setTransitions"
+                  ? command.cuts.flatMap(({ from, to }) => [from, to])
+                  : [],
         ),
       ),
       creates,

@@ -3,6 +3,7 @@ import {
   clipEnd,
   cutRoom,
   frameTime,
+  planBatchTransitions,
   toFrames,
 } from "../../shared/timeline/apply";
 import { takesTransition } from "../../shared/timeline/transition";
@@ -406,13 +407,44 @@ const moveTrack =
  * Ctrl+T, Alt+T and Shift+T: a one-second cross dissolve, centred on the cut nearest the playhead
  * between two clips on unlocked auto-select tracks, or touching the selected clips when there are
  * some. Ctrl+T takes a picture cut first and its linked sound with it; Alt+T only picture, Shift+T
- * only sound. Where the media runs short it takes the longest that fits and says so.
+ * only sound. Multiple selected clips take every cut between them. Where the media runs short it takes the longest that fits and says so.
  */
 export function addTransition(
   timeline: Timeline,
   target: EditTarget,
   scope: "both" | "video" | "audio",
 ): { commands: CommandInput[]; note: string | null } {
+  if (onePerLink(selectedIn(timeline, target)).length > 1) {
+    const { cuts, kept, skipped, shortened } = planBatchTransitions(
+      timeline,
+      target.selection,
+      scope,
+    );
+    if (!cuts.length && !skipped && !kept)
+      throw new TimelineError(
+        "not_found",
+        "No cuts between selected clips on the requested tracks.",
+      );
+    if (!cuts.length && !kept)
+      throw new TimelineError(
+        "out_of_bounds",
+        `${skipped} selected ${skipped === 1 ? "cut had" : "cuts had"} too little media for a transition.`,
+      );
+    const note = [
+      kept &&
+        `Kept ${kept} existing ${kept === 1 ? "transition" : "transitions"}.`,
+      skipped &&
+        `${skipped} ${skipped === 1 ? "cut had" : "cuts had"} too little media for a transition.`,
+      shortened &&
+        `${shortened} ${shortened === 1 ? "transition was" : "transitions were"} shortened to fit.`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return {
+      commands: cuts.length ? [{ type: "setTransitions", cuts }] : [],
+      note: note || null,
+    };
+  }
   const tracks = new Map(
     timeline.tracks
       .filter((track) => track.autoSelect && !track.locked)

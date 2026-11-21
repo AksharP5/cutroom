@@ -494,7 +494,7 @@ export const keymap = {
   },
   editAddTransition: {
     area: "Edit",
-    label: "Add transition at the nearest cut",
+    label: "Add transitions",
     keys: ["Ctrl+T"],
   },
   editAddVideoTransition: {

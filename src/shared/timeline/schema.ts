@@ -1139,6 +1139,23 @@ export const CommandSchema = z.discriminatedUnion("type", [
     ),
   z
     .object({
+      type: z.literal("setTransitions"),
+      cuts: z
+        .array(
+          z.object({
+            from: clipId,
+            to: clipId,
+            transition: TransitionSchema,
+          }),
+        )
+        .min(1)
+        .max(10_000),
+    })
+    .describe(
+      "Set transitions on several explicit cuts in one pass. Each cut must be on one track, and each transition must fit exactly. To choose default transitions between selected clips and skip cuts without handles, use timeline_add_transitions.",
+    ),
+  z
+    .object({
       type: z.literal("setTiming"),
       clipId,
       playbackRate: z
