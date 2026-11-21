@@ -264,7 +264,7 @@ export function editReply(
       range: timeline.range,
     }),
     ...(JSON.stringify(old.main) !== JSON.stringify(timeline.main) && {
-      main: timeline.main,
+      main: timeline.main ?? null,
     }),
     ...(old.duration !== timeline.duration && { duration: timeline.duration }),
   };
