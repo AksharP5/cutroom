@@ -264,28 +264,61 @@ test("absolute regular media only, with no links escaping through the project's 
 
 test("startup reclaims abandoned copy files and hard-link names", async () => {
   const source = join(root, "original.mp4");
+  const cross = join(await otherFilesystem(), "recording.mov");
   const legacy = `.import-${crypto.randomUUID()}.hf012345.tmp`;
   const live = `.import-${process.pid}-${crypto.randomUUID()}.hf012345.tmp`;
+  const copySize = 4 * 1024 * 1024;
   await writeFile(source, "original bytes");
-  await writeFile(assets(legacy), "old partial");
+  await writeFile(cross, Buffer.alloc(copySize, 17));
   await writeFile(assets(live), "live import");
   await writeFile(assets(".import-notes.tmp"), "owner's note");
 
-  // A subprocess takes the same filesystem actions as staging, then leaves without cleanup.
-  const child = Bun.spawnSync([
-    process.execPath,
-    "-e",
-    `import { linkSync, writeFileSync } from "node:fs";
-     const [source, assets] = process.argv.slice(1);
-     const path = () => \`\${assets}/.import-\${process.pid}-\${crypto.randomUUID()}.hf012345.tmp\`;
-     linkSync(source, path());
-     writeFileSync(path(), "partial copy");
-     process.kill(process.pid, "SIGKILL");`,
-    source,
-    assets(),
-  ]);
+  // Start the real copy and hard-link staging, then kill its process after a chunk lands.
+  const child = Bun.spawnSync(
+    [
+      process.execPath,
+      "-e",
+      `import { createApp } from "./src/server/app";
+     import { importMedia } from "./src/server/projects/mediaImport";
+     import { createReviewService } from "./src/server/projects/review";
+     const { dataDir, projectsDir, id, sources } = JSON.parse(process.argv[1]);
+     const { projects } = await createApp({ dataDir, projectsDir });
+     let firstChunk = true;
+     await importMedia(projects, createReviewService(projects), await projects.get(id), { sources }, {
+       signal: new AbortController().signal,
+       async progress({ copied }) {
+         if (copied === 0) return;
+         if (firstChunk) {
+           firstChunk = false;
+           await Bun.sleep(100);
+           return;
+         }
+         process.kill(process.pid, "SIGKILL");
+       },
+     });`,
+      JSON.stringify({
+        dataDir: data,
+        projectsDir: join(root, "projects"),
+        id: project.id,
+        sources: await Promise.all([openIdentity(source), openIdentity(cross)]),
+      }),
+    ],
+    { cwd: join(import.meta.dir, ".."), timeout: 3000 },
+  );
   expect(child.signalCode).toBe("SIGKILL");
   expect((await stat(source)).nlink).toBe(2);
+  const staged = (await mediaNames()).filter(
+    (name) => /^\.import-\d+-/.test(name) && name !== live,
+  );
+  expect(staged).toHaveLength(2);
+  const sizes = await Promise.all(
+    staged.map(async (name) => (await stat(assets(name))).size),
+  );
+  const partial = Math.max(...sizes);
+  expect(partial).toBeGreaterThan("original bytes".length);
+  expect(partial).toBeLessThan(copySize);
+
+  await writeFile(assets(legacy), "old partial");
 
   await runtime.dispose();
   runtime = await createApp({
