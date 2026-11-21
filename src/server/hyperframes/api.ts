@@ -233,17 +233,21 @@ export function createHyperframesApi(
       >;
     }
   >();
-  const sourceTimings = new Map<
-    string,
-    {
-      ids: ReadonlySet<string>;
-      dependencies: string;
-      mixStamp: string;
-      authored: PreviewTiming;
-      compiled: PreviewTiming;
-      mix: TrackGainPreview;
-    }
-  >();
+  type SourceTiming = {
+    ids: ReadonlySet<string>;
+    dependencies: string;
+    mixStamp: string;
+    authored: PreviewTiming;
+    compiled: PreviewTiming;
+    mix: TrackGainPreview;
+  };
+  const sourceTimings = new Map<string, SourceTiming>();
+  const rememberSourceTiming = (id: string, timing: SourceTiming) => {
+    sourceTimings.delete(id);
+    sourceTimings.set(id, timing);
+    if (sourceTimings.size > 8)
+      sourceTimings.delete(sourceTimings.keys().next().value!);
+  };
   // Keep the compiler's decision outside authored HTML. The upstream cache's write
   // hook supplies the final, stable response bytes, including all augmentations.
   type TimingBuild = { allowed?: boolean; signature?: string };
@@ -1501,12 +1505,11 @@ export function createHyperframesApi(
         window.duration,
       ]),
     );
-    const rememberSourceTiming = async (
-      id: string,
+    const checkedSourceTiming = async (
       compiled: PreviewTiming,
       dependencies: string,
-      sourceVersion: string,
-    ) => {
+      sourceVersion: string | undefined,
+    ): Promise<SourceTiming | undefined> => {
       if (
         !sourceTimingRequest ||
         !sourceBefore ||
@@ -1520,17 +1523,14 @@ export function createHyperframesApi(
       const ids = new Set(compiled.clips.map(({ id }) => id));
       const authored = previewSourceTiming(sourceBefore.content, ids);
       if (authored?.clips.length !== ids.size) return;
-      sourceTimings.delete(id);
-      sourceTimings.set(id, {
+      return {
         ids,
         dependencies,
         mixStamp: mixStampBefore,
         authored,
         compiled,
         mix,
-      });
-      if (sourceTimings.size > 8)
-        sourceTimings.delete(sourceTimings.keys().next().value!);
+      };
     };
     if (timingOnly) {
       c.header("Cache-Control", "no-store");
@@ -1560,13 +1560,13 @@ export function createHyperframesApi(
           { error: "The preview changed while reading timing." },
           409,
         );
-      if (documentId)
-        await rememberSourceTiming(
-          documentId,
-          document.timing,
-          dependencies,
-          sourceAfter.version,
-        );
+      const checked = await checkedSourceTiming(
+        document.timing,
+        dependencies,
+        sourceAfter.version,
+      );
+      if (checked && documentId && timingDocuments.get(documentId) === loaded)
+        rememberSourceTiming(documentId, checked);
       return c.json({
         version: sourceBefore.version,
         timing: document.timing,
@@ -1578,16 +1578,14 @@ export function createHyperframesApi(
     }
     if (navigation && documentId && !timingDocuments.has(documentId)) {
       const compiled = document.timing;
-      if (sourceTimingRequest && compiled && dependencies) {
-        const version = (await readEntry())?.version;
-        if (version)
-          await rememberSourceTiming(
-            documentId,
-            compiled,
-            dependencies,
-            version,
-          );
-      }
+      const checked =
+        sourceTimingRequest && compiled && dependencies
+          ? await checkedSourceTiming(
+              compiled,
+              dependencies,
+              (await readEntry())?.version,
+            )
+          : undefined;
       if (!timingDocuments.has(documentId)) {
         timingDocuments.set(documentId, {
           projectId,
@@ -1601,6 +1599,7 @@ export function createHyperframesApi(
           timingDocuments.delete(oldest);
           sourceTimings.delete(oldest);
         }
+        if (checked) rememberSourceTiming(documentId, checked);
       }
     }
     return new Response(document.html, {
