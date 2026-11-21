@@ -340,6 +340,11 @@ test.skipIf(!ready)(
             ? [
                 "-vf",
                 "setpts='if(lt(N,3),if(eq(N,0),0,if(eq(N,1),40,50)),if(eq(N,3),100,if(eq(N,4),120,200)))'",
+                // Give the last VFR packet one tick inside the MP4 edit list.
+                "-bf",
+                "0",
+                "-bsf:v",
+                "setts=duration=1",
                 "-fps_mode",
                 "vfr",
                 "-enc_time_base",
