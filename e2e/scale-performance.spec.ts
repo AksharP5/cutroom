@@ -111,6 +111,8 @@ for (const pipeline of [false, true]) {
       expect(loaded).toBeLessThanOrEqual(16);
 
       const offset = 24;
+      // The native path waits for a decoded frame from the isolated preview.
+      const rippleBudgetMs = pipeline ? 1500 : 4000;
       const ripple = async (shot: number) => {
         const frame = shots[shot]!.start + offset;
         await seek(page, frame);
@@ -123,7 +125,12 @@ for (const pipeline of [false, true]) {
         await expect
           .poll(() => picture(page), { timeout: 6000 })
           .toBe(shots[shot + 1]!.source + offset);
-        return Date.now() - started;
+        const elapsed = Date.now() - started;
+        expect(
+          elapsed,
+          `Ripple at shot ${shot} reached the expected picture`,
+        ).toBeLessThan(rippleBudgetMs);
+        return elapsed;
       };
       const lateShot = 400;
       const lateRippleMs = await ripple(lateShot);

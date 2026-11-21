@@ -62,6 +62,13 @@ const HistorySchema = z.object({
   canRedo: z.boolean(),
   entries: z.array(z.object({ id: z.string(), undone: z.boolean() })),
 });
+const emptyHistory = { canUndo: false, canRedo: false };
+const pendingEditHistory = { canUndo: true, canRedo: false };
+let confirmedHistory = emptyHistory;
+const historyControls = (projectId: string) =>
+  pending.some((edit) => edit.projectId === projectId)
+    ? pendingEditHistory
+    : confirmedHistory;
 const TimelineEditsSchema = TimelineViewSchema.pick({ clipEdits: true });
 
 /** The engine's timeline for the open composition, shared by the viewer, transport, and timeline. */
@@ -76,7 +83,7 @@ export const useTimeline = create(() => ({
   view: null as TimelineView | null,
   /** Review can still show pending edits when authored source cannot produce a timeline. */
   failedRead: null as ApiError | null,
-  history: { canUndo: false, canRedo: false },
+  history: emptyHistory,
   /** Selected clip ids. A clip id names one clip for good, so an id is that clip or gone. */
   selection: emptySelection as Selection,
   /** Dragged edges snap to clip edges, the playhead, markers, and in and out. Session state. */
@@ -175,13 +182,14 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
   dismissOutside();
   rippleRevision = null;
   historyHead = undefined;
+  confirmedHistory = emptyHistory;
   useTimeline.setState({
     projectId,
     composition: ROOT_COMPOSITION,
     parents: [],
     view: null,
     failedRead: null,
-    history: { canUndo: false, canRedo: false },
+    history: emptyHistory,
     selection: emptySelection,
   });
   signal?.addEventListener(
@@ -195,7 +203,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
         projectId: null,
         view: null,
         failedRead: null,
-        history: { canUndo: false, canRedo: false },
+        history: emptyHistory,
         selection: emptySelection,
       });
     },
@@ -383,9 +391,10 @@ function settle(
     dismissRipple();
     rippleRevision = null;
   }
+  confirmedHistory = history;
   useTimeline.setState({
     view: shown(projectId),
-    history,
+    history: historyControls(projectId),
     failedRead: null,
   });
   // The engine read this timeline, so an earlier refusal no longer stands.
@@ -414,12 +423,14 @@ async function read(
         const history = await historyRead.catch(() => null);
         if (!signal?.aborted) select?.(null);
         if (!signal?.aborted && isOpen(projectId, composition)) {
-          if (history)
+          if (history) {
             historyHead = history.entries.findLast(
               (entry) => !entry.undone,
             )?.id;
+            confirmedHistory = history;
+          }
           useTimeline.setState({
-            ...(history && { history }),
+            history: historyControls(projectId),
             failedRead: error,
           });
         }
@@ -763,9 +774,11 @@ export async function editTimeline(
       rippleFeedback(view.timeline, timeline, commands, clipboards);
     // Other edits can look up this bus as soon as it appears in the inspector.
     // Publish only the persisted ID from the server.
-    if (!createsAudioGroup(commands))
-      useTimeline.setState({ view: { ...view, timeline } });
     pending.push(made);
+    useTimeline.setState({
+      ...(!createsAudioGroup(commands) && { view: { ...view, timeline } }),
+      history: pendingEditHistory,
+    });
     onApply?.(timeline, commands, named.origins);
     let report = "";
     let revision: string | undefined;
@@ -874,7 +887,10 @@ export async function editTimeline(
     if (edit) pending = pending.filter((item) => item !== edit);
     if (useTimeline.getState().projectId !== projectId) return false;
     const shownView = shown(projectId);
-    if (shownView) useTimeline.setState({ view: shownView });
+    useTimeline.setState({
+      ...(shownView && { view: shownView }),
+      history: historyControls(projectId),
+    });
     lastToast = humanReason(
       error instanceof Error ? error.message : String(error),
       view.timeline,

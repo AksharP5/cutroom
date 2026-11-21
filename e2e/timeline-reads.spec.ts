@@ -71,6 +71,34 @@ test("each change reads the timeline once, and outside edits still show", async 
     timeline: 2,
     history: 2,
   });
+  const toolbar = page.getByRole("toolbar", { name: "Tools", exact: true });
+  const undo = toolbar.getByRole("button", { name: "Undo", exact: true });
+  const redo = toolbar.getByRole("button", { name: "Redo", exact: true });
+  await expect(undo).toBeDisabled();
+  await expect(redo).toBeEnabled();
+  const requested = Promise.withResolvers<void>();
+  const respond = Promise.withResolvers<void>();
+  const commands = `**${api}/commands`;
+  await page.route(commands, async (route) => {
+    requested.resolve();
+    await respond.promise;
+    await route.fulfill({
+      status: 422,
+      json: { error: "The edit was refused." },
+    });
+  });
+  try {
+    await page.keyboard.press("e");
+    await requested.promise;
+    await expect(undo).toBeEnabled();
+    await expect(redo).toBeDisabled();
+  } finally {
+    respond.resolve();
+  }
+  await expect(undo).toBeDisabled();
+  await expect(redo).toBeEnabled();
+  await page.unroute(commands);
+
   expect(
     await readsFor(async () => {
       const { revision } = TimelineViewSchema.parse(
