@@ -64,7 +64,7 @@ import { editTransform, hasTransformEdit } from "./transform";
 import { editStyle, takesStyleField } from "./elementStyle";
 import { FREEZE_DIR, localMediaPath, sourceUrl } from "../media";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
-import { editGrade } from "./grade";
+import { canHaveGrade, editGrade } from "./grade";
 import {
   moveKeyframe,
   holdKeyframes,
@@ -966,7 +966,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         };
       }
       if (input.kind === "adjustment") {
-        const { effect, ...edit } = input.region;
+        const region = input.region;
         onCreate(id, { insert: input });
         return {
           ...timeline,
@@ -975,7 +975,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             placed({
               kind: "element",
               adjustment: true,
-              region: editRegion(defaultRegion(effect, fps), edit),
+              region: region
+                ? editRegion(defaultRegion(region.effect, fps), region)
+                : null,
             }),
           ],
         };
@@ -1398,10 +1400,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           ? target.region
           : regionFor(target, command.region, fps);
       if (command.grade !== undefined) {
-        if (target.kind !== "video" && target.kind !== "image")
+        if (!canHaveGrade(target.kind, target.adjustment))
           throw new TimelineError(
             "unsupported",
-            `${clipName(target)} is not a video or image, so it has no colour grade.`,
+            `${clipName(target)} has no colour grade.`,
           );
         if (target.sourceRestrictions?.grade)
           throw new TimelineError(

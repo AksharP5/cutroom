@@ -10,13 +10,14 @@ import { isPrivateProjectFile } from "@hyperframes/studio-server/safe-path";
 import { z } from "zod";
 import type { ProjectStore } from "../projects/store";
 import { projectStatePath, projectWritePath } from "../projects/path";
-import { REVIEW_STATE_PATH } from "../../shared/review";
+import { REVIEW_LEDGER_PATH, REVIEW_STATE_PATH } from "../../shared/review";
 import { LEDGER_PATH } from "../projects/ids";
 import { HttpError } from "../../shared/errors";
 import { FREEZE_DIR, inFreezeAssets } from "../../shared/media";
 
 const stateFiles = new Set([
   REVIEW_STATE_PATH,
+  REVIEW_LEDGER_PATH,
   LEDGER_PATH,
   ...STUDIO_SIGNATURE_MANIFEST_PATHS,
   ".media/manifest.jsonl",

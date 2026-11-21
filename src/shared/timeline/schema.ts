@@ -421,7 +421,7 @@ export const ClipSchema = z.object({
     .boolean()
     .default(false)
     .describe(
-      "An adjustment layer: a clip that draws nothing itself and applies its region to every picture on the video tracks below it while it plays",
+      "An adjustment layer: a clip that draws nothing itself and applies its region and grade to the picture on the video tracks below it while it plays",
     ),
   style: ElementStyleSchema.default({}).describe(
     "The clip's inline look, as setClip.style writes it: text style on text elements, fill, corner radius, shadow, blur, layout size, and fit on video and images. A field is left out when the clip sets no inline value Cutroom can read; the composition's stylesheets and animation then decide it.",
@@ -429,7 +429,7 @@ export const ClipSchema = z.object({
   grade: GradeSchema.nullable()
     .default(null)
     .describe(
-      "The colour grade on a video or image clip, from HyperFrames' data-color-grading: adjust, wheels, curves, hueCurves, secondaries and a look lut, mixed by intensity. null is ungraded. Change it with setClip.grade; sourceRestrictions.grade says why it cannot be changed.",
+      "The colour grade on a video, image or adjustment layer, from HyperFrames' data-color-grading: adjust, wheels, curves, hueCurves, secondaries and a look lut, mixed by intensity. null is ungraded. Change it with setClip.grade; sourceRestrictions.grade says why it cannot be changed.",
     ),
   /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
   fadeIn: frame
@@ -694,9 +694,11 @@ export const InsertAdjustmentSchema = z.object({
   duration: frames.describe("Length on the timeline in frames"),
   region: RegionEditSchema.extend({
     effect: RegionSchema.shape.effect,
-  }).describe(
-    "The effect and its region. Omitted fields take the effect's defaults: a 0.5 s ease-in-out ramp at each end for a zoom; blur and highlight show at full strength from the first frame to the last.",
-  ),
+  })
+    .optional()
+    .describe(
+      "A region effect to add to the layer. Omit region to insert an empty adjustment layer for grading. A zoom defaults to a 0.5 s ease-in-out ramp at each end; blur and highlight show at full strength from the first frame to the last.",
+    ),
   label: label.optional(),
 });
 
@@ -909,7 +911,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       ids: pieceIds,
     })
     .describe(
-      'Add a media clip; a title with clip.kind "title": words on screen with a preset entrance and exit that stay on the clip\'s edges through every edit; a scene with clip.kind "composition": a host clip that plays another composition file of the project from its start; or an adjustment layer with clip.kind "adjustment": a zoom, blur or highlight on a video track that applies to every picture below it while it plays.',
+      'Add a media clip; a title with clip.kind "title": words on screen with a preset entrance and exit that stay on the clip\'s edges through every edit; a scene with clip.kind "composition": a host clip that plays another composition file of the project from its start; or an adjustment layer with clip.kind "adjustment": a layer on a video track whose region or grade applies to the picture below it while it plays.',
     ),
   z
     .object({
@@ -998,7 +1000,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       grade: GradeEditSchema.nullable()
         .optional()
         .describe(
-          "Change a video or image clip's colour grade: fields left out keep their values; null removes the whole grade. Check the picture with timeline_view.",
+          "Change a video, image or adjustment layer's colour grade: fields left out keep their values; null removes the whole grade. Check the picture with timeline_view.",
         ),
       enabled: z
         .boolean()
@@ -1327,6 +1329,7 @@ export const ClipEditSchema = z.object({
 export const TAB_ORIGIN_HEADER = "x-cutroom-tab-origin";
 /** On a command batch's answer: what the edit did, naming its clips, URI-encoded. */
 export const EDIT_SUMMARY_HEADER = "x-cutroom-edit-summary";
+export const EDIT_HISTORY_HEADER = "x-cutroom-history-entry";
 export const TabOriginSchema = z.uuid();
 
 export const AnimationLeftBehindSchema = z.object({
@@ -1349,6 +1352,8 @@ export const TimelineViewSchema = z.object({
     .optional(),
   agentChanges: z.array(z.string()).optional(),
   clipEdits: z.array(ClipEditSchema).optional(),
+  /** Active review entry keys for attributing outside edits without the full ledger. */
+  reviewEntries: z.array(z.string()).optional(),
   composition: z.string(),
   revision: z.string(),
   timeline: TimelineSchema,

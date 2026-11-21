@@ -27,7 +27,7 @@ import { version } from "../shared/version";
 import { HttpError } from "../shared/errors";
 import type { ProjectStore } from "./projects/store";
 import { isMissing, projectPath } from "./projects/store";
-import { REVIEW_STATE_PATH } from "../shared/review";
+import { REVIEW_LEDGER_PATH, REVIEW_STATE_PATH } from "../shared/review";
 import type { createTimelineRoutes } from "./timeline/routes";
 import { TabOriginSchema } from "../shared/timeline/schema";
 import { VIEW_PATH } from "./projects/view";
@@ -245,7 +245,9 @@ export function createWorkspaceRoutes(options: {
             );
             return;
           }
-          const review = filename.replaceAll("\\", "/") === REVIEW_STATE_PATH;
+          const review = [REVIEW_STATE_PATH, REVIEW_LEDGER_PATH].includes(
+            filename.replaceAll("\\", "/"),
+          );
           if (
             !review &&
             filename

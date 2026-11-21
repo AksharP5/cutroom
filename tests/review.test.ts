@@ -1187,6 +1187,7 @@ describe("review identity binding", () => {
 describe("owner actions over MCP", () => {
   test("an outside client acts for the owner, but Cutroom's agent cannot accept its own work", async () => {
     let refused = "";
+    let refusedAll = false;
     const queue = await setup(async (_turn, native) => {
       const [item] = await queue.items();
       await call(native, "review_complete", {
@@ -1199,10 +1200,17 @@ describe("owner actions over MCP", () => {
         arguments: { projectId: queue.project.id, noteId: item!.id },
       });
       refused = JSON.stringify(accepted.content);
+      const all = await native.callTool({
+        name: "review_accept_all",
+        arguments: { projectId: queue.project.id },
+      });
+      refusedAll =
+        all.isError === true && JSON.stringify(all.content).includes("409");
     });
     const id = await queue.note("Swap the logo");
     await send(queue.agents, queue.project, "Go");
     expect(refused).toContain("409");
+    expect(refusedAll).toBe(true);
     await call(queue.mcp, "review_send_back", {
       projectId: queue.project.id,
       noteId: id,

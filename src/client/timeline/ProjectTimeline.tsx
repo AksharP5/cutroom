@@ -14,6 +14,7 @@ import {
   shownTracks,
 } from "../../shared/timeline/tracks";
 import { addTitleCommands } from "../edit/addTitle";
+import { addLayerCommands } from "../edit/regionCommands";
 import { addTransition, editKeys, trimmedPlayhead } from "../edit/keys";
 import { useTextEdit } from "../edit/preview";
 import { showSource, useSource } from "../edit/source";
@@ -209,6 +210,32 @@ export function ProjectTimeline({
         useTimeline.setState({ selection: { ids: new Set([id]), anchor: id } });
         useWorkspace.setState({ inspector: true });
         useTextEdit.setState({ clipId: id });
+      },
+    );
+  };
+  const addAdjustment = (track?: Track) => {
+    const at = clock.frame();
+    void editTimeline(
+      projectId,
+      "Add adjustment layer",
+      (current) =>
+        addLayerCommands(
+          current,
+          track?.kind === "video"
+            ? track
+            : destinationTracks(
+                current.tracks,
+                useViewSettings.getState().destinations,
+              ).video,
+          at,
+        ),
+      undefined,
+      (_, commands) => {
+        const id = commands.find((command) => command.type === "insert")?.clip
+          .id;
+        if (id === undefined) return;
+        useTimeline.setState({ selection: { ids: new Set([id]), anchor: id } });
+        useWorkspace.setState({ inspector: true });
       },
     );
   };
@@ -529,6 +556,7 @@ export function ProjectTimeline({
       })),
       "separator",
       { action: "cutroomAddTitle" },
+      { label: "Add adjustment layer", run: () => addAdjustment(track) },
       { label: "Add video track", run: () => addTrack("video") },
       { label: "Add audio track", run: () => addTrack("audio") },
       // A row the timeline does not hold yet has nothing to remove.

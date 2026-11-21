@@ -22,6 +22,7 @@ import {
 } from "../../shared/project";
 import {
   MediaFileDetailsSchema,
+  MediaImportSchema,
   MediaRemoveSchema,
   MediaRenameSchema,
   mediaKind,
@@ -58,6 +59,13 @@ interface McpOptions {
   fetch?: LocalFetch;
   /** Set only in the bridge Cutroom gives its native agents; other clients act as `external`. */
   agentToken?: string;
+  importMedia?: (
+    projectId: string,
+    paths: string[],
+    signal: AbortSignal,
+    agentName: string,
+    progress: (copied: number, total: number) => void,
+  ) => Promise<{ files: string[] } | null>;
 }
 const project = {
   projectId: z.string().describe("Project ID returned by projects_list"),
@@ -271,6 +279,58 @@ export function createMcpServer(options: McpOptions = {}) {
       annotations: readOnly,
     },
     (input) => request(`/projects/${id(input.projectId)}/media`),
+  );
+  registry.registerTool(
+    "media_import",
+    {
+      description:
+        "Import video, audio, or images by absolute path through the local stdio bridge. Same-filesystem files are hard linked; other files are copied. Returns project-relative paths in assets/. The batch is one undo step. This reads outside the project and always asks in Cutroom.",
+      inputSchema: { ...project, ...MediaImportSchema.shape },
+      annotations: edit,
+    },
+    async ({ projectId, paths }, extra) => {
+      try {
+        if (!options.importMedia)
+          throw new Error(
+            "Use Cutroom's local stdio MCP bridge to import media by path.",
+          );
+        const progressToken = extra._meta?.progressToken;
+        const result = await options.importMedia(
+          projectId,
+          paths,
+          extra.signal,
+          AgentNameSchema.parse(
+            server.server.getClientVersion()?.name ?? "Agent",
+          ),
+          (copied, total) => {
+            if (progressToken === undefined) return;
+            void extra
+              .sendNotification({
+                method: "notifications/progress",
+                params: { progressToken, progress: copied, total },
+              })
+              .catch(() => {
+                // A disconnected client cannot receive progress.
+              });
+          },
+        );
+        if (!result) throw new Error("Media import cancelled.");
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          structuredContent: { result },
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: error instanceof Error ? error.message : String(error),
+            },
+          ],
+        };
+      }
+    },
   );
   registry.registerTool(
     "media_files",

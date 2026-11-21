@@ -23,6 +23,12 @@ export interface Layer {
   grade: GradeTexture | null;
 }
 
+export interface Adjustment {
+  /** The number of pictures below this adjustment. */
+  after: number;
+  grade: GradeTexture;
+}
+
 const VERTEX = `#version 300 es
 in vec2 local;
 uniform mat3 place;
@@ -82,6 +88,31 @@ void main() {
   }
   if (gradeGrid.x > 0.0) rgb = texture(grade, rgb * gradeGrid.x + gradeGrid.y).rgb;
   colour = vec4(rgb * brightness * opacity, opacity);
+}`;
+
+const COMPOSITE_VERTEX = `#version 300 es
+void main() {
+  float x = (gl_VertexID & 1) == 0 ? -1.0 : 1.0;
+  float y = (gl_VertexID & 2) == 0 ? -1.0 : 1.0;
+  gl_Position = vec4(x, y, 0.0, 1.0);
+}`;
+
+const COMPOSITE_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp sampler3D;
+uniform sampler2D backdrop;
+uniform sampler3D grade;
+uniform vec2 gradeGrid;
+uniform vec4 pageColour;
+out vec4 colour;
+void main() {
+  if (pageColour.a > 0.0) {
+    colour = pageColour;
+    return;
+  }
+  vec4 below = texelFetch(backdrop, ivec2(gl_FragCoord.xy), 0);
+  vec3 rgb = below.rgb / max(below.a, 0.00001);
+  colour = vec4(texture(grade, rgb * gradeGrid.x + gradeGrid.y).rgb * below.a, below.a);
 }`;
 
 /**
@@ -157,12 +188,16 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       throw new Error(gl.getShaderInfoLog(shader) ?? "A shader failed.");
     return shader;
   };
-  const program = gl.createProgram()!;
-  gl.attachShader(program, compile(gl.VERTEX_SHADER, VERTEX));
-  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAGMENT));
-  gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS))
-    throw new Error(gl.getProgramInfoLog(program) ?? "The program failed.");
+  const link = (vertex: string, fragment: string) => {
+    const program = gl.createProgram()!;
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS))
+      throw new Error(gl.getProgramInfoLog(program) ?? "The program failed.");
+    return program;
+  };
+  const program = link(VERTEX, FRAGMENT);
   gl.useProgram(program);
   const uniform = (name: string) => gl.getUniformLocation(program, name);
   const place = uniform("place");
@@ -201,17 +236,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   gl.activeTexture(gradeUnit);
   gl.bindTexture(gl.TEXTURE_3D, ungraded);
   gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA8, 1, 1, 1);
-  let boundGrade: number | null = null;
-  const bindGrade = (lut: GradeTexture | null) => {
-    const key = lut?.key ?? null;
-    if (key === boundGrade) return;
-    boundGrade = key;
-    gl.activeTexture(gradeUnit);
-    if (!lut) {
-      gl.bindTexture(gl.TEXTURE_3D, ungraded);
-      gl.uniform2f(gradeGrid, 0, 0);
-      return;
-    }
+  const bindCube = (lut: GradeTexture) => {
     let texture = grades.get(lut.key);
     if (texture) {
       grades.delete(lut.key);
@@ -244,9 +269,82 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       );
     }
     grades.set(lut.key, texture);
+  };
+  let boundGrade: number | null | undefined = null;
+  const bindGrade = (lut: GradeTexture | null) => {
+    const key = lut?.key ?? null;
+    if (key === boundGrade) return;
+    boundGrade = key;
+    gl.activeTexture(gradeUnit);
+    if (!lut) {
+      gl.bindTexture(gl.TEXTURE_3D, ungraded);
+      gl.uniform2f(gradeGrid, 0, 0);
+      return;
+    }
+    bindCube(lut);
     // The cube's first and last values live at the centres of the edge texels.
     gl.uniform2f(gradeGrid, (lut.size - 1) / lut.size, 0.5 / lut.size);
   };
+
+  const makeComposite = () => {
+    const stage = link(COMPOSITE_VERTEX, COMPOSITE_FRAGMENT);
+    const grid = gl.getUniformLocation(stage, "gradeGrid");
+    const page = gl.getUniformLocation(stage, "pageColour");
+    const backdrop = gl.createTexture();
+    gl.useProgram(stage);
+    gl.uniform1i(gl.getUniformLocation(stage, "grade"), textures.length);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, backdrop);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    let backdropWidth = 0;
+    let backdropHeight = 0;
+    const restore = () => {
+      gl.useProgram(program);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, textures[0]!.texture);
+    };
+    restore();
+    return {
+      grade(lut: GradeTexture) {
+        // The lower tracks stay on the GPU. Their premultiplied alpha survives the LUT.
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, backdrop);
+        const { width, height } = canvas;
+        if (width !== backdropWidth || height !== backdropHeight) {
+          gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 0, 0, width, height, 0);
+          backdropWidth = width;
+          backdropHeight = height;
+        } else
+          gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
+        gl.useProgram(stage);
+        gl.activeTexture(gradeUnit);
+        bindCube(lut);
+        gl.uniform2f(grid, (lut.size - 1) / lut.size, 0.5 / lut.size);
+        gl.disable(gl.BLEND);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        gl.enable(gl.BLEND);
+        boundGrade = undefined;
+        restore();
+      },
+      background(r: number, g: number, b: number) {
+        // Page colour is beneath the tracks and outside the grade.
+        gl.useProgram(stage);
+        gl.uniform4f(page, r, g, b, 1);
+        gl.blendFunc(gl.ONE_MINUS_DST_ALPHA, gl.ONE);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.uniform4f(page, 0, 0, 0, 0);
+        restore();
+      },
+      dispose() {
+        gl.deleteTexture(backdrop);
+        gl.deleteProgram(stage);
+      },
+    };
+  };
+  let composite: ReturnType<typeof makeComposite> | undefined;
+
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   /** Each layer's plane bytes, reused from draw to draw. */
@@ -334,6 +432,66 @@ export function createCompositor(canvas: HTMLCanvasElement) {
     };
   };
 
+  const drawPicture = (
+    layer: Layer,
+    width: number,
+    height: number,
+    copied: Awaited<ReturnType<typeof copy>>,
+  ) => {
+    if (layer.opacity <= 0) return;
+    const { width: iw, height: ih } = layer.intrinsic;
+    // object-fit, centred as object-position's default.
+    const scale =
+      layer.fit === "contain"
+        ? Math.min(width / iw, height / ih)
+        : layer.fit === "cover"
+          ? Math.max(width / iw, height / ih)
+          : null;
+    const cw = scale === null ? width : iw * scale;
+    const ch = scale === null ? height : ih * scale;
+    gl.uniform4f(content, (width - cw) / 2, (height - ch) / 2, cw, ch);
+    gl.uniformMatrix3fv(orient, false, ORIENT[layer.turn]);
+    // clip-path: inset() on the box, which also bounds a covering picture.
+    const { top, right, bottom, left } = layer.crop;
+    gl.uniform4f(shown, left, top, width - right, height - bottom);
+    // translate, rotate, then scale, about the box's centre.
+    const angle = (layer.rotation * Math.PI) / 180;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const ox = width / 2;
+    const oy = height / 2;
+    const a = cos * layer.scaleX;
+    const b2 = sin * layer.scaleX;
+    const c = -sin * layer.scaleY;
+    const d = cos * layer.scaleY;
+    const tx = ox + layer.x - (a * ox + c * oy);
+    const ty = oy + layer.y - (b2 * ox + d * oy);
+    gl.uniformMatrix3fv(place, false, [a, b2, 0, c, d, 0, tx, ty, 1]);
+    gl.uniform1f(opacity, layer.opacity);
+    gl.uniform1f(brightness, layer.brightness);
+    if (copied) {
+      gl.uniform1i(planes, 1);
+      gl.uniformMatrix3fv(toRgb, false, copied.convert.matrix);
+      gl.uniform3fv(offset, copied.convert.offset);
+      for (const [at, plane] of copied.planes.entries())
+        upload(
+          textures[at]!,
+          plane.width,
+          plane.height,
+          gl.RED,
+          gl.R8,
+          plane.bytes,
+          plane.stride,
+        );
+    } else {
+      gl.uniform1i(planes, 0);
+      const { displayWidth: fw, displayHeight: fh } = layer.frame;
+      upload(textures[0]!, fw, fh, gl.RGBA, gl.RGBA, layer.frame);
+    }
+    bindGrade(layer.grade);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  };
+
   return {
     /**
      * Draws the layers bottom first over the page colour, or over nothing when it is null, in a
@@ -344,6 +502,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       background: string | null,
       width: number,
       height: number,
+      adjustments?: readonly Adjustment[],
     ) {
       const copies = await Promise.all(
         layers.map((layer, slot) => copy(layer.frame, slot)),
@@ -361,69 +520,30 @@ export function createCompositor(canvas: HTMLCanvasElement) {
             (at) => parseInt(background.slice(at, at + 2), 16) / 255,
           )
         : [0, 0, 0];
-      gl.clearColor(r!, g!, b!, background ? 1 : 0);
+      if (adjustments?.length) gl.clearColor(0, 0, 0, 0);
+      else gl.clearColor(r!, g!, b!, background ? 1 : 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniform2f(view, width, height);
-      for (const [index, layer] of layers.entries()) {
-        if (layer.opacity <= 0) continue;
-        const { width: iw, height: ih } = layer.intrinsic;
-        // object-fit, centred as object-position's default.
-        const scale =
-          layer.fit === "contain"
-            ? Math.min(width / iw, height / ih)
-            : layer.fit === "cover"
-              ? Math.max(width / iw, height / ih)
-              : null;
-        const cw = scale === null ? width : iw * scale;
-        const ch = scale === null ? height : ih * scale;
-        gl.uniform4f(content, (width - cw) / 2, (height - ch) / 2, cw, ch);
-        gl.uniformMatrix3fv(orient, false, ORIENT[layer.turn]);
-        // clip-path: inset() on the box, which also bounds a covering picture.
-        const { top, right, bottom, left } = layer.crop;
-        gl.uniform4f(shown, left, top, width - right, height - bottom);
-        // translate, rotate, then scale, about the box's centre.
-        const angle = (layer.rotation * Math.PI) / 180;
-        const cos = Math.cos(angle);
-        const sin = Math.sin(angle);
-        const ox = width / 2;
-        const oy = height / 2;
-        const a = cos * layer.scaleX;
-        const b2 = sin * layer.scaleX;
-        const c = -sin * layer.scaleY;
-        const d = cos * layer.scaleY;
-        const tx = ox + layer.x - (a * ox + c * oy);
-        const ty = oy + layer.y - (b2 * ox + d * oy);
-        gl.uniformMatrix3fv(place, false, [a, b2, 0, c, d, 0, tx, ty, 1]);
-        gl.uniform1f(opacity, layer.opacity);
-        gl.uniform1f(brightness, layer.brightness);
-        gl.bufferData(
-          gl.ARRAY_BUFFER,
-          new Float32Array([0, 0, width, 0, 0, height, width, height]),
-          gl.STREAM_DRAW,
-        );
-        const copied = copies[index];
-        if (copied) {
-          gl.uniform1i(planes, 1);
-          gl.uniformMatrix3fv(toRgb, false, copied.convert.matrix);
-          gl.uniform3fv(offset, copied.convert.offset);
-          for (const [at, plane] of copied.planes.entries())
-            upload(
-              textures[at]!,
-              plane.width,
-              plane.height,
-              gl.RED,
-              gl.R8,
-              plane.bytes,
-              plane.stride,
-            );
-        } else {
-          gl.uniform1i(planes, 0);
-          const { displayWidth: fw, displayHeight: fh } = layer.frame;
-          upload(textures[0]!, fw, fh, gl.RGBA, gl.RGBA, layer.frame);
-        }
-        bindGrade(layer.grade);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.bufferData(
+        gl.ARRAY_BUFFER,
+        new Float32Array([0, 0, width, 0, 0, height, width, height]),
+        gl.STREAM_DRAW,
+      );
+      if (!adjustments?.length) {
+        for (const [index, layer] of layers.entries())
+          drawPicture(layer, width, height, copies[index]);
+        return;
       }
+      const stage = (composite ??= makeComposite());
+      let adjustment = 0;
+      for (const [index, layer] of layers.entries()) {
+        while (adjustments[adjustment]?.after === index)
+          stage.grade(adjustments[adjustment++]!.grade);
+        drawPicture(layer, width, height, copies[index]);
+      }
+      while (adjustment < adjustments.length)
+        stage.grade(adjustments[adjustment++]!.grade);
+      if (background) stage.background(r!, g!, b!);
     },
     isAvailable,
     dispose() {
@@ -434,6 +554,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       for (const texture of grades.values()) gl.deleteTexture(texture);
       grades.clear();
       gl.deleteTexture(ungraded);
+      composite?.dispose();
       gl.deleteBuffer(corners);
       gl.deleteProgram(program);
       buffers.length = 0;
