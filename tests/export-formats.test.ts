@@ -60,9 +60,15 @@ async function render(
     fps?: Fps;
     range?: { start: number; end: number } | null;
     outputResolution?: "landscape";
+    frameCache?: string;
   },
 ) {
-  const workers = createRenderWorkers({ scratchDir: `${root}-scratch` });
+  const workers = createRenderWorkers({
+    scratchDir: `${root}-scratch`,
+    frameCache: options.frameCache
+      ? { dir: options.frameCache, maxBytes: 16 * 1024 ** 2 }
+      : undefined,
+  });
   const filename = `${name}.${options.format}`;
   const state = workers.start(
     {
@@ -149,6 +155,56 @@ const near = (actual: number[], expected: number[], tolerance: number) =>
   );
 
 const ready = browserExecutable() && Bun.which("ffmpeg");
+
+test.skipIf(!ready)(
+  "MOV, WebM and GIF keep full chroma when extracting SDR footage for browser capture",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-chroma-formats-"));
+    try {
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=s=96x64:r=30:d=0.2",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        join(root, "source.mp4"),
+      ]);
+      await writeFile(
+        join(root, "index.html"),
+        `<!doctype html><style>body{margin:0}</style>
+<main data-composition-id="main" data-width="96" data-height="64" data-duration="0.2">
+  <video id="picture" class="clip" src="source.mp4" muted data-start="0" data-duration="0.2" data-track-index="0"
+    style="position:absolute;inset:0;width:100%;height:100%"></video>
+</main>`,
+      );
+      for (const format of ["mov", "webm", "gif"] as const) {
+        // Give each export a cold cache so it has to extract its own frame.
+        const frameCache = join(`${root}-scratch`, format + "-frames");
+        await render(root, format, { format, frameCache });
+        const frame = (await readdir(frameCache, { recursive: true })).find(
+          (name) => name.endsWith("frame_00001.jpg"),
+        );
+        if (!frame) throw new Error(`${format} did not extract a JPEG.`);
+        expect((await probe(join(frameCache, frame)))[0], format).toMatchObject(
+          {
+            codec_name: "mjpeg",
+            pix_fmt: "yuvj444p",
+          },
+        );
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(`${root}-scratch`, { recursive: true, force: true });
+    }
+  },
+  60_000,
+);
 
 test.skipIf(!ready)(
   "MOV and WebM exports key over a colour, whole or marked, with their codecs and sound",
