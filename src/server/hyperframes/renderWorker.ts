@@ -69,6 +69,7 @@ try {
     scratchDir: input.scratchDir,
     projectDir: input.projectDir,
     scopedMedia: input.scopedMedia,
+    fullChromaJpeg: input.options.format === "mp4",
   });
   const {
     createConsoleLogger,

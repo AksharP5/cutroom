@@ -253,6 +253,7 @@ export function registerRenderIsolation(
     scratchDir: string;
     projectDir: string;
     scopedMedia?: boolean;
+    fullChromaJpeg?: boolean;
   },
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
@@ -376,11 +377,24 @@ export function registerRenderIsolation(
           "return [...cutroomColour(metadata), SDR_CANVAS_PASSTHROUGH_FILTER];",
           url,
         );
-        // Frames cached before the conversion keep their old colours otherwise.
+        if (range?.fullChromaJpeg) {
+          // Keep the source chroma grid sharp as it expands to RGB. The JPEG
+          // then keeps all of that chroma until Chromium composites the frame.
+          source = replaceOnce(
+            source,
+            "scale=flags=neighbor+accurate_rnd,format=gbrp,scale=out_color_matrix=bt601:out_range=pc:flags=neighbor,format=yuv420p",
+            "scale=flags=neighbor+accurate_rnd+full_chroma_int,format=gbrp,scale=out_color_matrix=bt601:out_range=pc:flags=bicubic+accurate_rnd,format=yuv444p",
+            url,
+          );
+        }
+        // Cache entries must carry the colour transform and the JPEG layout.
         source = replaceOnce(
           source,
           '            work.finalFrameOnly ? "final-frame" : undefined,\n',
-          '            work.finalFrameOnly ? "final-frame" : undefined,\n            ...cutroomColour(work.metadata).filter((filter) => filter.startsWith("colorspace=")),\n',
+          `            work.finalFrameOnly ? "final-frame" : undefined,\n            ...cutroomColour(work.metadata).filter((filter) => filter.startsWith("colorspace=")),\n` +
+            (range?.fullChromaJpeg
+              ? '            work.format === "jpg" ? "cutroom-jpeg444" : undefined,\n'
+              : ""),
           url,
         );
         if (range?.range) {
