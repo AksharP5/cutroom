@@ -116,18 +116,11 @@ test("clearing audio automation under a dissolve keeps the native speed curve", 
   const volume = { target: "volume", points: [{ t: 0, v: 0.5 }] };
   const automation = (lanes: unknown[]) =>
     JSON.stringify({ version: 1, lanes });
-  const unbent = {
-    ...rate,
-    points: [
-      { t: 0, v: 0.25 },
-      { t: 4, v: 4 },
-    ],
-  };
   const source = `<main data-composition-id="main" data-duration="6" data-fps="30">
     <video id="lead" src="lead.mp4" muted data-link="first" data-start="0" data-duration="2" data-track-index="0"></video>
     <audio id="lead-sound" src="lead.mp4" data-link="first" data-start="0" data-duration="2" data-track-index="1"></audio>
-    <video id="picture" src="shot.mp4" muted data-link="shot" data-start="2" data-duration="4" data-media-start="2" data-track-index="0" data-automation='${automation([unbent])}'></video>
-    <audio id="sound" src="shot.mp4" data-link="shot" data-start="2" data-duration="4" data-media-start="2" data-track-index="1" data-automation='${automation([unbent, volume])}'></audio>
+    <video id="picture" src="shot.mp4" muted data-link="shot" data-start="2" data-duration="4" data-media-start="2" data-track-index="0" data-automation='${automation([rate])}'></video>
+    <audio id="sound" src="shot.mp4" data-link="shot" data-start="2" data-duration="4" data-media-start="2" data-track-index="1" data-automation='${automation([rate, volume])}'></audio>
   </main>`;
   const transition = edited(source, [
     {
@@ -138,10 +131,6 @@ test("clearing audio automation under a dissolve keeps the native speed curve", 
       transition: { kind: "dissolve", alignment: "center", duration: 30 },
     },
   ]);
-  const authored = transition.html.replaceAll(
-    '"target":"rate","points":[{"t":0.5,"v":0.25}',
-    '"target":"rate","points":[{"t":0,"v":0.25,"curve":1}',
-  );
   const authoredRate = (html: string, id: string) => {
     const parsed = parseComposition(html, settingsOf(transition.timeline));
     const raw = parsed.elements.get(id)?.attrs["data-automation"];
@@ -149,10 +138,10 @@ test("clearing audio automation under a dissolve keeps the native speed curve", 
       ? parseAutomation(raw).lanes.find(({ target }) => target === "rate")
       : undefined;
   };
-  const expected = authoredRate(authored, "picture");
+  const expected = authoredRate(transition.html, "picture");
   expect(expected?.points[0]?.curve).toBe(1);
-  expect(authoredRate(authored, "sound")).toEqual(expected);
-  const result = edited(authored, [
+  expect(authoredRate(transition.html, "sound")).toEqual(expected);
+  const result = edited(transition.html, [
     { type: "setClip", clipId: "sound", automation: null },
   ]);
   expect(authoredRate(result.html, "sound")).toEqual(expected);

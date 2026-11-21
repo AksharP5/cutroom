@@ -12,6 +12,7 @@ import {
   frames,
   micros,
   pictureAt,
+  positionAtSource,
   place,
   resolvePiece,
   sampleOf,
@@ -311,6 +312,20 @@ test("a ramp trimmed at an offset half-microsecond keeps its integral and pictur
   const sameRate = { ...grid, rate: film };
   expect(pictureAt(sameRate, sourceAt(piece, frames(1, film)))).toBe(0n);
   expect(pictureAt(sameRate, sourceAt(piece, frames(2, film)))).toBe(1n);
+});
+
+test("a ramp's inverse keeps a source boundary just beyond the output frame tolerance", () => {
+  const piece = resolvePiece(
+    placedMedia({
+      fps: thirty,
+      elements: [
+        { ...media, curve: { target: "rate", points: [{ t: 0, v: 1 }] } },
+      ],
+    }),
+    thirty,
+  );
+  const end = positionAtSource(piece, fraction(10000334n, 10000000n));
+  expect(firstFrame(end, thirty)).toBe(31n);
 });
 
 test("picture lookup handles differing rates, native PTS, hidden heads and held tails", () => {

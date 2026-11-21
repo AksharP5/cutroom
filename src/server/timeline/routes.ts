@@ -78,8 +78,9 @@ import {
   declareTrackLayer,
   parseComposition,
   patchComposition,
-  timelineContent,
   authoredAudioGroupContent,
+  timelineContent,
+  timelineReadbackMatches,
   settingsOf,
 } from "./composition";
 import type { HostedComposition, ParsedComposition } from "./composition";
@@ -353,7 +354,7 @@ export function createTimelineRoutes(
     const hasScript = [current.parsed, ...snapshots.values()].some((source) =>
       /<script\b/i.test(source.html),
     );
-    // Commands keep source times exact; the written timeline holds them to the microsecond.
+    // Each command reads and writes the source map at the clip’s current frame.
     const timeline = canonicalTimeline(
       applyAll(current.parsed.timeline, batch.commands, {
         composition,
@@ -459,7 +460,7 @@ export function createTimelineRoutes(
       fonts: current.parsed.fonts,
     });
     const { timeline: written } = writtenSource;
-    if (!Bun.deepEquals(timelineContent(written), timelineContent(timeline)))
+    if (!timelineReadbackMatches(written, timeline))
       throw new TimelineError(
         "unsupported",
         "This edit cannot be written to the composition exactly. Edit the source instead.",
