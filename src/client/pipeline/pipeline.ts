@@ -362,10 +362,11 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         : [index],
     );
     // Moving one row either way finds its decoder open; the saved take uses the main decoder.
+    // Until the first hover, only the next row warms, so it does not compete with a cold take.
     const neighbours = auditionNeighbours(eligible, selected);
     const resident = new Set([
       eligible.includes(selected) ? selected : undefined,
-      ...neighbours,
+      ...(hovered === null ? neighbours.slice(-1) : neighbours),
     ]);
     for (const [index, take] of warming.takes) {
       if (resident.has(index)) continue;

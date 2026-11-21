@@ -225,7 +225,7 @@ export function versionMedia(
   };
 }
 
-/** The playable rows either side of the current one in menu and keyboard order, wrapping. */
+/** The playable rows before and after the current one in menu and keyboard order, wrapping. */
 export function auditionNeighbours(
   available: readonly number[],
   current: number,
