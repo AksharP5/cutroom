@@ -5,7 +5,7 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
-import { frameTime } from "../../shared/timeline/apply";
+import { frameTime, planBatchTransitions } from "../../shared/timeline/apply";
 import { TimelineDestinationsSchema } from "../../shared/timeline/view";
 import type { RequestOptions } from "./server";
 import { agentTimeline, editReply, filterTimeline } from "./timelineReply";
@@ -229,6 +229,7 @@ export function registerTimelineTools(
     label: string,
     commands: CommandInput[],
     measured: object,
+    noteId?: string,
   ) =>
     request(
       `/projects/${id(projectId)}/commands`,
@@ -238,6 +239,7 @@ export function registerTimelineTools(
         expectedRevision: before.revision,
         label,
         commands,
+        noteId,
       },
       {
         reply: (result) => ({
@@ -275,6 +277,61 @@ export function registerTimelineTools(
     destructiveHint: false,
     openWorldHint: false,
   };
+  server.registerTool(
+    "timeline_add_transitions",
+    {
+      description:
+        "Add default centred transitions to every cut between two selected clips on the same unlocked track, as one undo step. Video and audio cuts are counted separately. The reply reports how many were added, skipped for lack of handles, or shortened to fit. If none fit, the timeline is left unchanged.",
+      inputSchema: {
+        ...input,
+        clipIds: z.array(z.string().min(1)).min(2),
+        scope: z.enum(["both", "video", "audio"]).default("both"),
+        expectedRevision: CommandBatchSchema.shape.expectedRevision,
+        noteId: CommandBatchSchema.shape.noteId,
+      },
+      annotations: edits,
+    },
+    async ({
+      projectId,
+      composition,
+      clipIds,
+      scope,
+      expectedRevision,
+      noteId,
+    }) => {
+      const before = await readView(projectId, composition);
+      if (!before.ok) return before.failure;
+      if (before.view.revision !== expectedRevision)
+        return failed(
+          409,
+          "Timeline changed. Read it again before adding transitions.",
+        );
+      const ids = new Set(before.view.timeline.clips.map(({ id }) => id));
+      const missing = clipIds.find((id) => !ids.has(id));
+      if (missing) return failed(404, `No clip has id ${missing}.`);
+      const { cuts, skipped, shortened } = planBatchTransitions(
+        before.view.timeline,
+        new Set(clipIds),
+        scope,
+      );
+      const measured = { added: cuts.length, skipped, shortened };
+      if (!cuts.length) {
+        const reply = { measured, revision: before.view.revision };
+        return {
+          content: [{ type: "text", text: JSON.stringify(reply) }],
+          structuredContent: { result: reply },
+        };
+      }
+      return commit(
+        projectId,
+        before.view,
+        "Add transitions",
+        [{ type: "setTransitions", cuts }],
+        measured,
+        noteId,
+      );
+    },
+  );
   server.registerTool(
     "audio_duck",
     {

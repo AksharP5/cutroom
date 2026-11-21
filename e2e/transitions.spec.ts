@@ -135,3 +135,58 @@ test("Ctrl+T adds a cross dissolve the viewer mixes; its end drags its length; D
   await expect.poll(async () => (await read())?.duration).toBe(60);
   await expect(page.locator("[data-transition]")).toHaveCount(2);
 });
+
+test("selected cuts get transitions by scope in one edit and skip missing handles", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Selected cuts", width: 320, height: 240, duration: 8 },
+      })
+    ).json(),
+  );
+  const path = `/api/cutroom/projects/${project.id}`;
+  media(join(project.path, "red.mp4"), "red", 440);
+  const clips = [1, 1, 2, 0]
+    .map((start, index) => {
+      const timing = `data-start="${index * 2}" data-duration="2" data-media-start="${start}" data-link="l${index}"`;
+      return `<video id="v${index}" muted src="red.mp4" ${timing} data-track-index="0"></video><audio id="a${index}" src="red.mp4" ${timing} data-track-index="1"></audio>`;
+    })
+    .join("");
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><main data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="8">${clips}</main>`,
+  );
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".tl-lanes [data-clip]")).toHaveCount(8);
+  await page.keyboard.press("Control+a");
+  const transitionIds = page.locator("[data-transition]");
+  const cases = [
+    { key: "Shift+t", ids: ["a1", "a2"], skipped: "1 cut had" },
+    { key: "Alt+t", ids: ["v1", "v2"], skipped: "1 cut had" },
+    { key: "Control+t", ids: ["a1", "a2", "v1", "v2"], skipped: "2 cuts had" },
+  ];
+  for (const { key, ids, skipped } of cases) {
+    const saved = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === `${path}/commands`,
+    );
+    await page.keyboard.press(key);
+    await expect(transitionIds).toHaveCount(ids.length);
+    const response = await saved;
+    expect(response.ok(), await response.text()).toBe(true);
+    const { timeline } = TimelineViewSchema.parse(await response.json());
+    expect(
+      timeline.clips
+        .filter(({ transitionIn }) => transitionIn)
+        .map(({ id }) => id)
+        .sort(),
+    ).toEqual(ids);
+    await expect(page.getByRole("banner").getByRole("status")).toContainText(
+      `${skipped} too little media`,
+    );
+    await page.keyboard.press("Control+z");
+    await expect(transitionIds).toHaveCount(0);
+  }
+});

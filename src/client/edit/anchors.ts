@@ -9,6 +9,7 @@ import type {
 } from "../../shared/timeline/schema";
 
 function sameClip(seen: Clip, clip: Clip | undefined) {
+  if (seen === clip) return true;
   if (!clip) return false;
   return (Object.keys(seen) as (keyof Clip)[]).every((key) => {
     if (key === "mediaStart") {
@@ -31,9 +32,11 @@ function sameClip(seen: Clip, clip: Clip | undefined) {
     if (key === "title") return sameTitle(seen.title, clip.title);
     if (key === "style") return sameStyle(seen.style, clip.style);
     if (key === "region") return sameRegion(seen.region, clip.region);
-    if (key === "fx" || key === "grade")
-      return JSON.stringify(seen[key]) === JSON.stringify(clip[key]);
-    return seen[key] === clip[key];
+    return (
+      seen[key] === clip[key] ||
+      (typeof seen[key] === "object" &&
+        JSON.stringify(seen[key]) === JSON.stringify(clip[key]))
+    );
   });
 }
 
@@ -56,6 +59,7 @@ export function editAnchors(
   if (
     !commands.some(
       ({ type }) =>
+        type === "setTransitions" ||
         type === "paste" ||
         type === "remove" ||
         type === "trim" ||
@@ -98,6 +102,8 @@ export function editAnchors(
       // when the command was built. A retry must still check the intended clip.
       if (command.type === "setClip" && command.grade !== undefined)
         return [command.clipId];
+      if (command.type === "setTransitions")
+        return command.cuts.flatMap(({ from, to }) => [from, to]);
       return [];
     }),
   );

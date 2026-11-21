@@ -701,7 +701,9 @@ export async function editTimeline(
               ? [command.clipId]
               : command.type === "setTransition"
                 ? [command.from, command.to]
-                : [],
+                : command.type === "setTransitions"
+                  ? command.cuts.flatMap(({ from, to }) => [from, to])
+                  : [],
         ),
       ),
       creates,

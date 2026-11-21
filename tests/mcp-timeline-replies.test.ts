@@ -452,3 +452,36 @@ test("setClip scale, rotation and crop answer as changed fields and read back as
     await mcp.close();
   }
 });
+
+test("timeline_add_transitions reports added cuts and writes one undo step", async () => {
+  const mcp = await connect();
+  try {
+    const path = join(mcp.project.path, "index.html");
+    await writeFile(
+      path,
+      `<main data-composition-id="main" data-duration="6" data-fps="30">
+      <audio id="a" src="voice.wav" data-start="0" data-duration="2" data-media-start="1" data-track-index="1"></audio>
+      <audio id="b" src="voice.wav" data-start="2" data-duration="2" data-media-start="1" data-track-index="1"></audio>
+      <audio id="c" src="voice.wav" data-start="4" data-duration="2" data-media-start="1" data-track-index="1"></audio>
+    </main>`,
+    );
+    const before = await mcp.read();
+    const reply = await mcp.result("timeline_add_transitions", {
+      clipIds: ["a", "b", "c"],
+      scope: "audio",
+      expectedRevision: before.revision,
+    });
+    expect(reply).toMatchObject({
+      measured: { added: 2, skipped: 0, shortened: 0 },
+    });
+    expect(
+      (await mcp.read()).timeline.clips.filter((clip) => clip.transitionIn),
+    ).toHaveLength(2);
+    await mcp.result("history_undo", {});
+    expect(
+      (await mcp.read()).timeline.clips.filter((clip) => clip.transitionIn),
+    ).toHaveLength(0);
+  } finally {
+    await mcp.close();
+  }
+});
