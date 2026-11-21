@@ -236,6 +236,12 @@ class HistoryAdvanced extends HttpError {
   }
 }
 
+/**
+ * Uncached composition inverses one group search may compute. Finding a group of k edits takes
+ * about k; pruning it takes about k²/2, so groups up to 5 are pruned fully.
+ */
+const GROUP_PLAN_STEPS = 24;
+
 const appSidecars = new Set([
   ...STUDIO_SIGNATURE_MANIFEST_PATHS,
   ".media/manifest.jsonl",
@@ -358,7 +364,17 @@ function replayCache(history: ProjectHistory) {
     }
     return parsed;
   };
-  return { text, document, timeline: timelineReplayCache() };
+  // A group search replans the same file inverses many times. Keyed by the hashes and settings they read.
+  const reversals = new Map<
+    string,
+    {
+      source: string;
+      structural: boolean;
+      content?: Buffer;
+      hash?: string;
+    } | null
+  >();
+  return { text, document, timeline: timelineReplayCache(), reversals };
 }
 
 function replayPlan(
@@ -478,17 +494,26 @@ function replayPlan(
             text(file.after),
             text(standing),
           ]);
-          const merged = reverseTimeline(
-            cache.timeline,
+          const key = JSON.stringify([
             file.path,
-            { before: old, after: written, current: now },
-            {
-              before,
-              after,
-              current,
-              restored: result,
-            },
-          );
+            file.before,
+            file.after,
+            standing,
+            before,
+            after,
+            current,
+            result,
+          ]);
+          let merged = cache.reversals.get(key);
+          if (merged === undefined) {
+            merged = reverseTimeline(
+              cache.timeline,
+              file.path,
+              { before: old, after: written, current: now },
+              { before, after, current, restored: result },
+            );
+            cache.reversals.set(key, merged);
+          }
           if (merged === null) {
             conflict.add(file.path);
             if (
@@ -499,8 +524,15 @@ function replayPlan(
               conflict.add(PROJECT_DOCUMENT_PATH);
             continue;
           }
-          restored =
-            merged.source === old ? file.before : remember(merged.source);
+          if (merged.source === old) restored = file.before;
+          else {
+            merged.content ??= Buffer.from(merged.source);
+            merged.hash ??= createHash("sha256")
+              .update(merged.content)
+              .digest("hex");
+            blobs.set(merged.hash, merged.content);
+            restored = merged.hash;
+          }
           if (!merged.structural) checkedReferences.add(file.path);
         } else if (standing !== file.after) {
           conflict.add(file.path);
@@ -687,7 +719,6 @@ export async function replayHistory(
                 ? "ordinary"
                 : "explicit";
             const later = relatedEdits(entries, target, original, direction);
-            const searchDeadline = performance.now() + 300;
             const conflicts = await plan.add(target, original, replay, later);
             if (!conflicts.length) {
               if (input.withEntries)
@@ -725,27 +756,65 @@ export async function replayHistory(
               );
             let together: ReturnType<typeof replayPlan> | undefined;
             let timedOut = false;
-            if (performance.now() >= searchDeadline) timedOut = true;
-            if (isOwner(who) && direction === "undo" && canGroup(original)) {
-              // Test the proposed inverses against a virtual project, newest first.
-              const planGroup = async (selected: ReadonlySet<string>) => {
-                const combined = replayPlan(cache, currentHash);
-                const inverse = entries
-                  .filter(({ id }) => selected.has(id))
-                  .reverse();
-                const reverted = new Set<string>();
-                for (const entry of [...inverse, target]) {
-                  if (performance.now() >= searchDeadline) return;
+            // Test the proposed inverses against a virtual project, newest first. Inverses are
+            // cached by the files they read, so a replan only pays for the steps that changed.
+            // The search is bounded by computed inverses, not time, so a loaded machine finds the same group.
+            let steps = GROUP_PLAN_STEPS;
+            const validated = new Set<string>();
+            const planGroup = async (selected: ReadonlySet<string>) => {
+              const combined = replayPlan(cache, currentHash);
+              const inverse = entries
+                .filter(({ id }) => selected.has(id))
+                .reverse();
+              const reverted = new Set<string>();
+              for (const entry of [...inverse, target]) {
+                if (steps <= 0) return;
+                if (!validated.has(entry.id)) {
                   await validatePaths(project, entry);
-                  const active = entries.filter(({ id }) => !reverted.has(id));
-                  const rows = relatedEdits(active, entry, entry, "undo");
-                  const files = await combined.add(entry, entry, "group", rows);
-                  if (performance.now() >= searchDeadline) return;
-                  if (files.length) return { rows, files };
-                  reverted.add(entry.id);
+                  validated.add(entry.id);
                 }
-                return { combined };
-              };
+                const active = entries.filter(({ id }) => !reverted.has(id));
+                const rows = relatedEdits(active, entry, entry, "undo");
+                const computed = cache.reversals.size;
+                const files = await combined.add(entry, entry, "group", rows);
+                steps -= cache.reversals.size - computed;
+                if (files.length) return { rows, files };
+                reverted.add(entry.id);
+              }
+              return { combined };
+            };
+            const groupable =
+              isOwner(who) && direction === "undo" && canGroup(original);
+            if (input.withEntries) {
+              // The owner confirmed this exact group, so plan it once instead of searching again.
+              const confirmed = input.withEntries.flatMap(
+                (id) => entries.find((entry) => entry.id === id) ?? [],
+              );
+              const attempt =
+                groupable &&
+                confirmed.length === input.withEntries.length &&
+                confirmed.every(
+                  (entry) =>
+                    !entry.undone &&
+                    entries.indexOf(entry) > entries.indexOf(target) &&
+                    canGroup(entry),
+                )
+                  ? await planGroup(new Set(input.withEntries))
+                  : undefined;
+              const planned = attempt?.combined?.steps
+                .slice(0, -1)
+                .map(({ id }) => id);
+              if (
+                attempt?.combined &&
+                Bun.deepEquals(planned, input.withEntries)
+              )
+                return attempt.combined;
+              throw new HttpError(
+                409,
+                "The edits in the way changed. Use Undo again.",
+              );
+            }
+            if (groupable) {
               const selected = new Set<string>();
               let candidates = blocking;
               while (selected.size < 100) {
@@ -765,32 +834,19 @@ export async function replayHistory(
                 candidates = related(attempt.rows, attempt.files);
               }
               // A newer row can touch the same file without contributing to the conflict.
-              // Remove it if the remaining inverses still resolve the block.
+              // Remove it if the remaining inverses still resolve the block. Out of steps,
+              // the group found so far still resolves it, so it is offered as it is.
               if (together && selected.size > 1) {
                 for (const id of [...selected]) {
                   selected.delete(id);
                   const attempt = await planGroup(selected);
-                  if (!attempt) {
-                    timedOut = true;
-                    together = undefined;
-                    break;
-                  }
-                  if (attempt.combined) together = attempt.combined;
+                  if (attempt?.combined) together = attempt.combined;
                   else selected.add(id);
+                  if (!attempt) break;
                 }
               }
             }
             const ids = together?.steps.slice(0, -1).map(({ id }) => id);
-            if (input.withEntries) {
-              if (together && Bun.deepEquals(ids, input.withEntries))
-                return together;
-              throw new HttpError(
-                409,
-                timedOut
-                  ? "Checking the dependent edits took too long. Use Undo again to review the current choices."
-                  : "The edits in the way changed. Use Undo again.",
-              );
-            }
             const blockers = ids?.length
               ? ids
                   .flatMap(
@@ -801,7 +857,7 @@ export async function replayHistory(
             const latest = blockers.at(-1);
             throw new ReplayConflict(
               timedOut
-                ? `Can't ${direction} ${original.label} by itself. Checking the dependent edits took too long.`
+                ? `Can't ${direction} ${original.label} by itself. Too many related edits depend on it.`
                 : isMediaOperation(original)
                   ? `Can't ${direction} ${original.label}. The project changed since. You can move the file from Media.`
                   : latest

@@ -220,45 +220,71 @@ test("Skip advances past an outside-write conflict and persists after reopening"
   }
 });
 
-test("a large project keeps the group search bounded and leaves every file intact on refusal", async () => {
-  const { fixture, project, file, ledger, agent, edit, read, step } =
-    await projectWithHistory(historyProjectHtml);
-  try {
-    await writeFile(
-      join(project.path, "talk.mp4"),
-      "synthetic fixture with authored timing",
-    );
-    expect((await read()).timeline.clips.length).toBe(historyClips);
-    await edit([{ type: "remove", clipIds: ["talk-3"], ripple: true }]);
-    for (let index = 0; index < 10; index++)
-      await edit(
-        [
-          {
-            type: "trim",
-            clipId: `title-${index + 20}`,
-            edge: "end",
-            to:
-              (await read()).timeline.clips.find(
-                ({ id }) => id === `title-${index + 20}`,
-              )!.start + 90,
-          },
-        ],
-        agent,
-      );
-    const standing = await readFile(file, "utf8");
-    const head = ledger.list().at(-1)?.id;
-    const start = performance.now();
-    const refusal = await step("undo");
-    expect(refusal.status).toBe(409);
-    if (!refusal.body.conflict.undoTogether)
-      expect(refusal.body.error).toContain("took too long");
-    expect(performance.now() - start).toBeLessThan(1000);
-    expect(await readFile(file, "utf8")).toBe(standing);
-    expect(ledger.list().at(-1)?.id).toBe(head);
-  } finally {
-    await fixture.close();
+/** An owner ripple at 1,038 clips, then `count` agent trims that each depend on it. */
+async function rippleWithDependentTrims(count: number) {
+  const history = await projectWithHistory(historyProjectHtml);
+  const { project, agent, edit, read } = history;
+  await writeFile(
+    join(project.path, "talk.mp4"),
+    "synthetic fixture with authored timing",
+  );
+  const original = (await read()).timeline;
+  expect(original.clips.length).toBe(historyClips);
+  await edit([{ type: "remove", clipIds: ["talk-3"], ripple: true }]);
+  for (let index = 0; index < count; index++) {
+    const clipId = `title-${index + 20}`;
+    const { start } = (await read()).timeline.clips.find(
+      ({ id }) => id === clipId,
+    )!;
+    await edit([{ type: "trim", clipId, edge: "end", to: start + 90 }], agent);
   }
-}, 30_000);
+  return { ...history, original };
+}
+
+/** Presses Undo, then the offered Undo all, leaving every file as it was until the confirm. */
+async function undoAll(
+  history: Awaited<ReturnType<typeof rippleWithDependentTrims>>,
+  count: number,
+) {
+  const { file, ledger, step } = history;
+  const standing = await readFile(file, "utf8");
+  const head = ledger.list().at(-1)?.id;
+  const refusal = await step("undo");
+  expect(refusal.status).toBe(409);
+  const group = refusal.body.conflict.undoTogether;
+  expect(group.withEntries).toHaveLength(count);
+  expect(await readFile(file, "utf8")).toBe(standing);
+  expect(ledger.list().at(-1)?.id).toBe(head);
+  expect(await step("undo", group)).toMatchObject({ status: 200 });
+}
+
+for (const count of [3, 5, 10])
+  test(`Undo all ${count} dependent edits is offered and applied at 1,038 clips`, async () => {
+    const history = await rippleWithDependentTrims(count);
+    try {
+      await undoAll(history, count);
+      expect((await history.read()).timeline.clips).toEqual(
+        history.original.clips,
+      );
+    } finally {
+      await history.fixture.close();
+    }
+  }, 60_000);
+
+test("three projects find and apply their groups at the same time", async () => {
+  const histories = await Promise.all(
+    [5, 5, 5].map((count) => rippleWithDependentTrims(count)),
+  );
+  try {
+    await Promise.all(histories.map((history) => undoAll(history, 5)));
+    for (const history of histories)
+      expect((await history.read()).timeline.clips).toEqual(
+        history.original.clips,
+      );
+  } finally {
+    await Promise.all(histories.map(({ fixture }) => fixture.close()));
+  }
+}, 120_000);
 
 test("selective ripple restore keeps linked picture and sound, a dissolve, and local keyframes", async () => {
   const src = `<main data-composition-id="main" data-duration="20" data-fps="30" data-width="640" data-height="360">
