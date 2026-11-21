@@ -280,6 +280,7 @@ async function expectSamePictures(
     for (const bias of result.bias)
       expect(bias, `frame ${frame} bias`).toBeLessThan(1.5);
   }
+  return results;
 }
 
 async function parity(
@@ -287,6 +288,7 @@ async function parity(
   project: Project,
   fps: number,
   frames: number[],
+  exact = false,
 ) {
   const context = await browser.newContext({
     viewport: { width: 1720, height: 1050 },
@@ -304,8 +306,8 @@ async function parity(
     });
     try {
       const page = await onContext.newPage();
-      const on = await pictures(page, project, fps, frames, true);
-      await expectSamePictures(page, off, on, frames);
+      const on = await pictures(page, project, fps, frames, true, exact);
+      return await expectSamePictures(page, off, on, frames);
     } finally {
       await onContext.close();
     }
@@ -1124,50 +1126,71 @@ test("a 4K60 source stays native while overlapping HD footage and after a cut", 
   expect(result.map(({ numbers }) => numbers[1])).toEqual([24, 61, 112, 26]);
 });
 
-test("a 4K HEVC source draws through its finished 1080p editing proxy", async ({
-  page,
-  request,
-}) => {
-  test.setTimeout(120_000);
-  const created = await project(
-    request,
-    { num: 60, den: 1 },
-    (seconds) =>
-      `<video id="uhd" src="large.mkv" muted data-start="0" data-duration="${seconds(30)}" data-track-index="0" style="${fill}"></video>`,
-  );
-  await numbered(
-    join(created.path, "large.mkv"),
-    "60",
-    "3840x2160",
-    undefined,
-    [
+for (const { name, file, encoder } of [
+  {
+    name: "HEVC",
+    file: "large.mkv",
+    encoder: [
       "-c:v",
       "libx265",
       "-preset",
       "ultrafast",
       "-x265-params",
       "pools=2:frame-threads=2:log-level=error",
+    ],
+  },
+  {
+    name: "ProRes",
+    file: "large.mov",
+    encoder: [
+      "-c:v",
+      "prores_ks",
+      "-profile:v",
+      "2",
+      "-pix_fmt",
+      "yuv422p10le",
+      "-threads",
+      "4",
+    ],
+  },
+]) {
+  test(`a 4K ${name} source draws through its finished 1080p editing proxy`, async ({
+    browser,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const created = await project(
+      request,
+      { num: 60, den: 1 },
+      (seconds) =>
+        `<video id="uhd" src="${file}" muted data-start="0" data-duration="${seconds(30)}" data-track-index="0" style="${fill}"></video>`,
+    );
+    await numbered(join(created.path, file), "60", "3840x2160", undefined, [
+      ...encoder,
       "-t",
       "0.75",
-    ],
-  );
-  await expect
-    .poll(
-      async () =>
-        (
-          await request.get(
-            `/api/cutroom/projects/${created.id}/media/proxy?path=large.mkv`,
-            { headers: { range: "bytes=0-0" } },
-          )
-        ).status(),
-      { timeout: 60_000 },
-    )
-    .toBe(206);
-  const frames = [0, 15, 29];
-  const shots = await pictures(page, created, 60, frames, true, true);
-  const result = await compare(page, shots, shots);
-  expect(result.map(({ numbers }) => numbers[1])).toEqual(frames);
-});
+    ]);
+    const projectUrl = `/api/cutroom/projects/${created.id}`;
+    const { plan } = PipelineResponseSchema.parse(
+      await (await request.get(`${projectUrl}/pipeline`)).json(),
+    );
+    expect(plan).toMatchObject({ drawable: { uhd: "fill" } });
+    await expect
+      .poll(
+        async () =>
+          (
+            await request.get(`${projectUrl}/media/proxy?path=${file}`, {
+              headers: { range: "bytes=0-0" },
+            })
+          ).status(),
+        { timeout: 60_000 },
+      )
+      .toBe(206);
+    const frames = [0, 15, 29];
+    const results = await parity(browser, created, 60, frames, true);
+    expect(results.map(({ numbers }) => numbers[1])).toEqual(frames);
+  });
+}
 
 test("a title under footage switches only the intersecting range to HyperFrames", async ({
   page,

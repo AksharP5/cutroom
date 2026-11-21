@@ -11,6 +11,7 @@ import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { projectPath, unavailableProjectFile } from "../projects/path";
 import { compositionScope, mediaSources } from "./composition";
 import { localMediaInputOptions } from "../media/input";
+import { makesProxy } from "../media/settings";
 
 const ProbeSchema = z.object({
   streams: z
@@ -70,23 +71,20 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   const { streams, format } = ProbeSchema.parse(JSON.parse(output));
   const seconds = format.duration;
   const video = streams.find((stream) => stream.codec_type === "video");
-  let footageRefusal: string | undefined;
-  if (
+  const alpha =
     /^(yuva|rgba|bgra|argb|abgr|gbrap|ya)/.test(video?.pix_fmt ?? "") ||
-    video?.tags?.alpha_mode === "1"
-  )
-    footageRefusal = "its source has alpha";
-  else if (
+    video?.tags?.alpha_mode === "1";
+  const hdr =
     video?.color_transfer === "smpte2084" ||
-    video?.color_transfer === "arib-std-b67"
-  )
-    footageRefusal = "its source is HDR";
-  // HEVC can play an editing proxy. The pipeline checks the actual track it opens.
+    video?.color_transfer === "arib-std-b67";
+  let footageRefusal: string | undefined;
+  if (alpha) footageRefusal = "its source has alpha";
+  else if (hdr) footageRefusal = "its source is HDR";
   else if (
-    video?.codec_name !== "hevc" &&
     video?.width &&
     video.height &&
-    video.width * video.height > FOOTAGE_PIXEL_LIMIT
+    video.width * video.height > FOOTAGE_PIXEL_LIMIT &&
+    !makesProxy({ codec: video.codec_name ?? "unknown", alpha, hdr })
   )
     footageRefusal = `its source is ${video.width} × ${video.height}, above the pipeline's 1080p limit`;
 
