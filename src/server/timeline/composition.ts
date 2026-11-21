@@ -1,3 +1,4 @@
+import type { ProjectFormat } from "../../shared/projectFormat";
 import {
   AudioAutomationError,
   RATE_TARGET,
@@ -40,7 +41,7 @@ import {
   firstTextLine,
   isAudioKind,
 } from "../../shared/timeline/schema";
-import { parseFpsWithDefault } from "@hyperframes/core";
+import { fpsToFfmpegArg, parseFpsWithDefault } from "@hyperframes/core";
 import {
   clipStyle,
   readClipStyle,
@@ -646,6 +647,32 @@ function projectComposition(
     timing,
     lengthOf,
   };
+}
+
+/** Read physical edges before the timeline projection rounds them up for visibility. */
+export function formatWindows(
+  parsed: ParsedComposition,
+  mediaLengths: ReadonlyMap<string, number>,
+) {
+  const { root, byId, timing, clipIds } = projectComposition(
+    compositionMarkup(parsed.html, parsed.scope),
+    { mediaLengths },
+  );
+  return topLevelElements(root)
+    .filter((element) => element.attrs["data-start"] !== undefined)
+    .map((element) => {
+      const { startExpression, begin, finish } = timing(element);
+      const clipId = clipIds.get(element);
+      const name =
+        element.attrs["data-label"] ?? clipId ?? element.attrs.id ?? "clip";
+      const reference = startExpression?.kind === "reference";
+      if (!startExpression || (reference && !byId.has(startExpression.refId)))
+        throw new TimelineError(
+          "unsupported",
+          `Cannot change the frame rate of ${name}: its start cannot be resolved.`,
+        );
+      return { clipId, name, start: begin, end: finish, reference };
+    });
 }
 
 function withDuration<
@@ -1587,6 +1614,8 @@ function clipChanges(
   fps: Fps,
   normalizeTracks: boolean,
   mix: TrackMix,
+  rewriteTiming = false,
+  incomingHandle = 0,
 ): AttributeChange[] {
   const has = (name: string) => element.attrs[name] !== undefined;
   const changes: AttributeChange[] = [];
@@ -1602,8 +1631,9 @@ function clipChanges(
       before.playbackRate !== after.playbackRate ||
       (changedAutomation && parseRateLane(after.automation) !== null));
   const writeStart =
-    after.startRef === null &&
-    (before.start !== after.start || before.startRef !== null || regrid);
+    rewriteTiming ||
+    (after.startRef === null &&
+      (before.start !== after.start || before.startRef !== null || regrid));
   const writeAutomation =
     changedAutomation ||
     (writeStart &&
@@ -1611,8 +1641,17 @@ function clipChanges(
         parseRateLane(authoredAutomation)?.offset);
   const removesLegacyWindow =
     writeAutomation && authoredAutomation?.includes('"audioWindow"');
-  if (writeStart)
-    changes.push(["data-start", String(toSeconds(after.start, fps))]);
+  if (writeStart) {
+    const reference = after.startRef;
+    const offset = reference ? reference.offset - incomingHandle : 0;
+    const expression = reference
+      ? reference.clipId +
+        (offset
+          ? ` ${offset < 0 ? "-" : "+"} ${toSeconds(Math.abs(offset), fps)}`
+          : "")
+      : String(toSeconds(after.start, fps));
+    changes.push(["data-start", expression]);
+  }
   if (after.authoredAudioGroupId !== before.authoredAudioGroupId)
     changes.push(["data-audio-group", after.authoredAudioGroupId ?? null]);
   // Start and duration are written together so both land on the frame grid.
@@ -1676,7 +1715,11 @@ function clipChanges(
   if (Object.keys(style).length)
     changes.push(["style", writeClipStyle(element.attrs.style, style)]);
   const keyframes = keyframesAttribute(after.keyframes, fps);
-  if (keyframesAttribute(before.keyframes, fps) !== keyframes)
+  if (
+    rewriteTiming
+      ? has(KEYFRAMES_ATTRIBUTE)
+      : keyframesAttribute(before.keyframes, fps) !== keyframes
+  )
     changes.push([KEYFRAMES_ATTRIBUTE, keyframes]);
   if (before.volume !== after.volume)
     changes.push([
@@ -1687,7 +1730,7 @@ function clipChanges(
     ["fadeIn", "data-fade-in"],
     ["fadeOut", "data-fade-out"],
   ] as const)
-    if (before[field] !== after[field])
+    if (before[field] !== after[field] || (rewriteTiming && has(attribute)))
       changes.push([
         attribute,
         after[field] ? String(toSeconds(after[field], fps)) : null,
@@ -1712,14 +1755,20 @@ function clipChanges(
       ]);
   }
   if (before.link !== after.link) changes.push(["data-link", after.link]);
-  if (!sameRegion(before.region, after.region))
+  if (
+    !sameRegion(before.region, after.region) ||
+    (rewriteTiming && after.region)
+  )
     changes.push([
       REGION_ATTRIBUTE,
       after.region && regionAttribute(after.region, fps),
     ]);
-  if (after.title && !Bun.deepEquals(before.title, after.title)) {
+  if (
+    after.title &&
+    (rewriteTiming || !Bun.deepEquals(before.title, after.title))
+  ) {
     const written = new Map(
-      before.title ? titleAttributes(before.title, fps) : [],
+      before.title && !rewriteTiming ? titleAttributes(before.title, fps) : [],
     );
     changes.push(
       ...titleAttributes(after.title, fps).filter(
@@ -2426,7 +2475,7 @@ function titleMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
  * The frame size a region's pixels are measured in: the root's declared size, or HyperFrames'
  * default stage.
  */
-function compositionSize(root: SourceElement) {
+export function compositionSize(root: SourceElement) {
   const length = (name: string, fallback: number) => {
     const value = Number.parseFloat(root.attrs[name] ?? "");
     return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -2871,9 +2920,11 @@ export function patchComposition(
   hosted: ReadonlyMap<string, HostedComposition> = new Map(),
   /** Export-colour stills by their authored preview `src`. */
   freezeExports: ReadonlyMap<string, string> = new Map(),
+  format?: ProjectFormat,
 ): string {
   const { html, timeline: before } = parsed;
-  const { fps } = before;
+  const { fps } = after;
+  const rewriteTiming = fps !== before.fps;
   const hostedComposition = (src: string) => {
     const found = hosted.get(src);
     if (!found) throw new Error(`No composition was read for ${src}.`);
@@ -2926,7 +2977,7 @@ export function patchComposition(
       true,
     ),
   ];
-  const regions = regionStyle(after, compositionSize(parsed.root));
+  const regions = regionStyle(after, format ?? compositionSize(parsed.root));
   edits.push(
     ...managedStyleEdits(
       parsed,
@@ -2945,12 +2996,14 @@ export function patchComposition(
     if (next) {
       const changes = [
         ...clipChanges(
-          elementClip(clip, fps),
+          elementClip(clip, before.fps),
           elementClip(next, fps),
           element,
           fps,
           stacking !== null,
           mix,
+          rewriteTiming,
+          next.transitionIn ? framesBefore(next.transitionIn) : 0,
         ),
         ...versionChanges(clip, next, element.attrs, hostedComposition),
         ...transitionChanges(element.attrs, next, under(next.id), fps),
@@ -3183,7 +3236,15 @@ export function patchComposition(
   }
 
   const rootChanges: AttributeChange[] = [
-    ...(parsed.rootDurationAuthored && after.duration !== before.duration
+    ...(format
+      ? [
+          ["data-width", String(format.width)] as const,
+          ["data-height", String(format.height)] as const,
+          ["data-fps", fpsToFfmpegArg(fps)] as const,
+        ]
+      : []),
+    ...(parsed.rootDurationAuthored &&
+    (rewriteTiming || after.duration !== before.duration)
       ? [["data-duration", String(toSeconds(after.duration, fps))] as const]
       : []),
   ];

@@ -69,6 +69,10 @@ export function decodeLocal(us: bigint, fps: Fps): ExactTime {
     : micros(us);
 }
 
+/** Move an edited edge to the nearest frame, with ties going to the later frame. */
+export const nearestFrame = (position: ExactTime, fps: Fps) =>
+  halfUp(position.n * BigInt(fps.num), position.d * BigInt(fps.den));
+
 export const sampleOf = (position: ExactTime) =>
   halfUp(position.n * SAMPLES, position.d);
 
@@ -373,6 +377,42 @@ export function decode(
     zero:
       stored.mediaStart - rampMicros(curve, since(start, c, fps) - remainder),
   };
+}
+
+/** Express the same source line on another grid before encoding any of its edges. */
+export function regridSourceMap(
+  map: SourceMap,
+  curve: Curve,
+  from: Fps,
+  to: Fps,
+): SourceMap {
+  const oldAnchor = frames(map.c, from);
+  const anchor = frames(nearestFrame(oldAnchor, to), to);
+  const stored = encode(map, curve, anchor, from);
+  const next = decode(stored, curve, anchor, to);
+  if (typeof curve === "object") return { ...next, zero: map.zero };
+  if (Number(curve) !== 1) return next;
+
+  // A sub-microsecond change in the intercept can cross a 48 kHz half-sample.
+  // Choose the closest writable value on the original sample's side of the tie.
+  const sample = sampleOf(subtract(micros(map.zero), oldAnchor));
+  const sampleAt = ({ zero, c }: SourceMap) =>
+    sampleOf(subtract(micros(zero), frames(c, to)));
+  const shifted = sampleAt(next);
+  if (sample === shifted) return next;
+  const direction = sample > shifted ? 1 : -1;
+  for (const by of [1, 2]) {
+    const adjusted = decode(
+      { mediaStart: stored.mediaStart + direction * by },
+      curve,
+      anchor,
+      to,
+    );
+    if (sampleAt(adjusted) === sample) return adjusted;
+  }
+  throw new Error(
+    "Cannot represent the source audio sample on the new frame grid.",
+  );
 }
 
 type SourceTime = ExactTime | number;

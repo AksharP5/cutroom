@@ -1,3 +1,5 @@
+import { FormatFields } from "./components/FormatFields";
+import { defaultFormat, ProjectFormatSchema } from "../shared/projectFormat";
 import {
   Component,
   Suspense,
@@ -158,6 +160,18 @@ export function App() {
   >(null);
   useKeymap({ resolveCustomizedActions: () => setDialog("shortcuts") });
   const [picker, setPicker] = useState<"file" | "directory" | null>(null);
+  const [projectFormat, setProjectFormat] = useState(() => {
+    try {
+      const saved = ProjectFormatSchema.safeParse(
+        JSON.parse(localStorage.getItem("cutroom.projectFormat") ?? "null"),
+      );
+      return saved.success ? saved.data : defaultFormat;
+    } catch {
+      return defaultFormat;
+    }
+  });
+  const validProjectFormat =
+    ProjectFormatSchema.safeParse(projectFormat).success;
   const [name, setName] = useState("");
   const projectName = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
@@ -857,15 +871,24 @@ export function App() {
             className="project-form"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!name.trim() || projectOpening.current) return;
+              if (!name.trim() || !validProjectFormat || projectOpening.current)
+                return;
               const operation = {};
               projectOpening.current = operation;
               setCreating(true);
               clearToasts();
-              void api("/projects", ProjectSchema, json("POST", { name }))
+              void api(
+                "/projects",
+                ProjectSchema,
+                json("POST", { name, ...projectFormat }),
+              )
                 .then(async (created) => {
                   await loadProjects();
                   if (projectOpening.current !== operation) return;
+                  localStorage.setItem(
+                    "cutroom.projectFormat",
+                    JSON.stringify(projectFormat),
+                  );
                   openProject(created);
                   setName("");
                 })
@@ -893,6 +916,11 @@ export function App() {
               required
               maxLength={120}
             />
+            <FormatFields
+              format={projectFormat}
+              onChange={setProjectFormat}
+              disabled={creating}
+            />
             <p className="field-help">
               Saved in{" "}
               {status?.projectsDir.replace(/^\/home\/[^/]+/, "~") ??
@@ -908,7 +936,7 @@ export function App() {
               </button>
               <button
                 className="primary-button"
-                disabled={!name.trim() || creating}
+                disabled={!name.trim() || !validProjectFormat || creating}
               >
                 {creating ? "Creating…" : "Create project"}
               </button>

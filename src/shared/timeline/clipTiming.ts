@@ -9,6 +9,7 @@ import {
   encode,
   frames,
   micros,
+  regridSourceMap,
   resolvePiece,
 } from "./piece";
 import type { ExactTime, StoredSource } from "./piece";
@@ -103,17 +104,19 @@ export function sourceAtEdge(
   authored: ExactTime,
   edge: ExactTime,
   fps: Fps,
+  edgeFps = fps,
 ) {
   if (fields.mediaStart === null)
     return { mediaStart: null, automation: fields.automation };
   const source = readClipSource(fields);
+  const map = decode(source.stored, source.curve, authored, fps);
   return writeClipSource(
     source,
     encode(
-      decode(source.stored, source.curve, authored, fps),
+      edgeFps === fps ? map : regridSourceMap(map, source.curve, fps, edgeFps),
       source.curve,
       edge,
-      fps,
+      edgeFps,
     ),
   );
 }

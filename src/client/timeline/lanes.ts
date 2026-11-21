@@ -1,3 +1,4 @@
+import type { ProjectFormat } from "../../shared/projectFormat";
 import { trackMix } from "../../shared/timeline/tracks";
 import {
   drawnPoints,
@@ -72,7 +73,12 @@ export interface LaneGestureOptions {
   playhead(): number;
   onSelect(selection: Selection): void;
   /** Makes one undo step; false when the editor refused it and nothing changed. */
-  onEdit(label: string, commands: CommandInput[], basis?: Timeline): boolean;
+  onEdit(
+    label: string,
+    commands: CommandInput[],
+    basis?: Timeline,
+    match?: ProjectFormat,
+  ): boolean;
   /** A press began or ended. While one is under way, Esc cancels it and does nothing else. */
   onGesture(active: boolean): void;
   onTrackDrag(active: boolean): void;
@@ -777,13 +783,17 @@ export function useLaneGestures(options: LaneGestureOptions) {
   }
 
   /** Ends a preview: with its edit when it has one the editor takes, otherwise by going back. */
-  function settle(result: Preview | null, basis?: Timeline) {
+  function settle(
+    result: Preview | null,
+    basis?: Timeline,
+    match?: ProjectFormat,
+  ) {
     const { lanes, bodies, onEdit } = latest.current;
     const offsets = clear();
     if (
       result?.valid !== false &&
       result?.commands.length &&
-      onEdit(result.label, result.commands, basis)
+      onEdit(result.label, result.commands, basis, match)
     ) {
       // The clips are where the edit puts them already; `useClipMotion` slides only the rest.
       held.current = offsets;
@@ -1228,7 +1238,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const drop = dropAt(event)?.preview;
     if (!drop) return;
     event.preventDefault();
-    settle(drop);
+    settle(drop, undefined, mediaDrag()?.format);
   }
 
   return {

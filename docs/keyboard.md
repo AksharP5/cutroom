@@ -182,6 +182,8 @@ On home, the arrow keys, Home, and End move between projects, and Enter opens th
 
 Resolve's Active Panel Selection keys move the keyboard between panels in one press, from anywhere in the editor: Ctrl+2 Media, Ctrl+3 the viewer on the source, Ctrl+4 the timeline, Ctrl+5 the viewer on the timeline, and Ctrl+9 the inspector. They are `viewActiveWindowSelectionMediaPoolClips`, `SourceViewer`, `Timeline`, `TimelineViewer` and `Inspector` in the owner's preset. The preset's Ctrl+1, Ctrl+6 and Ctrl+7 show the unsupported shortcut notice for bins, effects and the edit index.
 
+In the main timeline, press Shift+A to deselect clips and Ctrl+9 to focus the Inspector. Tab to **Edit project format**. Enter applies the reviewed change in the dialog when **Apply format** is available. Undo and redo include format changes.
+
 - Ctrl+2 focuses the file Media last had focus on, or the first. Up, Down, Home and End then move between files and Enter opens one.
 - Ctrl+4 focuses the timeline and shows it in the viewer. The edit, playhead and playback keys act on it, and Tab walks its controls from the zoom buttons.
 - Ctrl+3 and Ctrl+5 focus the one viewer, showing the loaded source or the timeline. Tab walks the picture and the transport. With no file loaded, Ctrl+3 says so and changes nothing. Focusing the viewer does not hand the arrows to the picture: that still takes a grab of the selected clip.

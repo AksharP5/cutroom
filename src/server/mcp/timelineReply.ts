@@ -272,6 +272,12 @@ export function editReply(
     ...(JSON.stringify(old.main) !== JSON.stringify(timeline.main) && {
       main: timeline.main ?? null,
     }),
+    ...(JSON.stringify(old.fps) !== JSON.stringify(timeline.fps) && {
+      fps: timeline.fps,
+    }),
+    ...(JSON.stringify(before.size) !== JSON.stringify(after.size) && {
+      size: after.size,
+    }),
     ...(old.duration !== timeline.duration && { duration: timeline.duration }),
   };
   return {
@@ -285,6 +291,7 @@ export function editReply(
         format === "compact"
           ? { ...timeline, clips: timeline.clips.map(compactClip) }
           : timeline,
+      size: after.size,
       agentChanges: after.agentChanges,
     }),
   };

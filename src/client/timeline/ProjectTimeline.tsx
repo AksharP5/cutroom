@@ -1,3 +1,4 @@
+import { offerMediaFormat } from "../edit/projectFormat";
 import { trackDensities } from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
 import { openContextMenu } from "../components/ContextMenu";
@@ -724,10 +725,23 @@ export function ProjectTimeline({
         tool={tool}
         snapping={snapping}
         linkedSelection={linkedSelection}
-        onEdit={(label, commands, basis) => {
+        onEdit={(label, commands, basis, match) => {
           // The editor shows an edit it takes before this returns.
           const before = useTimeline.getState().view;
-          void editTimeline(projectId, label, () => commands, basis);
+          const offer =
+            match &&
+            before?.composition === "index.html" &&
+            before.timeline.clips.length === 0;
+          void editTimeline(
+            projectId,
+            label,
+            () => commands,
+            basis,
+            undefined,
+            offer
+              ? (saved) => offerMediaFormat(projectId, saved, match)
+              : undefined,
+          );
           return useTimeline.getState().view !== before;
         }}
         onGesture={(gesture) => useWorkspace.setState({ gesture })}

@@ -1,3 +1,4 @@
+import { ProjectRateSchema } from "../../shared/projectFormat";
 import { z } from "zod";
 import { mediaSettings } from "../../shared/media";
 
@@ -26,6 +27,7 @@ export const MediaInfoSchema = z.object({
       height: z.number().int().positive(),
       pixelAspect: z.number().positive(),
       fps: z.number().positive(),
+      matchFps: ProjectRateSchema.optional(),
       duration: z.number().nonnegative(),
       codec: z.string(),
       alpha: z.boolean(),
