@@ -334,7 +334,7 @@ The stages run in that order on the picture as the browser decodes it, display-r
 
 `lut_import` copies a `.cube` 3D LUT from a full path on this computer into `luts/` and returns its project path for `grade.lut.src`. It accepts up to 65 points per axis and 16 MB, with every value a finite number within ±4, and writes a clean copy of what it read. `luts_list` lists the LUTs in `luts/`. `grade_save_lut` bakes a clip's whole grade into a new LUT there, at `size` 33 or 65 points, for the same look on other clips or in DaVinci Resolve; applied alone, it draws the grade within one level on average.
 
-A colour-only grade on a video or still can stay in the direct FFmpeg export and the footage pipeline. To grade several clips together, insert a clip with `kind: "adjustment"` and omit `region`. Set its grade with `setClip.grade`. Each lower clip's grade runs before the adjustment grades the composite. MP4 uses frame capture for the adjustment's span and draws eligible footage outside the span directly. Resolve gets a rendered composite on the adjustment's track.
+A colour-only grade on a video or still can stay in the direct FFmpeg export and the footage pipeline. To grade several clips together, insert a clip with `kind: "adjustment"` and omit `region`. Set its grade with `setClip.grade`. Each lower clip's grade runs before the adjustment grades the composite. MP4 applies the adjustment in FFmpeg over footage the direct exporter can draw. Titles, dissolves and other effects that require the browser still use frame capture for their own spans. Resolve gets a rendered composite on the adjustment's track.
 
 ### Transitions
 

@@ -879,6 +879,12 @@ Clips the inspector moved, scaled, rotated, cropped or faded, and image stills, 
 
 The photo is letterboxed over an interview cut that shows around it, so it stays in the browser and the server log says why; the titles do too. Against the capture, the frames have a mean difference of 0.40/255 (1.14 at worst) and at most 0.82/255 bias, with sample-identical sound. Every frame whose counter is visible reads the same source frame; in the two punch-ins without an upward move the counter is scaled off the frame, and each of those 266 frames is closer to the capture's same frame (at most 1.14/255) than to either neighbour.
 
+### Adjustment grades over footage
+
+On the same 12-second 1080p30 test with two synthetic BT.709 colour-bar cuts, one clip grade and a ten-second adjustment, a Standard MP4 with libx264 took 71.4 s using browser capture for the 300 graded frames and 5.7 s when FFmpeg applied the adjustment. Both exports contained 360 frames. The FFmpeg run finished with the browser executable disabled. The same cuts with the adjustment removed took 3.7 s.
+
+Over every pixel in the 300 graded frames, the mean absolute error by RGB channel was 0.78, 0.56 and 0.79 out of 255, with maxima of 28, 28 and 31. The largest differences were at colour boundaries in the bars. Frame capture extracts and screenshots frames as JPEG, so edge pixels can differ between the two paths. Titles, dissolves and effects that need the browser still use capture for their own runs.
+
 ### GPU encoding
 
 An export drawn wholly from its sources encodes with NVENC when the server's probe finds it working ([architecture](architecture.md#export-dialog)). On November 15, 2026, each case below exported through the export route at Standard quality, alternating main `f736424` and this change on an RTX 5060 (driver 615.78) and an Intel Core i5-14400F shared with other agents, so both columns carry the same load. The fixtures are noisier than the ones above, with light film grain over moving test patterns, which costs libx264 more: the interview is 45 seconds of ten linked 1080p30 BT.709 cuts, three b-roll clips (one 720p, one 23.976 fps), a music bed and two titles; the plain project is 150 linked cuts of a 720p copy, 6:15 long; the 300-clip project is the same with 140 pairs and 20 titles. Quality is measured against the same export at CRF 0, which is lossless, over every frame.

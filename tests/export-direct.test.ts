@@ -761,3 +761,117 @@ ${clips.join("\n")}
   },
   300_000,
 );
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "direct adjustment grades match capture after downscaling and placement",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-adjustment-"));
+    const scratchDir = `${root}-scratch`;
+    const direct = createRenderWorkers({ scratchDir });
+    const capture = createRenderWorkers({ scratchDir, directExport: false });
+    const fps = { num: 30, den: 1 };
+    const range = { start: 12, end: 18 };
+    try {
+      // Each pair of source columns averages to a gradient. A nonlinear LUT applied
+      // before that average produces a different picture from grading after resize.
+      const luma = "95+75*X/W+12*Y/H+if(mod(X,2),22,-22)";
+      const gradient = `geq=r='${luma}':g='${luma}':b='${luma}'`;
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        `nullsrc=s=${WIDTH * 2}x${HEIGHT * 2}:r=30`,
+        "-vf",
+        `format=gbrp,${gradient},${BT709},loop=loop=29:size=1:start=0,setpts=N/(30*TB)`,
+        "-t",
+        "1",
+        "-threads",
+        "2",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "12",
+        join(root, "plate.mp4"),
+      ]);
+      const fill =
+        "position:absolute;inset:0;width:100%;height:100%;object-fit:cover";
+      const html = `<!doctype html><html><head><style>html,body{margin:0;width:100%;height:100%;background:#30a060}main{position:relative;width:100%;height:100%}</style></head><body><main data-composition-id="main" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="1" data-fps="30">
+  <video id="plain" muted src="plate.mp4" data-start="0" data-duration="0.5" data-track-index="0" style="${fill}"></video>
+  <video id="placed" muted src="plate.mp4" data-start="0.5" data-duration="0.5" data-track-index="0" style="${fill};scale:0.8;opacity:0.6" data-color-grading='{"adjust":{"temperature":0.15}}'></video>
+  <div id="lift" class="clip" data-start="0.2" data-duration="0.6" data-track-index="1" data-cutroom-adjustment data-color-grading='{"adjust":{"exposure":0.45}}'></div>
+  <div id="look" class="clip" data-start="0.2" data-duration="0.6" data-track-index="2" data-cutroom-adjustment data-color-grading='{"curves":{"master":[[0,0],[0.32,0.24],[0.58,0.64],[0.78,0.88],[1,1]]}}'></div>
+</main></body></html>`;
+      const plan = planDirectExport(html, fps, range);
+      if ("reason" in plan) throw new Error(plan.reason);
+      expect(
+        plan.segments.map(({ start, end, ...segment }) => [
+          start,
+          end,
+          segment.kind === "source" && Boolean(segment.placement),
+        ]),
+      ).toEqual([
+        [12, 15, false],
+        [15, 18, true],
+      ]);
+      await writeFile(join(root, "index.html"), html);
+      const outputs: string[] = [];
+      for (const [name, workers] of [
+        ["direct", direct],
+        ["capture", capture],
+      ] as const) {
+        const filename = name + ".mp4";
+        const state = workers.start(
+          {
+            project: { id: name, dir: root },
+            outputPath: join(root, filename),
+            format: "mp4",
+            fps,
+            quality: "high",
+            jobId: name,
+          },
+          { filename, directory: root, range },
+        );
+        const deadline = Date.now() + 20_000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(50);
+        expect(state.error).toBeUndefined();
+        expect(state.renderer).toBe(name);
+        outputs.push(state.outputPath);
+      }
+      const [fast, browser] = await Promise.all(outputs.map(decode));
+
+      const frameSize = WIDTH * HEIGHT * 3;
+      const frames = range.end - range.start;
+      expect(fast!.length).toBe(frames * frameSize);
+      expect(browser!.length).toBe(frames * frameSize);
+      for (let frame = 0; frame < frames; frame++) {
+        const errors = new Uint32Array(256);
+        let total = 0;
+        const offset = frame * frameSize;
+        for (let i = offset; i < offset + frameSize; i++) {
+          const error = Math.abs(fast![i]! - browser![i]!);
+          errors[error]!++;
+          total += error;
+        }
+        let remaining = Math.ceil(frameSize * 0.99);
+        const p99 = errors.findIndex((count) => (remaining -= count) <= 0);
+        expect(
+          total / frameSize,
+          `frame ${frame + range.start} mean`,
+        ).toBeLessThanOrEqual(1.5);
+        expect(p99, `frame ${frame + range.start} p99`).toBeLessThanOrEqual(10);
+      }
+    } finally {
+      await Promise.all([direct.cancelAll(), capture.cancelAll()]);
+      await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
+    }
+  },
+  45_000,
+);

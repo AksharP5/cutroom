@@ -59,7 +59,11 @@ type MediaInput = {
   video?: Pick<VideoMetadata, "width" | "height" | "pixelFormat">;
 };
 /** A run with its file on disk and, when graded, the baked grade FFmpeg reads. */
-type Piece = SourceSegment & MediaInput & { cube?: string };
+type Piece = SourceSegment &
+  MediaInput & {
+    cube?: string;
+    adjustmentCubes?: string[];
+  };
 /** An encoded run of frames, in the export's frame numbers. */
 export type EncodedPart = { start: number; end: number; path: string };
 
@@ -144,8 +148,11 @@ export async function prepareDirectExport(
   }
   // One bake per distinct grade, at 65 points, written where every part's FFmpeg reads it.
   const cubes = new Map<string, string>();
-  for (const { grade } of segments) {
-    if (!grade) continue;
+  const grades = segments.flatMap(({ grade, adjustments }) => [
+    ...(grade ? [grade] : []),
+    ...(adjustments ?? []),
+  ]);
+  for (const grade of grades) {
     const key = JSON.stringify(grade);
     if (cubes.has(key)) continue;
     const cube = join(workDir, "grades", `${cubes.size}.cube`);
@@ -165,6 +172,9 @@ export async function prepareDirectExport(
       ...segment,
       ...sources.get(segment.src)!,
       ...(segment.grade && { cube: cubes.get(JSON.stringify(segment.grade)) }),
+      adjustmentCubes: (segment.adjustments ?? []).map((grade) =>
+        cubes.get(JSON.stringify(grade))!,
+      ),
     })),
   };
 }
@@ -181,12 +191,15 @@ const graphPath = (path: string) =>
  * and with chroma interpolated as the browser decodes it (FFmpeg's default conversion reads half a
  * level darker, which a grade's contrast doubles), through the LUT baked from the grade.
  */
+const gradeLookup = (cube: string) =>
+  `lut3d=file=${graphPath(cube)}:interp=trilinear`;
+
 const gradeFilters = (cube: string | undefined) =>
   cube
     ? [
         "scale=flags=accurate_rnd+full_chroma_int",
         "format=gbrp",
-        `lut3d=file=${graphPath(cube)}:interp=trilinear`,
+        gradeLookup(cube),
       ]
     : [];
 
@@ -217,6 +230,7 @@ function placed(
   after: string[],
   before: string[] = [],
   grading: string[] = [],
+  adjustments: string[] = [],
 ) {
   const content = contentRect(fit, picture, frame);
   const shown = visibleRect(content, placement.crop, frame);
@@ -282,6 +296,9 @@ function placed(
     `pad=${canvas.width}:${canvas.height}:${MARGIN}:${MARGIN}:color=black@0`,
     `perspective=x0=${x0}:y0=${y0}:x1=${x1}:y1=${y1}:x2=${x2}:y2=${y2}:x3=${x3}:y3=${y3}:sense=destination`,
     `crop=${frame.width}:${frame.height}:${MARGIN}:${MARGIN}`,
+    // The clip is now where it paints in the lower composite. Keep its alpha
+    // while grading so the page backdrop shows through with its own colour.
+    ...adjustments,
     ...(placement.opacity < 1
       ? [`colorchannelmixer=aa=${placement.opacity}`]
       : []),
@@ -381,6 +398,8 @@ async function encodePart(input: {
   for (const [index, piece] of pieces.entries()) {
     const frames = piece.end - piece.start;
     const frame = { width, height };
+    const grade = gradeFilters(piece.cube);
+    const adjustments = piece.adjustmentCubes?.map(gradeLookup) ?? [];
     if (piece.still) {
       const { still, placement } = piece;
       if (!placement || !still.width || !still.height)
@@ -401,7 +420,8 @@ async function encodePart(input: {
             "setpts=N/FRAME_RATE/TB",
           ],
           [],
-          gradeFilters(piece.cube),
+          grade,
+          adjustments,
         ),
       );
       continue;
@@ -432,6 +452,17 @@ async function encodePart(input: {
       );
     inputs.push(...layer.inputArgs);
     const trim = [`trim=end_frame=${frames}`, "setpts=PTS-STARTPTS"];
+    const delivery = adjustments.length
+      ? [
+          ...(!grade.length
+            ? ["scale=flags=accurate_rnd+full_chroma_int", "format=gbrp"]
+            : []),
+          ...(resize ? [resize] : []),
+          ...adjustments,
+          deliveryMatrix,
+          deliveryFormat,
+        ]
+      : [deliveryMatrix, ...format];
     chains.push(
       piece.placement
         ? placed(
@@ -443,9 +474,10 @@ async function encodePart(input: {
             rate,
             trim,
             layer.filters,
-            gradeFilters(piece.cube),
+            grade,
+            adjustments,
           )
-        : `[${index}:v]${[...layer.filters, ...gradeFilters(piece.cube), deliveryMatrix, ...format, deliveryTags, ...trim].join(",")}[p${index}]`,
+        : `[${index}:v]${[...layer.filters, ...grade, ...delivery, deliveryTags, ...trim].join(",")}[p${index}]`,
     );
   }
   const total = pieces.reduce((sum, piece) => sum + piece.end - piece.start, 0);
