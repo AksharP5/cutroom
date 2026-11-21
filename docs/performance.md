@@ -29,14 +29,14 @@ The new editor's code panel loads CodeMirror only when it first opens: its edito
 
 The scale fixture is a 1080p60 edit with 1,000 clips and a 100-clip control at the same frame rate. The 15-minute timeline contains 486 linked picture and dialogue pairs, four music clips, 24 titles, punch-ins and three dissolves. A synthetic H.264 source carries its frame number along the top.
 
-After `bun run build`, run the headed comparison on X11. Run each clip count once with and once without `--pipeline`, using the same `--dir` to reuse the fixtures. `--runs 3` gives three fresh browser sessions per setting.
+After `bun run build`, run the headed comparison on the desktop. Run each clip count once with and once without `--pipeline`, using the same `--dir` to reuse the fixtures. `--runs 3` gives three fresh browser sessions per setting.
 
 ```sh
 scratch=$(mktemp -d /var/tmp/cutroom-scale.XXXXXX)
-flock /tmp/cutroom-e2e.lock node scripts/bench-vs-studio.ts --editor cutroom --scale 1000 --pipeline --runs 1 --dir "$scratch" --port 4940 --out "$scratch/1000-gpu.json"
+flock /tmp/cutroom-e2e.lock node scripts/bench-vs-studio.ts --editor cutroom --scale 1000 --pipeline --runs 3 --dir "$scratch" --port 4940 --out "$scratch/1000-gpu.json"
 ```
 
-The benchmark reads the numbered pictures from Chromium's tab screencast. It reports the playback clock rate separately, measures how long a source picture holds at two points on the timeline, and times a ruler drag at comparable zoom. It also records the first correct pixels after ripple delete and undo and reads proportional browser memory after closing the screencast decoder tab. Screencast JPEG capture can miss swaps at 60 fps. Compare captured picture rates and holds under the same settings.
+The benchmark reads the numbered pictures from Chromium's tab screencast. It reports the playback clock rate separately, measures how long a source picture holds at two points on the timeline, and times a ruler drag at comparable zoom. It also records the first correct pixels after ripple delete and undo near the beginning and later in the timeline and reads proportional browser memory after closing the screencast decoder tab. Screencast JPEG capture can miss swaps at 60 fps. Compare captured picture rates and holds under the same settings.
 
 `e2e/scale-performance.spec.ts` runs in the performance gate with GPU playback on and off. It uses two 75-second source files and checks the playback clock against 60 fps, at most 16 loaded native media elements, the numbered pictures after an early and late ripple delete, undo, redo and a ruler scrub, and ten persisted W trims followed by ten undos and ten redos. The headless gate catches stalls and lost edits with wider timing budgets than the headed target.
 
