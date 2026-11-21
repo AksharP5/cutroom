@@ -188,8 +188,9 @@ test("cancelling partway through a copy leaves neither the file nor staged links
 test("free space is checked before a cross-device copy starts", async () => {
   const source = join(await otherFilesystem(), "no-room.mp4");
   await writeFile(source, "");
-  const disk = await statfs(assets(), { bigint: true });
-  await truncate(source, Number((disk.bavail + 1n) * disk.bsize));
+  // Free space can grow before the request reaches the import worker.
+  const { blocks, bsize } = await statfs(assets(), { bigint: true });
+  await truncate(source, Number((blocks + 1n) * bsize));
   let progressed = false;
   await expect(
     requestMediaImport(socket, project.id, [source], {
