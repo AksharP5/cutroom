@@ -442,6 +442,23 @@ export function registerRenderIsolation(
           ),
         };
       if (
+        process.platform === "linux" &&
+        url.endsWith("/@hyperframes/engine/dist/services/browserManager.js")
+      ) {
+        const captureArgs = JSON.stringify(
+          new URL("./captureBrowserArgs.ts", import.meta.url).href,
+        );
+        return {
+          ...loaded,
+          source: replaceOnce(
+            `import { captureBrowserArgs } from ${captureArgs};\n${String(loaded.source)}`,
+            "    return chromeArgs;",
+            "    return captureBrowserArgs(chromeArgs);",
+            url,
+          ),
+        };
+      }
+      if (
         url.endsWith(
           "/@hyperframes/engine/dist/services/videoFrameExtractor.js",
         )
