@@ -32,6 +32,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `luts_list`, `lut_import`, `grade_save_lut`                     | List the project's LUTs, import a `.cube`, or bake a clip's grade into one. |
 | `history_list`, `history_undo`, `history_redo`                  | Use the editor's shared history.                                            |
 | `timeline_read`, `timeline_edit`                                | Read the timeline in frames and apply a batch of commands.                  |
+| `timeline_format_preview`                                       | Check a proposed project format and report clip edge movement.              |
 | `timeline_destinations`                                         | Read or set the destination tracks for Insert and Overwrite.                |
 | `timeline_copy`                                                 | Copy clips and linked partners into the in-app clipboard.                   |
 | `timeline_view`                                                 | Render up to eight frames, or report composition setup errors.              |
@@ -69,6 +70,14 @@ Cutroom tells its native agents which of its tools may run without asking. The r
 Withdrawing a note is not bookkeeping: it cancels a request the owner made, so it asks like an edit. Shell commands, native file tools, and other MCP servers keep the agent's own permissions, including every write outside the project. Your own native ask rule for a Cutroom tool still wins over this table. Outside MCP clients decide for themselves; these rules apply to the agents Cutroom starts.
 
 Timeline approvals list each pending command in plain words through the shared edit labels. Clip names and timecodes use the matching open composition; unavailable compositions use exact frame counts. Commands later in a batch account for earlier commands. Media overwrite insertions show destination tracks and the affected time range. Missing track context falls back to the track index, and marker edits use neutral wording when their existence is unknown. Long lists scroll with Allow and Deny kept visible. Other approvals name their note or file, with naming bounded at 250 ms. Ids and tool identifiers appear only under **Details**, which shows the exact request. MCP and native agent instructions allow review notes in replies when the turn changed one, when you explicitly ask about notes, or when needed to explain a blocker. Otherwise they omit recaps of untouched queued notes.
+
+## Project format
+
+`project_create` accepts `width`, `height` and `fps`. Omit them for 1920 × 1080 at 30 fps. Pass FPS as exact integers, for example `{"num":60000,"den":1001}` for 59.94 fps or `{"num":60,"den":1}` for 60 fps.
+
+For an existing project, read `timeline_read` for `revision`, `size` and `timeline.fps`. Pass that revision as `expectedRevision` to `timeline_format_preview`, along with `projectId` and `format: {width, height, fps}`. The result gives `movedEdges` and `maxShiftMs`. A refused change names the timing that cannot fit. Preview writes nothing.
+
+Apply through `timeline_edit` with the same revision and a single command, for example `{"type":"setFormat","width":1080,"height":1920,"fps":{"num":60000,"den":1001}}`. This edits the main composition. Clip edges snap once from their original times to the nearest new frame, with ties going to the later frame. The result includes changed `fps` and `size` in `changes`, and the format edit is one shared undo step. Read the new frame grid before sending other edits.
 
 ## Timeline
 

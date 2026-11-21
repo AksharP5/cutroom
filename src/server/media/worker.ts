@@ -1,3 +1,5 @@
+import { parseFps } from "@hyperframes/core";
+import { ProjectRateSchema, sameRate } from "../../shared/projectFormat";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { mkdir, readdir, rename, rm } from "node:fs/promises";
@@ -202,6 +204,12 @@ try {
         180 ===
       90;
     const aspect = rational(video?.sample_aspect_ratio, ":") || 1;
+    const rate = parseFps(video?.r_frame_rate ?? "");
+    const average = parseFps(video?.avg_frame_rate ?? "");
+    const exactFps =
+      rate.ok && (!average.ok || sameRate(rate.value, average.value))
+        ? ProjectRateSchema.safeParse(rate.value).data
+        : undefined;
     const info = MediaInfoSchema.parse({
       channels: audio?.channels,
       video: video && {
@@ -213,6 +221,7 @@ try {
           rational(video.r_frame_rate, "/") ||
           30,
         duration: Number(video.duration ?? probe.format.duration ?? 0),
+        exactFps,
         codec: video.codec_name ?? "unknown",
         alpha: transparent(video),
         hdr: ["smpte2084", "arib-std-b67"].includes(video.color_transfer ?? ""),

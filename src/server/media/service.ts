@@ -90,7 +90,7 @@ const priority = {
 } satisfies Record<MediaKind, number>;
 /** Each kind's recipe; a new one keys new cache entries. */
 const recipe = {
-  probe: "media-v7",
+  probe: "media-v8",
   peaks: "media-v6",
   filmstrip: "media-v6",
   frame: "media-v6",

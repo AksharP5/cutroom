@@ -440,6 +440,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       ),
   };
   switch (command.type) {
+    case "setFormat":
+      throw new TimelineError(
+        "unsupported",
+        "Format changes need the composition source.",
+      );
     case "move": {
       const named = new Set(command.clipIds.map(find));
       const lifted = command.trackClipIds

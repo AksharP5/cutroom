@@ -1,3 +1,4 @@
+import { planFormat } from "./format";
 import { extname } from "node:path";
 import { stat } from "node:fs/promises";
 import {
@@ -42,6 +43,7 @@ import {
   CommandBatchSchema,
   CopyClipsSchema,
   TimelineSettingsSchema,
+  SetFormatSchema,
   emptyTimelineSettings,
 } from "../../shared/timeline/schema";
 import type {
@@ -75,6 +77,7 @@ import {
   rebaseClipboard,
   declareTrackLayer,
   parseComposition,
+  compositionSize,
   patchComposition,
   timelineContent,
   settingsOf,
@@ -248,6 +251,27 @@ export function createTimelineRoutes(
         409,
         "The timeline changed since it was read. Read it again before editing.",
       );
+    const format = batch.commands.find(
+      (command) => command.type === "setFormat",
+    );
+    if (format && composition !== "index.html")
+      throw new TimelineError(
+        "unsupported",
+        "Change the project format from its main composition.",
+      );
+    if (format && batch.commands.length !== 1)
+      throw new TimelineError(
+        "unsupported",
+        "Change format in its own command. Read the new frame grid before making more edits.",
+      );
+    const plan =
+      format &&
+      planFormat(
+        current.parsed,
+        current.document.timelines[composition] ?? emptyTimelineSettings(),
+        current.lengths,
+        format,
+      );
     const inserted = await mediaFacts(
       project,
       composition,
@@ -340,51 +364,56 @@ export function createTimelineRoutes(
           lengths.set(clip.src, clip.sourceDuration);
     const origins = new Map<string, ClipOrigin>();
     const shifts = new Map<string, number>();
-    const labels: string[] = [];
-    const summaries: string[] = [];
+    const labels: string[] = format
+      ? [editLabel([format], current.parsed.timeline, "")]
+      : [];
+    const summaries = [...labels];
     const hasScript = [current.parsed, ...snapshots.values()].some((source) =>
       /<script\b/i.test(source.html),
     );
     // Commands keep source times exact; the written timeline holds them to the microsecond.
     const timeline = canonicalTimeline(
-      applyAll(current.parsed.timeline, batch.commands, {
-        composition,
-        onCreate: (id, origin) => origins.set(id, origin),
-        onApply: (before, after, command) => {
-          labels.push(editLabel([command], before, "Edited timeline"));
-          summaries.push(
-            editLabel([command], before, "Edited timeline", "done"),
-          );
-          if (!hasScript) return;
-          const previous = new Map(before.clips.map((clip) => [clip.id, clip]));
-          for (const clip of after.clips) {
-            const old = previous.get(clip.id);
-            if (!old) continue;
-            const delta = canonicalSeconds(
-              animationOrigin(clip, after.fps) -
-                animationOrigin(old, before.fps),
+      plan?.timeline ??
+        applyAll(current.parsed.timeline, batch.commands, {
+          composition,
+          onCreate: (id, origin) => origins.set(id, origin),
+          onApply: (before, after, command) => {
+            labels.push(editLabel([command], before, "Edited timeline"));
+            summaries.push(
+              editLabel([command], before, "Edited timeline", "done"),
             );
-            if (delta)
-              shifts.set(
-                clip.id,
-                canonicalSeconds((shifts.get(clip.id) ?? 0) + delta),
+            if (!hasScript) return;
+            const previous = new Map(
+              before.clips.map((clip) => [clip.id, clip]),
+            );
+            for (const clip of after.clips) {
+              const old = previous.get(clip.id);
+              if (!old) continue;
+              const delta = canonicalSeconds(
+                animationOrigin(clip, after.fps) -
+                  animationOrigin(old, before.fps),
               );
-          }
-        },
-        onSkip: (clip, reason) =>
-          skippedClips.set(clip.id, {
-            clipId: clip.id,
-            label: clip.label,
-            reason,
-          }),
-        clipboards: new Map(
-          [...snapshots].map(([id, parsed]) => [id, parsed.timeline.clips]),
-        ),
-        mediaLengths: lengths,
-        silentMedia: inserted.silent,
-        // No new clip takes an id the project used before, even one undone since.
-        retired: await usedClipIds(project),
-      }),
+              if (delta)
+                shifts.set(
+                  clip.id,
+                  canonicalSeconds((shifts.get(clip.id) ?? 0) + delta),
+                );
+            }
+          },
+          onSkip: (clip, reason) =>
+            skippedClips.set(clip.id, {
+              clipId: clip.id,
+              label: clip.label,
+              reason,
+            }),
+          clipboards: new Map(
+            [...snapshots].map(([id, parsed]) => [id, parsed.timeline.clips]),
+          ),
+          mediaLengths: lengths,
+          silentMedia: inserted.silent,
+          // No new clip takes an id the project used before, even one undone since.
+          retired: await usedClipIds(project),
+        }),
     );
     const freezes = new Map(
       timeline.clips.flatMap(({ id }) => {
@@ -442,6 +471,7 @@ export function createTimelineRoutes(
       snapshots,
       hosted,
       freezeExports,
+      format,
     );
     const settings = settingsOf(timeline);
     // Compare authored content; removing markup can change the remaining source restrictions.
@@ -454,7 +484,9 @@ export function createTimelineRoutes(
     if (!Bun.deepEquals(timelineContent(written), timelineContent(timeline)))
       throw new TimelineError(
         "unsupported",
-        "This edit cannot be written to the composition exactly. Edit the source instead.",
+        format
+          ? "This format cannot preserve the composition’s timing exactly on the new grid."
+          : "This edit cannot be written to the composition exactly. Edit the source instead.",
       );
     const priorGroups = new Map(
       timelineContent(current.parsed.timeline).authoredAudioGroups?.map(
@@ -515,6 +547,7 @@ export function createTimelineRoutes(
       label,
       summary,
       encodedSummary,
+      formatPreview: plan?.preview,
       batchLabels:
         summaries.length > 1 || summaries.some((item) => item.includes("; "))
           ? summaries
@@ -589,6 +622,7 @@ export function createTimelineRoutes(
             timelines[composition] ?? emptyTimelineSettings(),
           ),
           timeline: written,
+          size: compositionSize(writtenSource.root),
           detectAnimation,
           ...(skippedClips.size && {
             skippedClips: [...skippedClips.values()],
@@ -638,6 +672,7 @@ export function createTimelineRoutes(
             composition,
             revision,
             timeline: parsed.timeline,
+            size: compositionSize(parsed.root),
           } satisfies TimelineView;
         } catch (error) {
           if (!(error instanceof TimelineError)) throw error;
@@ -917,6 +952,31 @@ export function createTimelineRoutes(
       return refused(c, error);
     }
   });
+  api.post("/projects/:id/format-preview", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const { format, ...input } = parseInput(
+      CommandBatchSchema.pick({
+        composition: true,
+        expectedRevision: true,
+      }).extend({ format: SetFormatSchema.omit({ type: true }) }),
+      await c.req.json(),
+    );
+    try {
+      const prepared = await prepareEdit(
+        project,
+        {
+          ...input,
+          composition: canonicalProjectPath(input.composition),
+          commands: [{ type: "setFormat", ...format }],
+        },
+        false,
+      );
+      return c.json(prepared.formatPreview);
+    } catch (error) {
+      return refused(c, error);
+    }
+  });
+
   api.post("/projects/:id/commands", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(CommandBatchSchema, await c.req.json());

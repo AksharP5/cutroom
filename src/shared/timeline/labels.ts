@@ -636,6 +636,8 @@ export function editLabel(
           return `${pending ? "Show" : "Showed"} ${version}${named ? ` of ${target([command.clipId])}` : ""}`;
         return `${pending ? "Keep" : "Kept"} ${version}${named ? ` of ${target([command.clipId])}` : ""} and ${pending ? "drop" : "dropped"} the others`;
       }
+      case "setFormat":
+        return "Changed project format";
       case "setRange":
         return pending
           ? [

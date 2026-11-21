@@ -587,12 +587,12 @@ export function Inspector({
           timeline={timeline}
           incoming={selection.transition}
         />
-      ) : !timeline ? null : !clip ? (
+      ) : !timeline || !view ? null : !clip ? (
         <TimelineOverview
           projectId={projectId}
           name={projectName}
-          timeline={timeline}
-          edits={view?.clipEdits ?? []}
+          view={view}
+          edits={view.clipEdits ?? []}
           hold={holdChanges}
         />
       ) : (

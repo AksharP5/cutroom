@@ -1,3 +1,4 @@
+import { ProjectFormatSchema } from "../projectFormat.ts";
 import {
   MAX_PLAYBACK_RATE,
   MIN_PLAYBACK_RATE,
@@ -720,7 +721,12 @@ export const CopyClipsSchema = z.object({
   expectedRevision: z.string().min(1),
 });
 
+export const SetFormatSchema = ProjectFormatSchema.extend({
+  type: z.literal("setFormat"),
+});
+
 export const CommandSchema = z.discriminatedUnion("type", [
+  SetFormatSchema,
   z
     .object({
       type: z.literal("move"),
@@ -1335,6 +1341,9 @@ export const TimelineViewSchema = z.object({
   composition: z.string(),
   revision: z.string(),
   timeline: TimelineSchema,
+  size: z
+    .object({ width: z.number().positive(), height: z.number().positive() })
+    .optional(),
 });
 
 const seconds = z.number().nonnegative();

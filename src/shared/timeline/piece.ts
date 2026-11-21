@@ -47,7 +47,7 @@ export const frames = (count: number | bigint, fps: Fps) =>
   fraction(BigInt(count) * BigInt(fps.den), BigInt(fps.num));
 export const micros = (count: number | bigint) =>
   fraction(BigInt(count), MICROS);
-const secondsOf = (time: ExactTime) => Number(time.n) / Number(time.d);
+export const secondsOf = (time: ExactTime) => Number(time.n) / Number(time.d);
 
 /** Read validated decimal seconds, including compiler-generated float spellings. */
 export const attrMicros = (seconds: string | number) =>
@@ -63,6 +63,10 @@ export function decodeLocal(us: bigint, fps: Fps): ExactTime {
     ? frames(frame, fps)
     : micros(us);
 }
+
+/** Move an edited edge to the nearest frame, with ties going to the later frame. */
+export const nearestFrame = (position: ExactTime, fps: Fps) =>
+  halfUp(position.n * BigInt(fps.num), position.d * BigInt(fps.den));
 
 export const sampleOf = (position: ExactTime) =>
   halfUp(position.n * SAMPLES, position.d);
@@ -119,7 +123,13 @@ export type PlacedMedia = Pick<
   Omit<Placement, "played"> & { played?: Window };
 export type PlacedElement = (Media | Visual) & Placement;
 
-function localWindows({ fps, elements }: Composition) {
+export function localWindows<Element extends AuthoredWindow>({
+  fps,
+  elements,
+}: {
+  fps: Fps;
+  elements: readonly Element[];
+}) {
   const byId = new Map(elements.map((el) => [el.id, el]));
   const starts = new Map<string, ExactTime>();
   const visiting = new Set<string>();
