@@ -814,7 +814,9 @@ On the 300-clip timeline the shared capture holds 9.2 GB of Chromium with two br
 
 ### Adjustment grade capture
 
-Review of #368 measured a 12-second synthetic 1080p30 MP4 at 9.6 s without a layer and 69.8 s with a 10-second graded adjustment. The 300 graded frames added about 201 ms each, or about six seconds per graded second at 30 fps. At that measured per-frame cost, 7,200 graded frames in a two-minute 60 fps span would add about 24 minutes. That last figure is an extrapolation. The browser captures only the adjustment's span and the other runs that need it.
+Review of #368 measured a 12-second synthetic 1080p30 MP4 at 9.6 s without a layer and 69.8 s with a 10-second graded adjustment. The 300 graded frames added about 201 ms each, or about six seconds per graded second at 30 fps. At that measured per-frame cost, 7,200 graded frames in a two-minute 60 fps span would add about 24 minutes. That last figure is an extrapolation. Mixed MP4 only sends the adjustment's span and other runs that need the browser to capture.
+
+For jobs with a graded adjustment, the producer uses screenshots for every frame it captures. That includes marked ranges outside the grade and every exported frame in MOV, WebM and GIF. In the follow-up review, a 60-frame MOV took 12% longer with a three-frame grade on this path.
 
 On Electron 45.2.3 (Chromium 156.0.8078.80) at device pixel ratio 2, the native viewer played a synthetic 1080p60 clip with a title under the grade and the footage pipeline disabled. At the same 314 × 177 CSS-pixel viewer size, the capture canvas shrank from 3840 × 2160 to 628 × 353. The graded title pixel stayed RGB (72, 104, 24). Across three 3.5-second samples, the observed distinct pictures per second were 28 to 30 before and 27.7 to 28 after. Electron's frame subscription delivered at most 30 samples per second in this headless run, so it cannot establish 60 fps playback.
 
