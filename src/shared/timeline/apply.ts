@@ -1,4 +1,21 @@
-import { frameTime, sourceGridFrame } from "./time";
+import { frameTime } from "./time";
+import {
+  readClipSource,
+  resolveClip,
+  retimeClipSource,
+  sourceAtEdge,
+  writeClipSource,
+} from "./clipTiming";
+import {
+  attrMicros,
+  decode,
+  encode,
+  firstFrame,
+  frames,
+  micros,
+  positionAtSource,
+  secondsOf,
+} from "./piece";
 import { activeVersion, fitsVersion } from "./versions";
 import { firstTextLine, isAudioKind } from "./schema";
 import type {
@@ -227,8 +244,10 @@ const animationSource = Symbol("animation source offset");
 type ObservedClip = Clip & { [animationSource]?: number };
 export const animationOrigin = (clip: ObservedClip, fps: Fps) =>
   canonicalSeconds(
-    frameTime(clip.start, fps) -
-      (clip.mediaStart ?? clip[animationSource] ?? 0) / clip.playbackRate,
+    clip.mediaStart === null
+      ? frameTime(clip.start, fps) -
+          (clip[animationSource] ?? 0) / clip.playbackRate
+      : secondsOf(positionAtSource(resolveClip(clip, fps), micros(0))),
   );
 
 const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -1213,33 +1232,75 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     case "setTiming": {
       const target = find(command.clipId);
       const targets = withPartners(clips, [target]);
-      for (const clip of targets)
+      for (const clip of targets) {
         if (clip.mediaStart === null)
           throw new TimelineError(
             "unsupported",
             `Clip ${clip.id} has no source timing.`,
           );
+        if (readClipSource(clip).lane)
+          throw new TimelineError(
+            "unsupported",
+            `Clip ${clip.id} has a speed ramp. Change its rate lane in the composition source.`,
+          );
+      }
+      const selected = readClipSource(target);
+      const anchor = frames(target.start, fps);
+      const previousMap = decode(
+        selected.stored,
+        target.playbackRate,
+        anchor,
+        fps,
+      );
+      const rate = command.playbackRate ?? target.playbackRate;
+      const editedMap = decode(
+        command.mediaStart === undefined
+          ? selected.stored
+          : { mediaStart: Number(attrMicros(command.mediaStart)) },
+        rate,
+        anchor,
+        fps,
+      );
       return {
         ...timeline,
-        clips: clips.map((clip) =>
-          targets.includes(clip)
-            ? {
+        clips: clips.map((clip) => {
+          if (!targets.includes(clip)) return clip;
+          const playbackRate = command.playbackRate ?? clip.playbackRate;
+          const source = readClipSource(clip);
+          const start = frames(clip.start, fps);
+          if (clip.playbackRate === target.playbackRate) {
+            const current =
+              clip === target
+                ? previousMap
+                : decode(source.stored, clip.playbackRate, start, fps);
+            if (
+              current.c === previousMap.c &&
+              current.zero === previousMap.zero
+            )
+              return {
                 ...clip,
-                ...(command.playbackRate !== undefined && {
-                  playbackRate: command.playbackRate,
-                }),
-                // Keep each partner's source at the selected clip's start in sync, including L-cuts.
-                mediaStart:
-                  clip.mediaStart! +
-                  (command.mediaStart === undefined
-                    ? 0
-                    : command.mediaStart - target.mediaStart!) +
-                  frameTime(clip.start - target.start, fps) *
-                    ((command.playbackRate ?? clip.playbackRate) -
-                      clip.playbackRate),
-              }
-            : clip,
-        ),
+                playbackRate,
+                ...writeClipSource(source, encode(editedMap, rate, start, fps)),
+              };
+          }
+          // Manually linked sources with different maps keep their existing sync offset.
+          const mediaStart =
+            clip.mediaStart! +
+            (command.mediaStart === undefined
+              ? 0
+              : command.mediaStart - target.mediaStart!) +
+            frameTime(clip.start - target.start, fps) *
+              (playbackRate - clip.playbackRate);
+          return {
+            ...clip,
+            playbackRate,
+            ...retimeClipSource(
+              { ...clip, mediaStart, playbackRate },
+              clip.start,
+              fps,
+            ),
+          };
+        }),
       };
     }
     case "setClip": {
@@ -1843,11 +1904,7 @@ function settle(before: Timeline, after: Timeline): Timeline {
       clip.sourceDuration !== null &&
       clip.mediaStart !== null &&
       // The frames the runtime shows before the source runs out.
-      clip.duration >
-        toFrames(
-          (clip.sourceDuration - clip.mediaStart) / clip.playbackRate,
-          after.fps,
-        )
+      framesAfterOut(clip, after.fps) < 0
     )
       throw new TimelineError(
         "out_of_bounds",
@@ -2497,10 +2554,17 @@ function assertRippleSync(
   for (const clip of clips) {
     const old = previous.get(copies.get(clip.id) ?? clip.id);
     if (!old?.link) continue;
-    const sourceAtStart =
-      (old.mediaStart ?? 0) +
-      frameTime(clip.start - old.start, before.fps) * old.playbackRate;
-    if (round6(clip.mediaStart ?? 0) === round6(sourceAtStart)) continue;
+    const { fps } = before;
+    if (old.mediaStart === null && clip.mediaStart === null) continue;
+    const line = resolveClip(old, fps);
+    const current = resolveClip(clip, fps);
+    if (
+      line.c === current.c &&
+      line.tau === current.tau &&
+      line.zero === current.zero &&
+      JSON.stringify(line.curve) === JSON.stringify(current.curve)
+    )
+      continue;
     const partners = shifted.get(old.link) ?? [];
     partners.push(clip);
     shifted.set(old.link, partners);
@@ -2550,12 +2614,6 @@ function keyframeValue<P extends KeyframeProperty>(
   return parsed.data;
 }
 
-function advance(clip: Clip, frames: number, fps: Fps): number | null {
-  return clip.mediaStart === null
-    ? null
-    : clip.mediaStart + ((frames * fps.den) / fps.num) * clip.playbackRate;
-}
-
 /** Source geometry is shared; edge trims and internal cuts have different fade semantics. */
 function windowClip(
   clip: ObservedClip,
@@ -2566,12 +2624,18 @@ function windowClip(
 ): Clip {
   const duration = end - start;
   if (duration <= 0) return { ...clip, start, duration };
+  const mix = windowMix(clip, start - clip.start, duration, fps, mode);
   return {
     ...clip,
-    ...windowMix(clip, start - clip.start, duration, fps, mode),
+    ...mix,
     start,
     duration,
-    mediaStart: advance(clip, start - clip.start, fps),
+    ...sourceAtEdge(
+      { ...clip, ...mix },
+      frames(clip.start, fps),
+      frames(start, fps),
+      fps,
+    ),
     // Keyframes stay on the frames of content they animate.
     keyframes: shiftKeyframes(clip.keyframes, start - clip.start),
     // A piece cut from a clip keeps a transition only on an edge it still has.
@@ -2619,18 +2683,21 @@ function linkedCuts(clips: Clip[], from: Clip, to: Clip): [Clip, Clip][] {
 /** Whole frames of media a clip has after its out point; unbounded for stills and unmeasured media. */
 function framesAfterOut(clip: Clip, fps: Fps) {
   if (clip.mediaStart === null || clip.sourceDuration === null) return Infinity;
-  return (
-    toFrames((clip.sourceDuration - clip.mediaStart) / clip.playbackRate, fps) -
-    clip.duration
-  );
+  const line = resolveClip(clip, fps);
+  const end = positionAtSource(line, micros(attrMicros(clip.sourceDuration)));
+  return Number(firstFrame(end, fps)) - clipEnd(clip);
 }
 
 /** Whole frames of media a clip has before its in point. */
 function framesBeforeIn(clip: Clip, fps: Fps) {
   if (clip.mediaStart === null) return Infinity;
+  const line = resolveClip(clip, fps);
+  const start = Number(firstFrame(positionAtSource(line, micros(0)), fps));
+  // A handle must encode a nonnegative in-point in the document.
   return (
-    sourceGridFrame(clip.mediaStart, fps, clip.playbackRate) ??
-    Math.floor((clip.mediaStart * fps.num) / (fps.den * clip.playbackRate))
+    clip.start -
+    start -
+    (encode(line, line.curve, frames(start, fps), fps).mediaStart < 0 ? 1 : 0)
   );
 }
 
@@ -2883,7 +2950,7 @@ export function canonicalTimeline(timeline: Timeline): Timeline {
     clips: timeline.clips.map((clip) =>
       clip.mediaStart === null
         ? clip
-        : { ...clip, mediaStart: round6(clip.mediaStart) + 0 },
+        : { ...clip, ...retimeClipSource(clip, clip.start, timeline.fps) },
     ),
   };
 }

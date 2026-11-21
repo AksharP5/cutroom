@@ -51,7 +51,9 @@ export function offsetAutomation(automation: string, seconds: number) {
   const parsed = parseAutomation(automation);
   return serializeAutomation({
     ...parsed,
-    lanes: parsed.lanes.map((lane) => startLaneAt(lane, -seconds)),
+    lanes: parsed.lanes.map((lane) =>
+      lane.target === RATE_TARGET ? lane : startLaneAt(lane, -seconds),
+    ),
   });
 }
 
@@ -167,7 +169,9 @@ export function windowMix(
   };
   // Known limit: a head trim loses earlier clip-local points; restoring them needs source-anchored keyframes.
   const lanes = automation.lanes.map((lane) =>
-    from === 0 ? lane : startLaneAt(lane, offset),
+    from === 0 || lane.target === RATE_TARGET
+      ? lane
+      : startLaneAt(lane, offset),
   );
   const crossing = volume?.points.findLast((point) => point.t <= offset);
   if (

@@ -270,3 +270,192 @@ diff --git a/package.json b/package.json
      "./color-luts": {
        "import": "./dist/colorLuts.js",
        "types": "./dist/colorLuts.d.ts"
+diff --git a/dist/audioAutomation.d.ts b/dist/audioAutomation.d.ts
+--- a/dist/audioAutomation.d.ts
++++ b/dist/audioAutomation.d.ts
+@@ -53,6 +53,8 @@
+     viaY?: number;
+ }
+ export interface HfAutomationLane {
++    /** In a rate lane, clip-local zero on the original point curve. */
++    offset?: number;
+     /** `volume`, or `fx.<nodeId>.<paramKey>`. */
+     target: string;
+     points: HfAutomationPoint[];
+diff --git a/dist/audioAutomation.js b/dist/audioAutomation.js
+--- a/dist/audioAutomation.js
++++ b/dist/audioAutomation.js
+@@ -295,6 +295,11 @@
+     }
+     return out.slice(0, MAX_AUTOMATION_POINTS);
+ }
++function rateTiming(lane) {
++    if (lane.target !== RATE_TARGET)
++        return {};
++    return Number.isFinite(lane.offset) && lane.offset ? { offset: lane.offset } : {};
++}
+ /**
+  * Structural normalisation, with no knowledge of the chain: sort and clean the
+  * points of every lane and drop lanes that carry none. Range clamping and
+@@ -312,7 +317,7 @@
+                 : null;
+         const points = normalizePoints(lane.points ?? [], range);
+         if (points.length > 0)
+-            lanes.push({ target: lane.target, points });
++            lanes.push({ target: lane.target, points, ...rateTiming(lane) });
+     }
+     return { version: HF_AUDIO_AUTOMATION_VERSION, lanes };
+ }
+@@ -332,7 +337,7 @@
+             continue;
+         const points = normalizePoints(lane.points, range);
+         if (points.length > 0)
+-            lanes.push({ target: lane.target, points });
++            lanes.push({ target: lane.target, points, ...rateTiming(lane) });
+     }
+     return { version: HF_AUDIO_AUTOMATION_VERSION, lanes };
+ }
+@@ -372,7 +377,9 @@
+         if (!Array.isArray(lane.points)) {
+             throw new AudioAutomationError(`Lane ${i} is missing a \`points\` array.`);
+         }
+-        return { target: lane.target, points: lane.points };
++        if (lane.target === RATE_TARGET && lane.offset !== undefined && !Number.isFinite(lane.offset))
++            throw new AudioAutomationError(`Lane ${i} has an invalid rate offset.`);
++        return { target: lane.target, points: lane.points, ...rateTiming(lane) };
+     });
+     return normalizeAutomation({ version: HF_AUDIO_AUTOMATION_VERSION, lanes });
+ }
+@@ -382,6 +389,7 @@
+         version: HF_AUDIO_AUTOMATION_VERSION,
+         lanes: automation.lanes.map((lane) => ({
+             target: lane.target,
++            ...rateTiming(lane),
+             points: lane.points.map((p) => ({
+                 t: p.t,
+                 v: p.v,
+diff --git a/dist/speedRamp.d.ts b/dist/speedRamp.d.ts
+index 83f011954c1a689d4885d509bc4f5024638ae4f9..438e776c326ba7ab6b764cba0d7b7245e2e9ad5c 100644
+--- a/dist/speedRamp.d.ts
++++ b/dist/speedRamp.d.ts
+@@ -2,10 +2,9 @@
+ import { type HfAutomationLane } from "./audioAutomation.js";
+ /** A constant multiplier, or a lane whose `v` is the multiplier over clip-local time. */
+ export type RateSpec = number | HfAutomationLane;
+-/**
+- * The lane as seen from `dt` seconds into the clip: what a renderer sees after it trims the clip's start.
+- * A shaped segment (`curve`, `viaX`) cut in the middle is resampled, since its shape belongs to its left point.
+- */
++/** Shift the clip clock, keeping the authored points and integration grid intact. */
++export declare function shiftRateLane(spec: number, dt: number): number;
++export declare function shiftRateLane(spec: HfAutomationLane, dt: number): HfAutomationLane;
+ export declare function shiftRateLane(spec: RateSpec, dt: number): RateSpec;
+ /** Speed multiplier at clip-local time `t`. */
+ export declare function rateAt(spec: RateSpec, t: number): number;
+diff --git a/dist/speedRamp.js b/dist/speedRamp.js
+--- a/dist/speedRamp.js
++++ b/dist/speedRamp.js
+@@ -2,24 +2,11 @@
+ import { RATE_TARGET, sampleAutomationLane } from "./audioAutomation.js";
+ import { laneFromAttr } from "./runtime/audioAutomationVolume.js";
+ import { MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE } from "./playbackRateBounds.js";
+-const SHIFT_RESAMPLES = 16;
+-/**
+- * The lane as seen from `dt` seconds into the clip: what a renderer sees after it trims the clip's start.
+- * A shaped segment (`curve`, `viaX`) cut in the middle is resampled, since its shape belongs to its left point.
+- */
++/** Shift the clip clock, keeping the authored points and integration grid intact. */
+ export function shiftRateLane(spec, dt) {
+     if (typeof spec === "number" || dt === 0)
+         return spec;
+-    const next = spec.points.findIndex((p) => p.t > dt);
+-    const later = next < 0 ? [] : spec.points.slice(next).map((p) => ({ ...p, t: p.t - dt }));
+-    const left = next > 0 ? spec.points[next - 1] : undefined;
+-    const shaped = left !== undefined && (left.curve || left.viaX !== undefined);
+-    const cut = shaped && next > 0 ? spec.points[next].t - dt : 0;
+-    const samples = Array.from({ length: shaped ? SHIFT_RESAMPLES - 1 : 0 }, (_, k) => {
+-        const t = ((k + 1) * cut) / SHIFT_RESAMPLES;
+-        return { t, v: rateAt(spec, dt + t) };
+-    });
+-    return { ...spec, points: [{ t: 0, v: rateAt(spec, dt) }, ...samples, ...later] };
++    return { ...spec, offset: (spec.offset ?? 0) + dt };
+ }
+ const CELLS_PER_SEGMENT = 48;
+ const tables = new WeakMap();
+@@ -50,10 +37,10 @@
+     return { ts: Float64Array.from(ts), ss: Float64Array.from(ss), firstRate, lastRate };
+ }
+ function tableFor(lane) {
+-    let table = tables.get(lane);
++    let table = tables.get(lane.points);
+     if (!table) {
+         table = buildTable(lane);
+-        tables.set(lane, table);
++        tables.set(lane.points, table);
+     }
+     return table;
+ }
+@@ -64,7 +51,7 @@
+ export function rateAt(spec, t) {
+     if (typeof spec === "number")
+         return spec;
+-    return usable(spec) ? sampleAutomationLane(spec, t, "log") : 1;
++    return usable(spec) ? sampleAutomationLane(spec, t + (spec.offset ?? 0), "log") : 1;
+ }
+ /** Piecewise-linear lookup of `x` in the ascending `xs`, read off `ys`; caller keeps `x` inside `xs`. */
+ function interpolate(xs, ys, x) {
+@@ -79,13 +66,8 @@
+     }
+     return ys[lo] + ((ys[hi] - ys[lo]) * (x - xs[lo])) / (xs[hi] - xs[lo]);
+ }
+-/** Source seconds consumed by clip-local time `t` (the integral of the rate). */
+-export function sourceTimeAt(spec, t) {
+-    if (typeof spec === "number")
+-        return t * spec;
+-    if (!usable(spec))
+-        return t;
+-    const { ts, ss, firstRate, lastRate } = tableFor(spec);
++function integralAt(table, t) {
++    const { ts, ss, firstRate, lastRate } = table;
+     const last = ts.length - 1;
+     if (t <= 0)
+         return t * firstRate;
+@@ -93,19 +75,32 @@
+         return ss[last] + (t - ts[last]) * lastRate;
+     return interpolate(ts, ss, t);
+ }
++/** Source seconds consumed by clip-local time `t` (the integral of the rate). */
++export function sourceTimeAt(spec, t) {
++    if (typeof spec === "number")
++        return t * spec;
++    if (!usable(spec))
++        return t;
++    const table = tableFor(spec);
++    const offset = spec.offset ?? 0;
++    return offset ? integralAt(table, offset + t) - integralAt(table, offset) : integralAt(table, t);
++}
+ /** Inverse of `sourceTimeAt`: the clip-local time at which `source` seconds have been consumed. */
+ export function timeAtSourceTime(spec, source) {
+     if (typeof spec === "number")
+         return source / spec;
+     if (!usable(spec))
+         return source;
+-    const { ts, ss, firstRate, lastRate } = tableFor(spec);
++    const table = tableFor(spec);
++    const { ts, ss, firstRate, lastRate } = table;
+     const last = ts.length - 1;
+-    if (source <= 0)
+-        return source / firstRate;
+-    if (source >= ss[last])
+-        return ts[last] + (source - ss[last]) / lastRate;
+-    return interpolate(ss, ts, source);
++    const offset = spec.offset ?? 0;
++    const absolute = source + (offset ? integralAt(table, offset) : 0);
++    if (absolute <= 0)
++        return absolute / firstRate - offset;
++    if (absolute >= ss[last])
++        return ts[last] + (absolute - ss[last]) / lastRate - offset;
++    return interpolate(ss, ts, absolute) - offset;
+ }
+ /** The `rate` lane inside a `data-automation` attribute value, or null when absent or unreadable. */
+ export function parseRateLane(raw) {

@@ -1,4 +1,5 @@
 import { parseFpsWithDefault } from "@hyperframes/core";
+import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import { readPlaybackRate } from "@hyperframes/parsers";
 import { parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
@@ -31,6 +32,7 @@ export function transitionSourceTimes(html: string): string {
         const location = node.sourceCodeLocation?.attrs?.[name];
         if (
           (alignment === "center" || alignment === "end") &&
+          !parseRateLane(attrs["data-automation"]) &&
           location &&
           source?.trim()
         ) {

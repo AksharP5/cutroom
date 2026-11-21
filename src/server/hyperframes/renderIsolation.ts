@@ -1,3 +1,4 @@
+import { rampRuntime } from "./rampRuntime.ts";
 import { readFileSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
 import { registerHooks } from "node:module";
@@ -227,7 +228,7 @@ function replaceOnce(
 /** Frame injection supplies the decoded pixels. The source element still owns opacity. */
 export function renderGradeRuntime(source: string) {
   const adapted = replaceOnce(
-    source,
+    rampRuntime(source),
     'i=r&&!n;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=a.opacity||"1"',
     'i=r;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=(n?window.getComputedStyle(e.element):a).opacity||"1"',
     "the colour grading runtime",

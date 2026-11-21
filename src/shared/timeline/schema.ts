@@ -1115,7 +1115,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       mediaStart: z.number().nonnegative().optional(),
     })
     .describe(
-      "Set media speed or source in on a clip and its linked partners, keeping timeline duration. Source in is seconds. Refuses non-media clips or insufficient source media.",
+      "Set media speed or source in on a clip and its linked partners, keeping timeline duration. Source in is seconds. Refuses speed ramps, non-media clips, or insufficient source media.",
     ),
   z
     .object({
