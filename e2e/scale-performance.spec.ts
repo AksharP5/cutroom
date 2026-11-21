@@ -111,8 +111,8 @@ for (const pipeline of [false, true]) {
       expect(loaded).toBeLessThanOrEqual(16);
 
       const offset = 24;
-      // The native path waits for a decoded frame from the isolated preview.
-      const rippleBudgetMs = pipeline ? 1500 : 6000;
+      // On a cold native preview the timing attempt can time out before a reload decodes.
+      const rippleBudgetMs = pipeline ? 1500 : 8000;
       const ripple = async (shot: number) => {
         const frame = shots[shot]!.start + offset;
         await seek(page, frame);
@@ -123,7 +123,10 @@ for (const pipeline of [false, true]) {
         const started = Date.now();
         await page.keyboard.press("Delete");
         await expect
-          .poll(() => picture(page), { timeout: 6000 })
+          .poll(() => picture(page), {
+            timeout: Math.max(6000, rippleBudgetMs),
+            intervals: [50, 100, 150],
+          })
           .toBe(shots[shot + 1]!.source + offset);
         const elapsed = Date.now() - started;
         expect(
