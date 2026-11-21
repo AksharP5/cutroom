@@ -187,7 +187,17 @@ export async function alignRangeAudio(input: {
       // WebM carries Opus, as HyperFrames' own WebM exports do; MP4 and MOV carry AAC.
       ...(webm
         ? ["-c:a", "libopus", "-b:a", "128k"]
-        : ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]),
+        : [
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            // The edit list uses the movie clock, which defaults to milliseconds.
+            "-movie_timescale",
+            String(AUDIO_SAMPLE_RATE),
+            "-movflags",
+            "+faststart",
+          ]),
       // The video already contains the selected frames. A shared time limit
       // can cut a sample when the two absolute edges round in opposite directions.
       "-af",
