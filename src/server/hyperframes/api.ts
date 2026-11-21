@@ -217,9 +217,27 @@ export function createHyperframesApi(
       return next();
     const project = await store.get(c.req.param("id") ?? "");
     await resolveProject(project.id);
-    await reviews.editAssets(project, c.req.header(AGENT_HEADER), () =>
-      store.serializeMutation(project, next),
-    );
+    const token = c.req.header(AGENT_HEADER);
+    await reviews.editAssets(project, token, () => {
+      if (family !== "upload") return store.serializeMutation(project, next);
+      const paths = new Set<string>();
+      return store
+        .mutateWithEntry(
+          project,
+          "Import media",
+          async () => {
+            await next();
+            if (!c.res.ok) return;
+            const result = z
+              .object({ files: z.array(z.string()) })
+              .parse(await c.res.clone().json());
+            for (const path of result.files) paths.add(path);
+          },
+          historyActor(reviews, c, project).who,
+          { moves: paths, category: "import" },
+        )
+        .then(({ value }) => value);
+    });
   });
   api.use("/render/*", async (c, next) => {
     if (

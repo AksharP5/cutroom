@@ -335,15 +335,22 @@ test("a part marked in the source viewer goes on the timeline by key, button and
       },
     });
     expect(result.isError).toBeFalsy();
+    await expect.poll(added).toEqual([
+      ["video", 0, 240, 90, 2],
+      ["audio", 1, 240, 90, 2],
+    ]);
+    expect(
+      (
+        await client.callTool({
+          name: "history_undo",
+          arguments: { projectId: project.id },
+        })
+      ).isError,
+    ).not.toBe(true);
+    await expect.poll(read).toEqual(before);
   } finally {
     await client.close();
   }
-  await expect.poll(added).toEqual([
-    ["video", 0, 240, 90, 2],
-    ["audio", 1, 240, 90, 2],
-  ]);
-  await page.keyboard.press("Control+z");
-  await expect.poll(read).toEqual(before);
 
   // Closing unloads the file: the switch goes, and F9 has nothing to place.
   await source.getByRole("button", { name: "Close source" }).click();

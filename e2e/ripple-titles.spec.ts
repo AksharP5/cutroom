@@ -168,7 +168,14 @@ test("ripple delete and Q/W keep a title editable as one attributed clip, with M
             ?.text,
       )
       .toBe("Grace Hopper, Rear Admiral");
-    await page.keyboard.press("Control+z");
+    expect(
+      (
+        await client.callTool({
+          name: "history_undo",
+          arguments: { projectId: project.id },
+        })
+      ).isError,
+    ).not.toBe(true);
     await expect
       .poll(async () => (await read()).timeline)
       .toEqual(before.timeline);

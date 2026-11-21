@@ -156,7 +156,7 @@ F11 replaces the clip under the playhead on the enabled destination. It aligns t
 
 Marks stay queued in the tab during a server interruption and retry after Cutroom reconnects. Closing the tab before a queued value is sent loses it. With two tabs marking one file, the last request to reach the server wins.
 
-Ctrl+Z and Ctrl+Shift+Z step through your own edits. They include Media Rename and Remove and skip imports and outside file changes. Undo in a text field still applies to typing.
+Ctrl+Z and Ctrl+Shift+Z step through your own edits. They include Media Rename and Remove and skip imports and outside file changes. Undo in a text field still applies to typing. When later work prevents your undo, the toast names the blocking edit and offers **Undo both** if both can be reversed together.
 
 Timeline editing keys Q, W, E, Ctrl+\\, X, Shift+X, Backspace, Delete, Alt+D, M, Cut, Paste, and Paste Insert edit immediately while Source is shown and reveal Timeline in the same press. The timeline panel shows where the edit will land; switching the picture makes its result visible. Resolve 21.1.2 also edits immediately, but leaves Source visible beside its Timeline Viewer. Cutroom shows one picture, so it switches that picture to Timeline. The source file and marks stay loaded. Copy and global Undo/Redo keep their existing behavior. I/O, stepping, and playback still drive Source while it is shown. F9/F10 immediately place its range, then show Timeline, following Resolve's [Switch focus to timeline after edit default](https://documents.blackmagicdesign.com/UserManuals/DaVinci_Resolve_21.1_Reference_Manual.pdf#page=980).
 

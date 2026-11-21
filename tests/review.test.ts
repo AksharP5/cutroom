@@ -1091,8 +1091,12 @@ describe("review round 3 regressions", () => {
 
   test("undo of a legacy sent note before any review change withdraws it", async () => {
     const queue = await setup();
-    // The legacy note arrives from disk and can be selected explicitly.
-    await queue.request(`/projects/${queue.project.id}/history`);
+    // Simulate an owner save by a build that kept sent status in cutroom.json.
+    const ledger = await queue.store.history(queue.project);
+    const window = await ledger.beginWindow(
+      { kind: "person", name: "You" },
+      "Add comment",
+    );
     await writeFile(
       join(queue.project.path, "cutroom.json"),
       JSON.stringify({
@@ -1113,12 +1117,11 @@ describe("review round 3 regressions", () => {
         transcripts: [],
       }),
     );
-    const ledger = await queue.store.history(queue.project);
-    await ledger.checkpoint();
+    const entry = await window.close();
     const undone = await queue.fetchRaw(
       `/projects/${queue.project.id}/history/undo`,
       "POST",
-      { entryId: ledger.list().at(-1)!.id },
+      { entryId: entry!.id },
     );
     expect(undone.status).toBe(200);
     const [item] = await queue.items();
@@ -1322,17 +1325,20 @@ describe("review round 4 regressions", () => {
     expect(Object.keys(await queue.status())).toEqual(["Yours"]);
   });
 
-  test("undo can repair an unreadable cutroom.json", async () => {
+  test("undo can repair an unreadable cutroom.json written by a recorded owner edit", async () => {
     const queue = await setup();
     await queue.note("Warm up the grade");
     await send(queue.agents, queue.project, "Go");
     const history = `/projects/${queue.project.id}/history`;
-    await queue.request(history);
-    await writeFile(join(queue.project.path, "cutroom.json"), "{oops");
     const ledger = await queue.store.history(queue.project);
-    await ledger.checkpoint();
+    const window = await ledger.beginWindow(
+      { kind: "person", name: "You" },
+      "Edit project settings",
+    );
+    await writeFile(join(queue.project.path, "cutroom.json"), "{oops");
+    const entry = await window.close();
     const undo = await queue.fetchRaw(`${history}/undo`, "POST", {
-      entryId: ledger.list().at(-1)!.id,
+      entryId: entry!.id,
     });
     expect(undo.status).toBe(200);
     const [item] = await queue.items();

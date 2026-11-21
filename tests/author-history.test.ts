@@ -14,6 +14,7 @@ import {
 import { createProjectStore } from "../src/server/projects/store";
 import { AGENT_HEADER, AGENT_NAME_HEADER } from "../src/shared/review";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
+import type { CommandInput } from "../src/shared/timeline/schema";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { projectFixture } from "./project-fixture";
 
@@ -269,7 +270,20 @@ test("replay refuses an outside write after candidate selection and rolls back e
     await expect(
       history.revert(
         who,
-        async () => ({ id: entry!.id, replay: "ordinary" }),
+        async () => ({
+          steps: [
+            {
+              id: entry!.id,
+              replay: "ordinary",
+              files: entry!.files.map(({ path, before, after }) => ({
+                path,
+                before: after,
+                after: before,
+              })),
+            },
+          ],
+          blobs: new Map(),
+        }),
         {},
       ),
     ).rejects.toThrow("b.css changed during history replay");
@@ -334,7 +348,20 @@ test("an interrupted replay and torn log tail recover without changing history I
       expect(await readFile(index, "utf8")).toBe(newer);
       const result = await current.revert(
         latest.who,
-        async () => ({ id: latest.id, replay: "ordinary" }),
+        async () => ({
+          steps: [
+            {
+              id: latest.id,
+              replay: "ordinary",
+              files: latest.files.map(({ path, before, after }) => ({
+                path,
+                before: after,
+                after: before,
+              })),
+            },
+          ],
+          blobs: new Map(),
+        }),
         {},
       );
       expect(result).toMatchObject({ ok: true, entry: { undoes: latest.id } });
@@ -345,6 +372,167 @@ test("an interrupted replay and torn log tail recover without changing history I
     } finally {
       await reopened.close();
     }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("selective undo and redo keep independent fields and markers in the same files", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Independent edits" });
+  const api = `/api/cutroom/projects/${project.id}`;
+  const agent = externalHistoryCredential();
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await fixture.app.request(`${api}/timeline`)).json(),
+    );
+  const edit = async (commands: CommandInput[], credential?: string) => {
+    const response = await fixture.app.request(`${api}/commands`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(credential && {
+          [AGENT_HEADER]: credential,
+          [AGENT_NAME_HEADER]: "Codex",
+        }),
+      },
+      body: JSON.stringify({
+        expectedRevision: (await read()).revision,
+        commands,
+      }),
+    });
+    expect(response.status, await response.text()).toBe(200);
+  };
+  const step = async (direction: "undo" | "redo") => {
+    const response = await fixture.app.request(`${api}/history/${direction}`, {
+      method: "POST",
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+    return response.json();
+  };
+  try {
+    await edit([
+      { type: "setClip", clipId: "headline", opacity: 0.5 },
+      {
+        type: "setMarker",
+        id: "owner-marker",
+        frame: 30,
+        name: "Owner marker",
+      },
+    ]);
+    await edit(
+      [
+        { type: "setClip", clipId: "headline", text: "Agent text" },
+        {
+          type: "setMarker",
+          id: "agent-marker",
+          frame: 90,
+          name: "Agent marker",
+        },
+      ],
+      agent,
+    );
+    expect(await step("undo")).toMatchObject({
+      kept: { count: 1, authors: ["Codex"] },
+    });
+    let { timeline } = await read();
+    expect(timeline.clips.find(({ id }) => id === "headline")).toMatchObject({
+      opacity: null,
+      text: "Agent text",
+    });
+    expect(timeline.markers.map(({ id }) => id)).toEqual(["agent-marker"]);
+    await step("redo");
+    ({ timeline } = await read());
+    expect(timeline.clips.find(({ id }) => id === "headline")).toMatchObject({
+      opacity: 0.5,
+      text: "Agent text",
+    });
+    expect(timeline.markers.map(({ id }) => id)).toEqual([
+      "owner-marker",
+      "agent-marker",
+    ]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("Undo both keeps a later independent edit in the same file", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Minimal group" });
+  const api = `/api/cutroom/projects/${project.id}`;
+  const agent = externalHistoryCredential();
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await fixture.app.request(`${api}/timeline`)).json(),
+    );
+  const retitle = async (clipId: string, text: string, credential?: string) => {
+    const response = await fixture.app.request(`${api}/commands`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(credential && {
+          [AGENT_HEADER]: credential,
+          [AGENT_NAME_HEADER]: "Codex",
+        }),
+      },
+      body: JSON.stringify({
+        expectedRevision: (await read()).revision,
+        commands: [{ type: "setClip", clipId, text }],
+      }),
+    });
+    expect(response.status, await response.text()).toBe(200);
+    return response.headers.get("x-cutroom-history-entry");
+  };
+  const undo = (body: unknown, credential?: string) =>
+    fixture.app.request(`${api}/history/undo`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(credential && {
+          [AGENT_HEADER]: credential,
+          [AGENT_NAME_HEADER]: "Codex",
+        }),
+      },
+      body: JSON.stringify(body),
+    });
+  try {
+    const owner = await retitle("headline", "Owner's title");
+    const blocker = await retitle("headline", "Agent's title", agent);
+    await retitle("caption", "Independent caption", agent);
+    const response = await undo({});
+    expect(response.status).toBe(409);
+    const result = await response.json();
+    expect(result).toMatchObject({
+      conflict: { undoTogether: { entryId: owner, withEntries: [blocker] } },
+    });
+    const suggestion = result.conflict.undoTogether;
+    expect((await undo(suggestion, agent)).status).toBe(409);
+    const newest = await retitle("headline", "Newer agent title", agent);
+    expect((await undo(suggestion)).status).toBe(409);
+    expect(
+      (await read()).timeline.clips.find(({ id }) => id === "headline")?.text,
+    ).toBe("Newer agent title");
+    const refreshed = await (await undo({})).json();
+    expect(refreshed.conflict.undoTogether).toEqual({
+      entryId: owner,
+      withEntries: [newest, blocker],
+    });
+    expect((await undo(refreshed.conflict.undoTogether)).status).toBe(200);
+    const { timeline } = await read();
+    expect(timeline.clips.find(({ id }) => id === "headline")?.text).toBe(
+      "Minimal group",
+    );
+    expect(timeline.clips.find(({ id }) => id === "caption")?.text).toBe(
+      "Independent caption",
+    );
   } finally {
     await fixture.close();
   }

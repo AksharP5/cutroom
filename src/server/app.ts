@@ -130,7 +130,13 @@ export async function createApp(
   );
   app.route(
     "/api/cutroom",
-    createProjectRoutes(projects, review, transcripts, media.media.proxyState),
+    createProjectRoutes(
+      projects,
+      review,
+      transcripts,
+      media.media.proxyState,
+      timeline.timelineSnapshot,
+    ),
   );
   app.route("/api/cutroom", timeline);
   app.route("/api/cutroom", variables);

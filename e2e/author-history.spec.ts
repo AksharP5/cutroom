@@ -1,8 +1,9 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
+import { REVIEW_LEDGER_PATH } from "../src/shared/review";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { clipVersions } from "../src/server/projects/changes";
@@ -85,11 +86,15 @@ test("author undo and redo preserve migrated review marks, acceptance, and unrel
       clipEdits: [{ ...edit, signature, beforeSignature }],
     });
     const ledger = join(project.path, ".cutroom/review.json");
+    await rm(join(project.path, REVIEW_LEDGER_PATH));
     await writeFile(ledger, legacy);
     await page.reload();
     await expect(picture).toHaveText("Codex opening");
     await expect(mark).toBeVisible();
-    expect(await readFile(ledger, "utf8")).toContain('"schemaVersion":2');
+    expect(JSON.parse(await readFile(ledger, "utf8"))).toMatchObject({
+      schemaVersion: 1,
+      clipEdits: [],
+    });
     expect(
       await readFile(join(project.path, ".cutroom/review.v1.json"), "utf8"),
     ).toBe(legacy);
@@ -111,6 +116,32 @@ test("author undo and redo preserve migrated review marks, acceptance, and unrel
     await writeFile(join(project.path, "assets/outside.png"), media);
     await expect(page.getByText("imported.png", { exact: true })).toBeVisible();
     await expect(page.getByText("outside.png", { exact: true })).toBeVisible();
+    expect(
+      (
+        await request.post(`/api/projects/${project.id}/history/checkpoint`)
+      ).ok(),
+    ).toBe(true);
+    const historyBefore = await (await request.get(`${api}/history`)).json();
+    expect(historyBefore.entries).toContainEqual(
+      expect.objectContaining({
+        label: "Imported 1 file",
+        author: { kind: "person", name: "You" },
+        step: false,
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: "assets/imported.png" }),
+        ]),
+      }),
+    );
+    expect(historyBefore.entries).toContainEqual(
+      expect.objectContaining({
+        label: "Added 1 file",
+        author: { kind: "outside", name: "Outside" },
+        step: false,
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: "assets/outside.png" }),
+        ]),
+      }),
+    );
     const html = await readFile(join(project.path, "index.html"), "utf8");
     const beforeUndo = await picture.screenshot();
 
@@ -175,7 +206,7 @@ test("author undo and redo preserve migrated review marks, acceptance, and unrel
     await page.getByRole("button", { name: "Review", exact: true }).click();
     const change = page
       .getByRole("complementary", { name: "Inspector" })
-      .getByRole("button", { name: /Set text to .*Codex opening/ });
+      .getByRole("button", { name: /^Set text to .*Codex opening/ });
     await expect(change).toBeVisible();
     const acceptChange = page
       .getByRole("complementary", { name: "Inspector" })
@@ -202,5 +233,155 @@ test("author undo and redo preserve migrated review marks, acceptance, and unrel
     });
   } finally {
     await Promise.all([client.close(), otherClient.close()]);
+  }
+});
+
+test("a later MCP trim blocks ripple undo and Undo both reverses the named edits", async ({
+  page,
+  request,
+  baseURL,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Ripple history", width: 640, height: 360, duration: 10 },
+      })
+    ).json(),
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  const source = join(project.path, "index.html");
+  const markup = await readFile(source, "utf8");
+  await writeFile(
+    source,
+    markup.replace(
+      /<div id="rule"[\s\S]*?<\/div>/,
+      '<div id="cut" class="clip" data-start="0" data-duration="1" data-track-index="0">Cut</div>' +
+        '<div id="next" class="clip" data-start="2" data-duration="1" data-track-index="0">Next</div>' +
+        '<div id="last" class="clip" data-start="4" data-duration="1" data-track-index="0">Last</div>',
+    ),
+  );
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+  const starts = async () =>
+    (await read()).timeline.clips
+      .filter(({ track }) => track === 0)
+      .map(({ id, start, duration }) => [id, start, duration]);
+  const original = await starts();
+  const client = new Client({ name: "Codex", version: "1" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+      requestInit: { headers: { origin: baseURL! } },
+    }),
+  );
+  try {
+    await page.goto(`/#project/${project.id}`);
+    await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+    await page.locator('[data-clip="cut"]').click();
+    await page.keyboard.press("Shift+X");
+    await expect(page.locator('[data-clip="cut"]')).toHaveCount(0);
+    await expect.poll(starts).toEqual([
+      ["next", 30, 30],
+      ["last", 90, 30],
+    ]);
+    const agent = await client.callTool({
+      name: "timeline_edit",
+      arguments: {
+        projectId: project.id,
+        expectedRevision: (await read()).revision,
+        commands: [{ type: "trim", clipId: "last", edge: "end", to: 105 }],
+      },
+    });
+    expect(agent.isError, JSON.stringify(agent.content)).not.toBe(true);
+    await expect.poll(starts).toEqual([
+      ["next", 30, 30],
+      ["last", 90, 15],
+    ]);
+    await page.keyboard.press("Control+z");
+    const toast = page.locator(".toast");
+    await expect(toast).toContainText("Codex");
+    await expect(toast).toContainText(/trim/i);
+    const both = page.getByRole("button", { name: "Undo both", exact: true });
+    await expect(both).toBeVisible();
+    await expect(page.locator('[data-clip="cut"]')).toHaveCount(0);
+    expect(await starts()).toEqual([
+      ["next", 30, 30],
+      ["last", 90, 15],
+    ]);
+    const cut = page.frameLocator("iframe[data-live]").locator("#cut");
+    await expect(cut).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath("blocked-undo.png") });
+    await both.click();
+    await expect(page.locator('[data-clip="cut"]')).toBeVisible();
+    await expect.poll(starts).toEqual(original);
+    await expect(cut).toHaveText("Cut");
+    await page.screenshot({ path: info.outputPath("both-edits-undone.png") });
+
+    await page.keyboard.press("Control+Shift+z");
+    await expect.poll(starts).toEqual([
+      ["next", 30, 30],
+      ["last", 90, 30],
+    ]);
+    await page.keyboard.press("Control+Shift+z");
+    await expect.poll(starts).toEqual([
+      ["next", 30, 30],
+      ["last", 90, 15],
+    ]);
+  } finally {
+    await client.close();
+  }
+});
+
+test("a cached own undo paints before its POST and reconciles without a timeline GET", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Fast undo", width: 640, height: 360, duration: 10 },
+      })
+    ).json(),
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  await seekFrame(page, 60);
+  const save = page.waitForResponse((response) =>
+    response.url().endsWith(`${api}/commands`),
+  );
+  await page.keyboard.press("m");
+  await save;
+  const marker = page.getByRole("button", { name: "Marker Marker 1" });
+  await expect(marker).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Undo", exact: true }),
+  ).toHaveAttribute("aria-description", /marker/);
+  const allowUndo = Promise.withResolvers<void>();
+  const allowReads = Promise.withResolvers<void>();
+  await page.route(`**${api}/timeline`, async (route) => {
+    await allowReads.promise;
+    await route.continue();
+  });
+  await page.route(`**${api}/history/undo`, async (route) => {
+    await allowUndo.promise;
+    await route.continue();
+  });
+  try {
+    const undo = page.waitForResponse((response) =>
+      response.url().endsWith(`${api}/history/undo`),
+    );
+    await page.keyboard.press("Control+z");
+    await expect(marker).toHaveCount(0);
+    allowUndo.resolve();
+    expect((await undo).ok()).toBe(true);
+    await expect(
+      page.getByRole("button", { name: "Redo", exact: true }),
+    ).toBeEnabled();
+    await expect(marker).toHaveCount(0);
+  } finally {
+    allowUndo.resolve();
+    allowReads.resolve();
   }
 });

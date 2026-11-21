@@ -6,6 +6,7 @@ import { dirname, isAbsolute } from "node:path";
 import { z } from "zod";
 import { fileContentVersion } from "@hyperframes/studio-server";
 import { historyActor } from "./historyActor";
+import type { createTimelineRoutes } from "../timeline/routes";
 import { HistoryRequestSchema, historySummary, replayHistory } from "./history";
 import {
   AnnotationInputSchema,
@@ -81,6 +82,9 @@ export function createProjectRoutes(
     project: Project,
     path: string,
   ) => Promise<Readonly<JobState> | null> = async () => null,
+  timelineSnapshot?: ReturnType<
+    typeof createTimelineRoutes
+  >["timelineSnapshot"],
 ) {
   const api = new Hono();
   const agentWho = (c: Context, project: Project) =>
@@ -527,14 +531,32 @@ export function createProjectRoutes(
         HistoryRequestSchema,
         body ? JSON.parse(body) : {},
       );
+      const actor = historyActor(reviews, c, project);
+      const composition =
+        input.composition && canonicalProjectPath(input.composition);
       const result = await replayHistory(
         reviews,
         project,
-        historyActor(reviews, c, project),
+        actor,
         direction,
         input,
       );
-      return c.json(result, result.ok ? 200 : 409);
+      if (!result.ok) return c.json(result, 409);
+      if (!composition || !timelineSnapshot || !result.entry)
+        return c.json(result);
+      const view = await timelineSnapshot(project, composition).catch(
+        (error: unknown) => {
+          // The inverse already landed. A missing or unreadable composition is shown by the normal refresh.
+          if (error instanceof HttpError) return null;
+          throw error;
+        },
+      );
+      const history = await store.history(project);
+      return c.json({
+        ...result,
+        view: view && !view.error ? view : null,
+        history: historySummary(history.list(), actor.who),
+      });
     });
   }
   return api;

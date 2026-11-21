@@ -582,29 +582,35 @@ test("review: undo or MCP rename cannot leave a missing source available to Inse
       },
     });
     expect(renamed.isError).not.toBe(true);
+    await page.keyboard.press("F9");
+    await expect(page.locator(".edit-source")).toHaveCount(0);
+    expect(await sources()).toEqual([
+      "assets/external.mp4",
+      "assets/external.mp4",
+    ]);
+    await row("external.mp4").dblclick();
+    expect(
+      (
+        await client.callTool({
+          name: "history_undo",
+          arguments: { projectId: project.id },
+        })
+      ).isError,
+    ).not.toBe(true);
+    await expect(page.locator(".edit-source")).toHaveCount(0);
+    await row("talk.mp4").dblclick();
+    expect(
+      (
+        await client.callTool({
+          name: "history_redo",
+          arguments: { projectId: project.id },
+        })
+      ).isError,
+    ).not.toBe(true);
+    await expect(page.locator(".edit-source")).toHaveCount(0);
   } finally {
     await client.close();
   }
-  await page.keyboard.press("F9");
-  await expect(page.locator(".edit-source")).toHaveCount(0);
-  expect(await sources()).toEqual([
-    "assets/external.mp4",
-    "assets/external.mp4",
-  ]);
-  await row("external.mp4").dblclick();
-  expect(
-    (
-      await request.post(`/api/cutroom/projects/${project.id}/history/undo`)
-    ).ok(),
-  ).toBe(true);
-  await expect(page.locator(".edit-source")).toHaveCount(0);
-  await row("talk.mp4").dblclick();
-  expect(
-    (
-      await request.post(`/api/cutroom/projects/${project.id}/history/redo`)
-    ).ok(),
-  ).toBe(true);
-  await expect(page.locator(".edit-source")).toHaveCount(0);
 });
 
 test("a clip using a directory alias keeps the original Media row online", async ({

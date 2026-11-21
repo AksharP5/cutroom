@@ -706,12 +706,12 @@ export function createTimelineRoutes(
 
   const api = new Hono();
   api.use("/projects/:id/*", projectMutationGuard(reviews));
-  api.get("/projects/:id/timeline", async (c) => {
-    const project = await store.get(c.req.param("id"));
-    const composition = canonicalProjectPath(
-      c.req.query("composition") ?? "index.html",
-    );
-    const snapshot = await reviews.readComposition(
+  const timelineSnapshot = (
+    project: Project,
+    composition: string,
+    details = false,
+  ) =>
+    reviews.readComposition(
       project,
       composition,
       async () => {
@@ -733,6 +733,16 @@ export function createTimelineRoutes(
           };
         }
       },
+      details,
+    );
+  api.get("/projects/:id/timeline", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
+    const snapshot = await timelineSnapshot(
+      project,
+      composition,
       c.req.query("clipEdits") === "1",
     );
     return c.json(snapshot, snapshot.error === undefined ? 200 : 422);
@@ -1183,6 +1193,7 @@ export function createTimelineRoutes(
   });
   return Object.assign(api, {
     editInWindow,
+    timelineSnapshot,
     subscribeAnimationFeedback(
       projectId: string,
       listener: (feedback: z.infer<typeof AnimationFeedbackSchema>) => void,

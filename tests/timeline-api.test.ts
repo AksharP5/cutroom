@@ -154,7 +154,12 @@ test("outside HTML uses persisted mute and solo on read without a history write 
       "POST",
       {},
     );
-    expect(undo.status).toBe(409);
+    expect(undo.status).toBe(200);
+    expect(
+      (await read()).timeline.tracks.every(
+        ({ muted, solo }) => !muted && !solo,
+      ),
+    ).toBe(true);
     expect(await readFile(index, "utf8")).toBe(raw);
   } finally {
     await fixture.close();

@@ -1222,7 +1222,7 @@ export function createReviewService(store: ProjectStore) {
       };
       return serialize(project, () =>
         store.serializeMutation(project, async () => {
-          await reconcile(project).catch(unlessUnreadable);
+          const before = await reconcile(project).catch(unlessUnreadable);
           const result = await replay(await store.history(project));
           if (result.ok && result.entry && !result.repeated) {
             const { files } = result.entry;
@@ -1242,10 +1242,20 @@ export function createReviewService(store: ProjectStore) {
               if (moved) await moveSourceMarks(project, file.path, moved.path);
             }
           }
-          await reconcile(project, { actor, how: `by ${direction}` }).catch(
-            unlessUnreadable,
-          );
-          return result;
+          const after = await reconcile(project, {
+            actor,
+            how: `by ${direction}`,
+          }).catch(unlessUnreadable);
+          const remaining = new Set(after?.map(({ id }) => id));
+          const removedNotes =
+            direction === "undo" && before && after
+              ? before.filter(({ id }) => !remaining.has(id))
+              : [];
+          return {
+            ...result,
+            removedNotes,
+            notesBefore: removedNotes.length ? before : undefined,
+          };
         }),
       );
     },

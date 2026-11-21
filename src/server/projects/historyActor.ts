@@ -43,11 +43,9 @@ export function historyActor(
     }
   }
   const key =
-    actor.turn.kind === "message"
-      ? `turn:${actor.turn.id}`
-      : isExternalHistoryCredential(token)
-        ? `mcp:${createHash("sha256").update(token).digest("hex")}`
-        : undefined;
+    actor.turn.kind === "message" || isExternalHistoryCredential(token)
+      ? `session:${createHash("sha256").update(token).digest("hex")}`
+      : undefined;
   const who: HistoryWho = { kind: "agent", name, ...(key && { key }) };
   return { who, review: actor };
 }

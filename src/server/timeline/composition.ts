@@ -3367,3 +3367,183 @@ export function rebaseClipboard(
   );
   return rebased;
 }
+
+/** Reverses independent changes to named clips directly in their authored source. */
+export function reverseComposition(
+  before: ParsedComposition,
+  after: ParsedComposition,
+  current: ParsedComposition,
+  settings: TimelineSettings,
+) {
+  const clipElements = (parsed: ParsedComposition) =>
+    [...parsed.elements.values()].sort((a, b) => a.start - b.start);
+  const styles = [
+    "data-cutroom-track-stacking",
+    "data-cutroom-titles",
+    TRANSITION_STYLE_ATTRIBUTE,
+    KEYFRAME_STYLE_ATTRIBUTE,
+    REGION_STYLE_ATTRIBUTE,
+  ];
+  const strip = (parsed: ParsedComposition) => {
+    const generated = scopeElements(parsed.roots, parsed.scope).filter(
+      (element) =>
+        element.tag === "style" &&
+        styles.some((name) => Object.hasOwn(element.attrs, name)),
+    );
+    const clips = clipElements(parsed);
+    const parts = [...clips, ...generated].sort((a, b) => a.start - b.start);
+    if (
+      parts.some(
+        (part, index) => index > 0 && part.start < parts[index - 1]!.end,
+      )
+    )
+      return null;
+    return applyEdits(
+      parsed.html,
+      parts.map(({ start, end }) => ({
+        start,
+        end: end + (parsed.html[end] === "\n" ? 1 : 0),
+        text: "",
+      })),
+    );
+  };
+  // An author can edit freeform markup too. Keep it byte for byte unless its full
+  // outside-clip unit may be restored without moving clips.
+  const outside = strip(before);
+  const afterOutside = strip(after);
+  const currentOutside = strip(current);
+  if (outside === null || afterOutside === null || currentOutside === null)
+    return null;
+  const restoreOutside = outside !== afterOutside;
+  const order = (parsed: ParsedComposition) =>
+    clipElements(parsed).map((element) => element.attrs.id);
+  if (
+    restoreOutside &&
+    (afterOutside !== currentOutside ||
+      !Bun.deepEquals(order(before), order(after)) ||
+      !Bun.deepEquals(order(after), order(current)))
+  )
+    return null;
+
+  const raw = (parsed: ParsedComposition, element: SourceElement) =>
+    parsed.html.slice(element.start, element.end);
+  const body = (parsed: ParsedComposition, element: SourceElement) =>
+    parsed.html.slice(
+      element.openEnd,
+      parsed.nodes[element.index]?.own[1]?.[0] ?? element.end,
+    );
+  const b = before.elements;
+  const a = after.elements;
+  const c = current.elements;
+  const edits: Edit[] = [];
+  const tags = new Map(
+    scanHtmlOpeningTags(current.html).map((span) => [span.start, span]),
+  );
+  const beforeOrdered = clipElements(before);
+  const parents = new Map<SourceElement, SourceElement>();
+  for (const element of scopeElements(before.roots, before.scope))
+    for (const child of [...element.children, ...element.content])
+      parents.set(child, element);
+  const common = (parsed: ParsedComposition) =>
+    order(parsed).filter((id) => id && b.has(id) && a.has(id));
+  if (!Bun.deepEquals(common(before), common(after))) return null;
+  for (const id of new Set([...b.keys(), ...a.keys()])) {
+    const old = b.get(id);
+    const edited = a.get(id);
+    const now = c.get(id);
+    if (old && edited && raw(before, old) === raw(after, edited)) continue;
+    if (!old && edited) {
+      if (
+        !now ||
+        edited.tag !== now.tag ||
+        body(after, edited) !== body(current, now)
+      )
+        return null;
+      const withoutStart = ({ attrs }: SourceElement) => {
+        const { "data-start": _start, ...other } = attrs;
+        return other;
+      };
+      if (!Bun.deepEquals(withoutStart(edited), withoutStart(now))) return null;
+      edits.push({ start: now.start, end: now.end, text: "" });
+      continue;
+    }
+    if (old && !edited) {
+      if (now || currentOutside !== afterOutside) return null;
+      // Existing sibling anchors preserve the author's DOM order.
+      const parent = parents.get(old);
+      const standing = beforeOrdered.filter(
+        (element) => element !== old && parents.get(element) === parent,
+      );
+      const next = standing.find(
+        (element) => element.start > old.start && c.has(element.attrs.id ?? ""),
+      );
+      const previous = standing.findLast(
+        (element) => element.start < old.start && c.has(element.attrs.id ?? ""),
+      );
+      const anchor = next ?? previous;
+      const actual = anchor && c.get(anchor.attrs.id ?? "");
+      if (!actual && parent !== before.root) return null;
+      const at = actual
+        ? next
+          ? actual.start
+          : actual.end
+        : current.nodes[current.root.index]?.own[1]?.[0];
+      if (at === undefined) return null;
+      edits.push({ start: at, end: at, text: `${raw(before, old)}\n` });
+      continue;
+    }
+    if (
+      !old ||
+      !edited ||
+      !now ||
+      old.tag !== edited.tag ||
+      edited.tag !== now.tag
+    )
+      return null;
+    const changes: AttributeChange[] = [];
+    for (const name of new Set([
+      ...Object.keys(old.attrs),
+      ...Object.keys(edited.attrs),
+    ])) {
+      const value = old.attrs[name];
+      const written = edited.attrs[name];
+      if (value === written) continue;
+      if (now.attrs[name] !== written) return null;
+      changes.push([name, value ?? null]);
+    }
+    const span = tags.get(now.start);
+    if (changes.length && !span) return null;
+    if (span) edits.push(...attributeEdits(span, current.html, changes));
+    const originalBody = body(before, old);
+    const editedBody = body(after, edited);
+    if (originalBody !== editedBody) {
+      if (body(current, now) !== editedBody) return null;
+      edits.push({
+        start: now.openEnd,
+        end: now.openEnd + editedBody.length,
+        text: originalBody,
+      });
+    }
+  }
+  let source = applyEdits(current.html, edits);
+  if (restoreOutside) {
+    const merged = parseComposition(source, settings, { scope: current.scope });
+    const replacements = clipElements(before).map((element) => {
+      const clip = merged.elements.get(element.attrs.id ?? "");
+      return (
+        clip && {
+          start: element.start,
+          end: element.end,
+          text: raw(merged, clip),
+        }
+      );
+    });
+    if (replacements.some((edit) => !edit)) return null;
+    source = applyEdits(
+      before.html,
+      replacements.filter((edit) => edit !== undefined),
+    );
+  }
+  const parsed = parseComposition(source, settings, { scope: current.scope });
+  return patchComposition(parsed, parsed.timeline, new Map());
+}

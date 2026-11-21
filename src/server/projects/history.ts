@@ -2,7 +2,14 @@ import {
   HistoryRefusedError,
   STUDIO_SIGNATURE_MANIFEST_PATHS,
 } from "@hyperframes/studio-server";
-import type { HistoryListItem, HistoryWho } from "@hyperframes/studio-server";
+import type {
+  HistoryEntry,
+  HistoryFileChange,
+  HistoryListItem,
+  HistoryWho,
+  ProjectHistory,
+} from "@hyperframes/studio-server";
+import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { dirname, relative, sep } from "node:path";
 import { z } from "zod";
@@ -12,19 +19,31 @@ import {
   inMediaTrash,
   isFreezeExport,
   isMediaItem,
+  localMediaPath,
 } from "../../shared/media";
-import { PROJECT_DOCUMENT_PATH } from "../../shared/project";
+import {
+  PROJECT_DOCUMENT_PATH,
+  ProjectDocumentSchema,
+  emptyProjectDocument,
+} from "../../shared/project";
 import type { Project } from "../../shared/project";
+import { emptyTimelineSettings } from "../../shared/timeline/schema";
+import { mediaSources, compositionScope } from "../timeline/composition";
 import { protectedPath } from "../../shared/sourcePaths";
 import { ownerWho } from "./historyActor";
 import type { historyActor } from "./historyActor";
+import { reverseDocument } from "./historyDocument";
+import { reverseTimeline } from "./historyTimeline";
 import { mediaRemoveLabel } from "./mediaTrash";
 import { projectPath, projectWritePath } from "./path";
 import type { ReviewService } from "./review";
 
 export const HistoryRequestSchema = z.strictObject({
   entryId: z.string().min(1).max(128).optional(),
+  expectedEntryId: z.string().min(1).max(128).optional(),
   requestId: z.uuid().optional(),
+  withEntries: z.array(z.string().min(1).max(128)).min(1).max(100).optional(),
+  composition: z.string().min(1).max(1024).optional(),
 });
 
 type Direction = "undo" | "redo";
@@ -34,17 +53,8 @@ const isOwner = (who: HistoryWho) => who.key === ownerWho.key;
 
 function belongsTo(entry: Entry, who: HistoryWho) {
   if (!who.key || entry.who.kind !== who.kind) return false;
-  if (entry.who.key) return entry.who.key === who.key;
-  if (!isOwner(who) || entry.who.name !== ownerWho.name) return false;
-  // These routes formerly stamped MCP and editor calls alike as "You".
-  if (entry.label === "Import transcript") return false;
-  return !(
-    entry.files.length === 1 &&
-    entry.files[0]?.path === PROJECT_DOCUMENT_PATH &&
-    ["Add comment", "Add drawing", "Update comment", "Remove comment"].includes(
-      entry.label,
-    )
-  );
+  if (isOwner(who)) return true;
+  return entry.who.key === who.key;
 }
 
 function isMediaOperation(entry: Entry) {
@@ -79,17 +89,25 @@ function isMediaOperation(entry: Entry) {
   );
 }
 
+function isImport(entry: Entry) {
+  return (
+    entry.category === "import" ||
+    (entry.files.length > 0 &&
+      entry.files.every(
+        ({ path, before, after }) =>
+          isMediaItem(path) && before === null && after !== null,
+      ))
+  );
+}
+
 function editable(entry: Entry) {
   if (
+    entry.who.kind === "outside" ||
+    isImport(entry) ||
     entry.incomplete ||
     !entry.files.length ||
     entry.restoredTo ||
     entry.undoes
-  )
-    return false;
-  if (
-    entry.who.kind === "outside" &&
-    entry.files.some(({ path }) => isMediaItem(path) || inMediaTrash(path))
   )
     return false;
   if (entry.category === "media") return isMediaOperation(entry);
@@ -98,9 +116,8 @@ function editable(entry: Entry) {
     entry.files.every(
       ({ path }) =>
         !protectedPath(path) ||
-        (entry.who.kind !== "outside" &&
-          (inFreezeAssets(path) ||
-            /^assets\/fonts\/[^/]+\.(?:woff2?|[ot]tf)$/i.test(path))),
+        inFreezeAssets(path) ||
+        /^assets\/fonts\/[^/]+\.(?:woff2?|[ot]tf)$/i.test(path),
     )
   );
 }
@@ -117,9 +134,7 @@ export function historyCandidate(
     if (!entry.undoes) {
       if (
         !belongsTo(entry, who) ||
-        !(entry.who.key
-          ? entry.files.length || entry.incomplete
-          : editable(entry))
+        !(editable(entry) || (entry.incomplete && !isImport(entry)))
       )
         continue;
       if (direction === "redo") return;
@@ -129,11 +144,16 @@ export function historyCandidate(
     if (
       direction === "redo" &&
       !entry.undone &&
-      entry.replay === "ordinary" &&
+      (entry.replay === "ordinary" ||
+        (isOwner(who) && entry.replay !== undefined)) &&
       belongsTo(entry, who)
     ) {
       const original = byId.get(entry.undoes);
-      if (original?.undone && editable(original) && belongsTo(original, who))
+      if (
+        original?.undone &&
+        editable(original) &&
+        (isOwner(who) || belongsTo(original, who))
+      )
         return entry;
     }
   }
@@ -143,10 +163,19 @@ export function historySummary(entries: readonly Entry[], who: HistoryWho) {
   const undo = historyCandidate(entries, "undo", who);
   const redo = historyCandidate(entries, "redo", who);
   return {
-    entries: entries.map(({ who, requestId: _requestId, ...entry }) => ({
-      ...entry,
-      who: { kind: who.kind, name: who.name },
-    })),
+    entries: entries.map(({ who: author, requestId: _requestId, ...entry }) => {
+      const display = { kind: author.kind, name: author.name };
+      return {
+        ...entry,
+        ...(isImport({ ...entry, who: author }) && {
+          label: `${author.kind === "outside" ? "Added" : "Imported"} ${entry.files.length} ${entry.files.length === 1 ? "file" : "files"}`,
+        }),
+        who: display,
+        author: display,
+        mine: belongsTo({ ...entry, who: author }, who),
+        step: editable({ ...entry, who: author }),
+      };
+    }),
     canUndo: !!undo,
     canRedo: !!redo,
     nextUndo: undo ? { id: undo.id, label: undo.label } : null,
@@ -160,12 +189,29 @@ export function historySummary(entries: readonly Entry[], who: HistoryWho) {
   };
 }
 
+type Blocker = {
+  id: string;
+  label: string;
+  author: { kind: HistoryWho["kind"]; name: string };
+};
+
 class ReplayConflict extends HttpError {
   constructor(
     message: string,
-    readonly conflict: { files: string[]; newer: string[] },
+    readonly conflict: {
+      files: string[];
+      newer: string[];
+      blocking?: Blocker[];
+      undoTogether?: { entryId: string; withEntries: string[] };
+    },
   ) {
     super(409, message);
+  }
+}
+
+class HistoryAdvanced extends HttpError {
+  constructor() {
+    super(409, "The next history action changed.");
   }
 }
 
@@ -192,7 +238,7 @@ async function validatePaths(project: Project, entry: Entry) {
   }
 }
 
-function guardLaterEdits(
+function relatedEdits(
   entries: readonly Entry[],
   target: Entry,
   original: Entry,
@@ -222,12 +268,27 @@ function guardLaterEdits(
         { entry, files: entry.files.length ? entry.files : target.files },
       ];
     // A later edit and its undo cancel. An undo of earlier content can still conflict.
-    if (entry.undoes && !redoOf(entry) && byId.get(root.id)!.index > anchor)
-      return [];
+    if (entry.undoes) {
+      const originalIndex = byId.get(root.id)!.index;
+      const reversesReplay = redoOf(entry);
+      if (!reversesReplay && originalIndex > anchor) return [];
+      if (
+        reversesReplay &&
+        originalIndex <= anchor &&
+        byId.get(entry.undoes)!.index > anchor
+      )
+        return [];
+    }
     const category = root.category;
     const files = entry.files.filter(({ path, before, after }) => {
       if (paths.has(path)) return true;
-      if (category === "marker" || category === "text") return false;
+      if (category === "marker")
+        return (
+          structural &&
+          path === PROJECT_DOCUMENT_PATH &&
+          target.files.some(({ path }) => /\.html?$/i.test(path))
+        );
+      if (category === "text") return false;
       if (original.category === "marker") return /\.html?$/i.test(path);
       if (!structural) return false;
       return (
@@ -237,19 +298,200 @@ function guardLaterEdits(
     });
     return files.length ? [{ entry, files }] : [];
   });
-  if (!conflicts.length) return;
-  const last = conflicts.at(-1)!.entry;
-  throw new ReplayConflict(
-    `Can't ${direction} ${original.label}. ${last.who.name} changed related content: ${last.label}.`,
-    {
-      files: [
-        ...new Set(
-          conflicts.flatMap(({ files }) => files.map(({ path }) => path)),
-        ),
-      ],
-      newer: conflicts.map(({ entry }) => entry.id),
+  return conflicts;
+}
+
+type ReplayStep = {
+  id: string;
+  replay: NonNullable<HistoryEntry["replay"]>;
+  files: HistoryFileChange[];
+};
+
+function replayPlan(
+  history: ProjectHistory,
+  currentHash: (path: string) => string | null,
+) {
+  const blobs = new Map<string, Buffer>();
+  const current = new Map<string, string | null>();
+  const steps: ReplayStep[] = [];
+  const hashOf = (path: string) =>
+    current.has(path) ? current.get(path)! : currentHash(path);
+  const bytes = (hash: string) =>
+    Promise.resolve(blobs.get(hash) ?? history.readBlob(hash));
+  const text = async (hash: string) => (await bytes(hash)).toString("utf8");
+  const remember = (source: string) => {
+    const content = Buffer.from(source);
+    const hash = createHash("sha256").update(content).digest("hex");
+    blobs.set(hash, content);
+    return hash;
+  };
+  return {
+    steps,
+    blobs,
+    async add(
+      target: Entry,
+      original: Entry,
+      replay: ReplayStep["replay"],
+      later: ReturnType<typeof relatedEdits>,
+    ) {
+      const changes: HistoryFileChange[] = [];
+      const document = target.files.find(
+        ({ path }) => path === PROJECT_DOCUMENT_PATH,
+      );
+      const currentDocument = hashOf(PROJECT_DOCUMENT_PATH);
+      let restoredDocument = document ? document.before : currentDocument;
+      const conflict = new Set<string>();
+      const movingMedia = isMediaOperation(original);
+      if (
+        movingMedia ||
+        target.files.some(
+          ({ path, before }) =>
+            before === null &&
+            /\.(?:html?|css|[cm]?[jt]s|svg|vtt|woff2?|[ot]tf)$/i.test(path),
+        )
+      ) {
+        for (const row of later)
+          for (const { path } of row.files) conflict.add(path);
+      }
+      if (document && document.after !== currentDocument) {
+        if (
+          !movingMedia &&
+          document.before &&
+          document.after &&
+          currentDocument
+        ) {
+          const merged = reverseDocument(
+            await text(document.before),
+            await text(document.after),
+            await text(currentDocument),
+          );
+          if (merged !== null) restoredDocument = remember(merged);
+          else conflict.add(document.path);
+        } else conflict.add(document.path);
+      }
+      for (const file of target.files) {
+        const standing = hashOf(file.path);
+        let restored = file.before;
+        if (file === document) {
+          restored = restoredDocument;
+        } else if (
+          !movingMedia &&
+          /\.html?$/i.test(file.path) &&
+          file.before &&
+          file.after &&
+          standing &&
+          (standing !== file.after ||
+            Boolean(document && document.after !== currentDocument) ||
+            later.some((row) =>
+              row.files.some(({ path }) => path === PROJECT_DOCUMENT_PATH),
+            ))
+        ) {
+          const readDocument = async (hash: string | null) =>
+            hash
+              ? ProjectDocumentSchema.safeParse(JSON.parse(await text(hash)))
+              : { success: true as const, data: emptyProjectDocument() };
+          const settings = async (hash: string | null) => {
+            const value = await readDocument(hash).catch((error: unknown) => {
+              if (error instanceof SyntaxError) return;
+              throw error;
+            });
+            return value?.success
+              ? (value.data.timelines[file.path] ?? emptyTimelineSettings())
+              : null;
+          };
+          // An HTML-only entry has no before/after sidecar hashes. Use the first later sidecar's before state.
+          const standingAtEdit = later
+            .flatMap(({ entry }) => entry.files)
+            .find(({ path }) => path === PROJECT_DOCUMENT_PATH);
+          const priorDocument = standingAtEdit
+            ? standingAtEdit.before
+            : currentDocument;
+          const [before, after, current, result] = await Promise.all([
+            settings(document ? document.before : priorDocument),
+            settings(document ? document.after : priorDocument),
+            settings(currentDocument),
+            settings(restoredDocument),
+          ]);
+          if (!before || !after || !current || !result) {
+            conflict.add(file.path);
+            continue;
+          }
+          const [old, written, now] = await Promise.all([
+            text(file.before),
+            text(file.after),
+            text(standing),
+          ]);
+          const merged = reverseTimeline(
+            file.path,
+            { before: old, after: written, current: now },
+            {
+              before,
+              after,
+              current,
+              restored: result,
+            },
+          );
+          if (merged === null) {
+            conflict.add(file.path);
+            if (
+              later.some(({ files }) =>
+                files.some(({ path }) => path === PROJECT_DOCUMENT_PATH),
+              )
+            )
+              conflict.add(PROJECT_DOCUMENT_PATH);
+            continue;
+          }
+          restored = merged === old ? file.before : remember(merged);
+        } else if (standing !== file.after) {
+          conflict.add(file.path);
+        } else if (
+          /\.html?$/i.test(file.path) &&
+          later.some(
+            ({ entry, files }) =>
+              files.some(({ path }) => path === file.path) &&
+              !entry.undoes &&
+              entry.who.kind !== "outside",
+          )
+        ) {
+          // A later write may have returned the file to the same bytes. It still owns that write.
+          conflict.add(file.path);
+        }
+        if (restored !== standing)
+          changes.push({ path: file.path, before: standing, after: restored });
+      }
+      if (conflict.size) return [...conflict];
+      for (const file of later.length ? changes : []) {
+        if (!file.after || !/\.html?$/i.test(file.path)) continue;
+        const scope = compositionScope(file.path);
+        const previous = new Set(
+          file.before
+            ? mediaSources(await text(file.before), scope, { images: true })
+            : [],
+        );
+        for (const reference of mediaSources(await text(file.after), scope, {
+          images: true,
+        })) {
+          if (previous.has(reference)) continue;
+          const path = localMediaPath(file.path, reference);
+          const rootPath =
+            file.path.includes("/") && !reference.startsWith("../")
+              ? localMediaPath("index.html", reference)
+              : null;
+          const exists = (candidate: string) =>
+            (
+              changes.find((change) => change.path === candidate) ?? {
+                after: hashOf(candidate),
+              }
+            ).after !== null;
+          if (path && !exists(path) && !(rootPath && exists(rootPath)))
+            return [file.path, path];
+        }
+      }
+      for (const change of changes) current.set(change.path, change.after);
+      steps.push({ id: target.id, replay, files: changes });
+      return [];
     },
-  );
+  };
 }
 
 type Actor = ReturnType<typeof historyActor>;
@@ -264,6 +506,8 @@ export async function replayHistory(
   const { who } = actor;
   let label: string | undefined;
   let originalId: string | undefined;
+  let kept: Entry[] = [];
+  let newest: Entry | undefined;
   try {
     const result = await reviews.replayHistory(
       project,
@@ -272,10 +516,24 @@ export async function replayHistory(
       async (history) => {
         const result = await history.revert(
           who,
-          async (entries) => {
+          async (entries, currentHash) => {
+            if (
+              input.withEntries &&
+              (!isOwner(who) || direction !== "undo" || !input.entryId)
+            )
+              throw new HttpError(
+                409,
+                "Only the owner can confirm a grouped undo.",
+              );
+            const next = historyCandidate(entries, direction, who);
+            if (input.expectedEntryId && input.expectedEntryId !== next?.id)
+              throw new HistoryAdvanced();
             const target = input.entryId
               ? entries.find(({ id }) => id === input.entryId)
-              : historyCandidate(entries, direction, who);
+              : next;
+            newest = entries.findLast(
+              (entry) => !entry.undone && !entry.undoes,
+            );
             if (!target && !input.entryId) return;
             const original =
               direction === "undo"
@@ -294,7 +552,6 @@ export async function replayHistory(
                 409,
                 "The selected history action is no longer available.",
               );
-            await validatePaths(project, target);
             if (original.incomplete)
               throw new HttpError(
                 409,
@@ -310,17 +567,126 @@ export async function replayHistory(
                 409,
                 "This history action isn't available to this editor.",
               );
+            await validatePaths(project, target);
             label = original.label;
             originalId = original.id;
-            guardLaterEdits(entries, target, original, direction);
-            return {
-              id: target.id,
-              replay:
-                !input.entryId ||
-                historyCandidate(entries, direction, who)?.id === target.id
-                  ? "ordinary"
-                  : "explicit",
-            };
+            const plan = replayPlan(history, currentHash);
+            const replay =
+              !input.entryId || next?.id === target.id
+                ? "ordinary"
+                : "explicit";
+            const later = relatedEdits(entries, target, original, direction);
+            const conflicts = await plan.add(target, original, replay, later);
+            if (!conflicts.length) {
+              if (input.withEntries)
+                throw new HttpError(
+                  409,
+                  "The edits in the way changed. Use Undo again.",
+                );
+              kept = entries
+                .slice(entries.indexOf(target) + 1)
+                .filter(
+                  (entry) =>
+                    !entry.undone && editable(entry) && !belongsTo(entry, who),
+                );
+              return plan;
+            }
+            const related = (rows: typeof later, files: string[]) =>
+              rows.filter((row) =>
+                row.files.some(({ path }) => files.includes(path)),
+              );
+            const blocking = related(later, conflicts);
+            const describe = ({ id, label, who }: Entry) => ({
+              id,
+              label,
+              author: { kind: who.kind, name: who.name },
+            });
+            const canGroup = (entry: Entry) =>
+              editable(entry) &&
+              !isMediaOperation(entry) &&
+              entry.files.every(
+                ({ before, after, path }) =>
+                  before !== null &&
+                  after !== null &&
+                  !protectedPath(path) &&
+                  !isMediaItem(path),
+              );
+            let together: ReturnType<typeof replayPlan> | undefined;
+            if (isOwner(who) && direction === "undo" && canGroup(original)) {
+              // Test the proposed inverses against a virtual project, newest first.
+              const planGroup = async (selected: ReadonlySet<string>) => {
+                const combined = replayPlan(history, currentHash);
+                const inverse = entries
+                  .filter(({ id }) => selected.has(id))
+                  .reverse();
+                const reverted = new Set<string>();
+                for (const entry of [...inverse, target]) {
+                  await validatePaths(project, entry);
+                  const active = entries.filter(({ id }) => !reverted.has(id));
+                  const rows = relatedEdits(active, entry, entry, "undo");
+                  const files = await combined.add(entry, entry, "group", rows);
+                  if (files.length) return { rows, files };
+                  reverted.add(entry.id);
+                }
+                return { combined };
+              };
+              const selected = new Set<string>();
+              let candidates = blocking;
+              while (selected.size < 100) {
+                const row = candidates.at(-1);
+                if (!row || !canGroup(row.entry) || selected.has(row.entry.id))
+                  break;
+                selected.add(row.entry.id);
+                const attempt = await planGroup(selected);
+                if (attempt.combined) {
+                  together = attempt.combined;
+                  break;
+                }
+                candidates = related(attempt.rows, attempt.files);
+              }
+              // A newer row can touch the same file without contributing to the conflict.
+              // Remove it if the remaining inverses still resolve the block.
+              if (together && selected.size > 1) {
+                for (const id of [...selected]) {
+                  selected.delete(id);
+                  const attempt = await planGroup(selected);
+                  if (attempt.combined) together = attempt.combined;
+                  else selected.add(id);
+                }
+              }
+            }
+            const ids = together?.steps.slice(0, -1).map(({ id }) => id);
+            if (input.withEntries) {
+              if (together && Bun.deepEquals(ids, input.withEntries))
+                return together;
+              throw new HttpError(
+                409,
+                "The edits in the way changed. Use Undo again.",
+              );
+            }
+            const blockers = ids?.length
+              ? ids
+                  .flatMap(
+                    (id) => entries.find((entry) => entry.id === id) ?? [],
+                  )
+                  .reverse()
+              : blocking.map(({ entry }) => entry);
+            const latest = blockers.at(-1);
+            throw new ReplayConflict(
+              isMediaOperation(original)
+                ? `Can't ${direction} ${original.label}. The project changed since. You can move the file from Media.`
+                : latest
+                  ? `Can't ${direction} ${original.label} by itself. ${latest.who.name} made a related edit: ${latest.label}.`
+                  : `Can't ${direction} ${original.label}. Newer changes affect ${conflicts.join(", ")}.`,
+              {
+                files: conflicts,
+                newer: blockers.map(({ id }) => id),
+                blocking: blockers.map(describe),
+                ...(ids?.length && {
+                  undoTogether: { entryId: target.id, withEntries: ids },
+                }),
+              },
+            );
           },
           {
             requestId:
@@ -353,10 +719,33 @@ export async function replayHistory(
         files: entry.files,
       },
       action: direction,
+      ...(!entry && {
+        message:
+          newest && !belongsTo(newest, who)
+            ? `Nothing of yours to ${direction}. ${newest.who.name} made the last change.`
+            : `Nothing of yours to ${direction}.`,
+      }),
+      ...(result.removedNotes.length && {
+        removedNotes: result.removedNotes.map(({ id }) => id),
+        notesBefore: result.notesBefore,
+      }),
+      ...(kept.length &&
+        entry && {
+          kept: {
+            count: kept.length,
+            authors: [...new Set(kept.map(({ who }) => who.name))],
+          },
+        }),
       originalId:
         originalId ?? (direction === "undo" ? entry?.undoes : undefined),
     };
   } catch (error) {
+    if (error instanceof HistoryAdvanced)
+      return {
+        ok: false as const,
+        error: error.message,
+        code: "history-advanced",
+      };
     if (error instanceof ReplayConflict)
       return {
         ok: false as const,
