@@ -5,8 +5,11 @@ import { TimelineError } from "../../shared/timeline/apply";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { imageDeclarationUrls } from "../../shared/variables";
-import { compositionScope, parseComposition } from "../timeline/composition";
-import { emptyTimelineSettings } from "../../shared/timeline/schema";
+import {
+  compositionScope,
+  compositionSourceOwners,
+} from "../timeline/composition";
+import type { CompositionScope } from "../timeline/composition";
 import { imageOverridesAt, sceneImageReferences } from "./mediaReferences";
 import { sceneSources } from "./sceneSources";
 import { readSource } from "./store";
@@ -20,6 +23,7 @@ const signature = (content: string) =>
 
 type SourceVersions = {
   source: string;
+  scope: CompositionScope;
   versions: ClipVersions;
   urls: Map<string | null, Set<string>>;
 };
@@ -37,8 +41,9 @@ function references(text: string) {
 }
 
 function sourceVersions(source: string, composition: string, cacheKey: string) {
+  const scope = compositionScope(composition);
   const previous = cache.get(cacheKey);
-  if (previous?.source === source) return previous;
+  if (previous?.source === source && previous.scope === scope) return previous;
   const versions: ClipVersions = new Map();
   const media = new Map<string | null, Set<string>>();
   const add = (id: string | null, value: string) => {
@@ -49,16 +54,10 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
     urls.add(url);
   };
   try {
-    const parsed = parseComposition(source, emptyTimelineSettings(), {
-      scope: compositionScope(composition),
-      sourceAttribution: true,
-    });
-    const clips = parsed.timeline.clips
-      .filter((clip) => !parsed.anonymous.has(clip.id))
-      .map((clip) => ({ ...clip, element: parsed.elements.get(clip.id)! }))
-      .sort((a, b) => a.element.start - b.element.start);
+    const { roots, clips } = compositionSourceOwners(source, scope);
+    clips.sort((a, b) => a.element.start - b.element.start);
     const owners = new Map(clips.map((clip) => [clip.element, clip.id]));
-    const visit = (elements: typeof parsed.roots, owner: string | null) => {
+    const visit = (elements: typeof roots, owner: string | null) => {
       for (const element of elements) {
         const id = owners.get(element) ?? owner;
         const target = ["script", "style", "link"].includes(element.tag)
@@ -89,19 +88,22 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
         visit(element.content, id);
       }
     };
-    visit(parsed.roots, null);
-    for (const clip of clips) {
-      if (!clip.link) continue;
-      for (const partner of clips)
-        if (
-          partner.link === clip.link &&
-          ["audio", "voiceover"].includes(partner.kind)
-        )
-          for (const path of media.get(partner.id) ?? []) {
-            let paths = media.get(clip.id);
-            if (!paths) media.set(clip.id, (paths = new Set()));
-            paths.add(path);
-          }
+    visit(roots, null);
+    const linkedAudio = new Map<string, Set<string>>();
+    for (const { id, link, kind } of clips) {
+      const urls = media.get(id);
+      if (!link || !urls || (kind !== "audio" && kind !== "voiceover"))
+        continue;
+      let group = linkedAudio.get(link);
+      if (!group) linkedAudio.set(link, (group = new Set()));
+      for (const url of urls) group.add(url);
+    }
+    for (const { id, link } of clips) {
+      const group = link ? linkedAudio.get(link) : undefined;
+      if (!group) continue;
+      let urls = media.get(id);
+      if (!urls) media.set(id, (urls = new Set()));
+      for (const url of group) urls.add(url);
     }
     const rest: (string | [string])[] = [];
     let end = 0;
@@ -117,7 +119,7 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
     versions.set(null, signature(source));
     for (const url of references(source)) add(null, url);
   }
-  const result = { source, versions, urls: media };
+  const result = { source, scope, versions, urls: media };
   cache.delete(cacheKey);
   cache.set(cacheKey, result);
   if (cache.size > 8) cache.delete(cache.keys().next().value!);
@@ -218,21 +220,21 @@ export async function compositionVersions(
       : rooted;
   };
   const resolvedUrls = new Map<string, string | null>();
+  const urls = new Set<string>();
+  for (const clipUrls of parsed.urls.values())
+    for (const url of clipUrls) urls.add(url);
   if (options?.mounted) {
-    const urls = new Set(
-      [...parsed.urls.values()].flatMap((urls) => [...urls]),
-    );
     await Promise.all(
       [...urls].map(async (url) =>
         resolvedUrls.set(url, await authoredPath(url)),
       ),
     );
+  } else {
+    for (const url of urls) resolvedUrls.set(url, localPath(composition, url));
   }
   const paths = new Map(
     [...parsed.urls].map(([id, urls]) => {
-      const paths = [...urls].map((url) =>
-        options?.mounted ? resolvedUrls.get(url) : localPath(composition, url),
-      );
+      const paths = [...urls].map((url) => resolvedUrls.get(url));
       return [id, new Set(paths.filter((path) => path != null))];
     }),
   );
