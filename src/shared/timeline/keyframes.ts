@@ -207,6 +207,17 @@ function settle(clip: Clip, frame: number): Clip {
   ]);
 }
 
+/** Replace the tracks as a unit, taking over the corresponding static fields. */
+export function replaceKeyframes(
+  clip: Clip,
+  keyframes: Keyframes | null,
+): Clip {
+  const cleared = {};
+  for (const property of KEYFRAME_PROPERTIES)
+    if (keyframes?.[property]) Object.assign(cleared, CLEARED[property]);
+  return settle({ ...clip, ...cleared, keyframes }, 0);
+}
+
 /** Adds the keyframe at `frame`, or replaces the one there. */
 export function setKeyframe<P extends KeyframeProperty>(
   clip: Clip,

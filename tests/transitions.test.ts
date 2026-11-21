@@ -285,6 +285,38 @@ test("Ctrl+T, Alt+T and Shift+T pick the nearest cut and shorten to fit with a r
   ).toEqual([{ type: "setTransition", from: "a", to: "b", transition: null }]);
 });
 
+test("a selected run adds every in-scope cut and skips a cut without handles", () => {
+  const original = shots.replace(
+    "</main>",
+    `<audio id="sc" src="talk.mp4" data-start="6" data-duration="3" data-media-start="17" data-track-index="1"></audio>
+<audio id="sd" src="talk.mp4" data-start="9" data-duration="3" data-media-start="0" data-track-index="1"></audio>
+<audio id="se" src="talk.mp4" data-start="12" data-duration="3" data-media-start="4" data-track-index="1"></audio></main>`,
+  );
+  const result = addTransition(
+    parse(original).timeline,
+    { frame: 90, selection: new Set(["a", "b", "sa", "sb", "sc", "sd"]) },
+    "audio",
+  );
+  expect(result.note).toBe("1 cut had too little media for a transition.");
+  expect(result.commands).toEqual([
+    {
+      type: "setTransitions",
+      cuts: [
+        { from: "sa", to: "sb", transition: second },
+        { from: "sb", to: "sc", transition: second },
+      ],
+    },
+  ]);
+  const changed = clips(edit(original, result.commands));
+  expect(changed.sb).toMatchObject({
+    transitionIn: second,
+    transitionOut: second,
+  });
+  expect(changed.b?.transitionIn).toBeNull();
+  expect(changed.sd?.transitionIn).toBeNull();
+  expect(changed.se?.transitionIn).toBeNull();
+});
+
 test("a clip's own volume points play on the frames they are drawn at when a transition starts its element early", () => {
   // sb's element starts 15 frames before its clip under a centred one-second dissolve.
   const html = edit(shots, [

@@ -67,9 +67,15 @@ export function editAnchors(
   if (
     !commands.some(
       ({ type }) =>
+        type === "setTransitions" ||
         type === "paste" ||
         type === "remove" ||
         type === "trim" ||
+        type === "trimPlayhead" ||
+        type === "roll" ||
+        type === "swap" ||
+        type === "setTiming" ||
+        type === "insert" ||
         type === "split" ||
         type === "freeze" ||
         type === "move" ||
@@ -78,7 +84,13 @@ export function editAnchors(
   )
     return { clips: [], destinations };
   const clips = new Map(after.clips.map((clip) => [clip.id, clip]));
-  if (commands.some((command) => command.type === "paste")) {
+  if (
+    commands.some(
+      (command) =>
+        command.type === "paste" ||
+        (command.type === "insert" && command.mode === "overwrite"),
+    )
+  ) {
     const previous = new Set(before.clips.map((clip) => clip.id));
     for (const clip of after.clips)
       if (!previous.has(clip.id))
@@ -104,11 +116,16 @@ export function editAnchors(
   }
   const targets = new Set(
     commands.flatMap((command) => {
-      if (command.type === "split") return command.clipIds ?? [];
+      if (command.type === "split" || command.type === "trimPlayhead")
+        return command.clipIds ?? [];
+      if (command.type === "roll" || command.type === "swap")
+        return [command.from, command.to];
       // A grade write can replace an existing wheel even if it looked unchanged
       // when the command was built. A retry must still check the intended clip.
       if (command.type === "setClip" && command.grade !== undefined)
         return [command.clipId];
+      if (command.type === "setTransitions")
+        return command.cuts.flatMap(({ from, to }) => [from, to]);
       return [];
     }),
   );

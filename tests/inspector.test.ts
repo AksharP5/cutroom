@@ -163,7 +163,7 @@ test("inspector timing uses normal move and trim, changes linked source timing, 
   const splitEdit = {
     ...timeline,
     clips: timeline.clips.map((clip) =>
-      clip.id === "voice" ? { ...clip, start: 15, mediaStart: 0.5 } : clip,
+      clip.id === "voice" ? { ...clip, start: 12, mediaStart: 0.4 } : clip,
     ),
   };
   const retimed = applyAll(splitEdit, [
@@ -174,7 +174,12 @@ test("inspector timing uses normal move and trim, changes linked source timing, 
       mediaStart: 1,
     }),
   ]);
-  expect(retimed.clips.find((clip) => clip.id === "voice")?.mediaStart).toBe(2);
+  expect(retimed.clips.find((clip) => clip.id === "voice")).toMatchObject({
+    start: 6,
+    duration: 30,
+    mediaStart: 1.4,
+    playbackRate: 2,
+  });
   expect(() => apply("start", 60)).toThrow("overlap");
   const bounded = {
     ...timeline,
@@ -188,6 +193,7 @@ test("inspector timing uses normal move and trim, changes linked source timing, 
         type: "setTiming",
         clipId: "picture",
         playbackRate: 2,
+        mediaStart: 1,
       }),
     ]),
   ).toThrow("end of its source");

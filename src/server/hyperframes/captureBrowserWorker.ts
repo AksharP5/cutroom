@@ -5,6 +5,7 @@ import type { Browser } from "puppeteer-core";
 import { z } from "zod";
 import { browserTempRoot, createOwnedDirectory } from "./ownedDirectories";
 import { browserExecutable } from "./render";
+import { captureBrowserArgs } from "./captureBrowserArgs";
 
 async function webSocketEndpoint(profile: string) {
   const deadline = Date.now() + 5000;
@@ -61,7 +62,7 @@ try {
     handleSIGINT: false,
     handleSIGTERM: false,
     handleSIGHUP: false,
-    args: [
+    args: captureBrowserArgs([
       // The pipe ties Chromium to this owner; the server connects over loopback WS.
       "--remote-debugging-pipe",
       "--remote-debugging-port=0",
@@ -74,7 +75,7 @@ try {
       "--use-gl=angle",
       "--use-angle=swiftshader",
       "--enable-unsafe-swiftshader",
-    ],
+    ]),
   });
   browser.once("disconnected", () => stopped.resolve());
   if (process.connected) process.send?.(await webSocketEndpoint(profile));

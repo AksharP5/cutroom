@@ -87,12 +87,19 @@ export function ChangeList({
   const reveal = (clipId: string, frame: number) => {
     showSource(false);
     transport.seek(frame);
-    useTimeline.setState(({ selection }) => ({
-      selection: clickSelection(timeline, [], selection, clipId, {
-        toggle: false,
-        range: false,
-        alone: false,
-      }),
+    useTimeline.setState(({ selection, linkedSelection }) => ({
+      selection: clickSelection(
+        timeline,
+        [],
+        selection,
+        clipId,
+        {
+          toggle: false,
+          range: false,
+          alone: false,
+        },
+        linkedSelection,
+      ),
     }));
   };
   return (

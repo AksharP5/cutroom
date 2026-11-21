@@ -119,8 +119,12 @@ function addTarget(
   return index;
 }
 
-export function memberId({ entry, ordinal, index }: Member) {
-  return entry.legacyIds?.[ordinal] ?? `${entry.id}:${index}`;
+/** Named by the clip, not its catalog index, so compaction never renames a row. */
+export function memberId({ entry, ordinal, target }: Member) {
+  return (
+    entry.legacyIds?.[ordinal] ??
+    `${entry.id}:${target.composition}:${target.clipId}`
+  );
 }
 function beforeSignature({ entry, target, ordinal }: Member) {
   return target.baselines[entry.before?.[ordinal] ?? 0];
@@ -405,9 +409,8 @@ export function appendEdit(
 
 /**
  * Drops targets and baselines that no remaining row refers to, so accepting agent work and editing
- * again does not grow the file. Renumbering changes the ids of rows recorded without a legacy id,
- * so it runs only once the unused part outweighs the used part; the file stays within about
- * twice its live size.
+ * again does not grow the file. It runs once the unused part outweighs the used part, so the file
+ * stays within about twice its live size.
  */
 function compact(ledger: Ledger) {
   const used = new Map<number, Set<number>>();

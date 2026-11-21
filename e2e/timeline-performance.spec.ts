@@ -98,6 +98,12 @@ for (const count of [400, 500] as const)
         ).toHaveAttribute("aria-valuenow", "0");
       }
       const summary = frameSummary(results);
+      const rippleRuns = results
+        .filter(({ interaction }) => interaction === "ripple")
+        .map(({ frames }) => ({
+          firstGap: frames[0],
+          maxGap: Math.max(...frames),
+        }));
       // Keep passing CI timings in the log too; failure-only traces omit them.
       console.log(
         JSON.stringify({
@@ -106,6 +112,7 @@ for (const count of [400, 500] as const)
           trace,
           key: summary.key,
           ripple: summary.ripple,
+          rippleRuns,
         }),
       );
       const evidence = {
@@ -154,14 +161,21 @@ for (const count of [400, 500] as const)
         if (output)
           await writeFile(join(output, `${count}.trace.json.gz`), body);
       }
-      // Keep the 150 ms ceiling, but require a stall to reproduce: the default three runs
-      // tolerate one slow interaction run. #59's original before-build ripple maxima
-      // were 171/141/164 ms at 400 clips (median 164); after was 78/68/68 (median 68).
-      // Use per-run maxima so a recurring bad frame cannot disappear into pooled p95.
       // Profiling changes frame times; the CI budgets use the untraced runs.
       if (!trace) {
         expect(summary.key.medianMax).toBeLessThan(150);
-        expect(summary.ripple.medianMax).toBeLessThan(150);
+        // Check a single freeze, one recurring pause per edit, and sustained slow frames.
+        expect(summary.ripple.max, "worst ripple frame gap, ms").toBeLessThan(
+          250,
+        );
+        expect(
+          summary.ripple.medianMax,
+          "median of the worst frame gaps per ripple, ms",
+        ).toBeLessThan(190);
+        expect(
+          summary.ripple.p95,
+          "pooled ripple frame gap p95, ms",
+        ).toBeLessThan(125);
       }
     },
   );

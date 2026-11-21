@@ -63,6 +63,7 @@ export interface LaneGestureOptions {
   tracks: ReadonlyMap<number, TrackClips>;
   imageSources: ReadonlyMap<string, string>;
   selection: Selection;
+  linkedSelection: boolean;
   tool: Tool;
   snapping: boolean;
   lanes: RefObject<HTMLDivElement | null>;
@@ -517,7 +518,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const box = marquee.current;
     const ppf = view()?.ppf;
     if (current.phase !== "dragging" || !box || !ppf) return;
-    const { timeline, rows, selection, onSelect } = latest.current;
+    const { timeline, rows, selection, onSelect, linkedSelection } =
+      latest.current;
     const { origin, point } = current;
     const left = Math.min(point.x, origin.x);
     const top = Math.min(point.y, origin.y);
@@ -533,6 +535,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       rowsBetween(rows, top, bottom).map((row) => row.track.index),
       { from: left / ppf, to: right / ppf },
       marqueeBase.current,
+      linkedSelection,
     );
     if (!sameIds(next.ids, selection.ids)) onSelect(next);
   }
@@ -693,7 +696,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
   }
 
   function finish(outcome: Outcome) {
-    const { lanes, selection, timeline, rows, onSelect } = latest.current;
+    const { lanes, selection, timeline, rows, onSelect, linkedSelection } =
+      latest.current;
     const active = drag.current;
     const bus = busDrop.current?.dataset.busDrop;
     busDrop.current?.removeAttribute("data-drop");
@@ -714,7 +718,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
       clear();
       if (outcome === "click" && marqueeBase.current === emptySelection) {
         if (pressedGap.current) onSelect(pressedGap.current);
-        else if (selection.ids.size || selection.gap) onSelect(emptySelection);
+        else if (selection.ids.size || selection.gap || selection.editPoint)
+          onSelect(emptySelection);
       }
       return;
     }
@@ -733,6 +738,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
             selection,
             alone,
             { toggle: false, range: false, alone: false },
+            linkedSelection,
           ),
         );
       return;
@@ -875,8 +881,16 @@ export function useLaneGestures(options: LaneGestureOptions) {
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0 || gesture.current.phase !== "idle") return;
     hoverClip(null);
-    const { tool, timeline, rows, selection, onSelect, onGesture, playhead } =
-      latest.current;
+    const {
+      tool,
+      timeline,
+      rows,
+      selection,
+      onSelect,
+      onGesture,
+      playhead,
+      linkedSelection,
+    } = latest.current;
     const hit = hitAt(event);
     const toggle = event.ctrlKey || event.metaKey;
     const onLine =
@@ -887,7 +901,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
     // Alt still drags a clip without its partners; only an Alt-click edits points.
     pointClick.current =
       onLine && event.altKey ? { hit: hit!, x: event.clientX } : null;
-    const intent = intentAt(tool, timeline, hit, event.altKey);
+    const intent = intentAt(
+      tool,
+      timeline,
+      hit,
+      event.altKey || !linkedSelection,
+    );
     // A press on a selected clip keeps the selection, so several clips drag as one. A gain press
     // keeps it too, since a mostly horizontal gain drag becomes that same move.
     const keep =
@@ -915,6 +934,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
             range: event.shiftKey && intent?.kind !== "gain",
             alone: event.altKey,
           },
+          linkedSelection,
         );
       if (selected !== selection) onSelect(selected);
     }

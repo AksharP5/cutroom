@@ -45,6 +45,8 @@ import type { TimelineClock, TimelinePin, TimelineProps } from "./Timeline";
 import {
   clickSelection,
   emptySelection,
+  clipsAtEditPoint,
+  nearestEditPoint,
   pruneSelection,
   selectAll,
   selectionAtPlayhead,
@@ -131,6 +133,7 @@ export function ProjectTimeline({
   };
   const selection = useTimeline((state) => state.selection);
   const snapping = useTimeline((state) => state.snapping);
+  const linkedSelection = useTimeline((state) => state.linkedSelection);
   const setSelection = (next: Selection) =>
     useTimeline.setState({ selection: next });
   const timeline = view?.timeline;
@@ -149,13 +152,16 @@ export function ProjectTimeline({
         revealTimeline();
         // The store's selection, not this render's: a click just before the key has not rendered.
         const {
-          selection: { ids, transition, gap },
+          selection: { ids, transition, gap, editPoint },
+          linkedSelection: linked,
           trimKeys,
         } = useTimeline.getState();
         const target = {
           selection: ids,
           transition,
           gap,
+          editPoint,
+          linked,
           ...(tool === "trim" && { trim: trimKeys }),
           frame: clock.frame(),
         };
@@ -239,7 +245,7 @@ export function ProjectTimeline({
       },
     );
   };
-  /** Adds the default transition at the nearest cut, saying so when the media made it shorter. */
+  /** Adds transitions and reports any cuts that kept their old transition or ran out of media. */
   const transitionKey = (scope: Parameters<typeof addTransition>[2]) => () => {
     revealTimeline();
     const target = {
@@ -247,12 +253,14 @@ export function ProjectTimeline({
       frame: clock.frame(),
     };
     let note: string | null = null;
+    let noChanges = false;
     void editTimeline(projectId, "Add transition", (current) => {
       const added = addTransition(current, target, scope);
       note = added.note;
+      noChanges = added.commands.length === 0;
       return added.commands;
     }).then((accepted) => {
-      if (accepted && note)
+      if ((accepted || noChanges) && note)
         showToast(note, null, { tone: "info", transient: true });
     });
   };
@@ -335,10 +343,55 @@ export function ProjectTimeline({
     editAddVideoTransition: transitionKey("video"),
     editAddAudioTransition: transitionKey("audio"),
     editCopy: () => clipboard("copy"),
+    editPasteAttributes: () => clipboard("attributes"),
     editCut: () => clipboard("cut"),
     editPaste: () => clipboard("overwrite"),
     editPasteInsert: () => clipboard("insert"),
     ...(Object.fromEntries(edits) as Partial<Record<Action, () => void>>),
+    editSelectEditPoint: () => {
+      const current = useTimeline.getState().view?.timeline;
+      const editPoint =
+        current &&
+        nearestEditPoint(
+          current,
+          clock.frame(),
+          useViewSettings.getState().destinations,
+        );
+      if (editPoint) {
+        revealTimeline();
+        setSelection({ ...emptySelection, editPoint });
+      } else
+        showToast("No edit point on an unlocked destination track.", null, {
+          tone: "info",
+          transient: true,
+        });
+    },
+    editToggleEditPointType: () => {
+      const { selection, view } = useTimeline.getState();
+      const { editPoint } = selection;
+      if (!editPoint)
+        return void showToast("Press V to select an edit point.", null, {
+          tone: "info",
+          transient: true,
+        });
+      const cut = view && clipsAtEditPoint(view.timeline, editPoint);
+      if (!cut?.from || !cut.to) return;
+      const mode =
+        editPoint.mode === "roll"
+          ? "end"
+          : editPoint.mode === "end"
+            ? "start"
+            : "roll";
+      setSelection({ ...selection, editPoint: { ...editPoint, mode } });
+    },
+    editLinkedSelection: () => {
+      const linkedSelection = !useTimeline.getState().linkedSelection;
+      useTimeline.setState({ linkedSelection });
+      showToast(`Linked selection ${linkedSelection ? "on" : "off"}.`, null, {
+        tone: "info",
+        transient: true,
+      });
+    },
     editSelectAll: () => {
       if (timeline) setSelection(selectAll(timeline));
     },
@@ -369,12 +422,14 @@ export function ProjectTimeline({
     },
     editDeselectAll: (key) => {
       // Esc with nothing selected steps out of a sub-composition, as in Studio.
-      const { ids, transition, gap } = useTimeline.getState().selection;
+      const { ids, transition, gap, editPoint } =
+        useTimeline.getState().selection;
       if (
         keymap.editDeselectAll.keys[key] === "Esc" &&
         !ids.size &&
         !transition &&
         !gap &&
+        !editPoint &&
         leaveComposition(projectId)
       )
         return;
@@ -668,6 +723,7 @@ export function ProjectTimeline({
         onSelect={setSelection}
         tool={tool}
         snapping={snapping}
+        linkedSelection={linkedSelection}
         onEdit={(label, commands, basis) => {
           // The editor shows an edit it takes before this returns.
           const before = useTimeline.getState().view;
@@ -709,11 +765,18 @@ export function ProjectTimeline({
           if (!clip) setSelection(emptySelection);
           else if (!current.ids.has(clip.id))
             setSelection(
-              clickSelection(view.timeline, [], current, clip.id, {
-                toggle: false,
-                range: false,
-                alone: false,
-              }),
+              clickSelection(
+                view.timeline,
+                [],
+                current,
+                clip.id,
+                {
+                  toggle: false,
+                  range: false,
+                  alone: false,
+                },
+                linkedSelection,
+              ),
             );
           openClipMenu(event, projectId, anchor, clip ?? undefined);
         }}

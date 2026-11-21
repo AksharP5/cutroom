@@ -304,18 +304,14 @@ export function createReviewService(store: ProjectStore) {
           items: combined!.items,
           ledger: ledgerRaw ? saved : combined!.ledger,
         };
-    // Keep the original bytes before replacing the file. A retry reuses an identical backup.
+    // Keep the bytes from before the first move. Later moves bring only an older build's own rows,
+    // so one backup is enough and round trips between builds add no files.
     const backup = await projectStatePath(
       project,
       ".cutroom/review.v1.json",
       true,
     );
-    const previous = await readOptional(backup);
-    if (previous !== raw)
-      await atomicWrite(
-        previous === null ? backup : `${backup}.${randomUUID()}`,
-        raw,
-      );
+    if ((await readOptional(backup)) === null) await atomicWrite(backup, raw);
     await writeState(project, state);
     return state;
   };

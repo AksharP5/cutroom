@@ -738,6 +738,24 @@ input.tl-track-gain {
   left: 0;
   z-index: var(--z-clip-selected);
 }
+/* The active side of a cut uses the same paper bracket as clip selection. */
+.tl-edit-edge {
+  position: absolute;
+  left: calc(var(--s) / var(--span) * 100%);
+  inset-block: var(--stroke-hair);
+  width: var(--space-2);
+  z-index: var(--z-range-lines);
+  border: var(--stroke-bracket) solid var(--selection);
+  pointer-events: none;
+}
+.tl-edit-edge.start {
+  border-right: 0;
+}
+.tl-edit-edge.end {
+  margin-left: calc(-1 * var(--space-2));
+  border-left: 0;
+}
+
 /* Selection: a 1px paper outline inside the clip, with 2px brackets at its ends, above the bodies and transitions. Instant. */
 .tl-selected {
   z-index: var(--z-clip-selected);

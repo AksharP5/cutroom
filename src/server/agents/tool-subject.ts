@@ -88,9 +88,13 @@ const clipsOf = (command: Command) => {
     case "link":
     case "unlink":
     case "slide":
+    case "trimPlayhead":
       return command.clipIds;
     case "split":
       return command.clipIds ?? [];
+    case "roll":
+    case "swap":
+      return [command.from, command.to];
     case "trim":
     case "freeze":
     case "slip":
