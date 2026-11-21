@@ -375,6 +375,41 @@ test("Rename in a media row's menu renames the file and every clip that plays it
   expect(await present("assets/spare.wav")).toBe(false);
 });
 
+test("two quick undos take back two renames the history has not shown yet", async ({
+  page,
+  request,
+}) => {
+  const { project, media, row, present } = await open(page, request);
+  // Hold history reads so neither rename reaches the page's history before the presses.
+  const held = Promise.withResolvers<void>();
+  await page.route(
+    (url) => url.pathname === `/api/cutroom/projects/${project.id}/history`,
+    async (route) => {
+      if (route.request().method() === "GET") await held.promise;
+      await route.continue();
+    },
+  );
+  for (const [from, to] of [
+    ["spare.wav", "one"],
+    ["music.wav", "two"],
+  ] as const) {
+    await row(from).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+    await media.getByRole("textbox", { name: `Rename ${from}` }).fill(to);
+    await page.keyboard.press("Enter");
+    await expect(row(`${to}.wav`)).toBeVisible();
+  }
+  await page.keyboard.press("Control+z");
+  await page.keyboard.press("Control+z");
+  held.resolve();
+  await expect.poll(() => present("assets/music.wav")).toBe(true);
+  await expect.poll(() => present("assets/spare.wav")).toBe(true);
+  expect(await present("assets/one.wav")).toBe(false);
+  await expect(page.locator(".toast")).not.toContainText(
+    "The next history action changed",
+  );
+});
+
 test("Remove asks before taking a file the timeline uses, and Undo brings it back", async ({
   page,
   request,

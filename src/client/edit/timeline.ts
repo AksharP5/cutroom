@@ -94,8 +94,11 @@ let confirmedHistory = emptyHistory;
 let unobservedTimelineHistory:
   { projectId: string; entryId: string } | undefined;
 // Any owner write here, not only a timeline command, is the next Undo before history is read again.
+/** Entries this tab wrote in the open project. A queued Undo may reach them before a press saw them. */
+const committedHere = new Set<string>();
 onCommittedEntry((projectId, entryId) => {
   if (useTimeline.getState().projectId !== projectId) return;
+  committedHere.add(entryId);
   unobservedNoteHistory.delete(projectId);
   unobservedTimelineHistory = { projectId, entryId };
 });
@@ -408,6 +411,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
   historyHead = undefined;
   confirmedHistory = emptyHistory;
   unobservedTimelineHistory = undefined;
+  committedHere.clear();
   useTimeline.setState({
     projectId,
     composition: ROOT_COMPOSITION,
@@ -1308,6 +1312,7 @@ export function stepHistory(
           priorStep &&
           !editPending &&
           queued !== null &&
+          !committedHere.has(queued) &&
           !observed.entries.some(({ id }) => id === queued);
         const target =
           expectedHistoryId ??
