@@ -10,11 +10,8 @@ import {
   runFfmpeg,
   sdrCanvasColourFilters,
 } from "@hyperframes/engine";
-import type {
-  AudioElement,
-  EngineConfig,
-  VideoMetadata,
-} from "@hyperframes/engine";
+import type { EngineConfig, VideoMetadata } from "@hyperframes/engine";
+import type { AudioMixElement } from "./audioClock.ts";
 import { alignRangeAudio, mixRangeAudio } from "./rangeAudio.ts";
 import { ExportStageError } from "./renderFailure.ts";
 import { projectPath } from "../projects/path.ts";
@@ -36,7 +33,7 @@ export type AudioStage = (input: {
   workDir: string;
   totalFrames: number;
   fps: Fps;
-  audios: AudioElement[];
+  audios: AudioMixElement[];
   masterFxChain?: string;
   ffmpegProcessTimeout: number;
   audioGain: number;
@@ -688,7 +685,7 @@ export async function exportDirect(
     projectDir: string;
     outputPath: string;
     audioStage: AudioStage;
-    collectAudio: (html: string) => AudioElement[];
+    collectAudio: (html: string) => AudioMixElement[];
     progress: Progress;
   },
 ) {

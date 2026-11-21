@@ -130,6 +130,20 @@ const snapshot = (html: string, dependencies = "") => {
 
 const source = `<html><head><style>video { position:absolute }</style></head><body><main data-composition-id="main" data-fps="30000/1001" data-duration="10"><video id="v" data-start="0" data-duration="2.535867" data-media-start="0" src="a.mp4" data-link="pair"></video><audio id="a" data-start="0" data-duration="2.535867" data-media-start="0" src="a.mp4" data-link="pair"></audio><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main><script>window.answer=42</script></body></html>`;
 
+test("only a preview with an adjustment clip installs the capture controller", () => {
+  const plain = previewDocument(source, "index.html", "stable");
+  const adjustment =
+    '<div id="look" class="clip" data-cutroom-adjustment data-track-index="2" data-start="1" data-duration="2"></div>';
+  const layered = previewDocument(
+    source.replace("</main>", adjustment + "</main>"),
+    "index.html",
+    "stable",
+  );
+  expect(plain.html).not.toContain("function adjustmentCapture");
+  expect(layered.html).toContain("function adjustmentCapture");
+  expect(layered.timing?.structure).not.toBe(plain.timing?.structure);
+});
+
 test("saved timing snapshots use the fresh preview's rational boundaries and include linked partners", () => {
   const before = snapshot(source);
   const after = snapshot(
