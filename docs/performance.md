@@ -964,6 +964,19 @@ The PNG extraction control kept the existing JPEG browser capture. On the 4K 8-b
 
 [Individual runs and pixel measurements](measurements/export-chroma.json)
 
+### PNG capture experiment
+
+We compared 4:4:4 JPEG extraction and JPEG screenshots with PNG for both stages. Each pair used the same 90-frame, 60 fps SDR chart, CPU encoding, a cold frame cache, and the same High H.264 encoder preset. PNG used source-aligned chroma sampling for opaque SDR footage. Time and peak process-group memory are medians of two runs per path. Each cell shows JPEG → PNG. Hard-edge error is the maximum / p99.9 / mean absolute RGB-channel error against the decoded source, out of 255.
+
+| SDR source   |                     Hard-edge RGB error | Export time, s | Peak memory, GiB | Extracted frames, MiB |
+| ------------ | --------------------------------------: | -------------: | ---------------: | --------------------: |
+| 1080p 8-bit  | 56.3 / 16.7 / 1.09 → 54.3 / 17.1 / 0.69 |    5.63 → 8.58 |      2.50 → 2.21 |          19.3 → 125.3 |
+| 1080p 10-bit | 51.9 / 17.8 / 0.87 → 49.9 / 17.1 / 0.71 |    5.65 → 8.82 |      2.54 → 2.35 |          19.6 → 213.5 |
+| 4K 8-bit     |   33.2 / 9.2 / 1.02 → 30.7 / 7.1 / 0.56 |  12.35 → 22.30 |      5.38 → 4.03 |          66.6 → 466.4 |
+| 4K 10-bit    |   42.2 / 9.0 / 0.81 → 33.2 / 8.4 / 0.68 |  12.77 → 26.21 |      5.29 → 4.51 |          67.2 → 838.3 |
+
+PNG lowered mean hard-edge and grain error on all four charts. Cutroom kept JPEG for opaque MP4 capture because the PNG path took 1.5–2.1× as long and used up to 12.5× the extraction space for modest gains in worst-edge error. MP4 delivery uses 8-bit H.264 4:2:0, which subsamples chroma even when its input is lossless. For a full-chroma master, export MOV (ProRes 4444). Whole and marked MOV exports of a synthetic chart decoded as `yuva444p12le` and preserved its alternating one-pixel red and blue stripes.
+
 ## Scrubbing
 
 A ruler drag asks for a new frame on every pointer move. [Scrub proxies](architecture.md#scrub-proxies) answer those seeks from an all-intra 540-line copy of each video and show the exact frame once the pointer rests. On November 15, 2026 the same drag ran against `main` and this change: 3 s across 900 px of ruler at Fit, about 60 pointer moves a second, headless installed Chromium 155 at 1720x1050, alternating the two builds. A CDP screencast recorded every composited frame, and each frame's number was read back from blocks burned into the footage, so a picture counts only when the viewer showed a new source frame. The interview is a 90 s 1080p30 H.264 file (8 Mbit/s, 1 s GOP) with a title; the 300-clip timeline is `timelineWorkload` over a 720p copy, with each 2.5 s clip its own element.

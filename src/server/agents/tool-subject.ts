@@ -177,6 +177,12 @@ export async function toolSubject(
     case "source_read":
     case "source_write":
       return text("path");
+    case "media_import": {
+      const paths = z.array(z.string()).safeParse(args.paths).data;
+      if (paths?.length === 1) return fileName(paths[0]!);
+      if (paths?.length) return `${paths.length} media files`;
+      return undefined;
+    }
     case "media_rename":
     case "media_remove": {
       const media = text("path");
