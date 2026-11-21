@@ -823,17 +823,12 @@ test("a roll moves the cut and leaves both clips' far edges where they were", ()
         reach: 0,
       },
     );
-  // Either way, the clip that gives way is trimmed first, so the batch never overlaps.
-  expect(
-    roll(80).commands.map(
-      (command) => command.type === "trim" && command.clipId,
-    ),
-  ).toEqual(["a", "b"]);
-  expect(
-    roll(120).commands.map(
-      (command) => command.type === "trim" && command.clipId,
-    ),
-  ).toEqual(["b", "a"]);
+  expect(roll(80).commands).toEqual([
+    { type: "roll", from: "a", to: "b", by: -20 },
+  ]);
+  expect(roll(120).commands).toEqual([
+    { type: "roll", from: "a", to: "b", by: 20 },
+  ]);
   expect(committed(timeline, roll(80))).toMatchObject({
     a: [0, 0, 80],
     "a-sound": [2, 0, 80],

@@ -157,6 +157,65 @@ const near = (actual: number[], expected: number[], tolerance: number) =>
 const ready = browserExecutable() && Bun.which("ffmpeg");
 
 test.skipIf(!ready)(
+  "browser capture keeps CanvasDrawElement and avoids the screenshot stall",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-capture-cadence-"));
+    try {
+      // Encode the source ordinal in black and white cells below the title.
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "nullsrc=s=96x54:r=30,geq=lum='if(mod(floor(N/pow(2,floor(X/12))),2),235,16)':cb=128:cr=128",
+        "-frames:v",
+        "60",
+        "-c:v",
+        "libx264",
+        "-threads",
+        "1",
+        join(root, "source.mp4"),
+      ]);
+      await writeFile(
+        join(root, "index.html"),
+        `<!doctype html><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style>
+<main id="main" data-composition-id="main" data-no-timeline data-width="96" data-height="54" data-fps="30" data-duration="1" style="position:relative;width:100%;height:100%">
+  <video id="picture" src="source.mp4" muted data-start="0" data-duration="1" data-media-start="0.5" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video>
+  <div id="title" data-start="0" data-duration="1" style="position:absolute;inset:2px auto auto 2px;padding:4px 8px;background:#605060;color:#111;font:12px sans-serif">Title</div>
+</main>
+<script>
+  if (typeof document.createElement('canvas').getContext('2d')?.drawElementImage === 'function')
+    document.getElementById('title').style.backgroundColor = '#ff8000';
+</script>`,
+      );
+      const started = performance.now();
+      const path = await render(root, "cadence", { format: "mp4" });
+      // Leave room for cold startup and shared runners, with a ceiling below the 2 s/frame stall.
+      expect(performance.now() - started).toBeLessThan(25_000);
+      const decoded = await frames(path, 96, 54);
+      expect(decoded).toHaveLength(30);
+      expect(
+        decoded.map((frame) =>
+          Array.from({ length: 8 }, (_, bit) =>
+            frame.at(6 + bit * 12, 40)[0] > 128 ? 1 << bit : 0,
+          ).reduce((ordinal, mask) => ordinal | mask, 0),
+        ),
+      ).toEqual(Array.from({ length: 30 }, (_, index) => 15 + index));
+      expect(
+        near(decoded[0]!.at(6, 8), [255, 128, 0, 255], 9),
+        "the title turns orange when the export page can draw HTML into a canvas",
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(`${root}-scratch`, { recursive: true, force: true });
+    }
+  },
+  90_000,
+);
+
+test.skipIf(!ready)(
   "MOV, WebM and GIF keep full chroma when extracting SDR footage for browser capture",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "export-chroma-formats-"));

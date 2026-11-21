@@ -272,6 +272,28 @@ function sourcePeriodFloor(curve: Curve, fps: Fps) {
   return Number(period);
 }
 
+/** Scale a source edge around the group start, rounding exact half frames up. */
+export function retimedFrames(
+  offset: number,
+  before: number,
+  after: number,
+  phase: number,
+  span?: { frames: number; rate: number },
+) {
+  const oldRate = decimalFraction(before);
+  const newRate = decimalFraction(after);
+  const head = add(
+    fraction(BigInt(offset) * oldRate.n, oldRate.d),
+    decimalFraction(phase),
+  );
+  const width = span && decimalFraction(span.rate);
+  const edge =
+    span && width
+      ? add(head, fraction(BigInt(span.frames) * width.n, width.d))
+      : head;
+  return Number(halfUp(edge.n * newRate.d, edge.d * newRate.n));
+}
+
 function microsOf(time: ExactTime) {
   const numerator = time.n * MICROS;
   return (

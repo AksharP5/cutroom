@@ -1056,6 +1056,22 @@ export function projectTimeline(
         `Clip ${id} has invalid audio automation. ${error.message}`,
       );
     }
+    const [durationText, rateText, framesText, spanRateText, phaseText] = (
+      element.attrs["data-cutroom-speed-span"] ?? ""
+    ).split(":");
+    const spanFrames = Number(framesText);
+    const spanRate = Number(spanRateText);
+    const phase = Number(phaseText);
+    const speedSpan =
+      Number(durationText) === end - start &&
+      Number(rateText) === playbackRate &&
+      Number.isSafeInteger(spanFrames) &&
+      spanFrames > 0 &&
+      Number.isFinite(spanRate) &&
+      spanRate > 0 &&
+      Number.isFinite(phase)
+        ? { frames: spanFrames, rate: spanRate, phase }
+        : undefined;
     const clip: Clip = {
       id,
       track: read.trackIndex,
@@ -1064,6 +1080,7 @@ export function projectTimeline(
       duration: end - start,
       ...source,
       playbackRate,
+      ...(speedSpan && { speedSpan }),
       src,
       sourceDuration: lengthOf(element),
       hasAudio,
@@ -1633,6 +1650,18 @@ function clipChanges(
         : "data-media-start",
       String(mediaStart),
     ]);
+  const speedSpan = (clip: Clip) =>
+    clip.speedSpan
+      ? [
+          clip.duration,
+          clip.playbackRate,
+          clip.speedSpan.frames,
+          clip.speedSpan.rate,
+          clip.speedSpan.phase,
+        ].join(":")
+      : null;
+  if (speedSpan(before) !== speedSpan(after))
+    changes.push(["data-cutroom-speed-span", speedSpan(after)]);
   if (before.playbackRate !== after.playbackRate)
     changes.push(["data-playback-rate", String(after.playbackRate)]);
   if (before.x !== after.x || before.y !== after.y)
@@ -2528,6 +2557,9 @@ function insertMarkup(
       ([, value]) => value !== null,
     ),
     ...(keyframes ? [[KEYFRAMES_ATTRIBUTE, keyframes] as const] : []),
+    ...(clip.region
+      ? [[REGION_ATTRIBUTE, regionAttribute(clip.region, fps)] as const]
+      : []),
     ["data-start", String(toSeconds(clip.start, fps))],
     ["data-duration", String(toSeconds(clip.duration, fps))],
     ["data-track-index", String(clip.track)],

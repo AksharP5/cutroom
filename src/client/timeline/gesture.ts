@@ -656,22 +656,14 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
       const left = find(intent.left);
       const from = clipEnd(left);
       const hit = snap([from + travel], targets, input.reach);
-      // The clip that gives way is trimmed first, so the cut never overlaps on the way.
-      const commands = (to: number): CommandInput[] => {
-        const out: CommandInput = {
-          type: "trim",
-          clipId: intent.left,
-          edge: "end",
-          to,
-        };
-        const into: CommandInput = {
-          type: "trim",
-          clipId: intent.right,
-          edge: "start",
-          to,
-        };
-        return to > from ? [into, out] : [out, into];
-      };
+      const commands = (to: number): CommandInput[] => [
+        {
+          type: "roll",
+          from: intent.left,
+          to: intent.right,
+          by: to - from,
+        },
+      ];
       const to = furthest(
         from,
         Math.max(0, from + travel + (hit?.by ?? 0)),

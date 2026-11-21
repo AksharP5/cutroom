@@ -173,6 +173,12 @@ export function editLabel(
           ? `${command.ripple ? "Ripple trim" : "Trim"} ${command.edge} of ${target([command.clipId])} to ${time(command.to)}`
           : `${command.ripple ? "Ripple trimmed" : "Trimmed"} ${command.edge}${named ? ` of ${target([command.clipId])}` : ""} to ${time(command.to)}`;
       }
+      case "trimPlayhead":
+        return `${pending ? "Trim" : "Trimmed"} the ${command.edge} of ${target(command.clipIds)} to ${time(command.at)}${command.ripple ? ", with ripple" : ""}`;
+      case "roll":
+        return `${pending ? "Roll" : "Rolled"} the cut${named ? ` between ${target([command.from, command.to])}` : ""} by ${span(Math.abs(command.by))} ${command.by < 0 ? "left" : "right"}`;
+      case "swap":
+        return `${pending ? "Swap" : "Swapped"} ${named ? target([command.from, command.to]) : "adjacent clips"}`;
       case "split":
         return `Split${named ? ` ${target(command.clipIds ?? [])}` : ""} at ${time(command.at)}`;
       case "remove":
@@ -180,6 +186,8 @@ export function editLabel(
           ? `${command.ripple ? "Ripple delete" : "Lift"} ${target(command.clipIds)}`
           : `${command.ripple ? "Ripple deleted" : "Lifted"} ${named ? target(command.clipIds) : "clips"}`;
       case "freeze":
+        if (command.mode === "replace")
+          return `${pending ? "Hold" : "Held"} ${named ? target([command.clipId]) : "the clip"} on the frame at ${time(command.at)}`;
         return `${pending ? "Freeze" : "Froze"} ${named ? target([command.clipId]) : "frame"} at ${time(command.at)}`;
       case "closeGap": {
         const gap = timeline && gapAt(timeline, command.track, command.at);

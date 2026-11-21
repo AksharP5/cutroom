@@ -245,6 +245,9 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     if (drawing) return;
     drawing = true;
     try {
+      // An edit publishes its new timeline and playhead in the same key event.
+      // Read them together so decoding does not start at the old playhead.
+      await Promise.resolve();
       while (wanted && !closing.signal.aborted) {
         wanted = false;
         const drawingPlan = plan;
@@ -287,7 +290,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   };
 
   const drawFrame = async (drawingPlan: Plan) => {
-    const view = useTimeline.getState().view;
+    const { view, selection } = useTimeline.getState();
     const { frame, state } = useTransport.getState();
     if (!view || view.composition !== "index.html") return;
     const { draft } = usePreviewGrade.getState();
@@ -451,7 +454,9 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     for (const { found, lane, index } of pictures) {
       if (moving) continue;
       found.playing = lane;
-      if (playing) lane.prefetch(index + 1, index + lane.room(8));
+      // Repeated keyboard trims can step through this opening at rest.
+      if (playing || selection.editPoint)
+        lane.prefetch(index + 1, index + lane.room(8));
     }
     if (playing) prepare(view, frame, LOOKAHEAD, OPENING);
     else if (!moving) prepare(view, frame, NEXT, PREPARED);
