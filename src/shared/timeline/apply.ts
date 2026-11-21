@@ -16,6 +16,7 @@ import {
   positionAtSource,
   retimedFrames,
   secondsOf,
+  sourceAt,
 } from "./piece";
 import { activeVersion, fitsVersion } from "./versions";
 import { firstTextLine, isAudioKind } from "./schema";
@@ -71,6 +72,7 @@ import {
   holdKeyframes,
   parseKeyframeValue,
   removeKeyframe,
+  replaceKeyframes,
   setKeyframe,
   shiftKeyframes,
   tracksOf,
@@ -521,7 +523,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const delta = command.to - at;
       if (delta === 0) return timeline;
       // A linked group is one unit: every partner's same edge moves by the same delta.
-      const members = withPartners(clips, [target]);
+      const members = command.linked ? withPartners(clips, [target]) : [target];
       const ids = new Set(members.map((clip) => clip.id));
       const trimmed = clips.map((clip) => {
         if (!ids.has(clip.id)) return clip;
@@ -561,6 +563,122 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           : insertTime(trimmed, tracks, editPoint, change, timeline, mint, ids);
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
+    }
+    case "trimPlayhead": {
+      const named = command.clipIds.map(find);
+      const { at, edge, ripple, linked } = command;
+      const deltas = new Map<string, number>();
+      for (const clip of named) {
+        if (
+          at < clip.start ||
+          at >= clipEnd(clip) ||
+          (edge === "end" && at === clip.start)
+        )
+          throw new TimelineError(
+            "out_of_bounds",
+            `The playhead must be inside ${clipName(clip)} to trim its ${edge}.`,
+          );
+        const delta = at - (edge === "start" ? clip.start : clipEnd(clip));
+        if (linked && clip.link !== null)
+          for (const partner of clips)
+            if (partner.link === clip.link && !deltas.has(partner.id))
+              deltas.set(partner.id, delta);
+        deltas.set(clip.id, delta);
+      }
+      const followers = new Map<number, { after: number; by: number }>();
+      const trimmed = new Map<string, Clip>();
+      for (const [id, delta] of deltas) {
+        if (!delta) continue;
+        const clip = find(id);
+        const start = edge === "start" ? clip.start + delta : clip.start;
+        const end = edge === "end" ? clipEnd(clip) + delta : clipEnd(clip);
+        const next = windowClip(clip, start, end, fps, "trim");
+        trimmed.set(id, ripple ? { ...next, start: clip.start } : next);
+        if (!ripple) continue;
+        if (followers.has(clip.track))
+          throw new TimelineError(
+            "unsupported",
+            "Ripple trim needs one edit per affected track.",
+          );
+        followers.set(clip.track, {
+          after: clipEnd(clip),
+          by: next.duration - clip.duration,
+        });
+      }
+      if (!trimmed.size) return timeline;
+      const shifts = new Map<string, number>();
+      return {
+        ...timeline,
+        clips: clips.map((clip) => {
+          if (trimmed.has(clip.id)) return trimmed.get(clip.id)!;
+          const follow = followers.get(clip.track);
+          const by = follow && clip.start >= follow.after ? follow.by : 0;
+          if (linked && ripple && clip.link !== null) {
+            const previous = shifts.get(clip.link);
+            if (previous !== undefined && previous !== by)
+              throw new TimelineError(
+                "unsupported",
+                `Ripple trim would move linked clips of ${clipName(clip)} by different amounts.`,
+              );
+            shifts.set(clip.link, by);
+          }
+          return by ? { ...clip, start: clip.start + by } : clip;
+        }),
+      };
+    }
+    case "roll":
+    case "swap": {
+      const from = find(command.from);
+      const to = find(command.to);
+      if (from.track !== to.track || clipEnd(from) !== to.start)
+        throw new TimelineError(
+          "unsupported",
+          "The two clips must meet on the same track.",
+        );
+      const outgoing = new Set(
+        command.linked ? withPartners(clips, [from]) : [from],
+      );
+      const incoming = new Set(
+        command.linked ? withPartners(clips, [to]) : [to],
+      );
+      if ([...outgoing].some((clip) => incoming.has(clip)))
+        throw new TimelineError(
+          "unsupported",
+          "The two clips belong to the same linked group.",
+        );
+      if (command.type === "swap") {
+        if (
+          [...outgoing, ...incoming].some(
+            (clip) => clip.transitionIn || clip.transitionOut,
+          )
+        )
+          throw new TimelineError(
+            "unsupported",
+            "Remove the transitions touching the clips before swapping them.",
+          );
+        return {
+          ...timeline,
+          clips: clips.map((clip) =>
+            outgoing.has(clip)
+              ? { ...clip, start: clip.start + to.duration }
+              : incoming.has(clip)
+                ? { ...clip, start: clip.start - from.duration }
+                : clip,
+          ),
+        };
+      }
+      const { by } = command;
+      if (!by) return timeline;
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          outgoing.has(clip)
+            ? windowClip(clip, clip.start, clipEnd(clip) + by, fps, "trim")
+            : incoming.has(clip)
+              ? windowClip(clip, clip.start + by, clipEnd(clip), fps, "trim")
+              : clip,
+        ),
+      };
     }
     case "split": {
       const { at } = command;
@@ -621,7 +739,12 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "unsupported",
           "Select a clip with a local video source.",
         );
-      if (at <= video.start || at >= clipEnd(video))
+      const replace = command.mode === "replace";
+      if (
+        at < video.start ||
+        (!replace && at === video.start) ||
+        at >= clipEnd(video)
+      )
         throw new TimelineError(
           "out_of_bounds",
           "Move the playhead inside the video clip to freeze a frame.",
@@ -630,15 +753,20 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const targets = linked.filter(
         (clip) => clip.start < at && at < clipEnd(clip),
       );
-      if (targets.some((clip) => parseRateLane(clip.automation)))
+      if (replace && video.sourceRestrictions?.remove)
+        throw new TimelineError("unsupported", video.sourceRestrictions.remove);
+      if (!replace && targets.some((clip) => parseRateLane(clip.automation)))
         throw new TimelineError(
           "unsupported",
           "Freeze frame needs a constant playback speed on every clip it cuts.",
         );
       const tracks = new Set(linked.map((clip) => clip.track));
-      const duration = Math.max(1, Math.round((2 * fps.num) / fps.den));
+      const duration = replace
+        ? video.duration
+        : Math.max(1, Math.round((2 * fps.num) / fps.den));
       const id = command.id ? claim(command.id) : mint.name("freeze", null);
       const path = `${FREEZE_DIR}/${id}.png`;
+      const sourceTime = sourceAt(resolveClip(video, fps), frames(at, fps));
       onCreate(id, {
         freeze: {
           clipId: video.id,
@@ -646,23 +774,22 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           media,
           path,
           time:
-            mediaStart + frameTime(at - video.start, fps) * video.playbackRate,
+            typeof sourceTime === "number" ? sourceTime : secondsOf(sourceTime),
         },
       });
-      const cut = splitClips(clips, targets, at, fps, mint);
       const held = holdKeyframes(video, at - video.start);
       const image: Clip = {
         id,
         track: video.track,
         kind: "image",
-        start: at,
+        start: replace ? video.start : at,
         duration,
         mediaStart: null,
         playbackRate: 1,
         src: sourceUrl(batch.composition, path),
         sourceDuration: null,
         hasAudio: false,
-        link: null,
+        link: replace ? video.link : null,
         label: "Freeze",
         volume: null,
         opacity: held.opacity,
@@ -684,15 +811,21 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         }),
         fadeIn: 0,
         fadeOut: 0,
-        transitionIn: null,
-        transitionOut: null,
+        transitionIn: replace ? video.transitionIn : null,
+        transitionOut: replace ? video.transitionOut : null,
         automation: null,
         fx: [],
         // The still is the source's frame, so the same grade draws it as the clip showed it.
         grade: video.grade,
         enabled: video.enabled,
-        startRef: null,
+        startRef: replace ? video.startRef : null,
       };
+      if (replace)
+        return {
+          ...timeline,
+          clips: clips.map((clip) => (clip === video ? image : clip)),
+        };
+      const cut = splitClips(clips, targets, at, fps, mint);
       return {
         ...timeline,
         clips: [...shiftAfter(cut, tracks, () => at, duration), image],
@@ -1425,15 +1558,27 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     case "setClip": {
       const target = find(command.clipId);
       const transform = hasTransformEdit(command);
+      const animatedTransform =
+        command.keyframes &&
+        (command.keyframes.position ||
+          command.keyframes.scale ||
+          command.keyframes.rotation ||
+          command.keyframes.crop);
       if (
         isAudioKind(target.kind) &&
-        (command.x !== undefined || command.y !== undefined || transform)
+        (command.x !== undefined ||
+          command.y !== undefined ||
+          transform ||
+          command.keyframes)
       )
         throw new TimelineError(
           "unsupported",
           `Audio clips have no ${transform ? "transform" : "position"}.`,
         );
-      if (transform && target.sourceRestrictions?.transform)
+      if (
+        (transform || animatedTransform) &&
+        target.sourceRestrictions?.transform
+      )
         throw new TimelineError(
           "unsupported",
           target.sourceRestrictions.transform,
@@ -1459,7 +1604,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           (tracks[property] ||
             (property === "position" && (tracks.scale || tracks.rotation))),
       );
-      if (keyed)
+      if (keyed && command.keyframes === undefined)
         throw new TimelineError(
           "unsupported",
           `${clipName(target)} animates its ${keyed[0]} with keyframes. Change it with setKeyframe, or remove its keyframes first.`,
@@ -1501,7 +1646,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         const refused = (
           [
             ["position", command.x !== undefined || command.y !== undefined],
-            ["transform", transform],
+            ["transform", transform || command.keyframes],
             ["opacity", command.opacity !== undefined],
             ["style", command.style !== undefined],
           ] as const
@@ -1556,53 +1701,55 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const fadeOut = command.fadeOut ?? target.fadeOut;
       return {
         ...timeline,
-        clips: clips.map((clip) =>
-          clip === target
-            ? {
-                ...clip,
-                fadeIn,
-                fadeOut,
-                ...(command.label !== undefined && { label: command.label }),
-                ...(command.volume !== undefined && { volume: command.volume }),
-                ...(command.fx !== undefined && {
-                  fx: buildFxChain(clip.fx, command.fx),
-                }),
-                ...(command.automation !== undefined && {
-                  automation: command.automation
-                    ? withVolumePoints(
-                        clip.automation,
-                        command.automation.volume,
-                        timeline.fps,
-                      )
-                    : clearAudioAutomation(clip.automation),
-                }),
-                ...(command.x !== undefined && { x: command.x }),
-                ...(command.y !== undefined && { y: command.y }),
-                ...(transform && editTransform(clip, command)),
-                ...(command.text !== undefined && {
-                  text: command.text,
-                  textPreview: firstTextLine(command.text),
-                }),
-                ...(command.opacity !== undefined && {
-                  opacity: command.opacity,
-                }),
-                ...(command.title !== undefined &&
-                  clip.title && {
-                    title: editTitle(clip.title, command.title),
-                  }),
-                ...(command.style !== undefined && {
-                  style: editStyle(clip.style, command.style),
-                }),
-                ...(command.grade !== undefined && {
-                  grade: graded ? graded.grade : null,
-                }),
-                ...(command.enabled !== undefined && {
-                  enabled: command.enabled,
-                }),
-                region,
-              }
-            : clip,
-        ),
+        clips: clips.map((clip) => {
+          if (clip !== target) return clip;
+          const edited = {
+            ...clip,
+            fadeIn,
+            fadeOut,
+            ...(command.label !== undefined && { label: command.label }),
+            ...(command.volume !== undefined && { volume: command.volume }),
+            ...(command.fx !== undefined && {
+              fx: buildFxChain(clip.fx, command.fx),
+            }),
+            ...(command.automation !== undefined && {
+              automation: command.automation
+                ? withVolumePoints(
+                    clip.automation,
+                    command.automation.volume,
+                    timeline.fps,
+                  )
+                : clearAudioAutomation(clip.automation),
+            }),
+            ...(command.x !== undefined && { x: command.x }),
+            ...(command.y !== undefined && { y: command.y }),
+            ...(transform && editTransform(clip, command)),
+            ...(command.text !== undefined && {
+              text: command.text,
+              textPreview: firstTextLine(command.text),
+            }),
+            ...(command.opacity !== undefined && {
+              opacity: command.opacity,
+            }),
+            ...(command.title !== undefined &&
+              clip.title && {
+                title: editTitle(clip.title, command.title),
+              }),
+            ...(command.style !== undefined && {
+              style: editStyle(clip.style, command.style),
+            }),
+            ...(command.grade !== undefined && {
+              grade: graded ? graded.grade : null,
+            }),
+            ...(command.enabled !== undefined && {
+              enabled: command.enabled,
+            }),
+            region,
+          };
+          return command.keyframes === undefined
+            ? edited
+            : replaceKeyframes(edited, command.keyframes);
+        }),
       };
     }
     case "setKeyframe":
@@ -2017,7 +2164,8 @@ function settle(before: Timeline, after: Timeline): Timeline {
         `Clip ${clip.id} would start before its source media.`,
       );
     const old = previous.get(clip.id);
-    if (old && JSON.stringify(old) === JSON.stringify(clip)) continue;
+    if (old === clip || (old && JSON.stringify(old) === JSON.stringify(clip)))
+      continue;
     if (
       clip.sourceDuration !== null &&
       clip.mediaStart !== null &&

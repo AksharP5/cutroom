@@ -7,6 +7,7 @@ import {
   FrameCorners,
   GridNine,
   Magnet,
+  LinkSimple,
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import type { EditorContext } from "../../shared/editor";
@@ -21,6 +22,7 @@ import {
   hint,
   isTyping,
   missingNotice,
+  runAction,
   useKeymap,
 } from "../keymap";
 import type { Action } from "../keymap";
@@ -166,6 +168,7 @@ export function EditPage({
   );
   useFollowVariables(projectId, composition);
   const snapping = useTimeline((state) => state.snapping);
+  const linkedSelection = useTimeline((state) => state.linkedSelection);
   const source = useSource((state) => state.file !== null);
   const sourceShown = useSource((state) => state.shown);
   /** The transport keys and bar drive what the viewer shows. */
@@ -486,6 +489,8 @@ export function EditPage({
     editInsertOverwriteActionInsert: () => placeSource(projectId, "insert"),
     editInsertOverwriteActionOverwrite: () =>
       placeSource(projectId, "overwrite"),
+    editInsertOverwriteActionReplace: () => placeSource(projectId, "replace"),
+    editInsertOverwriteActionPlaceOnTop: () => placeSource(projectId, "top"),
     // The one viewer is either panel: its key shows that side and takes the keyboard there.
     viewActiveWindowSelectionSourceViewer: () => {
       if (!source)
@@ -586,6 +591,15 @@ export function EditPage({
           onClick={() => useTimeline.setState({ snapping: !snapping })}
         >
           <Magnet size={16} weight={snapping ? "fill" : "regular"} />
+        </button>
+        <button
+          className="edit-icon"
+          aria-label="Linked selection"
+          aria-pressed={linkedSelection}
+          title={hint("editLinkedSelection")}
+          onClick={() => runAction("editLinkedSelection")}
+        >
+          <LinkSimple size={16} weight={linkedSelection ? "fill" : "regular"} />
         </button>
         <button
           className="edit-icon"

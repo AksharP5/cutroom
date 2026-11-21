@@ -16,6 +16,8 @@ import { countingIds } from "./clip-ids";
 import { syncOffsets } from "../src/shared/timeline/sync";
 import { volumePoints } from "../src/shared/timeline/mix";
 import { editKeys } from "../src/client/edit/keys";
+import { pasteAttributes } from "../src/client/edit/pasteAttributes";
+import { nearestEditPoint } from "../src/client/timeline/selection";
 import type {
   Clip,
   CommandInput,
@@ -2659,4 +2661,176 @@ test("a full-source clip can return to 100% after rounding its faster duration",
     picture: [0, 0, 80],
     next: [0, 80, 30],
   });
+});
+
+test("roll moves linked edges together and refuses missing handles or a locked partner", () => {
+  const state = timeline([
+    clip("left", 0, 0, 60, { link: "left-link", sourceDuration: 5 }),
+    clip("right", 0, 60, 60, { link: "right-link", mediaStart: 1 }),
+    clip("left-a", 1, 0, 60, { kind: "audio", link: "left-link" }),
+    clip("right-a", 1, 60, 60, {
+      kind: "audio",
+      link: "right-link",
+      mediaStart: 1,
+    }),
+  ]);
+  const roll = { type: "roll", from: "left", to: "right", by: 6 } as const;
+  const result = run(state, roll);
+  expect(positions(result)).toEqual({
+    left: [0, 0, 66],
+    right: [0, 66, 54],
+    "left-a": [1, 0, 66],
+    "right-a": [1, 66, 54],
+  });
+  expect(result.clips.find(({ id }) => id === "right")?.mediaStart).toBeCloseTo(
+    1.2,
+    6,
+  );
+  expect(() => run(state, { ...roll, by: -31 })).toThrow(
+    "before its source media",
+  );
+  expect(() =>
+    run(run(state, { type: "setTrack", index: 1, locked: true }), roll),
+  ).toThrow("locked");
+});
+
+test("swap preserves unlike clip lengths and refuses a transition on a neighbouring cut", () => {
+  const state = timeline([
+    clip("left", 0, 0, 60),
+    clip("right", 0, 60, 30),
+    clip("next", 0, 90, 30, { mediaStart: 1 }),
+  ]);
+  const swap = { type: "swap", from: "left", to: "right" } as const;
+  expect(positions(run(state, swap))).toEqual({
+    right: [0, 0, 30],
+    left: [0, 30, 60],
+    next: [0, 90, 30],
+  });
+  const faded = run(state, {
+    type: "setTransition",
+    from: "right",
+    to: "next",
+    transition: { duration: 30 },
+  });
+  expect(() => run(faded, swap)).toThrow("Remove the transitions");
+});
+
+test("trim linked false edits the named clip even when its partner is locked", () => {
+  const state = timeline(
+    [
+      clip("picture", 0, 0, 60, { link: "talk" }),
+      clip("sound", 1, 0, 60, { kind: "audio", link: "talk" }),
+    ],
+    [{ index: 1, kind: "audio", locked: true }],
+  );
+  const trim = {
+    type: "trim",
+    clipId: "picture",
+    edge: "end",
+    to: 42,
+  } as const;
+  expect(() => run(state, trim)).toThrow("locked");
+  expect(positions(run(state, { ...trim, linked: false }))).toEqual({
+    picture: [0, 0, 42],
+    sound: [1, 0, 60],
+  });
+});
+
+test("Shift brackets trim every eligible clip and close gaps only in Trim mode", () => {
+  const state = timeline(
+    [
+      clip("low", 0, 0, 60),
+      clip("low-next", 0, 60, 30),
+      clip("high", 1, 10, 70),
+      clip("high-next", 1, 80, 30),
+      clip("disabled", 2, 0, 90),
+    ],
+    [{ index: 2, autoSelect: false }],
+  );
+  const keys = editKeys.editNudgeTrimStepTrimStart;
+  const target = { frame: 30, selection: new Set(["disabled"]) };
+  expect(positions(run(state, ...keys.commands(state, target)))).toEqual({
+    low: [0, 30, 30],
+    "low-next": [0, 60, 30],
+    high: [1, 30, 50],
+    "high-next": [1, 80, 30],
+    disabled: [2, 0, 90],
+  });
+  expect(
+    positions(run(state, ...keys.commands(state, { ...target, trim: "slip" }))),
+  ).toEqual({
+    low: [0, 0, 30],
+    "low-next": [0, 30, 30],
+    high: [1, 10, 50],
+    "high-next": [1, 60, 30],
+    disabled: [2, 0, 90],
+  });
+});
+
+test("V prefers the lowest populated auto-select track over a closer edge above it", () => {
+  const state = timeline(
+    [
+      clip("lowest", 1, 0, 70),
+      clip("nearest", 2, 29, 50),
+      clip("sound", 3, 30, 90, { kind: "audio" }),
+    ],
+    [{ index: 0 }],
+  );
+  expect(nearestEditPoint(state, 30)).toEqual({
+    mode: "start",
+    to: "lowest",
+    from: undefined,
+  });
+  const disabled = run(state, {
+    type: "setTrack",
+    index: 1,
+    autoSelect: false,
+  });
+  expect(nearestEditPoint(disabled, 30)?.to).toBe("nearest");
+});
+
+test("Paste Attributes replaces the animation tracks and skips speed ramps on either side", () => {
+  const ramp = JSON.stringify({
+    version: 1,
+    lanes: [
+      {
+        target: "rate",
+        points: [
+          { t: 0, v: 1 },
+          { t: 3, v: 1.5 },
+        ],
+      },
+    ],
+  });
+  const source = clip("source", 0, 0, 90, {
+    playbackRate: 0.75,
+    keyframes: {
+      position: [{ frame: 5, value: { x: 20, y: 10 }, ease: "linear" }],
+    },
+  });
+  const destination = clip("destination", 0, 90, 90, {
+    keyframes: { opacity: [{ frame: 0, value: 0.3, ease: "linear" }] },
+  });
+  for (const [from, to, skip] of [
+    [source, destination, 0],
+    [{ ...source, automation: ramp }, destination, 1],
+    [source, { ...destination, automation: ramp }, 1],
+  ] as const) {
+    const state = timeline([to]);
+    const { commands, skippedSpeed } = pasteAttributes(
+      state,
+      [from],
+      from.id,
+      new Set([to.id]),
+    );
+    expect(skippedSpeed).toBe(skip);
+    expect(run(state, ...commands).clips[0]).toMatchObject({
+      keyframes: source.keyframes,
+      automation: to.automation,
+      playbackRate: skip ? 1 : 0.75,
+      x: null,
+      y: null,
+      opacity: null,
+    });
+  }
 });

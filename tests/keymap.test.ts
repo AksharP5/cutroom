@@ -1,12 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "bun:test";
-import {
-  comboOf,
-  keymap,
-  keymapTable,
-  missing,
-  missingSentence,
-} from "../src/client/keymap";
+import { comboOf, keymap, keymapTable } from "../src/client/keymap";
+import { resolvePresetKeys } from "../src/client/resolvePresetKeys";
 
 const press = (
   code: string,
@@ -64,13 +59,25 @@ test("the keyboard docs show the keymap as it is", async () => {
   expect(rows(docs)).toEqual(rows(keymapTable()));
 });
 
-test("missing preset keys never shadow a working key, and the docs list them", async () => {
-  const bound = new Set(Object.values(keymap).flatMap(({ keys }) => keys));
-  for (const { keys } of Object.values(missing))
-    for (const key of keys) expect(bound.has(key)).toBe(false);
-  const docs = await readFile(
-    new URL("../docs/keyboard.md", import.meta.url),
-    "utf8",
-  );
-  expect(docs).toContain(missingSentence());
+test("the new editing keys follow the preset and the version keys are free there", () => {
+  for (const { keys } of [
+    keymap.clipFreezeFrame,
+    keymap.editPasteAttributes,
+    keymap.editSelectEditPoint,
+    keymap.editToggleEditPointType,
+    keymap.editLinkedSelection,
+    keymap.editInsertOverwriteActionReplace,
+    keymap.editInsertOverwriteActionPlaceOnTop,
+    keymap.editNudgeTrimStepTrimStart,
+    keymap.editNudgeTrimStepTrimEnd,
+    keymap.editNudgeSwapEditReverse,
+    keymap.editNudgeSwapEditForward,
+  ]) {
+    for (const key of keys) expect(resolvePresetKeys.has(key)).toBe(true);
+  }
+  for (const key of [
+    ...keymap.cutroomNextVersion.keys,
+    ...keymap.cutroomPreviousVersion.keys,
+  ])
+    expect(resolvePresetKeys.has(key)).toBe(false);
 });

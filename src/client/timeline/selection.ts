@@ -10,6 +10,97 @@ export interface Selection {
   transition?: string;
   /** A selected gap between clips on a track, which Delete closes. It is selected alone. */
   gap?: Gap;
+  /** A selected cut, gap edge or end of a track. */
+  editPoint?: EditPoint;
+}
+
+export interface EditPoint {
+  from?: string;
+  to?: string;
+  mode: "start" | "end" | "roll";
+}
+
+export function clipsAtEditPoint(timeline: Timeline, point: EditPoint) {
+  const from =
+    point.from && timeline.clips.find((clip) => clip.id === point.from);
+  const to = point.to && timeline.clips.find((clip) => clip.id === point.to);
+  if ((point.from && !from) || (point.to && !to)) return null;
+  if (from && to && (clipEnd(from) !== to.start || from.track !== to.track))
+    return null;
+  return { from: from || undefined, to: to || undefined };
+}
+
+/** Find the nearest edge on the lowest eligible picture track, or the first eligible sound track. */
+export function nearestEditPoint(
+  timeline: Timeline,
+  frame: number,
+): EditPoint | null {
+  const populated = new Set(timeline.clips.map(({ track }) => track));
+  const track = timeline.tracks
+    .filter(
+      ({ autoSelect, locked, index }) =>
+        autoSelect && !locked && populated.has(index),
+    )
+    .toSorted(
+      (a, b) =>
+        Number(a.kind === "audio") - Number(b.kind === "audio") ||
+        a.index - b.index,
+    )[0];
+  if (!track) return null;
+  let nearest: {
+    distance: number;
+    clip: Clip;
+    edge: "start" | "end";
+  } | null = null;
+  for (const clip of timeline.clips) {
+    if (clip.track !== track.index) continue;
+    for (const edge of ["start", "end"] as const) {
+      const distance = Math.abs(
+        frame - (edge === "start" ? clip.start : clipEnd(clip)),
+      );
+      if (!nearest || distance < nearest.distance)
+        nearest = { distance, clip, edge };
+    }
+  }
+  if (!nearest) return null;
+  const { clip, edge } = nearest;
+  const other = timeline.clips.find(
+    (item) =>
+      item.track === clip.track &&
+      item.id !== clip.id &&
+      (edge === "start"
+        ? clipEnd(item) === clip.start
+        : item.start === clipEnd(clip)),
+  );
+  return {
+    from: edge === "end" ? clip.id : other?.id,
+    to: edge === "start" ? clip.id : other?.id,
+    mode: other ? "roll" : edge,
+  };
+}
+
+export function selectedEditEdges(
+  timeline: Timeline,
+  point: EditPoint,
+  linked: boolean,
+) {
+  const sides = clipsAtEditPoint(timeline, point);
+  if (!sides) return [];
+  return (["end", "start"] as const).flatMap((edge) => {
+    if (point.mode !== "roll" && point.mode !== edge) return [];
+    const clip = edge === "end" ? sides.from : sides.to;
+    if (!clip) return [];
+    const clips =
+      linked && clip.link
+        ? timeline.clips.filter((item) => item.link === clip.link)
+        : [clip];
+    return clips.map((item) => ({
+      id: item.id,
+      track: item.track,
+      edge,
+      frame: edge === "start" ? item.start : clipEnd(item),
+    }));
+  });
 }
 
 export interface Gap {
@@ -74,6 +165,7 @@ export function clickSelection(
   current: Selection,
   id: string,
   { toggle, range, alone }: ClickModifiers,
+  linked = true,
 ): Selection {
   const clips = selectable(timeline);
   const clip = clips.find((item) => item.id === id);
@@ -88,17 +180,19 @@ export function clickSelection(
       from: Math.min(anchor.start, clip.start),
       to: Math.max(clipEnd(anchor), clipEnd(clip)),
     };
+    const picked = clips.filter(
+      (item) => tracks.has(item.track) && touches(item, span),
+    );
     return {
       ids: new Set(
-        withLinked(
-          clips,
-          clips.filter((item) => tracks.has(item.track) && touches(item, span)),
-        ),
+        linked && !alone
+          ? withLinked(clips, picked)
+          : picked.map(({ id }) => id),
       ),
       anchor: anchor.id,
     };
   }
-  const group = alone ? [clip.id] : withLinked(clips, [clip]);
+  const group = alone || !linked ? [clip.id] : withLinked(clips, [clip]);
   if (!toggle) return { ids: new Set(group), anchor: clip.id };
   const ids = new Set(current.ids);
   for (const member of group)
@@ -113,13 +207,17 @@ export function marqueeSelection(
   tracks: readonly number[],
   range: FrameRange,
   base: Selection = emptySelection,
+  linked = true,
 ): Selection {
   const clips = selectable(timeline);
   const inside = clips.filter(
     (clip) => tracks.includes(clip.track) && touches(clip, range),
   );
   return {
-    ids: new Set([...base.ids, ...withLinked(clips, inside)]),
+    ids: new Set([
+      ...base.ids,
+      ...(linked ? withLinked(clips, inside) : inside.map(({ id }) => id)),
+    ]),
     anchor: base.anchor,
   };
 }
@@ -189,7 +287,15 @@ export function pruneSelection(
   timeline: Timeline,
   current: Selection,
 ): Selection {
-  const { gap } = current;
+  const { gap, editPoint } = current;
+  if (editPoint) {
+    const sides = clipsAtEditPoint(timeline, editPoint);
+    const track = sides?.from?.track ?? sides?.to?.track;
+    return sides &&
+      !timeline.tracks.some((item) => item.index === track && item.locked)
+      ? current
+      : emptySelection;
+  }
   if (gap) {
     const now = gapSelection(timeline, gap.track, gap.from)?.gap;
     return now?.from === gap.from && now.to === gap.to

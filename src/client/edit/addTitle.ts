@@ -1,10 +1,10 @@
-import { clipEnd, toFrames } from "../../shared/timeline/apply";
+import { toFrames } from "../../shared/timeline/apply";
 import type {
   CommandInput,
   Timeline,
   Track,
 } from "../../shared/timeline/schema";
-import { nextTrackIndex, shownTracks } from "../../shared/timeline/tracks";
+import { higherPlacementTrack } from "./placeMedia";
 
 const TITLE_SECONDS = 5;
 /** The placeholder a new title opens with, selected so typing replaces it. */
@@ -22,36 +22,21 @@ export function addTitleCommands(
   at: number,
 ): CommandInput[] {
   const duration = toFrames(TITLE_SECONDS, timeline.fps);
-  const tracks = shownTracks(timeline.tracks);
-  const video = tracks.filter((track) => track.kind === "video");
-  const free = video
-    .slice(video.findIndex((track) => track.index === destination.index) + 1)
-    .find(
-      (track) =>
-        !track.locked &&
-        track.enabled &&
-        !timeline.clips.some(
-          (clip) =>
-            clip.track === track.index &&
-            clip.start < at + duration &&
-            clipEnd(clip) > at,
-        ),
-    );
-  // An empty timeline only shows its V1: the title's track must not become that V1 itself.
-  const kept = timeline.tracks.some(({ index }) => index === destination.index)
-    ? timeline.tracks
-    : [...timeline.tracks, destination];
-  const track = free?.index ?? nextTrackIndex(kept);
-  const newTracks: CommandInput[] = free
-    ? []
-    : [...kept.slice(timeline.tracks.length), { index: track }].map(
-        ({ index }) => ({ type: "setTrack", index, kind: "video" }),
-      );
+  const { track, create } = higherPlacementTrack(
+    timeline,
+    destination,
+    at,
+    duration,
+  );
   return [
-    ...newTracks,
+    ...create.map(({ index, kind }): CommandInput => ({
+      type: "setTrack",
+      index,
+      kind,
+    })),
     {
       type: "insert",
-      track,
+      track: track.index,
       at,
       clip: {
         kind: "title",

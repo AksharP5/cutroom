@@ -76,6 +76,7 @@ import { KeyframeMarks } from "./KeyframeMarks";
 import { useLaneGestures } from "./lanes";
 import { mediaDrag, subscribeMediaDrag } from "./mediaDrag";
 import type { LaneGestureOptions } from "./lanes";
+import { selectedEditEdges } from "./selection";
 import type { Selection } from "./selection";
 import { useClipMotion } from "./motion";
 import { createViewport } from "./view";
@@ -125,6 +126,7 @@ export interface TimelineProps {
   pins: readonly TimelinePin[];
   agentChanges?: ReadonlySet<string>;
   selection: Selection;
+  linkedSelection?: boolean;
   onSelect(selection: Selection): void;
   /** What a press on a clip does: move and resize, ripple and roll, or razor. */
   tool: Tool;
@@ -779,6 +781,7 @@ export function Timeline({
   pins,
   agentChanges,
   selection,
+  linkedSelection = true,
   onSelect,
   tool,
   snapping,
@@ -969,6 +972,13 @@ export function Timeline({
       });
     },
   });
+  const editEdges = useMemo(
+    () =>
+      selection.editPoint
+        ? selectedEditEdges(timeline, selection.editPoint, linkedSelection)
+        : [],
+    [timeline, selection.editPoint, linkedSelection],
+  );
   const gestures = useLaneGestures({
     timeline,
     composition: source.composition,
@@ -977,6 +987,7 @@ export function Timeline({
     tracks,
     imageSources,
     selection,
+    linkedSelection,
     tool,
     snapping,
     lanes,
@@ -1563,6 +1574,17 @@ export function Timeline({
                           }}
                         />
                       )}
+                      {editEdges
+                        .filter((edge) => edge.track === row.track.index)
+                        .map((edge) => (
+                          <i
+                            key={`${edge.id}:${edge.edge}`}
+                            className={`tl-edit-edge ${edge.edge}`}
+                            data-edit-edge={`${edge.id}:${edge.edge}`}
+                            data-frame={edge.frame}
+                            style={{ "--s": edge.frame }}
+                          />
+                        ))}
                       {/* Brackets sit above the transitions they may cross. */}
                       {rowClips.map(
                         ({ clip, row }) =>
