@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { z } from "zod";
 import { historyClips, historyProjectHtml } from "./bench-history-project";
 import { historyCandidate } from "../src/server/projects/history";
 import {
@@ -39,9 +40,19 @@ export async function benchHistory(store: ProjectStore) {
     "synthetic fixture with authored timing",
   );
   const review = createReviewService(store);
+  const timeline = createTimelineRoutes(store, review);
   const app = new Hono()
-    .route("/", createProjectRoutes(store, review))
-    .route("/", createTimelineRoutes(store, review));
+    .route(
+      "/",
+      createProjectRoutes(
+        store,
+        review,
+        undefined,
+        undefined,
+        timeline.timelineSnapshot,
+      ),
+    )
+    .route("/", timeline);
   const path = `/projects/${project.id}`;
   const credential = externalHistoryCredential();
   const read = async () =>
@@ -85,11 +96,15 @@ export async function benchHistory(store: ProjectStore) {
   const exact: number[] = [];
   const selective: number[] = [];
   const samples: string[] = [];
+  const replayResponse = z.object({ view: TimelineViewSchema });
   const undo = async () => {
     const start = performance.now();
-    const response = await post("history/undo", {});
+    const response = await post("history/undo", { composition: "index.html" });
     const elapsed = performance.now() - start;
     if (!response.ok) throw new Error(await response.text());
+    const { view } = replayResponse.parse(await response.json());
+    if (view.timeline.clips.length !== historyClips)
+      throw new Error("The replay did not return the full verified timeline.");
     return elapsed;
   };
   for (let run = 0; run < 11; run++) {
@@ -158,7 +173,7 @@ export async function benchHistory(store: ProjectStore) {
     );
     if (index !== 1 && index !== 5 && index !== 10) continue;
     const started = performance.now();
-    const response = await post("history/undo", {});
+    const response = await post("history/undo", { composition: "index.html" });
     groups[`group${index}`] = performance.now() - started;
     if (response.status !== 409)
       throw new Error("The dependent trim should block undo.");
