@@ -9,7 +9,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `project_read`                                                  | Read annotations and transcript metadata.                                   |
 | `project_lint`                                                  | Run HyperFrames lint: counts and findings, errors first.                    |
 | `media_list`                                                    | Inspect local media elements and their timing.                              |
-| `media_files`                                                   | Find stills, video, and audio in the project, including unused files.       |
+| `media_files`                                                   | Find stills, video, and audio in the project, with length, size and rate.   |
 | `media_rename`, `media_remove`                                  | Rename a media file with its references, or move it to the trash.           |
 | `source_read`, `source_write`                                   | Read source and save with its exact expected version.                       |
 | `motion_read`, `motion_update`                                  | Inspect existing inline GSAP motion and edit one authored literal.          |
@@ -46,7 +46,7 @@ Start with `projects_list` and retain the returned project ID. Before saving an 
 
 `media_list` gives a video the browser cannot decode, such as HEVC, ProRes or DNxHR, a `proxy` field: the job state of the editing proxy the preview plays (`queued`, `running` with `progress` from 0 to 1, `done`, or `failed` with `error`). Asking starts it. While it runs, the editor plays that clip piece by piece and makes the part at the playhead first; `timeline_view` and exports read the original file. [Details](architecture.md#editing-proxies).
 
-`media_files` filters the project's files by name or relative path. Use the returned `path` for file operations such as `source_marks`. For `timeline_edit` insertion, pass the destination `composition` to `media_files` and use the returned `kind` and `src`. Each page holds up to 100 results. Pass `nextOffset` as `offset` to read the next page.
+`media_files` filters the project's files by name or relative path. Use the returned `path` for file operations such as `source_marks`. For `timeline_edit` insertion, pass the destination `composition` to `media_files` and use the returned `kind` and `src`. Each file also has `bytes`, its size on disk. Video and audio files add `duration` in seconds and `audio`, whether the file holds a sound stream, and video adds `width`, `height` and `fps`, so an agent can plan a cut without probing files itself. Stills, and files FFmpeg cannot read, have only `bytes`. Each page holds up to 100 results. Pass `nextOffset` as `offset` to read the next page.
 
 `media_rename` takes a media file's project path and its new name with the same extension. The file stays in its folder, every reference in the project's sources follows it, and the rename is one undo step. `media_remove` moves a file to the project's `trash` folder and `history_undo` moves it back. A file used by clips, CSS backgrounds or composition scripts is refused with 409 and its use count; pass `confirmUsed: true` to remove it anyway, which leaves those clips in place playing nothing. Files already in `trash` are not media: neither tool takes them. [Details](editing.md#media-files).
 

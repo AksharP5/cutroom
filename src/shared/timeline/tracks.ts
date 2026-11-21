@@ -78,7 +78,7 @@ export function trackMix(
     if (!track.enabled || (track.kind === "audio" && silent))
       hidden.add(track.index);
   }
-  return { hidden, muted, soloedOut, soloGroups };
+  return { hidden, muted, solo, soloedOut, soloGroups };
 }
 
 export type TrackMix = ReturnType<typeof trackMix>;

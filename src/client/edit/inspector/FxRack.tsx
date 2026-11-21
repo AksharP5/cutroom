@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { CaretRight, Power, X } from "@phosphor-icons/react";
 import { HF_AUDIO_FX, getAudioFxDef } from "@hyperframes/core/audio-fx";
@@ -35,13 +35,19 @@ function grouped<Item, Key>(
 export function FxRack({
   fx,
   disabled = false,
+  open: initial,
   onChange,
 }: {
   fx: readonly FxNode[];
   disabled?: boolean;
+  /** An effect to show open, or "add" to start with the Add effect menu open. */
+  open?: string;
   onChange(label: string, next: FxInput[]): void;
 }) {
-  const [open, setOpen] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(
+    initial === "add" ? null : (initial ?? null),
+  );
+  const adding = useRef<HTMLButtonElement>(null);
   const inputs = fx.map(fxInput);
   const replace = (
     id: string,
@@ -52,6 +58,16 @@ export function FxRack({
     );
   const add = (label: string, entry: FxInput) =>
     onChange(label, [...inputs, entry]);
+  const effects = () =>
+    grouped(
+      GROUPS,
+      HF_AUDIO_FX,
+      (def) => def.group,
+      (def) => ({
+        label: def.label,
+        run: () => add(`Add ${def.label}`, { type: def.id }),
+      }),
+    );
   // The menu hangs from its button, as the menu key opens a context menu.
   const menu = (
     event: MouseEvent<HTMLButtonElement>,
@@ -69,6 +85,24 @@ export function FxRack({
       items,
       event.currentTarget,
     );
+  // Opened from an empty strip's Add effect: the menu hangs from this rack's own button.
+  useEffect(() => {
+    const button = adding.current;
+    if (initial !== "add" || !button || button.disabled) return;
+    const box = button.getBoundingClientRect();
+    openContextMenu(
+      {
+        preventDefault() {},
+        button: -1,
+        clientX: box.left,
+        clientY: box.bottom,
+      },
+      "Add effect",
+      effects(),
+      button,
+    );
+    // Only when the rack opens.
+  }, []);
   return (
     <div className="inspector-fx" aria-label="Effects" role="group">
       {fx.map((node) => {
@@ -146,22 +180,9 @@ export function FxRack({
       })}
       <div className="inspector-fx-add">
         <button
+          ref={adding}
           disabled={disabled}
-          onClick={(event) =>
-            menu(
-              event,
-              "Add effect",
-              grouped(
-                GROUPS,
-                HF_AUDIO_FX,
-                (def) => def.group,
-                (def) => ({
-                  label: def.label,
-                  run: () => add(`Add ${def.label}`, { type: def.id }),
-                }),
-              ),
-            )
-          }
+          onClick={(event) => menu(event, "Add effect", effects())}
         >
           Add effect
         </button>

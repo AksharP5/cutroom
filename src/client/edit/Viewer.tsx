@@ -727,6 +727,10 @@ export function Viewer({
       reload(revision, undefined, "native");
     };
     const preview = connectPreview(frame, {
+      mixScope: {
+        projectId,
+        composition: documentCompositions.current.get(gen) ?? ROOT_COMPOSITION,
+      },
       onUnload: () => {
         transition({
           type: "unloaded",
