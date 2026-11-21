@@ -78,7 +78,7 @@ import { mediaDrag, subscribeMediaDrag } from "./mediaDrag";
 import type { LaneGestureOptions } from "./lanes";
 import { selectedEditEdges } from "./selection";
 import type { Selection } from "./selection";
-import { useClipMotion } from "./motion";
+import { readSlideTiming, useClipMotion } from "./motion";
 import { createViewport } from "./view";
 import type { TimelineViewport, ViewPlacement } from "./view";
 import { formatTimecode, quietTimecode } from "../../shared/timeline/timecode";
@@ -200,6 +200,7 @@ interface Mounted {
 
 function readSizes(): {
   rows: RowSizes;
+  slide: ReturnType<typeof readSlideTiming>;
   head: number;
   /** The ruler and its seam, over the lanes in the same scroller. */
   ruler: number;
@@ -209,6 +210,7 @@ function readSizes(): {
   const style = getComputedStyle(document.documentElement);
   const px = (token: string) => parseFloat(style.getPropertyValue(token));
   return {
+    slide: readSlideTiming(style),
     rows: {
       video: px("--size-track-video"),
       audio: px("--size-track-audio"),
@@ -1126,6 +1128,7 @@ export function Timeline({
     () => viewport.current?.state().ppf ?? 0,
     (slides) => bodies.current?.slide(slides),
     gestures.held,
+    sizes.slide,
   );
   useLayoutEffect(() => {
     viewport.current?.measure({

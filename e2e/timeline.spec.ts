@@ -6,6 +6,50 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+test("ripple motion follows a preference change after the timeline opens", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Ripple motion" },
+      })
+    ).json(),
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    `<main data-composition-id="main" data-width="1920" data-height="1080" data-fps="30" data-duration="6">
+      <div id="first" class="clip" data-start="0" data-duration="3" data-track-index="0">First</div>
+      <div id="last" class="clip" data-start="3" data-duration="3" data-track-index="0">Last</div>
+    </main>`,
+  );
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto(`/#project/${project.id}`);
+  const lanes = page.locator(".tl-lanes");
+  const first = page.locator('[data-clip="first"]');
+  await first.click();
+  await lanes.evaluate((element) => {
+    new MutationObserver((records) => {
+      if (records.some(({ oldValue }) => oldValue === null))
+        element.setAttribute("data-observed-slide", "");
+    }).observe(element, {
+      attributeFilter: ["data-sliding"],
+      attributeOldValue: true,
+    });
+  });
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.keyboard.press("Delete");
+  await expect(first).toHaveCount(0);
+  await expect(lanes).not.toHaveAttribute("data-observed-slide");
+
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.keyboard.press("Control+z");
+  await expect(first).toBeVisible();
+  await expect(lanes).toHaveAttribute("data-observed-slide");
+});
+
 test("Fit returns a scrolled timeline to frame zero with whole ruler labels", async ({
   page,
   request,

@@ -528,6 +528,12 @@ Paired 500-clip screenshots freeze both animation clocks at 110 ms, then capture
 
 [Every session's median maximum and p95, raw frame samples, traces, capture method, and matching images](https://github.com/AksharP5/cutroom/tree/pr-assets/ripple-first-edit) are retained separately from the source branch. Reproduce with `CUTROOM_PERF_DIR=... bun run test:perf`; set `CUTROOM_PERF_TRACE=1 CUTROOM_PERF_RUNS=1` for the separate profiling pass.
 
+#### Ripple animation timing
+
+On the 500-clip workload, the timeline read the animation's CSS duration after React changed the clip positions. A Chromium trace attributed 16 ms of synchronous layout to that read in the first Delete frame. Applying the clip translations then required a separate style pass over 982 elements. The same layout happened on subsequent edits, where command processing was already warm.
+
+The timeline now reads the slide duration and easing alongside its initial track sizes. It refreshes the timing when the reduced-motion preference changes and honors an inline override on the lanes. The browser can lay out the new positions and their first animation offsets together.
+
 ## Work counts
 
 Frame-time budgets measure what users feel, but on shared CI runners they need repeated runs and still fail when a runner is slow (see Zoom and ripple edits). `e2e/timeline-work-performance.spec.ts` gates the same hot gestures on how much work they cause instead, which depends on the code and not on the runner. The idea comes from Powermove's structural timeline tests; no code was taken.
