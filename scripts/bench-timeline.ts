@@ -2,6 +2,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { benchHistory, historyBudgets } from "./bench-history";
+import { historyClips } from "./bench-history-project";
 import { applyAll } from "../src/shared/timeline/apply";
 import type { ClipOrigin } from "../src/shared/timeline/apply";
 import {
@@ -31,6 +33,7 @@ const budgets = {
   request: 50,
   bulkApply: 20,
   bulkPatch: 20,
+  ...historyBudgets,
 };
 const runs = 31;
 
@@ -98,7 +101,7 @@ const bulkCommands = [
   }),
 ];
 const bulkEdited = applyAll(bulk.timeline, bulkCommands);
-const results = {
+const results: Record<string, number> = {
   parse: median(() => parseComposition(html, emptyTimelineSettings())),
   apply: median(() => applyAll(parsed.timeline, commands)),
   multiRangeApply: median(() => applyAll(parsed.timeline, multiRangeCommands)),
@@ -136,19 +139,21 @@ try {
     revision = TimelineViewSchema.parse(await response.json()).revision;
   }
   results.request = times.sort((a, b) => a - b)[5]!;
+  Object.assign(results, await benchHistory(store));
 } finally {
   await store.close();
   await rm(directory, { recursive: true, force: true });
 }
 
 const over = Object.entries(budgets).filter(
-  ([step, budget]) => results[step as keyof typeof results] > budget,
+  ([step, budget]) => (results[step] ?? Infinity) > budget,
 );
 console.log(
   JSON.stringify(
     {
       runtime: `Bun ${Bun.version}`,
       clips: 500,
+      historyClips,
       bytes: html.length,
       medianMs: Object.fromEntries(
         Object.entries(results).map(([step, ms]) => [

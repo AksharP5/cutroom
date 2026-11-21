@@ -145,8 +145,8 @@ export function addAnnotation(
   project: Project,
   input: z.output<typeof AnnotationInputSchema>,
   who?: HistoryWho,
-): Promise<Annotation> {
-  return store.mutate(
+) {
+  return store.mutateWithEntry(
     project,
     input.kind === "drawing" ? "Add drawing" : "Add comment",
     async () => {
@@ -1165,7 +1165,7 @@ export function createReviewService(store: ProjectStore) {
       serialize(project, async () => {
         // Checked in the queue, so the run cannot end between the check and the add.
         agent(project, token);
-        const annotation = await addAnnotation(
+        const { value: annotation } = await addAnnotation(
           store,
           project,
           AnnotationInputSchema.parse({ ...input, kind: "comment" }),

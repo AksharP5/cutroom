@@ -300,7 +300,7 @@ export function createMcpServer(options: McpOptions = {}) {
     "media_import",
     {
       description:
-        "Import video, audio, or images by absolute path through the local stdio bridge. Same-filesystem files are hard linked; other files are copied. Returns project-relative paths in assets/. The batch is one undo step. This reads outside the project and always asks in Cutroom.",
+        "Import video, audio, or images by absolute path through the local stdio bridge. Same-filesystem files are hard linked; other files are copied. Returns project-relative paths in assets/. Imported files stay in Media when you undo timeline edits. This reads outside the project and always asks in Cutroom.",
       inputSchema: { ...project, ...MediaImportSchema.shape },
       annotations: edit,
     },

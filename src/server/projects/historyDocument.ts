@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import type { ProjectDocument } from "../../shared/project";
 import { ProjectDocumentSchema } from "../../shared/project";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 
@@ -81,14 +82,15 @@ function reverse(before: Value, after: Value, current: Value): Value {
 }
 
 export function reverseDocument(
-  before: string,
-  after: string,
-  current: string,
+  before: ProjectDocument,
+  after: ProjectDocument,
+  current: ProjectDocument,
 ) {
   try {
-    const documents = [before, after, current].map((source) =>
-      ProjectDocumentSchema.parse(JSON.parse(source)),
-    );
+    const documents = [before, after, current].map((document) => ({
+      ...document,
+      timelines: { ...document.timelines },
+    }));
     const compositions = new Set(
       documents.flatMap(({ timelines }) => Object.keys(timelines)),
     );
@@ -105,12 +107,7 @@ export function reverseDocument(
     const parsed = ProjectDocumentSchema.parse(document);
     return `${JSON.stringify(parsed, null, 2)}\n`;
   } catch (error) {
-    if (
-      error instanceof Overlap ||
-      error instanceof SyntaxError ||
-      error instanceof ZodError
-    )
-      return null;
+    if (error instanceof Overlap || error instanceof ZodError) return null;
     throw error;
   }
 }

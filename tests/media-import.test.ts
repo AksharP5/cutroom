@@ -480,7 +480,7 @@ test("the stdio MCP bridge imports media while public HTTP callers cannot name s
 
   const publicHttp = Bun.serve({
     hostname: "127.0.0.1",
-    port: 0,
+    port: Number(new URL(baseUrl).port),
     fetch: runtime.app.fetch,
   });
   const http = new Client({ name: "HTTP-only import test", version: "1" });
@@ -511,7 +511,21 @@ test("the stdio MCP bridge imports media while public HTTP callers cannot name s
       "agent recording",
     );
     const entry = (await runtime.projects.history(project)).list().at(-1);
-    expect(entry?.who).toEqual({ kind: "agent", name: "Media import test" });
+    expect(entry?.who).toMatchObject({
+      kind: "agent",
+      name: "Media import test",
+    });
+    expect(entry?.who.key).toMatch(/^session:/);
+    const listed = await client.callTool({
+      name: "history_list",
+      arguments: { projectId: project.id },
+    });
+    expect(listed.isError ?? false).toBe(false);
+    expect(listed.structuredContent).toMatchObject({
+      result: {
+        entries: [{ id: entry?.id, mine: true, step: false }],
+      },
+    });
   } finally {
     await client.close();
     await http.close();

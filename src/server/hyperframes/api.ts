@@ -1886,7 +1886,11 @@ export function createHyperframesApi(
       nextUndo: back,
       nextRedo: forward,
       entries,
-    } = historySummary(history.list(), historyActor(reviews, c, project).who);
+    } = await historySummary(
+      project,
+      history.list(),
+      historyActor(reviews, c, project).who,
+    );
     return c.json({ entries, back, forward });
   });
   api.post("/projects/:id/history/checkpoint", async (c) => {

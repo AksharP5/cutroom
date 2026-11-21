@@ -1,3 +1,4 @@
+import { EDIT_HISTORY_HEADER } from "../../shared/timeline/schema";
 import { projectMutationGuard } from "./authorization";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -308,10 +309,14 @@ export function createProjectRoutes(
   api.post("/projects/:id/annotations", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(AnnotationInputSchema, await c.req.json());
-    return c.json(
-      await addAnnotation(store, project, input, agentWho(c, project)),
-      201,
+    const { value, entry } = await addAnnotation(
+      store,
+      project,
+      input,
+      agentWho(c, project),
     );
+    if (entry) c.header(EDIT_HISTORY_HEADER, entry.id);
+    return c.json(value, 201);
   });
   api.patch("/projects/:id/annotations/:annotationId", async (c) => {
     const project = await store.get(c.req.param("id"));
@@ -521,7 +526,7 @@ export function createProjectRoutes(
     const project = await store.get(c.req.param("id"));
     const { who } = historyActor(reviews, c, project);
     const history = await store.history(project);
-    return c.json(historySummary(history.list(), who));
+    return c.json(await historySummary(project, history.list(), who));
   });
   for (const direction of ["undo", "redo"] as const) {
     api.post(`/projects/:id/history/${direction}`, async (c) => {
@@ -542,6 +547,13 @@ export function createProjectRoutes(
         input,
       );
       if (!result.ok) return c.json(result, 409);
+      if (result.skipped) {
+        const history = await store.history(project);
+        return c.json({
+          ...result,
+          history: await historySummary(project, history.list(), actor.who),
+        });
+      }
       if (!composition || !timelineSnapshot || !result.entry)
         return c.json(result);
       const view = await timelineSnapshot(project, composition).catch(
@@ -555,7 +567,7 @@ export function createProjectRoutes(
       return c.json({
         ...result,
         view: view && !view.error ? view : null,
-        history: historySummary(history.list(), actor.who),
+        history: await historySummary(project, history.list(), actor.who),
       });
     });
   }

@@ -48,7 +48,12 @@ import {
   showAnimationFeedback,
 } from "./animationFeedback";
 import { noteNumbers } from "../review";
-import { dispatchNote, queueNoteChange } from "./noteStore";
+import {
+  dispatchNote,
+  hasQueuedNoteChange,
+  queueNoteChange,
+  unobservedNoteHistory,
+} from "./noteStore";
 import { sameHeldKey } from "../keymap";
 import type { HeldKey } from "../keymap";
 
@@ -77,14 +82,17 @@ const HistorySchema = z.object({
     }),
   ),
 });
-const emptyHistory: Omit<z.infer<typeof HistorySchema>, "entries"> = {
+const emptyHistory: z.infer<typeof HistorySchema> = {
   canUndo: false,
   canRedo: false,
   nextUndo: null,
   nextRedo: null,
+  entries: [],
 };
 const pendingEditHistory = { ...emptyHistory, canUndo: true };
 let confirmedHistory = emptyHistory;
+let unobservedTimelineHistory:
+  { projectId: string; entryId: string } | undefined;
 const historyControls = (projectId: string) =>
   pending.some((edit) => edit.projectId === projectId)
     ? pendingEditHistory
@@ -107,6 +115,7 @@ const HistoryReplaySchema = z.object({
   view: TimelineViewSchema.nullish(),
   history: HistorySchema.optional(),
   message: z.string().optional(),
+  skipped: z.object({ id: z.string(), label: z.string() }).optional(),
   kept: z
     .object({ count: z.number(), authors: z.array(z.string()) })
     .optional(),
@@ -118,7 +127,13 @@ const UndoTogetherSchema = z.object({
   withEntries: z.array(z.string()),
 });
 const HistoryConflictSchema = z.object({
-  conflict: z.object({ undoTogether: UndoTogetherSchema.optional() }),
+  conflict: z.object({
+    undoTogether: UndoTogetherSchema.optional(),
+    skipEntryId: z.string().optional(),
+    blocking: z
+      .array(z.object({ author: z.object({ name: z.string() }) }))
+      .optional(),
+  }),
 });
 const historyPictures = new Map<
   string,
@@ -355,7 +370,7 @@ function noticeOutside(
         outsideMessage(outsideClips, outsideActors),
         id
           ? {
-              label: "Undo",
+              label: `Undo ${[...outsideActors][0] ?? "agent"}'s edit`,
               run: () => {
                 dismissOutside();
                 void stepHistory(projectId, "undo", id).catch(
@@ -386,6 +401,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
   rippleRevision = null;
   historyHead = undefined;
   confirmedHistory = emptyHistory;
+  unobservedTimelineHistory = undefined;
   useTimeline.setState({
     projectId,
     composition: ROOT_COMPOSITION,
@@ -618,6 +634,17 @@ function settle(
     dismissRipple();
     rippleRevision = null;
   }
+  if (
+    history.entries.some(
+      ({ id }) => id === unobservedNoteHistory.get(projectId),
+    )
+  )
+    unobservedNoteHistory.delete(projectId);
+  if (
+    unobservedTimelineHistory?.projectId === projectId &&
+    history.entries.some(({ id }) => id === unobservedTimelineHistory?.entryId)
+  )
+    unobservedTimelineHistory = undefined;
   confirmedHistory = history;
   useTimeline.setState({
     view: shown(projectId),
@@ -846,7 +873,13 @@ async function send(edit: Edit) {
       );
       if (useTimeline.getState().projectId === edit.projectId) {
         answers.set(result.composition, result);
-        if (historyId) rememberHistoryPicture(historyId, result, base);
+        if (historyId) {
+          unobservedTimelineHistory = {
+            projectId: edit.projectId,
+            entryId: historyId,
+          };
+          rememberHistoryPicture(historyId, result, base);
+        }
       }
       if (isOpen(edit.projectId, result.composition))
         confirmed = { projectId: edit.projectId, view: result };
@@ -1237,7 +1270,23 @@ export function stepHistory(
   step: "undo" | "redo",
   expectedHistoryId?: string,
   withEntries?: string[],
+  skip?: true,
 ) {
+  const nextId = (history: typeof emptyHistory) =>
+    (step === "undo" ? history.nextUndo : history.nextRedo)?.id ?? null;
+  // A press targets the history shown at that moment. Steps behind a local save or
+  // a previous press bind to the answer from that queued operation.
+  const priorStep = pendingHistory.has(projectId);
+  const notePending = !priorStep && hasQueuedNoteChange(projectId);
+  const editPending = pending.some((edit) => edit.projectId === projectId);
+  const observed = confirmedHistory;
+  const seen =
+    (step === "undo"
+      ? (unobservedNoteHistory.get(projectId) ??
+        (unobservedTimelineHistory?.projectId === projectId
+          ? unobservedTimelineHistory.entryId
+          : undefined))
+      : undefined) ?? nextId(observed);
   const run = queueNoteChange(projectId, () =>
     clipboardTask.then(() =>
       enqueue(async () => {
@@ -1245,17 +1294,27 @@ export function stepHistory(
         rippleRevision = null;
         const open = useTimeline.getState();
         const here = open.projectId === projectId;
+        const queued = nextId(confirmedHistory);
+        // A preceding Undo can reveal an older entry, but a new entry from another
+        // tab must not become the target of a keypress already in the queue.
+        const unseenUndo =
+          step === "undo" &&
+          priorStep &&
+          !editPending &&
+          queued !== null &&
+          !observed.entries.some(({ id }) => id === queued);
         const target =
           expectedHistoryId ??
-          (here
-            ? (step === "undo"
-                ? confirmedHistory.nextUndo
-                : confirmedHistory.nextRedo
-              )?.id
-            : undefined);
+          (notePending
+            ? ((step === "undo"
+                ? unobservedNoteHistory.get(projectId)
+                : undefined) ?? nextId(await readHistory(projectId)))
+            : (priorStep || editPending) && !unseenUndo
+              ? queued
+              : seen);
         const standing = here ? confirmed?.view : undefined;
         const prediction =
-          !withEntries && target && target === historyHead
+          !withEntries && !skip && target && target === historyHead
             ? historyPictures.get(target)
             : undefined;
         const painted =
@@ -1271,34 +1330,21 @@ export function stepHistory(
             : undefined;
         if (painted) useTimeline.setState({ view: painted });
 
-        const applyHistory = (expectedEntryId?: string) =>
-          api(
+        let replay: z.output<typeof HistoryReplaySchema>;
+        try {
+          replay = await api(
             `${project(projectId)}/history/${step}`,
             HistoryReplaySchema,
             json("POST", {
               entryId: expectedHistoryId,
-              expectedEntryId,
+              expectedEntryId:
+                expectedHistoryId === undefined ? target : undefined,
               requestId: crypto.randomUUID(),
               composition: here ? open.composition : undefined,
               withEntries,
+              skip,
             }),
           );
-        let replay: z.output<typeof HistoryReplaySchema>;
-        let predicted = Boolean(painted);
-        try {
-          replay = await applyHistory(
-            painted && !expectedHistoryId ? target : undefined,
-          ).catch((error: unknown) => {
-            if (
-              !(error instanceof ApiError) ||
-              error.code !== "history-advanced"
-            )
-              throw error;
-            if (useTimeline.getState().view === painted)
-              useTimeline.setState({ view: shown(projectId) });
-            predicted = false;
-            return applyHistory();
-          });
         } catch (error) {
           if (painted && useTimeline.getState().view === painted)
             useTimeline.setState({ view: shown(projectId) });
@@ -1309,9 +1355,26 @@ export function stepHistory(
           )
             throw error;
           const refusal = HistoryConflictSchema.safeParse(error.body);
-          const group = refusal.success && refusal.data.conflict.undoTogether;
+          const conflict = refusal.success ? refusal.data.conflict : undefined;
+          const group = conflict?.undoTogether;
+          const skipEntryId = conflict?.skipEntryId;
+          const authors = [
+            ...new Set(conflict?.blocking?.map(({ author }) => author.name)),
+          ];
+          if (error.code === "history-advanced") {
+            if (target === unobservedNoteHistory.get(projectId))
+              unobservedNoteHistory.delete(projectId);
+            if (
+              unobservedTimelineHistory?.projectId === projectId &&
+              unobservedTimelineHistory.entryId === target
+            )
+              unobservedTimelineHistory = undefined;
+            await refreshOpenTimeline(projectId, undefined, false);
+          }
           const dismiss = showToast(
-            error.message,
+            group && authors.length
+              ? `${error.message} This also takes back the ${group.withEntries.length === 1 ? "edit" : "edits"} by ${authors.join(", ")}.`
+              : error.message,
             group
               ? {
                   label:
@@ -1330,13 +1393,37 @@ export function stepHistory(
                     );
                   },
                 }
-              : step === "redo"
-                ? { label: "Show changes", run: showHistoryChanges }
-                : null,
+              : skipEntryId
+                ? {
+                    label: "Skip",
+                    run: () => {
+                      dismiss();
+                      void stepHistory(
+                        projectId,
+                        "undo",
+                        skipEntryId,
+                        undefined,
+                        true,
+                      ).catch((error: unknown) =>
+                        reportEditorError("timeline", error),
+                      );
+                    },
+                  }
+                : step === "redo"
+                  ? { label: "Show changes", run: showHistoryChanges }
+                  : null,
           );
           return;
         }
         const { entry, view, history } = replay;
+        if (replay.skipped) {
+          if (here && isOpen(projectId, open.composition)) {
+            if (history && standing) settle(projectId, standing, history);
+            else await refreshOpenTimeline(projectId, undefined, false);
+            showToast(replay.skipped.label, null, { tone: "info" });
+          }
+          return;
+        }
         if (!entry) {
           if (useTimeline.getState().projectId === projectId)
             showToast(
@@ -1349,7 +1436,7 @@ export function stepHistory(
         if (view && history && isOpen(projectId, view.composition)) {
           answers.set(view.composition, view);
           confirmed = { projectId, view };
-          if (predicted && standing)
+          if (painted && standing)
             rememberHistoryPicture(entry.id, view, standing);
           settle(projectId, view, history);
         } else {

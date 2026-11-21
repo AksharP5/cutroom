@@ -1,10 +1,15 @@
 import { z } from "zod";
+import { EDIT_HISTORY_HEADER } from "../shared/timeline/schema";
 import { AnnotationSchema } from "../shared/project";
 import type { EditorReviewDraft } from "../shared/editor";
 import type { ReviewItem, ReviewStatus } from "../shared/review";
 import { api, json } from "./api";
 import { strokePath } from "./edit/notes";
-import { queueNoteChange, trackNoteCapture } from "./edit/noteStore";
+import {
+  queueNoteChange,
+  trackNoteCapture,
+  unobservedNoteHistory,
+} from "./edit/noteStore";
 
 /** Completed notes and agent questions wait on the owner in Review's To review group. */
 export const toReviewStatuses: readonly ReviewStatus[] = ["blocked", "done"];
@@ -53,6 +58,10 @@ export async function saveReviewNote(
         point: draft.point,
         strokes: draft.strokes.map((points) => ({ points, color: pencil })),
       }),
+      (headers) => {
+        const entryId = headers.get(EDIT_HISTORY_HEADER);
+        if (entryId) unobservedNoteHistory.set(projectId, entryId);
+      },
     ),
   );
   const capture = trackNoteCapture(

@@ -390,6 +390,7 @@ export async function createProjectStore(options: {
           throw error;
         },
       );
+      captureHistoryCreation(absolute, before);
     }
     return {
       sourceFile: PROJECT_DOCUMENT_PATH,
@@ -412,7 +413,11 @@ export async function createProjectStore(options: {
         const { absPath } = mutations[index]!;
         rememberTimelineWrite(absPath, () => file.version, origin);
         if (capture)
-          captureWrite(absPath, recordedHash(file.before), recordedHash(file.after));
+          captureWrite(
+            absPath,
+            recordedHash(file.before),
+            recordedHash(file.after),
+          );
       }
     } catch (error) {
       if (

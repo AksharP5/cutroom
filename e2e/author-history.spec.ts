@@ -1,3 +1,4 @@
+import type { APIRequestContext } from "@playwright/test";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -236,11 +237,7 @@ test("author undo and redo preserve migrated review marks, acceptance, and unrel
   }
 });
 
-test("a later MCP trim blocks ripple undo and Undo both reverses the named edits", async ({
-  page,
-  request,
-  baseURL,
-}, info) => {
+async function rippleProject(request: APIRequestContext) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -268,6 +265,15 @@ test("a later MCP trim blocks ripple undo and Undo both reverses the named edits
     (await read()).timeline.clips
       .filter(({ track }) => track === 0)
       .map(({ id, start, duration }) => [id, start, duration]);
+  return { project, read, starts };
+}
+
+test("a later MCP trim blocks ripple undo and Undo both reverses the named edits", async ({
+  page,
+  request,
+  baseURL,
+}, info) => {
+  const { project, read, starts } = await rippleProject(request);
   const original = await starts();
   const client = new Client({ name: "Codex", version: "1" });
   await client.connect(
@@ -302,6 +308,9 @@ test("a later MCP trim blocks ripple undo and Undo both reverses the named edits
     const toast = page.locator(".toast");
     await expect(toast).toContainText("Codex");
     await expect(toast).toContainText(/trim/i);
+    await expect(toast).toContainText(
+      "This also takes back the edit by Codex.",
+    );
     const both = page.getByRole("button", { name: "Undo both", exact: true });
     await expect(both).toBeVisible();
     await expect(page.locator('[data-clip="cut"]')).toHaveCount(0);
@@ -383,5 +392,277 @@ test("a cached own undo paints before its POST and reconciles without a timeline
   } finally {
     allowUndo.resolve();
     allowReads.resolve();
+  }
+});
+
+test("ripple undo restores the cut and preserves the agent's opacity in the rendered picture", async ({
+  page,
+  request,
+  baseURL,
+}, info) => {
+  const { project, read, starts } = await rippleProject(request);
+  const original = await starts();
+  const client = new Client({ name: "Codex", version: "1" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+      requestInit: { headers: { origin: baseURL! } },
+    }),
+  );
+  try {
+    await page.goto(`/#project/${project.id}`);
+    await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+    await page.locator('[data-clip="cut"]').click();
+    await page.keyboard.press("Shift+X");
+    await expect.poll(starts).toEqual([
+      ["next", 30, 30],
+      ["last", 90, 30],
+    ]);
+    const agent = await client.callTool({
+      name: "timeline_edit",
+      arguments: {
+        projectId: project.id,
+        expectedRevision: (await read()).revision,
+        commands: [{ type: "setClip", clipId: "last", opacity: 0.4 }],
+      },
+    });
+    expect(agent.isError, JSON.stringify(agent.content)).not.toBe(true);
+    const last = page.frameLocator("iframe[data-live]").locator("#last");
+    await expect(last).toHaveCSS("opacity", "0.4");
+    await page.keyboard.press("Control+z");
+    await expect(page.locator('[data-clip="cut"]')).toBeVisible();
+    await expect.poll(starts).toEqual(original);
+    await seekFrame(page, 125);
+    await expect(last).toHaveCSS("opacity", "0.4");
+    await expect(page.locator('[data-agent-change="last"]')).toBeVisible();
+    await page.screenshot({
+      path: info.outputPath("ripple-undone-agent-opacity-kept.png"),
+    });
+  } finally {
+    await client.close();
+  }
+});
+
+test("Skip leaves an outside edit in place and the next Undo targets the older owner edit", async ({
+  page,
+  request,
+}) => {
+  const { project, read } = await rippleProject(request);
+  const api = `/api/cutroom/projects/${project.id}`;
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  const edit = async (text: string, clipId: string) => {
+    const response = await request.post(`${api}/commands`, {
+      data: {
+        expectedRevision: (await read()).revision,
+        commands: [{ type: "setClip", clipId, text }],
+      },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  };
+  await edit("Older owner edit", "next");
+  await edit("Owner title", "last");
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  await expect(undo).toHaveAttribute("aria-description", /Owner title/);
+  const file = join(project.path, "index.html");
+  await writeFile(
+    file,
+    (await readFile(file, "utf8")).replace(">Owner title<", ">Outside title<"),
+  );
+  const last = page.frameLocator("iframe[data-live]").locator("#last");
+  await expect(last).toHaveText("Outside title");
+  await page.keyboard.press("Control+z");
+  await page.getByRole("button", { name: "Skip", exact: true }).click();
+  await expect(page.locator(".toast")).toContainText(
+    /Left .*Owner title.* in place/,
+  );
+  await expect(undo).toHaveAttribute("aria-description", /Older owner edit/);
+  await page.reload();
+  await expect(undo).toHaveAttribute("aria-description", /Older owner edit/);
+  await page.keyboard.press("Control+z");
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#next"),
+  ).toHaveText("Next");
+  await expect(last).toHaveText("Outside title");
+});
+
+test("author undo processes eleven presses in order while the first response is held", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Undo burst", width: 640, height: 360, duration: 10 },
+      })
+    ).json(),
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  const header = "x-cutroom-history-entry";
+  const steps: string[] = [];
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  for (let index = 0; index < 11; index++) {
+    await seekFrame(page, index * 20 + 10);
+    const saved = page.waitForResponse((response) =>
+      response.url().endsWith(`${api}/commands`),
+    );
+    await page.keyboard.press("m");
+    const id = (await saved).headers()[header];
+    if (!id) throw new Error("The marker save did not return an entry ID.");
+    steps.unshift(id);
+  }
+  const markers = page.getByRole("button", { name: /^Marker Marker / });
+  await expect(markers).toHaveCount(11);
+  const received: string[] = [];
+  const firstSeen = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const body = z.object({ expectedEntryId: z.string() });
+  await page.route(`**${api}/history/undo`, async (route) => {
+    const { expectedEntryId } = body.parse(route.request().postDataJSON());
+    received.push(expectedEntryId);
+    firstSeen.resolve();
+    await release.promise;
+    await route.continue();
+  });
+  try {
+    await page.keyboard.press("Control+z");
+    await firstSeen.promise;
+    for (let index = 1; index < 11; index++) {
+      await page.waitForTimeout(100);
+      await page.keyboard.press("Control+z");
+    }
+  } finally {
+    release.resolve();
+  }
+  await expect(markers).toHaveCount(0);
+  expect(received).toEqual(steps);
+  await expect
+    .poll(async () => {
+      const response = await request.get(`${api}/timeline`);
+      return TimelineViewSchema.parse(await response.json()).timeline.markers
+        .length;
+    })
+    .toBe(0);
+});
+
+test("author undo refuses queued presses when another owner edit advances history", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Advanced undo", width: 640, height: 360, duration: 10 },
+      })
+    ).json(),
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  await seekFrame(page, 60);
+  const saved = page.waitForResponse((response) =>
+    response.url().endsWith(`${api}/commands`),
+  );
+  await page.keyboard.press("m");
+  const entryId = (await saved).headers()["x-cutroom-history-entry"];
+  expect(entryId).toBeTruthy();
+  const firstSeen = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const replies: number[] = [];
+  const targets: string[] = [];
+  const body = z.object({ expectedEntryId: z.string() });
+  await page.route(`**${api}/history/undo`, async (route) => {
+    targets.push(body.parse(route.request().postDataJSON()).expectedEntryId);
+    firstSeen.resolve();
+    await release.promise;
+    const response = await route.fetch();
+    replies.push(response.status());
+    await route.fulfill({ response });
+  });
+  try {
+    await page.keyboard.press("Control+z");
+    await firstSeen.promise;
+    await page.keyboard.press("Control+z");
+    const standing = TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+    const edit = await request.post(`${api}/commands`, {
+      data: {
+        expectedRevision: standing.revision,
+        commands: [
+          {
+            type: "setClip",
+            clipId: "headline",
+            text: "An edit from the other tab",
+          },
+        ],
+      },
+    });
+    expect(edit.ok()).toBe(true);
+  } finally {
+    release.resolve();
+  }
+  await expect.poll(() => replies).toEqual([409, 409]);
+  expect(targets).toEqual([entryId, entryId]);
+  await expect(page.locator(".toast")).toContainText(
+    "The next history action changed.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Marker Marker 1" }),
+  ).toBeVisible();
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#headline"),
+  ).toHaveText("An edit from the other tab");
+});
+
+test("author undo targets a saved timeline edit before history refreshes", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: {
+          name: "Undo before refresh",
+          width: 640,
+          height: 360,
+          duration: 10,
+        },
+      })
+    ).json(),
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  await seekFrame(page, 60);
+  const historyRead = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  await page.route(`**${api}/history`, async (route) => {
+    historyRead.resolve();
+    await resume.promise;
+    await route.continue();
+  });
+  const undo = page.waitForResponse((response) =>
+    response.url().endsWith(`${api}/history/undo`),
+  );
+  try {
+    const saved = page.waitForResponse((response) =>
+      response.url().endsWith(`${api}/commands`),
+    );
+    await page.keyboard.press("m");
+    const entryId = (await saved).headers()["x-cutroom-history-entry"];
+    await historyRead.promise;
+    await page.keyboard.press("Control+z");
+    resume.resolve();
+    const response = await undo;
+    expect(response.ok()).toBe(true);
+    expect(response.request().postDataJSON()).toMatchObject({
+      expectedEntryId: entryId,
+    });
+    await expect(
+      page.getByRole("button", { name: "Marker Marker 1" }),
+    ).toHaveCount(0);
+  } finally {
+    resume.resolve();
   }
 });

@@ -7,7 +7,7 @@ import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
 
-test("Inspector, R, and MCP resize linked clips, ripple the cut, and share Undo", async ({
+test("Inspector, R, and MCP resize linked clips, ripple the cut, with undo for the owner and MCP session", async ({
   page,
   request,
   baseURL,
@@ -124,7 +124,12 @@ test("Inspector, R, and MCP resize linked clips, ripple the cut, and share Undo"
       next: [240, 60, 5, 1],
     });
     await expect(speed).toHaveValue("50%");
-    await undo();
+    const reversed = await client.callTool({
+      name: "history_undo",
+      arguments: { projectId: project.id },
+    });
+    expect(reversed.isError, JSON.stringify(reversed.content)).not.toBe(true);
+    await expect.poll(() => readFile(file, "utf8")).toBe(original);
   } finally {
     await client.close();
   }

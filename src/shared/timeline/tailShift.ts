@@ -15,7 +15,7 @@ export function groupClips<Key>(
 }
 
 /** The first position affected by a uniform shift of the surviving tail of a track. */
-export function tailShift(before: readonly Clip[], after: readonly Clip[]) {
+export function tailShifts(before: readonly Clip[], after: readonly Clip[]) {
   const byId = new Map(after.map((clip) => [clip.id, clip]));
   const tracks = groupClips(before, (clip) => clip.track);
   const known = new Set(before.map(({ id }) => id));
@@ -23,7 +23,10 @@ export function tailShift(before: readonly Clip[], after: readonly Clip[]) {
     after.filter(({ id }) => !known.has(id)),
     (clip) => clip.track,
   );
-  let boundary = Infinity;
+  const shifts = new Map<
+    number,
+    { delta: number; boundary: number; from: number }
+  >();
   for (const [track, clips] of tracks) {
     const ordered = clips.toSorted((a, b) => a.start - b.start);
     let delta: number | undefined;
@@ -43,7 +46,7 @@ export function tailShift(before: readonly Clip[], after: readonly Clip[]) {
       first = clip;
       count++;
     }
-    if (!first) continue;
+    if (!first || delta === undefined) continue;
     const start = first.start;
     const removed = ordered.filter(
       (clip) => clip.start <= start && !byId.has(clip.id),
@@ -62,9 +65,8 @@ export function tailShift(before: readonly Clip[], after: readonly Clip[]) {
       );
     });
     if (count < 2 && !removed.length && !added.length && !trimmed) continue;
-    boundary = Math.min(
-      boundary,
-      first.start,
+    const boundary = Math.min(
+      start,
       ...removed.map(({ start }) => start),
       ...added.map(({ start }) => start),
       trimmed
@@ -72,6 +74,14 @@ export function tailShift(before: readonly Clip[], after: readonly Clip[]) {
             Math.min(trimmed.duration, byId.get(trimmed.id)!.duration)
         : Infinity,
     );
+    shifts.set(track, { delta, boundary, from: start });
   }
+  return shifts;
+}
+
+export function tailShift(before: readonly Clip[], after: readonly Clip[]) {
+  let boundary = Infinity;
+  for (const shift of tailShifts(before, after).values())
+    boundary = Math.min(boundary, shift.boundary);
   return boundary;
 }

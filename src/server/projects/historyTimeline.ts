@@ -4,10 +4,17 @@ import type {
   Timeline,
   TimelineSettings,
 } from "../../shared/timeline/schema";
-import { groupClips, tailShift } from "../../shared/timeline/tailShift";
 import {
+  groupClips,
+  tailShift,
+  tailShifts,
+} from "../../shared/timeline/tailShift";
+import {
+  compositionMarkup,
   compositionScope,
-  parseComposition,
+  historyComposition,
+  projectTimeline,
+  patchComposition,
   reverseComposition,
 } from "../timeline/composition";
 
@@ -97,7 +104,47 @@ function timingProblems(timeline: Timeline) {
   return problems;
 }
 
+export function timelineReplayCache() {
+  const trees = new Map<string, ReturnType<typeof compositionMarkup>>();
+  const markup = (path: string, source: string) => {
+    const key = `${path}\0${source}`;
+    let tree = trees.get(key);
+    if (!tree) {
+      tree = compositionMarkup(source, compositionScope(path));
+      trees.set(key, tree);
+    }
+    return tree;
+  };
+  const structures = new Map<string, ReturnType<typeof historyComposition>>();
+  const projections = new Map<string, ReturnType<typeof projectTimeline>>();
+  const structure = (path: string, source: string) => {
+    const key = `${path}\0${source}`;
+    if (!structures.has(key))
+      structures.set(key, historyComposition(markup(path, source)));
+    return structures.get(key) ?? null;
+  };
+  const project = (
+    path: string,
+    source: string,
+    settings: TimelineSettings,
+  ) => {
+    const key = `${path}\0${JSON.stringify(settings)}\0${source}`;
+    let projection = projections.get(key);
+    if (!projection) {
+      projection = projectTimeline(markup(path, source), settings);
+      projections.set(key, projection);
+    }
+    return projection;
+  };
+  return {
+    structure,
+    project,
+    media: (path: string, source: string) => markup(path, source).sources(true),
+  };
+}
+
 export function reverseTimeline(
+  cache: ReturnType<typeof timelineReplayCache>,
   path: string,
   sources: { before: string; after: string; current: string },
   settings: {
@@ -107,32 +154,65 @@ export function reverseTimeline(
     restored: TimelineSettings;
   },
 ) {
-  const scope = compositionScope(path);
   try {
-    const before = parseComposition(sources.before, settings.before, { scope });
-    const after = parseComposition(sources.after, settings.after, { scope });
-    const current = parseComposition(sources.current, settings.current, {
-      scope,
-    });
-    if (timingConflict(before.timeline, after.timeline, current.timeline))
-      return null;
+    const project = (state: "before" | "after" | "current") =>
+      cache.project(path, sources[state], settings[state]);
+    let moved: Set<string> | undefined;
+    const slid = (id: string) => {
+      if (!moved) {
+        const after = project("after").timeline.clips;
+        const current = project("current").timeline.clips;
+        const later = new Map(current.map((clip) => [clip.id, clip]));
+        const shifts = tailShifts(after, current);
+        moved = new Set(
+          after
+            .filter((clip) => {
+              const shift = shifts.get(clip.track);
+              const next = later.get(clip.id);
+              return (
+                shift &&
+                next &&
+                clip.start >= shift.from &&
+                next.track === clip.track &&
+                next.start - clip.start === shift.delta
+              );
+            })
+            .map((clip) => clip.id),
+        );
+      }
+      return moved.has(id);
+    };
     if (
       sources.after === sources.current &&
       Bun.deepEquals(settings.after, settings.current)
     )
-      return sources.before;
-    const result =
+      return { source: sources.before, structural: true };
+    const before = cache.structure(path, sources.before);
+    const after = cache.structure(path, sources.after);
+    const current = cache.structure(path, sources.current);
+    if (!before || !after || !current) return null;
+    const merged =
       sources.after === sources.current
-        ? sources.before
-        : reverseComposition(before, after, current, settings.restored);
-    if (result === null) return null;
-    const restored = parseComposition(result, settings.restored, { scope });
-    const existing = timingProblems(current.timeline);
+        ? { source: sources.before, structural: true }
+        : reverseComposition(before, after, current, slid);
+    if (!merged || !merged.structural) return merged;
+    const standing = project("current").timeline;
+    if (
+      timingConflict(
+        project("before").timeline,
+        project("after").timeline,
+        standing,
+      )
+    )
+      return null;
+    const restored = cache.project(path, merged.source, settings.restored);
+    const existing = timingProblems(standing);
     for (const problem of timingProblems(restored.timeline))
       if (!existing.has(problem)) return null;
-    // The old source can reference media that someone moved outside Cutroom. The
-    // caller checks any references absent from the standing composition.
-    return result;
+    return {
+      source: patchComposition(restored, restored.timeline, new Map()),
+      structural: true,
+    };
   } catch (error) {
     if (error instanceof TimelineError) return null;
     throw error;
