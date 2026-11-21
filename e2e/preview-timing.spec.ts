@@ -603,6 +603,41 @@ test("an undo that starts an animation on another clip reloads and matches a fre
   await matchesFresh(page, project.id, [40, 60], "undo");
 });
 
+test("native ripple waits for a slow timing response and keeps the loaded preview", async ({
+  page,
+  request,
+}) => {
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  const { project, edit } = await fixture(request, page);
+  await seek(page, 40);
+  const original = await live(page);
+  const previous = await token(page);
+  const timing =
+    /\/api\/projects\/[^/]+\/isolated-preview\?[^#]*\bcutroom-timing=1\b/;
+  const delayed = Promise.withResolvers<void>();
+  await page.route(
+    timing,
+    async (route) => {
+      const response = await route.fetch();
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      delayed.resolve();
+      await route.fulfill({ response });
+    },
+    { times: 1 },
+  );
+  await edit([{ type: "remove", clipIds: ["v1"], ripple: true }]);
+  await delayed.promise;
+  await waitForPreview(page, { after: previous });
+  await expect(
+    page.locator("iframe[data-live]").contentFrame().locator("#v1, #a1"),
+  ).toHaveCount(0);
+  expect(await live(page)).toBe(original);
+  await matchesFresh(page, project.id, [40], "delayed native ripple");
+});
+
 test("ripple delete, lift, razor, turning clips off and every undo keep the document and match fresh pictures", async ({
   page,
   request,

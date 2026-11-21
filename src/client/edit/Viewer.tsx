@@ -25,7 +25,7 @@ import { NoteLayer } from "./NoteLayer";
 import { RegionLayer } from "./RegionLayer";
 import { PictureSelect } from "./PictureSelect";
 import { ViewerGuides } from "./ViewerGuides";
-import { ROOT_COMPOSITION, useTimeline } from "./timeline";
+import { afterEditBurst, ROOT_COMPOSITION, useTimeline } from "./timeline";
 import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
@@ -362,6 +362,7 @@ export function Viewer({
     const closing = new AbortController();
     refresh.current = previewRefresh(
       async (change, isLatest) => {
+        await afterEditBurst(projectId, shownComposition.current);
         await editSaved();
         if (
           timingEligible.current &&
@@ -411,7 +412,14 @@ export function Viewer({
           ) {
             const timing = new AbortController();
             const timingSignal = AbortSignal.any([signal, timing.signal]);
-            const timingTimer = window.setTimeout(() => timing.abort(), 2000);
+            // Native playback keeps the old picture until the timing update
+            // paints. A slow compile can still finish before a cold document
+            // would load and decode the same frame.
+            const timingTimeout = usePipeline.getState().enabled ? 2000 : 5000;
+            const timingTimer = window.setTimeout(
+              () => timing.abort(),
+              timingTimeout,
+            );
             const stop = useTransport.subscribe((state, previous) => {
               if (
                 state.state.kind !== "stopped" ||
