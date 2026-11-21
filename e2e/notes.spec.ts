@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
@@ -1091,7 +1091,7 @@ for (const delayed of ["save request", "save acknowledgement"] as const) {
   });
 }
 
-test("undo still repairs unreadable note metadata when its review snapshot fails", async ({
+test("undo leaves unreadable note metadata from an outside write in place", async ({
   page,
   request,
 }) => {
@@ -1100,17 +1100,17 @@ test("undo still repairs unreadable note metadata when its review snapshot fails
     data: { kind: "comment", body: "Keep this note", time: 0 },
   });
   expect(saved.ok()).toBe(true);
-  await request.get(`${project.base}/history`);
-  await writeFile(join(project.path, "cutroom.json"), "{broken");
+  // The note was saved outside this page, so Undo waits until the page shows it.
+  await expect(
+    page.getByRole("button", { name: "Undo", exact: true }),
+  ).toHaveAttribute("aria-description", "Add comment");
+  const path = join(project.path, "cutroom.json");
+  await writeFile(path, "{broken");
   expect((await request.get(`${project.base}/review`)).status()).toBe(422);
   await page.getByRole("button", { name: /^Select/ }).click();
   await page.keyboard.press("Control+z");
-  await expect
-    .poll(async () => (await request.get(`${project.base}/review`)).status())
-    .toBe(200);
-  expect((await project.notes()).map((note) => note.body)).toEqual([
-    "Keep this note",
-  ]);
+  await expect(page.locator(".toast")).toContainText("Can't undo Add comment");
+  expect(await readFile(path, "utf8")).toBe("{broken");
 });
 
 test("single-frame notes stay readable in playback and acceptance removes both pin and strokes", async ({

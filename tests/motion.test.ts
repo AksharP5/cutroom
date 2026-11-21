@@ -455,7 +455,11 @@ test("typed MCP uses the same operation, attribution and native permissions; inv
     expect(claudeToolPermissions(true).allowedTools).toContain(
       "mcp__cutroom_studio__motion_update",
     );
-    expect((await f.request(`${f.base}/history/undo`, "POST")).ok).toBe(true);
+    const undo = await client.callTool({
+      name: "history_undo",
+      arguments: { projectId: f.project.id },
+    });
+    expect(undo.isError, JSON.stringify(undo.content)).not.toBe(true);
     expect(await f.source()).toBe(html());
   } finally {
     await client.close();
@@ -595,9 +599,17 @@ window.__timelines.intro = tl;
     expect(await readFile(file, "utf8")).toBe(after);
     expect((await add()).status).toBe(409);
     expect((await add({ expectedVersion: result.version })).status).toBe(422);
-    expect((await f.request(`${f.base}/history/undo`, "POST")).ok).toBe(true);
+    const undo = await client.callTool({
+      name: "history_undo",
+      arguments: { projectId: f.project.id },
+    });
+    expect(undo.isError, JSON.stringify(undo.content)).not.toBe(true);
     expect(await readFile(file, "utf8")).toBe(source);
-    expect((await f.request(`${f.base}/history/redo`, "POST")).ok).toBe(true);
+    const redo = await client.callTool({
+      name: "history_redo",
+      arguments: { projectId: f.project.id },
+    });
+    expect(redo.isError, JSON.stringify(redo.content)).not.toBe(true);
     expect(await readFile(file, "utf8")).toBe(after);
     await setLocked(true, alias);
     const lockedUpdate = await f.update(result, { kind: "position", value: 2 });
@@ -879,9 +891,11 @@ test("locked motion ownership includes descendant targets and anonymous clips in
         expect(await readFile(path, "utf8")).toBe(
           beforeAllowed.replace("x:100", "x:200"),
         );
-        expect((await f.request(`${f.base}/history/undo`, "POST")).ok).toBe(
-          true,
-        );
+        const undo = await client.callTool({
+          name: "history_undo",
+          arguments: { projectId: f.project.id },
+        });
+        expect(undo.isError, JSON.stringify(undo.content)).not.toBe(true);
         expect(await readFile(path, "utf8")).toBe(beforeAllowed);
       } finally {
         await client.close();

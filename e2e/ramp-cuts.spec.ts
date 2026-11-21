@@ -156,7 +156,7 @@ for (const [name, commands] of [
   });
 }
 
-test("E3–E4: real editor undo and redo restore each MCP edit byte for byte", async ({
+test("E3–E4: MCP undo and redo restore each session edit byte for byte", async ({
   page,
   request,
   baseURL,
@@ -174,21 +174,28 @@ test("E3–E4: real editor undo and redo restore each MCP edit byte for byte", a
       await edit(client, project.id, [command]);
       snapshots.push(await source());
     }
+    const step = async (direction: "undo" | "redo") => {
+      const result = await client.callTool({
+        name: `history_${direction}`,
+        arguments: { projectId: project.id },
+      });
+      expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+    };
+    await page.goto(`/#project/${project.id}`);
+    await expect(page.locator('[data-clip="tail"]')).toBeVisible();
+    for (const bytes of snapshots.slice(0, -1).reverse()) {
+      await step("undo");
+      await expect.poll(source).toBe(bytes);
+    }
+    await expect(page.locator('[data-clip="tail"]')).toHaveCount(0);
+    for (const bytes of snapshots.slice(1)) {
+      await step("redo");
+      await expect.poll(source).toBe(bytes);
+    }
+    await expect(page.locator('[data-clip="tail"]')).toBeVisible();
   } finally {
     await client.close();
   }
-  await page.goto(`/#project/${project.id}`);
-  await expect(page.locator('[data-clip="tail"]')).toBeVisible();
-  for (const bytes of snapshots.slice(0, -1).reverse()) {
-    await page.getByRole("button", { name: "Undo", exact: true }).click();
-    await expect.poll(source).toBe(bytes);
-  }
-  await expect(page.locator('[data-clip="tail"]')).toHaveCount(0);
-  for (const bytes of snapshots.slice(1)) {
-    await page.getByRole("button", { name: "Redo", exact: true }).click();
-    await expect.poll(source).toBe(bytes);
-  }
-  await expect(page.locator('[data-clip="tail"]')).toBeVisible();
 });
 
 test("a saved ramp tail plays its shifted curve in Cutroom and opens in stock HyperFrames", async ({

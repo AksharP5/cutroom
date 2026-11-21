@@ -280,6 +280,10 @@ ${recipe[0]!.replace('data-start="6"', 'data-start="1"').replace('data-track-ind
       [1, 60],
       [61, 150],
     ]);
+    // The move was saved outside this page, so Undo waits until the page shows it.
+    await expect(
+      page.getByRole("button", { name: "Undo", exact: true }),
+    ).toHaveAttribute("aria-description", "Moved 1 frame right");
     await page.keyboard.press("Control+z");
     await expect
       .poll(async () => (await read()).timeline)

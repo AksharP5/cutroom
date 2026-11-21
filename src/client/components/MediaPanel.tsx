@@ -14,7 +14,13 @@ import {
   previewMediaPath,
 } from "../../shared/media";
 import type { TimelineView } from "../../shared/timeline/schema";
-import { api, frameTimecode, json, mediaUrl } from "../api";
+import {
+  api,
+  frameTimecode,
+  json,
+  mediaUrl,
+  reportCommittedEntry,
+} from "../api";
 import { useOfflineMedia } from "../edit/offlineMedia";
 import { placeAtPlayhead } from "../edit/placeMedia";
 import { closeSource, openSource, useSource } from "../edit/source";
@@ -661,29 +667,29 @@ export function MediaPanel({
           z.object({ error: z.string() }).safeParse(body).data?.error ??
             `The file could not be removed (${response.status}).`,
         );
+      reportCommittedEntry(`${cutroomUrl}/media/remove`, response.headers);
       if (useSource.getState().file?.path === path) closeSource();
       if (keyboard) focusNext.current = neighbour ?? null;
-      const { entries } = await api(
-        `${cutroomUrl}/history`,
-        z.object({
-          entries: z.array(z.object({ id: z.string(), undone: z.boolean() })),
-        }),
-      );
-      const removal = entries.findLast((entry) => !entry.undone)?.id;
+      // A remove history could not record still moved the file; it just has no Undo.
+      const { historyId } = z
+        .object({ historyId: z.string().optional() })
+        .parse(body);
       const dismiss = showToast(
         `Moved ${fileName(path)} to the project's ${MEDIA_TRASH} folder.`,
-        {
-          label: "Undo",
-          run: () => {
-            dismiss();
-            void stepHistory(projectId, "undo", removal).catch(
-              (error: unknown) =>
-                showToast(
-                  error instanceof Error ? error.message : String(error),
-                ),
-            );
-          },
-        },
+        historyId
+          ? {
+              label: "Undo",
+              run: () => {
+                dismiss();
+                void stepHistory(projectId, "undo", historyId).catch(
+                  (error: unknown) =>
+                    showToast(
+                      error instanceof Error ? error.message : String(error),
+                    ),
+                );
+              },
+            }
+          : null,
         { tone: "info", transient: true },
       );
     }).catch(failed);

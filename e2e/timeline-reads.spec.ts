@@ -80,10 +80,10 @@ test("file events make one read and outside edits still show", async ({
   } finally {
     await other.close();
   }
-  // Undo answers without a view, so it reads once itself and once for its file events.
+  // Undo returns the view and history. File events still trigger the shared refresh.
   expect(await readsFor(() => page.keyboard.press("Control+z"), 4)).toEqual({
-    timeline: 2,
-    history: 2,
+    timeline: 1,
+    history: 1,
   });
   const toolbar = page.getByRole("toolbar", { name: "Tools", exact: true });
   const undo = toolbar.getByRole("button", { name: "Undo", exact: true });

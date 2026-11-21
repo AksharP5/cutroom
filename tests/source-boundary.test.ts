@@ -332,15 +332,24 @@ test("undo and restore refuse to rewrite an instruction file", async () => {
     const editor = createHyperframesApi(fixture.store, fixture.review);
     fixture.app.route("/api/editor", editor);
     try {
-      for (const [path, body] of [
-        [`/api/cutroom/projects/${project.id}/history/undo`, {}],
+      for (const [path, body, status, message] of [
+        [
+          `/api/cutroom/projects/${project.id}/history/undo`,
+          {},
+          200,
+          '"entry":null',
+        ],
         [
           `/api/editor/projects/${project.id}/history/undo`,
           { entryId: history.list().at(-1)?.id, mode: "just-this" },
+          403,
+          "protected",
         ],
         [
           `/api/editor/projects/${project.id}/history/restore`,
           { point: "start" },
+          409,
+          "unavailable",
         ],
       ] as const) {
         const response = await fixture.app.request(path, {
@@ -348,10 +357,8 @@ test("undo and restore refuse to rewrite an instruction file", async () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         });
-        expect(response.status, path).toBe(
-          path.startsWith("/api/editor") ? 409 : 403,
-        );
-        expect(await response.text()).toContain("protected");
+        expect(response.status, path).toBe(status);
+        expect(await response.text()).toContain(message);
       }
     } finally {
       await editor.dispose();

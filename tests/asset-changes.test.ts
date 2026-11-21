@@ -123,11 +123,17 @@ test("asset replacement, deletion, acceptance and unchanged revisions use the ex
     expect((await f.read()).agentChanges).toEqual(["title"]);
     await f.review.acceptChanges(f.project);
     for (let i = 0; i < 3; i++) {
-      await f.review.editComposition(f.project, "index.html", "external", () =>
-        writeFile(
-          `${f.project.path}/index.html`,
-          document(image, `<script>const revision=${i}</script>`),
-        ),
+      await f.review.editComposition(
+        f.project,
+        "index.html",
+        "external",
+        async () => {
+          await writeFile(
+            `${f.project.path}/index.html`,
+            document(image, `<script>const revision=${i}</script>`),
+          );
+          return { value: undefined, entry: null };
+        },
       );
       expect((await f.read()).agentChanges).toEqual([]);
     }

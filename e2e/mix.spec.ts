@@ -806,6 +806,7 @@ test("clearing audio automation leaves the speed ramp on both linked clips, and 
   await page.locator('[data-clip="sound"]').click();
   const clear = page.getByRole("button", {
     name: "Clear audio automation",
+    description: "Remove this clip's volume and effect automation",
     exact: true,
   });
   await expect(clear).toBeVisible();

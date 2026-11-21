@@ -152,9 +152,9 @@ export function createTranscriptService(
   const importTranscript = async (
     project: Project,
     input: TranscriptImport,
-    signal?: AbortSignal,
-  ) =>
-    store.mutate(project, "Import transcript", async () => {
+    { signal, who }: { signal?: AbortSignal; who?: HistoryWho } = {},
+  ) => {
+    const save = async () => {
       signal?.throwIfAborted();
       const clip = await readClip(project, input);
       const document = await store.document(project);
@@ -271,14 +271,16 @@ export function createTranscriptService(
             ],
       );
       return transcriptView(transcript);
-    });
-  const cutWords = async (
+    };
+    return store.mutate(project, "Import transcript", save, who);
+  };
+  const cutWords = (
     project: Project,
     transcriptId: string,
     input: CutWords,
     who?: HistoryWho,
   ) =>
-    store.mutate(
+    store.mutateWithEntry(
       project,
       input.action === "cut" ? "Cut script words" : "Restore script words",
       async () => {
@@ -367,6 +369,7 @@ export function createTranscriptService(
   const start = async (
     project: Project,
     input: Omit<TranscriptImport, "words">,
+    who?: HistoryWho,
   ) => {
     if (disposed)
       throw new HttpError(503, "The transcription service is shutting down.");
@@ -473,7 +476,7 @@ export function createTranscriptService(
           const transcript = await importTranscript(
             project,
             { ...input, words },
-            controller.signal,
+            { signal: controller.signal, who },
           );
           job.transcriptId = transcript.id;
           job.message = `Transcribed ${words.length} words`;

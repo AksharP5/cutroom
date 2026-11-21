@@ -298,19 +298,26 @@ test.each(["clip", "composition"])(
         (await f.read()).clipEdits.find((edit) => edit.id === row.id)
           ?.resolution,
       ).toBe("source");
-      const history = f.review.history(
-        f.project,
-        await f.store.history(f.project),
-        { kind: "human" },
-      );
-      await history.step("back", { kind: "person", name: "You" });
+      const history = await f.store.history(f.project);
+      const original = history.list().at(-1)!;
+      const undo = (entryId: string) =>
+        f.request(`${f.base}/history/undo`, "POST", { entryId });
+      expect((await undo(original.id)).status).toBe(200);
       expect(
         (await f.read()).clipEdits.find((edit) => edit.id === row.id)
           ?.resolution,
       ).toBeUndefined();
       await f.review.acceptChanges(f.project);
-      await history.step("back", { kind: "person", name: "You" });
-      await history.step("forward", { kind: "person", name: "You" });
+      const undone = await undo(history.list().at(-3)!.id);
+      expect(undone.status, await undone.clone().text()).toBe(200);
+      const { entry } = await undone.json();
+      expect(
+        (
+          await f.request(`${f.base}/history/redo`, "POST", {
+            entryId: entry.id,
+          })
+        ).status,
+      ).toBe(200);
       expect(
         (await f.read()).clipEdits
           .filter((edit) => edit.by === "agent")

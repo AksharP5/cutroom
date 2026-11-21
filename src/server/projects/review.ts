@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { ProjectHistory } from "../history/projectHistory";
+import type { HistoryEntry, HistoryWho } from "../history/historyLog";
+import type { HistoryResult, ProjectHistory } from "../history/projectHistory";
 import {
   mkdir,
   readdir,
   readFile,
-  realpath,
   rename,
   rm,
   writeFile,
@@ -38,15 +38,15 @@ import type {
 import { pendingEdit } from "../../shared/timeline/reviewChanges";
 import type { AcceptRowSchema } from "../../shared/timeline/reviewChanges";
 import { HttpError } from "../../shared/errors";
-import { ProjectDocumentError, isMissing, projectPath } from "./store";
+import { ProjectDocumentError, isMissing } from "./store";
 import type { ProjectStore } from "./store";
 import { clipVersions, compositionVersions, missingSignature } from "./changes";
 import type { ClipVersions } from "./changes";
 import { projectStatePath, projectWritePath } from "./path";
-import { posix, relative, sep } from "node:path";
+import { posix } from "node:path";
 import { inMediaTrash, isMediaItem } from "../../shared/media";
 import { moveSourceMarks } from "./view";
-import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
+import { isExternalHistoryCredential } from "./historyActor";
 import {
   LedgerSchema,
   LegacyEditSchema,
@@ -144,8 +144,9 @@ export function addAnnotation(
   store: ProjectStore,
   project: Project,
   input: z.output<typeof AnnotationInputSchema>,
-): Promise<Annotation> {
-  return store.mutate(
+  who?: HistoryWho,
+) {
+  return store.mutateWithEntry(
     project,
     input.kind === "drawing" ? "Add drawing" : "Add comment",
     async () => {
@@ -163,6 +164,7 @@ export function addAnnotation(
       await store.writeDocument(project, document);
       return annotation;
     },
+    who,
   );
 }
 
@@ -476,6 +478,7 @@ export function createReviewService(store: ProjectStore) {
     id: string,
     label: string,
     change: (annotations: Annotation[], index: number) => Annotation[],
+    who?: HistoryWho,
   ) =>
     serialize(project, async () => {
       const [item] = (await reconcile(project)).filter(
@@ -486,16 +489,23 @@ export function createReviewService(store: ProjectStore) {
           409,
           "This note has been sent. Withdraw it instead, so the reason is recorded.",
         );
-      return store.mutate(project, label, async () => {
-        const document = await store.document(project);
-        const index = document.annotations.findIndex(
-          (annotation) => annotation.id === id,
-        );
-        if (index < 0) throw new HttpError(404, "Annotation not found.");
-        document.annotations = change(document.annotations, index);
-        await store.writeDocument(project, document);
-        return document.annotations.find((annotation) => annotation.id === id);
-      });
+      return store.mutate(
+        project,
+        label,
+        async () => {
+          const document = await store.document(project);
+          const index = document.annotations.findIndex(
+            (annotation) => annotation.id === id,
+          );
+          if (index < 0) throw new HttpError(404, "Annotation not found.");
+          document.annotations = change(document.annotations, index);
+          await store.writeDocument(project, document);
+          return document.annotations.find(
+            (annotation) => annotation.id === id,
+          );
+        },
+        who,
+      );
     });
 
   /**
@@ -503,7 +513,12 @@ export function createReviewService(store: ProjectStore) {
    * belongs to, while that run is active; anything else is refused rather than guessed.
    */
   const authorize = (token: string | undefined, projectId?: string) => {
-    if (token === undefined || token === "external") return;
+    if (
+      token === undefined ||
+      token === "external" ||
+      isExternalHistoryCredential(token)
+    )
+      return;
     const turn =
       projectId === undefined
         ? [...turns.values()].find(
@@ -547,11 +562,11 @@ export function createReviewService(store: ProjectStore) {
     changes: ChangedComposition[],
     actor: ReviewActor | undefined,
     noteIds: string[],
+    entry: HistoryEntry | null,
     label?: string,
     batchLabels?: string[],
     origin?: string,
   ) => {
-    const entry = (await store.history(project)).list().at(-1);
     const ledger = writableLedger(state.ledger);
     appendEdit(
       ledger,
@@ -622,6 +637,7 @@ export function createReviewService(store: ProjectStore) {
     after: AssetSnapshot,
     actor: Extract<ReviewActor, { kind: "agent" }> | undefined,
     sources = false,
+    commit?: { id: string | undefined },
   ) => {
     if (!actor && !sources) return;
     const changes = [...after].flatMap(([path, next]) => {
@@ -650,7 +666,13 @@ export function createReviewService(store: ProjectStore) {
     if (!changes.length) return;
     const { items, state } = await reconcileState(project);
     const { history, entries } = await readLedger(project, state.ledger);
-    await history.checkpoint();
+    const entry = commit
+      ? history.list().find(({ id }) => id === commit.id)
+      : await store.serializeMutation(project, async () => {
+          // A checkpoint closes open windows. Wait for admitted app writes to finish first.
+          await history.checkpoint();
+          return history.list().at(-1);
+        });
     const noteIds = actor
       ? items
           .filter(
@@ -674,6 +696,7 @@ export function createReviewService(store: ProjectStore) {
       })),
       actor,
       noteIds,
+      entry ?? null,
     );
   };
   const observeAssets = (project: Project) => {
@@ -799,7 +822,10 @@ export function createReviewService(store: ProjectStore) {
       project: Project,
       token: string | undefined,
       work: () => Promise<T>,
-      options: { sources?: boolean } = {},
+      options: {
+        sources?: boolean;
+        historyId?: (result: T) => string | undefined;
+      } = {},
     ) =>
       serialize(project, async () => {
         authorize(token, project.id);
@@ -821,6 +847,7 @@ export function createReviewService(store: ProjectStore) {
           after,
           token === undefined ? undefined : agent(project, token),
           options.sources,
+          options.historyId && { id: options.historyId(result) },
         );
         assetSnapshots.set(project.id, after);
         return result;
@@ -830,7 +857,7 @@ export function createReviewService(store: ProjectStore) {
       project: Project,
       composition: string,
       token: string | undefined,
-      work: () => Promise<T>,
+      work: () => Promise<{ value: T; entry: HistoryEntry | null }>,
       noteId?: string,
       options: {
         create?: boolean;
@@ -858,7 +885,7 @@ export function createReviewService(store: ProjectStore) {
             error instanceof ReviewFileError ||
             error instanceof ProjectDocumentError
           )
-            return work();
+            return (await work()).value;
           throw error;
         }
         const actor = token === undefined ? undefined : agent(project, token);
@@ -890,27 +917,28 @@ export function createReviewService(store: ProjectStore) {
               before,
             )
           : new Map<string | null, string>();
-        const result = await work();
+        const { value, entry } = await work();
         const after = await clipVersions(project, composition);
         const changed = new Set(
           [...before.keys(), ...after.keys()].filter(
             (id) => before.get(id) !== after.get(id),
           ),
         );
-        if (!changed.size) return result;
+        if (!changed.size) return value;
         await recordEdits(
           project,
           state,
           [{ composition, before, after, changed, baselines }],
           actor,
           noteIds,
+          entry,
           typeof options.label === "function"
-            ? options.label(result)
+            ? options.label(value)
             : options.label,
-          options.batchLabels?.(result),
+          options.batchLabels?.(value),
           options.origin,
         );
-        return result;
+        return value;
       }),
     clipChanges: (project: Project, composition: string) =>
       serialize(project, async () => {
@@ -1132,14 +1160,16 @@ export function createReviewService(store: ProjectStore) {
       project: Project,
       input: z.output<typeof ReviewAddSchema>,
       token: string | undefined,
+      who?: HistoryWho,
     ) =>
       serialize(project, async () => {
         // Checked in the queue, so the run cannot end between the check and the add.
         agent(project, token);
-        const annotation = await addAnnotation(
+        const { value: annotation } = await addAnnotation(
           store,
           project,
           AnnotationInputSchema.parse({ ...input, kind: "comment" }),
+          who,
         );
         const items = await reconcile(project, outside, (items) =>
           items.map((item) =>
@@ -1157,71 +1187,53 @@ export function createReviewService(store: ProjectStore) {
       project: Project,
       id: string,
       patch: z.output<typeof AnnotationPatchSchema>,
+      who?: HistoryWho,
     ) =>
-      changeDraft(project, id, "Update comment", (annotations, index) =>
-        annotations.map((annotation, at) =>
-          at === index
-            ? { ...annotation, ...patch, updatedAt: new Date().toISOString() }
-            : annotation,
-        ),
+      changeDraft(
+        project,
+        id,
+        "Update comment",
+        (annotations, index) =>
+          annotations.map((annotation, at) =>
+            at === index
+              ? { ...annotation, ...patch, updatedAt: new Date().toISOString() }
+              : annotation,
+          ),
+        who,
       ),
-    remove: (project: Project, id: string) =>
-      changeDraft(project, id, "Remove comment", (annotations, index) =>
-        annotations.filter((_annotation, at) => at !== index),
+    remove: (project: Project, id: string, who?: HistoryWho) =>
+      changeDraft(
+        project,
+        id,
+        "Remove comment",
+        (annotations, index) =>
+          annotations.filter((_annotation, at) => at !== index),
+        who,
       ),
-    /**
-     * The project's history as seen by `actor`. Undo, redo, and restore run in the review queue,
-     * reconciled before (so earlier outside edits keep their own cause) and after, so any sent note
-     * they remove or change becomes withdrawn, credited to `actor`.
-     */
-    history(project: Project, history: ProjectHistory, actor: ReviewActor) {
-      // History is how an unreadable cutroom.json gets repaired, so that alone never blocks it.
-      // The saved review state is kept and reconciled once the document can be read again.
+    /** Reconcile sent notes under the same locks used by normal project edits. */
+    replayHistory(
+      project: Project,
+      actor: ReviewActor,
+      direction: "undo" | "redo",
+      replay: (history: ProjectHistory) => Promise<HistoryResult>,
+    ) {
       const unlessUnreadable = (error: unknown) => {
         if (!(error instanceof ProjectDocumentError)) throw error;
       };
-      const guarded = <T>(
-        how: string,
-        paths: () => string[],
-        change: () => Promise<T>,
-      ) =>
-        serialize(project, async () => {
-          await reconcile(project).catch(unlessUnreadable);
-          await history.checkpoint();
-          for (const path of paths()) {
-            // History also owns these fixed app sidecars, never native agent configuration.
-            if (
-              [
-                ...STUDIO_SIGNATURE_MANIFEST_PATHS,
-                ".media/manifest.jsonl",
-              ].includes(path)
-            ) {
-              const absolute = await projectPath(project, path, true);
-              if (
-                relative(await realpath(project.path), absolute)
-                  .split(sep)
-                  .join("/") === path
-              )
-                continue;
-            }
-            await projectWritePath(project, path, {
-              sourceOnly: false,
-              allowMissing: true,
-            });
-          }
-          const previous = history.list().at(-1)?.id;
-          const result = await change();
-          const entry = history.list().at(-1);
-          if (entry && entry.id !== previous) {
-            // History records file moves as a deletion and an addition with the same content hash.
-            for (const file of entry.files) {
+      return serialize(project, () =>
+        store.serializeMutation(project, async () => {
+          const before = await reconcile(project).catch(unlessUnreadable);
+          const result = await replay(await store.history(project));
+          if (result.ok && result.entry && !result.repeated) {
+            const { files } = result.entry;
+            for (const file of files) {
               if (
                 !isMediaItem(file.path) ||
                 file.before === null ||
                 file.after !== null
               )
                 continue;
-              const moved = entry.files.find(
+              const moved = files.find(
                 (next) =>
                   next.before === null &&
                   next.after === file.before &&
@@ -1230,58 +1242,22 @@ export function createReviewService(store: ProjectStore) {
               if (moved) await moveSourceMarks(project, file.path, moved.path);
             }
           }
-          await reconcile(project, { actor, how }).catch(unlessUnreadable);
-          return result;
-        });
-      const overrides: Partial<ProjectHistory> = {
-        step: (direction, who, options) =>
-          guarded(
-            direction === "back" ? "by undo" : "by redo",
-            () =>
-              history.next(direction, who)?.files.map((file) => file.path) ??
-              [],
-            () => history.step(direction, who, options),
-          ),
-        undo: (id, options) =>
-          guarded(
-            "by undo",
-            () => {
-              const entries = history.list();
-              const index = entries.findIndex((entry) => entry.id === id);
-              if (index < 0) return [];
-              const selected =
-                options.mode === "back-to-before"
-                  ? entries.slice(index)
-                  : [entries[index]!];
-              return selected.flatMap((entry) =>
-                entry.files.map((file) => file.path),
-              );
-            },
-            () => history.undo(id, options),
-          ),
-        restore: (point, who, options) =>
-          guarded(
-            "by restoring an earlier version",
-            () => {
-              const target = history.peek(point);
-              if (!target) return [];
-              const current =
-                history.peek(history.list().at(-1)?.id ?? "start") ?? {};
-              return [
-                ...new Set([...Object.keys(target), ...Object.keys(current)]),
-              ].filter((path) => target[path] !== current[path]);
-            },
-            () => history.restore(point, who, options),
-          ),
-      };
-      return new Proxy(history, {
-        get(target, key) {
-          if (key === "step" || key === "undo" || key === "restore")
-            return overrides[key];
-          const value: unknown = Reflect.get(target, key, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+          const after = await reconcile(project, {
+            actor,
+            how: `by ${direction}`,
+          }).catch(unlessUnreadable);
+          const remaining = new Set(after?.map(({ id }) => id));
+          const removedNotes =
+            direction === "undo" && before && after
+              ? before.filter(({ id }) => !remaining.has(id))
+              : [];
+          return {
+            ...result,
+            removedNotes,
+            notesBefore: removedNotes.length ? before : undefined,
+          };
+        }),
+      );
     },
     /**
      * Posting a message queues the owner's new notes and returns the digest the agent reconciles first.

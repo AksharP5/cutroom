@@ -1732,14 +1732,7 @@ test("unarmed Record via the shortcut starts a take and creates its audio track 
         }),
       ).structuredContent.result;
     expect(result.timeline).toEqual((await read()).timeline);
-    expect(
-      (
-        await client.callTool({
-          name: "history_undo",
-          arguments: { projectId: project.id },
-        })
-      ).isError,
-    ).not.toBe(true);
+    await page.keyboard.press("Control+z");
     await expect.poll(async () => (await read()).timeline).toEqual(before);
   } finally {
     await client.close();

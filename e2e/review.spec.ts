@@ -48,12 +48,12 @@ test("an invalid clip envelope keeps the picture, Review, and Undo usable", asyn
     "Audio source recovery",
     "Updated picture",
   );
+  await save(corrected, true);
   await save(
     corrected.replace(
       "</main>",
       `<audio id="voice" src="voice.wav" data-start="0" data-duration="1" data-hidden data-automation='{"version":1,"lanes":[{"target":"rate","points":null}]}'></audio></main>`,
     ),
-    true,
   );
   await expect(headline).toHaveText("Updated picture");
   await expect(
@@ -100,10 +100,16 @@ test("an invalid clip envelope keeps the picture, Review, and Undo usable", asyn
     page.getByText(/Clip voice has invalid audio automation/).first(),
   ).toBeVisible();
   await undo.click();
-  await expect(headline).toHaveText("Audio source recovery");
-  await expect(changes).toHaveCount(0);
+  await expect(headline).toHaveText("Updated picture");
+  await expect(
+    page.getByText(/Clip voice has invalid audio automation/),
+  ).toHaveCount(0);
+  await expect(changes).toContainText("Edited index.html composition");
   await page.getByRole("button", { name: "Redo", exact: true }).click();
   await expect(headline).toHaveText("Updated picture");
+  await expect(
+    page.getByText(/Clip voice has invalid audio automation/).first(),
+  ).toBeVisible();
   await expect(accept).toBeVisible();
   await accept.click();
   await expect(changes).toHaveCount(0);

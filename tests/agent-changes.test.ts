@@ -340,14 +340,18 @@ test("shared script edits make one composition row that accepts, undoes, and red
     expect(
       (await read()).clipEdits.filter((edit) => edit.by === "agent"),
     ).toEqual(rows);
-    const history = review.history(project, await store.history(project), {
-      kind: "human",
+    const undo = await request(`${path}/history/undo`, "POST", {
+      entryId: row.historyId,
     });
-    await history.step("back", { kind: "person", name: "You" });
+    expect(undo.status, await undo.clone().text()).toBe(200);
     expect((await read()).clipEdits.some((edit) => edit.id === row.id)).toBe(
       false,
     );
-    await history.step("forward", { kind: "person", name: "You" });
+    const { entry } = await undo.json();
+    expect(
+      (await request(`${path}/history/redo`, "POST", { entryId: entry.id }))
+        .status,
+    ).toBe(200);
     expect((await read()).clipEdits.find((edit) => edit.id === row.id)).toEqual(
       row,
     );

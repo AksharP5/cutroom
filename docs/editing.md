@@ -118,6 +118,8 @@ The ruler is the scrub surface: press or drag it to move the playhead. While a d
 
 A clip with versions, such as several takes an agent made of one title, shows their count with a caret in its name strip. Click it for the list. Hovering a version plays the clip in a loop showing it; moving to another switches the picture at once, and leaving the list stops and returns the playhead. Click a version to make it the clip's own, as one undo step, and Keep to drop the others. Alt+V and Alt+Shift+V show the next and previous version of the selected clip under the playhead, or else the topmost one there. While the list is open, or a clip with versions is selected, the viewer's document carries every version of that clip, hidden and loaded, so switching needs no load; the version the clip shows is the one export draws.
 
+Undo and Redo follow your own edits across the project, including other compositions. An MCP client's work stays applied when you undo a separate edit. Imports and files changed outside Cutroom stay on disk. Rename and Remove in Media remain undoable with the ordinary shortcuts. Undo preserves later changes to unrelated clips and fields. If a later edit depends on yours, Cutroom names it. **Undo both** reverses your edit and the dependent edits named in the toast. Each change can be redone separately. When the edits cannot safely be reversed together, **Skip** leaves your edit applied and moves Undo to your next older edit. Cutroom remembers that choice after you reopen the project. Use Undo on a named agent edit in Changes to reverse it yourself.
+
 M adds a named marker at the playhead. Double-click a marker, or focus it and press Enter, to change its name and choose grey, green, violet, rose, or sand. Save commits one undo step; Escape cancels. The same popover can delete the marker. Agents can name and colour markers through MCP `timeline_edit` with `setMarker`, and delete them with `removeMarker`.
 
 A clip's name stays at the left edge of the view while any of the clip is on screen. Names show on clips at least 28px wide and durations at 200px. While a trim, ripple trim or roll is held, each resized clip's duration reads the length it would have and stays at its held edge. It hides whole once the held clip is under 200px, so a duration is never cut through.
@@ -136,7 +138,7 @@ The inspector holds the rest: the effect of an adjustment layer, a zoom's magnif
 
 ### Media files
 
-Drop video, audio, or image files into Media or use **Import media**. The desktop app hard-links files on the same filesystem when possible. On import, both names share the same bytes. Undo can keep that link in history's aside folder so the footage remains available for redo, even if you remove the original name. Redo restores a separate project file, which can use the full size of the recording on disk. Files from other drives are copied with a progress readout and **Cancel import**. Each completed batch is one undo step. Browser uploads are limited to 500 MB at a time.
+Drop video, audio, or image files into Media or use **Import media**. The desktop app hard-links files on the same filesystem when possible. On import, both names share the same bytes. Files from other drives are copied with a progress readout and **Cancel import**. Cutroom records the completed batch in project history. Undoing a clip placement leaves the imported files in Media. Browser uploads are limited to 500 MB at a time.
 
 Use **Search media** to filter the project's files by name or folder path. Down Arrow goes to the first result. Escape clears the search.
 
@@ -359,7 +361,7 @@ A batch writes only the attributes it changes, removed elements, and new clips; 
 
 Editor writes, script changes, annotations, and MCP commands share a history. A save based on an older source version returns a conflict instead of overwriting a newer edit. External agents can also edit files directly; the watcher refreshes the preview and the history observes those changes. Accepted outside changes update a clean source buffer even while it has focus. Pending typing keeps the normal save and conflict handling.
 
-Undo can conflict with a newer outside edit. Resolve that conflict before applying another change. Original video and audio files remain intact.
+Outside edits stay in history. If an outside edit conflicts with your Undo, Cutroom keeps both changes in place.
 
 ### Authored motion
 

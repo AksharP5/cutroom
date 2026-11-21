@@ -1091,8 +1091,12 @@ describe("review round 3 regressions", () => {
 
   test("undo of a legacy sent note before any review change withdraws it", async () => {
     const queue = await setup();
-    // History is open before the legacy note arrives, so its arrival is an undoable change.
-    await queue.request(`/projects/${queue.project.id}/history`);
+    // Simulate an owner save by a build that kept sent status in cutroom.json.
+    const ledger = await queue.store.history(queue.project);
+    const window = await ledger.beginWindow(
+      { kind: "person", name: "You" },
+      "Add comment",
+    );
     await writeFile(
       join(queue.project.path, "cutroom.json"),
       JSON.stringify({
@@ -1113,7 +1117,13 @@ describe("review round 3 regressions", () => {
         transcripts: [],
       }),
     );
-    await queue.request(`/projects/${queue.project.id}/history/undo`, "POST");
+    const entry = await window.close();
+    const undone = await queue.fetchRaw(
+      `/projects/${queue.project.id}/history/undo`,
+      "POST",
+      { entryId: entry!.id },
+    );
+    expect(undone.status).toBe(200);
     const [item] = await queue.items();
     expect(item?.body).toBe("Sent earlier");
     expect(item?.review).toMatchObject({
@@ -1315,14 +1325,21 @@ describe("review round 4 regressions", () => {
     expect(Object.keys(await queue.status())).toEqual(["Yours"]);
   });
 
-  test("undo can repair an unreadable cutroom.json", async () => {
+  test("undo can repair an unreadable cutroom.json written by a recorded owner edit", async () => {
     const queue = await setup();
     await queue.note("Warm up the grade");
     await send(queue.agents, queue.project, "Go");
     const history = `/projects/${queue.project.id}/history`;
-    await queue.request(history);
+    const ledger = await queue.store.history(queue.project);
+    const window = await ledger.beginWindow(
+      { kind: "person", name: "You" },
+      "Edit project settings",
+    );
     await writeFile(join(queue.project.path, "cutroom.json"), "{oops");
-    const undo = await queue.fetchRaw(`${history}/undo`, "POST");
+    const entry = await window.close();
+    const undo = await queue.fetchRaw(`${history}/undo`, "POST", {
+      entryId: entry!.id,
+    });
     expect(undo.status).toBe(200);
     const [item] = await queue.items();
     expect(item?.body).toBe("Warm up the grade");
@@ -1340,18 +1357,10 @@ test("history changes nothing while review.json is unreadable, even if cutroom.j
   const state = join(queue.project.path, ".cutroom", "review.json");
   await writeFile(document, "{broken document");
   await writeFile(state, "{broken review");
-  const ledger = await queue.store.history(queue.project);
-  const guarded = queue.review.history(queue.project, ledger, {
-    kind: "human",
-  });
-  const [first] = ledger.list();
   // The two files used to be read in a race; repeat so a lucky ordering cannot pass.
   for (let attempt = 0; attempt < 30; attempt += 1) {
     expect((await queue.fetchRaw(`${history}/undo`, "POST")).status).toBe(422);
     expect((await queue.fetchRaw(`${history}/redo`, "POST")).status).toBe(422);
-    await expect(
-      guarded.restore(first!.id, { kind: "person", name: "You" }),
-    ).rejects.toThrow("review.json");
     expect(await Bun.file(document).text()).toBe("{broken document");
     expect(await Bun.file(state).text()).toBe("{broken review");
   }

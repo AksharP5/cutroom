@@ -43,7 +43,7 @@ beforeAll(async () => {
       time: 2,
       strokes: [],
     })
-  ).id;
+  ).value.id;
   names = projectNames(fixture.store, fixture.review, project);
 });
 afterAll(() => fixture.close());
