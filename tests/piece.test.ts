@@ -624,7 +624,7 @@ test(
       [ntsc, 1],
       [thirty, 1.03125],
       [film, 0.1],
-      [fps(240), 2],
+      [fps(48), 2],
       [fps(120), 3.3333333],
       [fps(128), ramp],
       [fps(240), ramp],
@@ -828,226 +828,228 @@ function oracleWindows(
   return rows;
 }
 
-test("generated scene trees match an independent integer clock for placement, audio and pictures", () => {
-  const next = generator(332);
-  const maxDepth = new Set<number>();
-  const speedsList = [...speeds.keys()];
+test(
+  "generated scene trees match an independent integer clock for placement, audio and pictures",
+  () => {
+    const next = generator(332);
+    const maxDepth = new Set<number>();
+    const speedsList = [...speeds.keys()];
 
-  function document(depth: number): Composition {
-    const rate = sceneRates[next(sceneRates.length)];
-    const grid = (frame: number) =>
-      Math.round((frame * rate.den * 1e6) / rate.num);
-    const time = (frame: number) => {
-      const roll = next(100);
-      if (roll < 55) return grid(frame);
-      if (roll < 80) return grid(frame) + next(101) - 50;
-      return next(2600000);
-    };
-    return {
-      fps: rate,
-      elements: Array.from({ length: 2 + next(4) }, (_, i) => {
-        const length = grid(6 + next(75));
-        const spelling = next(100);
-        const timing = {
-          id: String(i),
-          start:
-            i > 0 && next(5) === 0
-              ? { ref: String(next(i)), offsetUs: BigInt(time(1) - grid(1)) }
-              : { us: BigInt(time(next(26))) },
-          ...(spelling < 70
-            ? { durationUs: BigInt(length) }
-            : spelling < 85
-              ? { endUs: BigInt(time(98)) }
-              : spelling < 95
-                ? { durationUs: BigInt(length), endUs: 10000000n }
-                : { naturalSeconds: length / 1e6 }),
-        };
-        if (depth < 3 && next(4) === 0)
-          return {
-            ...timing,
-            kind: "host",
-            mediaStartUs: BigInt(next(3) ? 0 : grid(1 + next(12))),
-            child: document(depth + 1),
+    function document(depth: number): Composition {
+      const rate = sceneRates[next(sceneRates.length)];
+      const grid = (frame: number) =>
+        Math.round((frame * rate.den * 1e6) / rate.num);
+      const time = (frame: number) => {
+        const roll = next(100);
+        if (roll < 55) return grid(frame);
+        if (roll < 80) return grid(frame) + next(101) - 50;
+        return next(2600000);
+      };
+      return {
+        fps: rate,
+        elements: Array.from({ length: 2 + next(4) }, (_, i) => {
+          const length = grid(6 + next(75));
+          const spelling = next(100);
+          const timing = {
+            id: String(i),
+            start:
+              i > 0 && next(5) === 0
+                ? { ref: String(next(i)), offsetUs: BigInt(time(1) - grid(1)) }
+                : { us: BigInt(time(next(26))) },
+            ...(spelling < 70
+              ? { durationUs: BigInt(length) }
+              : spelling < 85
+                ? { endUs: BigInt(time(98)) }
+                : spelling < 95
+                  ? { durationUs: BigInt(length), endUs: 10000000n }
+                  : { naturalSeconds: length / 1e6 }),
           };
-        if (next(4) === 0)
-          return { ...timing, kind: next(2) ? "image" : "text" };
-        return {
-          ...media,
-          ...timing,
-          global: next(10) === 0,
-          curve: speedsList[next(speedsList.length)],
-          stored: { mediaStart: next(6000000) },
-        };
-      }),
-    };
-  }
-
-  let ties = 0;
-  let count = 0;
-  let roundedDiffers = 0;
-  let flooredDiffers = 0;
-  const indexOrigin = 63999n;
-  const sourceGrid = {
-    origin: { n: 21333n, d: 1_000_000n },
-    rate: ntsc,
-    count: 240n,
-  };
-  for (let i = 0; i < (full ? 400_000 : 4_000); i++) {
-    // A separate tie and a mixed-rate scene occur even if the random fixture changes.
-    const root =
-      i === 0
-        ? {
-            fps: twentyFive,
-            elements: [
-              {
-                id: "scene",
-                kind: "host" as const,
-                start: { us: 20040n },
-                child: {
-                  fps: fps(50),
-                  elements: [{ ...media, start: { us: 20000n } }],
-                },
-              },
-              {
-                id: "off-grid",
-                kind: "host" as const,
-                start: { us: 10427n },
-                child: {
-                  fps: fps(24),
-                  elements: [{ ...media, start: { us: 41667n } }],
-                },
-              },
-            ],
-          }
-        : document(0);
-    const expected = oracleWindows(root);
-    const actual = place(root);
-    deepStrictEqual(
-      actual.map(({ path }) => path),
-      expected.map(({ path }) => path),
-    );
-    const frameTicks = ticksPerFrame(root.fps);
-    function checkEdge(exact: ExactTime, tick: bigint) {
-      strictEqual(exact.n * CLOCK, tick * exact.d);
-      const sample = nearest(tick * 48_000n, CLOCK);
-      strictEqual(sampleOf(exact), sample);
-      const grid = nearest(tick, frameTicks) * frameTicks;
-      const distance = tickAbs(tick - grid) * 1000n;
-      if (distance === frameTicks) ties++;
-      const snaps = distance <= frameTicks;
-      const output =
-        (snaps
-          ? grid
-          : lower(tick + frameTicks - 1n, frameTicks) * frameTicks) /
-        frameTicks;
-      strictEqual(firstFrame(exact, root.fps), output);
-      if (tick >= 0n) {
-        const rate = root.fps.num / root.fps.den;
-        const time = Number(snaps ? grid : tick) / Number(CLOCK);
-        const handed = exportClipWindow(time, time, rate).start * rate;
-        const close = Math.round(handed);
-        const hf = Math.abs(handed - close) < 1e-9 ? close : Math.ceil(handed);
-        strictEqual(BigInt(hf), output);
-      }
-      if (nearest(nearest(tick, 3n) * 48_000n, 1_000_000n) !== sample)
-        roundedDiffers++;
-      if (nearest(lower(tick, 3n) * 48_000n, 1_000_000n) !== sample)
-        flooredDiffers++;
-      return { sample, output };
+          if (depth < 3 && next(4) === 0)
+            return {
+              ...timing,
+              kind: "host",
+              mediaStartUs: BigInt(next(3) ? 0 : grid(1 + next(12))),
+              child: document(depth + 1),
+            };
+          if (next(4) === 0)
+            return { ...timing, kind: next(2) ? "image" : "text" };
+          return {
+            ...media,
+            ...timing,
+            global: next(10) === 0,
+            curve: speedsList[next(speedsList.length)],
+            stored: { mediaStart: next(6000000) },
+          };
+        }),
+      };
     }
-    for (const [j, row] of expected.entries()) {
-      const placed = actual[j];
-      maxDepth.add(row.path.split("/").length - 2);
-      strictEqual(placed.origin.n * CLOCK, row.origin * placed.origin.d);
-      checkEdge(placed.local.start, row.start);
-      checkEdge(placed.local.end, row.end);
-      checkEdge(placed.edge.start, row.inPoint);
-      checkEdge(placed.edge.end, row.actualEnd);
-      const head = checkEdge(placed.played.start, row.shownStart);
-      const end = checkEdge(placed.played.end, row.actualEnd);
-      if (placed.kind !== "media" || row.element.kind !== "media") continue;
-      count++;
-      const speed =
-        typeof row.element.curve === "number"
-          ? speeds.get(row.element.curve)
-          : undefined;
-      if (!speed) throw new Error("Expected a known decimal speed.");
-      const piece = resolvePiece(placed, root.fps);
-      deepStrictEqual(piece.samples, { start: head.sample, end: end.sample });
-      deepStrictEqual(piece.frames, { start: head.output, end: end.output });
-      const nativeFrame = ticksPerFrame(row.fps);
-      const shift = BigInt(row.element.stored.mediaStart);
-      const divisor = 3n * SPEED_SCALE;
-      const width = lower(speed * nativeFrame, divisor) - 1n;
-      const lo = -(width / 2n);
-      const hi = lo + width - 1n;
-      const guess = nearest(
-        speed * row.start - shift * divisor,
-        speed * nativeFrame,
+
+    let ties = 0;
+    let count = 0;
+    let roundedDiffers = 0;
+    let flooredDiffers = 0;
+    const indexOrigin = 63999n;
+    const sourceGrid = {
+      origin: { n: 21333n, d: 1_000_000n },
+      rate: ntsc,
+      count: 240n,
+    };
+    for (let i = 0; i < (full ? 400_000 : 4_000); i++) {
+      // A separate tie and a mixed-rate scene occur even if the random fixture changes.
+      const root =
+        i === 0
+          ? {
+              fps: twentyFive,
+              elements: [
+                {
+                  id: "scene",
+                  kind: "host" as const,
+                  start: { us: 20040n },
+                  child: {
+                    fps: fps(50),
+                    elements: [{ ...media, start: { us: 20000n } }],
+                  },
+                },
+                {
+                  id: "off-grid",
+                  kind: "host" as const,
+                  start: { us: 10427n },
+                  child: {
+                    fps: fps(24),
+                    elements: [{ ...media, start: { us: 41667n } }],
+                  },
+                },
+              ],
+            }
+          : document(0);
+      const expected = oracleWindows(root);
+      const actual = place(root);
+      deepStrictEqual(
+        actual.map(({ path }) => path),
+        expected.map(({ path }) => path),
       );
-      const candidates = [guess, guess - 1n, guess + 1n].map(
-        (c) => {
+      const frameTicks = ticksPerFrame(root.fps);
+      function checkEdge(exact: ExactTime, tick: bigint) {
+        strictEqual(exact.n * CLOCK, tick * exact.d);
+        const sample = nearest(tick * 48_000n, CLOCK);
+        strictEqual(sampleOf(exact), sample);
+        const grid = nearest(tick, frameTicks) * frameTicks;
+        const distance = tickAbs(tick - grid) * 1000n;
+        if (distance === frameTicks) ties++;
+        const snaps = distance <= frameTicks;
+        const output =
+          (snaps
+            ? grid
+            : lower(tick + frameTicks - 1n, frameTicks) * frameTicks) /
+          frameTicks;
+        strictEqual(firstFrame(exact, root.fps), output);
+        if (tick >= 0n) {
+          const rate = root.fps.num / root.fps.den;
+          const time = Number(snaps ? grid : tick) / Number(CLOCK);
+          const handed = exportClipWindow(time, time, rate).start * rate;
+          const close = Math.round(handed);
+          const hf =
+            Math.abs(handed - close) < 1e-9 ? close : Math.ceil(handed);
+          strictEqual(BigInt(hf), output);
+        }
+        if (nearest(nearest(tick, 3n) * 48_000n, 1_000_000n) !== sample)
+          roundedDiffers++;
+        if (nearest(lower(tick, 3n) * 48_000n, 1_000_000n) !== sample)
+          flooredDiffers++;
+        return { sample, output };
+      }
+      for (const [j, row] of expected.entries()) {
+        const placed = actual[j];
+        maxDepth.add(row.path.split("/").length - 2);
+        strictEqual(placed.origin.n * CLOCK, row.origin * placed.origin.d);
+        checkEdge(placed.local.start, row.start);
+        checkEdge(placed.local.end, row.end);
+        checkEdge(placed.edge.start, row.inPoint);
+        checkEdge(placed.edge.end, row.actualEnd);
+        const head = checkEdge(placed.played.start, row.shownStart);
+        const end = checkEdge(placed.played.end, row.actualEnd);
+        if (placed.kind !== "media" || row.element.kind !== "media") continue;
+        count++;
+        const speed =
+          typeof row.element.curve === "number"
+            ? speeds.get(row.element.curve)
+            : undefined;
+        if (!speed) throw new Error("Expected a known decimal speed.");
+        const piece = resolvePiece(placed, root.fps);
+        deepStrictEqual(piece.samples, { start: head.sample, end: end.sample });
+        deepStrictEqual(piece.frames, { start: head.output, end: end.output });
+        const nativeFrame = ticksPerFrame(row.fps);
+        const shift = BigInt(row.element.stored.mediaStart);
+        const divisor = 3n * SPEED_SCALE;
+        const width = lower(speed * nativeFrame, divisor) - 1n;
+        const lo = -(width / 2n);
+        const hi = lo + width - 1n;
+        const guess = nearest(
+          speed * row.start - shift * divisor,
+          speed * nativeFrame,
+        );
+        const candidates = [guess, guess - 1n, guess + 1n].map((c) => {
           const raw =
             shift - nearest(speed * (row.start - c * nativeFrame), divisor);
           const zero = tickMin(hi, tickMax(lo, raw));
           return { c, zero, error: tickAbs(raw - zero) };
-        },
-        full ? 600_000 : 5_000,
-      );
-      candidates.sort((a, b) => Number(a.error - b.error));
-      const [{ c, zero }] = candidates;
-      deepStrictEqual(
-        { c: piece.c, tau: piece.tau, zero: piece.zero },
-        {
-          c: Number(c),
-          tau: 0,
-          zero: Number(zero),
-        },
-        row.path,
-      );
-      const line = { c: Number(c), tau: 0, zero: Number(zero) };
-      const tail = frames(
-        lower(row.start, nativeFrame) + 1n + BigInt(next(200)),
-        row.fps,
-      );
-      deepStrictEqual(
-        decode(
-          encode(piece, piece.curve, tail, row.fps),
-          piece.curve,
-          tail,
+        });
+        candidates.sort((a, b) => Number(a.error - b.error));
+        const [{ c, zero }] = candidates;
+        deepStrictEqual(
+          { c: piece.c, tau: piece.tau, zero: piece.zero },
+          {
+            c: Number(c),
+            tau: 0,
+            zero: Number(zero),
+          },
+          row.path,
+        );
+        const line = { c: Number(c), tau: 0, zero: Number(zero) };
+        const tail = frames(
+          lower(row.start, nativeFrame) + 1n + BigInt(next(200)),
           row.fps,
-        ),
-        line,
-      );
-      const zeroAt = row.origin + c * nativeFrame;
-      const source = (at: bigint) =>
-        zero * 3n * SPEED_SCALE + speed * (at - zeroAt);
-      if (speed === SPEED_SCALE)
-        strictEqual(
-          sourceSampleOffset(piece),
-          nearest(source(0n) * 48_000n, CLOCK * SPEED_SCALE),
         );
-      for (const by of [0n, 1n, 2n, 7n]) {
-        const frame = head.output + by;
-        const at = source(frame * frameTicks);
-        const ordinal = lower(
-          at + (30n - indexOrigin) * SPEED_SCALE,
-          100100n * SPEED_SCALE,
+        deepStrictEqual(
+          decode(
+            encode(piece, piece.curve, tail, row.fps),
+            piece.curve,
+            tail,
+            row.fps,
+          ),
+          line,
         );
-        const picture =
-          at <= (indexOrigin - 2999997n) * SPEED_SCALE
-            ? null
-            : tickMin(239n, tickMax(0n, ordinal));
-        strictEqual(
-          pictureAt(sourceGrid, sourceAt(piece, frames(frame, root.fps))),
-          picture,
-        );
+        const zeroAt = row.origin + c * nativeFrame;
+        const source = (at: bigint) =>
+          zero * 3n * SPEED_SCALE + speed * (at - zeroAt);
+        if (speed === SPEED_SCALE)
+          strictEqual(
+            sourceSampleOffset(piece),
+            nearest(source(0n) * 48_000n, CLOCK * SPEED_SCALE),
+          );
+        for (const by of [0n, 1n, 2n, 7n]) {
+          const frame = head.output + by;
+          const at = source(frame * frameTicks);
+          const ordinal = lower(
+            at + (30n - indexOrigin) * SPEED_SCALE,
+            100100n * SPEED_SCALE,
+          );
+          const picture =
+            at <= (indexOrigin - 2999997n) * SPEED_SCALE
+              ? null
+              : tickMin(239n, tickMax(0n, ordinal));
+          strictEqual(
+            pictureAt(sourceGrid, sourceAt(piece, frames(frame, root.fps))),
+            picture,
+          );
+        }
       }
     }
-  }
-  expect(count).toBeGreaterThan(8000);
-  expect(maxDepth).toEqual(new Set([0, 1, 2, 3]));
-  expect(ties).toBeGreaterThan(0);
-  expect(roundedDiffers).toBeGreaterThan(0);
-  expect(flooredDiffers).toBeGreaterThan(0);
-}, 30_000);
+    expect(count).toBeGreaterThan(8000);
+    expect(maxDepth).toEqual(new Set([0, 1, 2, 3]));
+    expect(ties).toBeGreaterThan(0);
+    expect(roundedDiffers).toBeGreaterThan(0);
+    expect(flooredDiffers).toBeGreaterThan(0);
+  },
+  full ? 600_000 : 30_000,
+);
