@@ -1100,6 +1100,10 @@ test("undo leaves unreadable note metadata from an outside write in place", asyn
     data: { kind: "comment", body: "Keep this note", time: 0 },
   });
   expect(saved.ok()).toBe(true);
+  // The note was saved outside this page, so Undo waits until the page shows it.
+  await expect(
+    page.getByRole("button", { name: "Undo", exact: true }),
+  ).toHaveAttribute("aria-description", "Add comment");
   const path = join(project.path, "cutroom.json");
   await writeFile(path, "{broken");
   expect((await request.get(`${project.base}/review`)).status()).toBe(422);

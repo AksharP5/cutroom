@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EDIT_HISTORY_HEADER } from "../shared/timeline/schema";
 
 /** Fresh for each page, including a duplicated tab; never stored with project data. */
 export const tabOrigin = crypto.randomUUID();
@@ -55,6 +56,23 @@ export class ApiError extends Error {
   }
 }
 
+let committedEntry: ((projectId: string, entryId: string) => void) | undefined;
+
+/** Hears each history entry this tab's writes commit, before the history list is read again. */
+export function onCommittedEntry(
+  listener: (projectId: string, entryId: string) => void,
+) {
+  committedEntry = listener;
+}
+
+/** For a successful write sent without `api`: `path` is the part after /api/cutroom. */
+export function reportCommittedEntry(path: string, headers: Headers) {
+  const entryId = headers.get(EDIT_HISTORY_HEADER);
+  const projectId = /^\/projects\/([^/?]+)/.exec(path)?.[1];
+  if (entryId && projectId)
+    committedEntry?.(decodeURIComponent(projectId), entryId);
+}
+
 export async function api<T>(
   path: string,
   schema: z.ZodType<T>,
@@ -84,6 +102,7 @@ export async function api<T>(
     );
   }
   const data = schema.parse(value);
+  reportCommittedEntry(path, response.headers);
   onHeaders?.(response.headers);
   return data;
 }

@@ -13,7 +13,8 @@ import { createReviewService } from "./projects/review";
 import { createProjectRoutes } from "./projects/routes";
 import { createMediaImportRoutes } from "./projects/mediaImportRoutes";
 import { sweepMediaImports } from "./projects/mediaImport";
-import { createProjectStore } from "./projects/store";
+import { createProjectStore, trackCommittedEntry } from "./projects/store";
+import { EDIT_HISTORY_HEADER } from "../shared/timeline/schema";
 import { createTimelineRoutes } from "./timeline/routes";
 import { createCaptionRoutes } from "./captions/routes";
 import { createWorkspaceRoutes } from "./workspace";
@@ -88,6 +89,11 @@ export async function createApp(
         "frame-src 'self'; object-src 'none'",
       );
     await next();
+  });
+  app.use("/api/*", async (c, next) => {
+    const entryId = await trackCommittedEntry(next);
+    if (entryId && !c.res.headers.has(EDIT_HISTORY_HEADER))
+      c.header(EDIT_HISTORY_HEADER, entryId);
   });
   app.onError((error, c) => {
     if (error instanceof HttpError)

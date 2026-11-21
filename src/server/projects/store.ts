@@ -166,6 +166,15 @@ body { color: #ededed; background: #111111; font-family: "Instrument Sans", syst
 </main></body></html>\n`;
 }
 
+const committedEntries = new AsyncLocalStorage<{ id?: string }>();
+
+/** Runs a request and returns the newest history entry its writes committed, so the editor can address its next Undo. */
+export async function trackCommittedEntry(run: () => Promise<void>) {
+  const committed: { id?: string } = {};
+  await committedEntries.run(committed, run);
+  return committed.id;
+}
+
 export async function createProjectStore(options: {
   dataDir: string;
   projectsDir?: string;
@@ -336,6 +345,12 @@ export async function createProjectStore(options: {
         entry = await window.close();
       }
       return { value, entry };
+    }).then((result) => {
+      const committed = committedEntries.getStore();
+      // Ordinary Undo skips imports, so they never become the editor's next target.
+      if (committed && result.entry && result.entry.category !== "import")
+        committed.id = result.entry.id;
+      return result;
     });
   const mutate = <T>(
     project: Project,

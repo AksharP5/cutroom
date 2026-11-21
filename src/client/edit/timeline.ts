@@ -26,7 +26,7 @@ import type {
   Timeline,
   TimelineView,
 } from "../../shared/timeline/schema";
-import { ApiError, api, json, tabOrigin } from "../api";
+import { ApiError, api, json, onCommittedEntry, tabOrigin } from "../api";
 import { clipName, trackRows } from "../timeline/math";
 import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
@@ -93,6 +93,12 @@ const pendingEditHistory = { ...emptyHistory, canUndo: true };
 let confirmedHistory = emptyHistory;
 let unobservedTimelineHistory:
   { projectId: string; entryId: string } | undefined;
+// Any owner write here, not only a timeline command, is the next Undo before history is read again.
+onCommittedEntry((projectId, entryId) => {
+  if (useTimeline.getState().projectId !== projectId) return;
+  unobservedNoteHistory.delete(projectId);
+  unobservedTimelineHistory = { projectId, entryId };
+});
 const historyControls = (projectId: string) =>
   pending.some((edit) => edit.projectId === projectId)
     ? pendingEditHistory

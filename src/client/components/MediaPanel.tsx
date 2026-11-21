@@ -14,7 +14,13 @@ import {
   previewMediaPath,
 } from "../../shared/media";
 import type { TimelineView } from "../../shared/timeline/schema";
-import { api, frameTimecode, json, mediaUrl } from "../api";
+import {
+  api,
+  frameTimecode,
+  json,
+  mediaUrl,
+  reportCommittedEntry,
+} from "../api";
 import { useOfflineMedia } from "../edit/offlineMedia";
 import { placeAtPlayhead } from "../edit/placeMedia";
 import { closeSource, openSource, useSource } from "../edit/source";
@@ -661,6 +667,7 @@ export function MediaPanel({
           z.object({ error: z.string() }).safeParse(body).data?.error ??
             `The file could not be removed (${response.status}).`,
         );
+      reportCommittedEntry(`${cutroomUrl}/media/remove`, response.headers);
       if (useSource.getState().file?.path === path) closeSource();
       if (keyboard) focusNext.current = neighbour ?? null;
       const { historyId } = z.object({ historyId: z.string() }).parse(body);
