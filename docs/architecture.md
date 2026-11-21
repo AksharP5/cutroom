@@ -303,6 +303,8 @@ Thumbnails and MCP `timeline_view` use the same capability-scoped, opaque docume
 
 On Linux, exports and frame captures prefer the Chromium binary under `/usr/lib/chromium`. They open a fresh profile with extensions disabled and bypass launchers that read the desktop's Chromium flags. Set `HYPERFRAMES_BROWSER_PATH` to a different browser binary, such as Playwright's installed Chromium, to override discovery.
 
+On Linux, export and still capture add `CDPScreenshotNewSurface` to a single `--enable-features` list. This preserves HyperFrames' `CanvasDrawElement` and any other enabled features. The still browser also keeps its `--enable-blink-features=CanvasDrawElement` switch. Screenshots request a fresh compositor surface after the timeline seek and image decode. The legacy redraw callback can take about two seconds per frame in full Chromium. [Capture timings](performance.md#chromium-screenshot-capture).
+
 Frame-capture Chromium is reused by thumbnails, note images, and `timeline_view`. `captureBrowserWorker.ts` owns that browser through a DevTools pipe. Chromium exits when that pipe closes, including when SIGKILL kills the owner alone or the server's whole process group. Chromium also exposes an ephemeral loopback WebSocket endpoint, published through `DevToolsActivePort`, so the server can keep using Puppeteer directly without relaying capture traffic through the owner.
 
 The upstream thumbnail coordinator admits one capture at a time. The thumbnail API hashes `thumbnailRendererVersion`, the caller's version, and the exact seek time into Studio's cache version. Nearby seeks stay distinct even when Studio rounds them to the same cache time. Bump the renderer version to invalidate existing captures without deleting their cache files.

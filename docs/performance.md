@@ -990,6 +990,21 @@ We compared 4:4:4 JPEG extraction and JPEG screenshots with PNG for both stages.
 
 PNG lowered mean hard-edge and grain error on all four charts. Cutroom kept JPEG for opaque MP4 capture because the PNG path took 1.5–2.1× as long and used up to 12.5× the extraction space for modest gains in worst-edge error. MP4 delivery uses 8-bit H.264 4:2:0, which subsamples chroma even when its input is lossless. For a full-chroma master, export MOV (ProRes 4444). Whole and marked MOV exports of a synthetic chart decoded as `yuva444p12le` and preserved its alternating one-pixel red and blue stripes.
 
+### Chromium screenshot capture
+
+Full Chromium 155 intermittently spent about two seconds inside one `Page.captureScreenshot` call. In a 96 × 54 synthetic loop, frame 11 took 7 ms to seek, inject and finish preparing, then 1,993 ms to capture. Allowing capture outside the viewport or removing the screenshot clip left the stall in place. Chromium’s `CDPScreenshotNewSurface` feature makes the DevTools request submit and read a fresh compositor surface, bypassing the wait for the legacy redraw callback. [Chromium screenshot implementation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/renderer_host/render_widget_host_impl.cc#2401).
+
+The same Linux machine rendered 60 frames of 1080p60 synthetic `testsrc2` footage under an opaque title. Each run used one capture browser, a cold extraction cache and High quality CPU H.264. The table shows medians of three runs. Capture fps uses the time spent seeking, injecting and taking screenshots, excluding setup and encoding. The 1080p fixture ran without the two-second stall in this measurement.
+
+| Browser and capture mode                               | Capture fps | Screenshot, ms | Whole export, s |
+| ------------------------------------------------------ | ----------: | -------------: | --------------: |
+| System Chromium 155, legacy screenshot                 |        13.8 |             52 |            7.04 |
+| System Chromium 155, new-surface screenshot            |        19.9 |             34 |            5.59 |
+| Playwright headless shell 158, legacy screenshot       |        15.9 |             50 |            6.14 |
+| Headless Electron 45 (Chromium 156), legacy screenshot |        13.7 |             53 |            6.43 |
+
+On the 12-frame loop, the switch cut export time from 19.30 s to 1.48 s and median screenshot time from 1,993 ms to 12 ms. Electron took 1.45 s, and the shell took 1.57 s with screenshots or 1.21 s with explicit `BeginFrame` capture. All three browsers returned the expected source frame numbers. The before-and-after MP4s were byte-identical on the loop and all three system Chromium 1080p pairs.
+
 ## Scrubbing
 
 A ruler drag asks for a new frame on every pointer move. [Scrub proxies](architecture.md#scrub-proxies) answer those seeks from an all-intra 540-line copy of each video and show the exact frame once the pointer rests. On November 15, 2026 the same drag ran against `main` and this change: 3 s across 900 px of ruler at Fit, about 60 pointer moves a second, headless installed Chromium 155 at 1720x1050, alternating the two builds. A CDP screencast recorded every composited frame, and each frame's number was read back from blocks burned into the footage, so a picture counts only when the viewer showed a new source frame. The interview is a 90 s 1080p30 H.264 file (8 Mbit/s, 1 s GOP) with a title; the 300-clip timeline is `timelineWorkload` over a 720p copy, with each 2.5 s clip its own element.
