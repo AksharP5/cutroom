@@ -4,7 +4,8 @@ import { z } from "zod";
 import { FootageColourSchema } from "../../shared/pipeline";
 import type { FootageColour } from "../../shared/pipeline";
 import type { Project } from "../../shared/project";
-import { fileFingerprint, localMediaPath } from "../../shared/media";
+import { fileFingerprint, localMediaPath, mediaKind } from "../../shared/media";
+import type { MediaFileDetails } from "../../shared/media";
 import { projectPath, unavailableProjectFile } from "../projects/path";
 import { compositionScope, mediaSources } from "./composition";
 import { localMediaInputOptions } from "../media/input";
@@ -16,6 +17,10 @@ const ProbeSchema = z.object({
         codec_type: z.string().optional(),
         width: z.number().optional(),
         height: z.number().optional(),
+        avg_frame_rate: z.string().optional(),
+        disposition: z
+          .object({ attached_pic: z.number().optional() })
+          .optional(),
         pix_fmt: z.string().optional(),
         color_primaries: z.string().optional(),
         color_space: z.string().optional(),
@@ -32,16 +37,26 @@ interface Probe {
   seconds: number | null;
   /** The file was read and holds no audio stream. */
   silent: boolean;
+  /** The first moving picture stream, leaving out cover art. */
+  picture: { width: number; height: number; fps: number | null } | null;
   footageRefusal?: string;
   colour?: FootageColour;
 }
 
 /**
- * Probe results keyed by path, modification time, and size, so each file version is probed once,
- * including files ffprobe cannot read (null). Nothing is kept while ffprobe is missing, so those
- * files are measured once it is available.
+ * Probes by path, for one version of the file (size, times and inode), so each version is probed
+ * once and callers asking at the same time share one ffprobe. Files ffprobe cannot read are kept
+ * as null. A probe that times out or fails is dropped and asked again; nothing is kept while
+ * ffprobe is missing, so those files are measured once it is available. An entry is a few hundred
+ * bytes, so the cache holds every file of a large project.
  */
-const probes = new Map<string, { version: string; result: Probe | null }>();
+const probes = new Map<
+  string,
+  { version: string; result: Promise<Probe | null> }
+>();
+const PROBE_CACHE_SIZE = 4096;
+/** ffprobe reads only headers; a file that takes longer is on a stalled disk or malformed. */
+const PROBE_TIMEOUT_MS = 15_000;
 
 async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   const child = Bun.spawn(
@@ -51,17 +66,21 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       "error",
       ...localMediaInputOptions,
       "-show_entries",
-      "format=duration:stream=codec_type,width,height,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode",
+      "format=duration:stream=codec_type,width,height,avg_frame_rate,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode:stream_disposition=attached_pic",
       "-of",
       "json",
       path,
     ],
-    { stdout: "pipe", stderr: "ignore" },
+    { stdout: "pipe", stderr: "ignore", timeout: PROBE_TIMEOUT_MS },
   );
   const [output, code] = await Promise.all([
     new Response(child.stdout).text(),
     child.exited,
   ]);
+  if (child.signalCode !== null)
+    throw new Error(
+      `ffprobe did not finish reading ${path} within ${PROBE_TIMEOUT_MS / 1000} s.`,
+    );
   if (code !== 0) return null;
   const { streams, format } = ProbeSchema.parse(JSON.parse(output));
   const seconds = format.duration;
@@ -88,7 +107,20 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   );
   const matrix = FootageColourSchema.shape.matrix.safeParse(video?.color_space);
   const range = video?.color_range;
+  const picture = streams.find(
+    (stream) =>
+      stream.codec_type === "video" && !stream.disposition?.attached_pic,
+  );
+  const [num, den] = (picture?.avg_frame_rate ?? "").split("/").map(Number);
   return {
+    picture:
+      picture?.width && picture.height
+        ? {
+            width: picture.width,
+            height: picture.height,
+            fps: num && den ? Math.round((num / den) * 1000) / 1000 : null,
+          }
+        : null,
     colour: video && {
       primaries: primaries.data,
       transfer: transfer.data,
@@ -101,6 +133,56 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
         : null,
     silent: !streams.some((stream) => stream.codec_type === "audio"),
     footageRefusal,
+  };
+}
+
+/** A project file's cached probe and its size in bytes; null when it is missing or not a file. */
+async function probeFile(
+  project: Project,
+  relative: string,
+  ffprobe: string | undefined,
+) {
+  const path = await projectPath(project, relative).catch(() => null);
+  if (path === null) return null;
+  const info = await stat(path).catch(() => null);
+  if (!info?.isFile()) return null;
+  // Inode and change time catch a same-size replacement that kept the old modification time.
+  const version = `${fileFingerprint(path, info)}:${info.ino}:${info.ctimeMs}`;
+  let cached = probes.get(path);
+  if (cached?.version !== version) {
+    if (!ffprobe) return { bytes: info.size, result: null };
+    const entry = { version, result: probe(ffprobe, path) };
+    entry.result.catch(() => {
+      if (probes.get(path) === entry) probes.delete(path);
+    });
+    cached = entry;
+    probes.delete(path);
+    probes.set(path, entry);
+    if (probes.size > PROBE_CACHE_SIZE)
+      probes.delete(probes.keys().next().value!);
+  }
+  return { bytes: info.size, result: await cached.result };
+}
+
+/** Length, size, picture and sound of a project media file; null when it is missing. Throws when ffprobe stalls. */
+export async function mediaFileDetails(
+  project: Project,
+  path: string,
+): Promise<MediaFileDetails | null> {
+  const ffprobe = findFfBinary("ffprobe", { configuredMustExist: true });
+  const probed = await probeFile(project, path, ffprobe);
+  if (!probed) return null;
+  const { bytes, result } = probed;
+  const still = mediaKind(path)?.kind === "image";
+  return {
+    bytes,
+    ...(!still && result?.seconds && { duration: result.seconds }),
+    ...(result?.picture && {
+      width: result.picture.width,
+      height: result.picture.height,
+    }),
+    ...(!still && result?.picture?.fps && { fps: result.picture.fps }),
+    ...(!still && result && { audio: !result.silent }),
   };
 }
 
@@ -130,20 +212,14 @@ export async function mediaFacts(
     [...new Set(sources)].map(async (src) => {
       const relative = localMediaPath(composition, src);
       if (relative === null) return;
-      const path = await projectPath(project, relative).catch(() => null);
-      if (path === null) return;
-      const info = await stat(path).catch(() => null);
-      if (!info?.isFile()) return;
-      const version = fileFingerprint(path, info);
-      let cached = probes.get(path);
-      if (cached?.version !== version) {
-        if (!ffprobe) return;
-        cached = { version, result: await probe(ffprobe, path) };
-        probes.delete(path);
-        probes.set(path, cached);
-        if (probes.size > 256) probes.delete(probes.keys().next().value!);
-      }
-      const result = cached.result;
+      const probed = await probeFile(project, relative, ffprobe).catch(
+        (error: unknown) => {
+          // The timeline still opens; this file's length and sound stay unknown until a later read.
+          console.warn("Could not probe media:", error);
+          return null;
+        },
+      );
+      const result = probed?.result;
       if (!result) return;
       if (result.seconds) facts.lengths.set(src, result.seconds);
       if (result.silent) facts.silent.add(src);
