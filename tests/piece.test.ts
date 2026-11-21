@@ -25,6 +25,7 @@ import {
 } from "../src/shared/timeline/piece.ts";
 import type { Fps } from "../src/shared/timeline/schema.ts";
 
+const full = process.env.PIECE_FULL === "1";
 const fps = (num: number, den = 1): Fps => ({ num, den });
 const ntsc = fps(30_000, 1001);
 const film = fps(24_000, 1001);
@@ -437,177 +438,248 @@ function generator(seed: number) {
   };
 }
 
-test("seeded maps survive re-encodes, moves, foreign values and slips across 18 frame rates", () => {
-  const next = generator(20261120);
-  const fixed = [
-    1,
-    1.03125,
-    0.1,
-    0.25,
-    0.5,
-    0.75,
-    1.5,
-    2,
-    3.3333333,
-    4,
-    10,
-    Math.SQRT2,
-    Math.PI / 3,
-    0.999,
-    1.001,
-  ];
-  for (const rate of rates) {
-    for (let index = 0; index < 360; index++) {
-      const speed =
-        index % 3 === 0
-          ? 0.1 + next(990000) / 100000
-          : fixed[next(fixed.length)];
-      const curve =
-        index % 2 === 0
-          ? speed
-          : {
-              target: "rate",
-              points: Array.from({ length: 2 + next(5) }, (_, point) => ({
-                t: point * 4,
-                v: 0.1 + next(990) / 100,
-                curve: (next(201) - 100) / 100,
-              })),
-            };
-      const period =
-        ((typeof curve === "number" ? curve : 1) * rate.den * 1_000_000) /
-        rate.num;
-      const width = Math.floor(period) - 1;
-      const first = -Math.floor(width / 2);
-      const remainder =
-        index % 5 === 0
-          ? first + (next(2) ? next(3) : width - 1 - next(3))
-          : first + next(width);
-      const map = {
-        c: next(1_300_001) - 1000,
-        tau: typeof curve === "number" ? 0 : remainder,
-        zero: typeof curve === "number" ? remainder : next(3_600_000_000),
-      };
-      const anchor = frames(next(1_300_001), rate);
-      const offGrid = micros(next(10_800_000_001));
-      const other = add(
-        add(frames(next(100_000), rates[next(rates.length)]), anchor),
-        offGrid,
-      );
-      for (const start of [anchor, offGrid, other]) {
-        const stored = encode(map, curve, start, rate);
-        deepStrictEqual(decode(stored, curve, start, rate), map);
-        const by = next(10001) - 5000;
-        deepStrictEqual(
-          encode(
-            { ...map, c: map.c + by },
-            curve,
-            add(start, frames(by, rate)),
-            rate,
-          ),
-          stored,
-        );
-      }
+// The generated speeds use ordinary decimal spellings, including those whose
+// exact product lies a fraction below an integer.
+function periodFloor(speed: number, rate: Fps) {
+  const [whole, decimals = ""] = String(speed).split(".");
+  const units = BigInt(whole + decimals);
+  const scale = 10n ** BigInt(decimals.length);
+  return Number(
+    (units * 1_000_000n * BigInt(rate.den)) / (scale * BigInt(rate.num)),
+  );
+}
 
-      const foreign = {
-        mediaStart: next(3_600_000_001),
-        ...(typeof curve === "number"
-          ? {}
-          : { offset: next(620_000_001) - 20_000_000 }),
-      };
-      const settled = decode(foreign, curve, other, rate);
-      const stored = encode(settled, curve, other, rate);
-      deepStrictEqual(decode(stored, curve, other, rate), settled);
-      deepStrictEqual(
-        decode(encode(settled, curve, anchor, rate), curve, anchor, rate),
-        settled,
-      );
-      strictEqual(
-        Math.abs((stored.offset ?? 0) - (foreign.offset ?? 0)) <= 1,
-        true,
-      );
-      strictEqual(Math.abs(stored.mediaStart - foreign.mediaStart) <= 1, true);
-
-      if (typeof curve === "number") {
-        const before = encode(map, curve, offGrid, rate).mediaStart;
-        const slip = next(60_000_001) - 30_000_000;
-        const after = decode(
-          { mediaStart: before + slip },
-          curve,
-          offGrid,
-          rate,
-        );
-        strictEqual(
-          Math.abs(
-            encode(after, curve, offGrid, rate).mediaStart - (before + slip),
-          ) <= 1,
-          true,
-        );
-        const lineDelta =
-          after.zero -
-          map.zero +
-          (curve * (map.c - after.c) * rate.den * 1e6) / rate.num;
-        strictEqual(Math.abs(lineDelta - slip) <= 2, true);
-        deepStrictEqual(
-          decode(encode(after, curve, anchor, rate), curve, anchor, rate),
-          after,
-        );
-      }
-    }
-  }
+test("the source map uses the exact decimal period at its remainder boundary", () => {
+  const map = { c: 590830, tau: 0, zero: 173650 };
+  const speed = "8.68255";
+  const start = frames(map.c + 1, twentyFive);
+  expect(
+    decode(encode(map, speed, start, twentyFive), speed, start, twentyFive),
+  ).toEqual(map);
+  expect(
+    decode(
+      { mediaStart: 173650 },
+      "8.682549999999999",
+      frames(map.c, twentyFive),
+      twentyFive,
+    ),
+  ).toEqual({ ...map, zero: 173649 });
 });
 
-test("exhaustively re-encodes three frame periods of stored values for selected rate and curve pairs", () => {
-  const pairs: [Fps, Curve][] = [
-    [ntsc, 1],
-    [thirty, 1.03125],
-    [film, 0.1],
-    [fps(240), 2],
-    [fps(120), 3.3333333],
-    [fps(128), ramp],
-    [fps(240), ramp],
-    [fps(60_000, 1001), 1],
-  ];
-  for (const [rate, curve] of pairs) {
-    const period = (rate.den * 1_000_000) / rate.num;
-    const span = Math.ceil(
-      3 * period * (typeof curve === "number" ? curve : 1),
-    );
-    const targets = [
-      frames(0, rate),
-      frames(100003, rate),
-      micros(7200000123),
-      fraction(BigInt(rate.den), 2n * BigInt(rate.num)),
+test("encode and decode require a source period of at least three microseconds", () => {
+  const start = frames(0, thirty);
+  const map = { c: 0, tau: 0, zero: 0 };
+  const speed = "0.00008999999999999999";
+  expect(() => encode(map, speed, start, thirty)).toThrow(
+    "at least three microseconds",
+  );
+  expect(() => decode({ mediaStart: 0 }, speed, start, thirty)).toThrow(
+    "at least three microseconds",
+  );
+  expect(
+    decode(encode(map, "0.00009", start, thirty), "0.00009", start, thirty),
+  ).toEqual(map);
+});
+
+test(
+  "seeded maps survive re-encodes, moves, foreign values and slips across 18 frame rates",
+  () => {
+    const next = generator(20261120);
+    const fixed = [
+      1,
+      1.03125,
+      0.1,
+      0.25,
+      0.5,
+      0.75,
+      1.5,
+      2,
+      3.3333333,
+      4,
+      10,
+      Math.SQRT2,
+      Math.PI / 3,
+      0.999,
+      1.001,
     ];
-    // Every in-point or offset is exercised at each pair's frame and off-grid start.
-    for (const start of [frames(7, rate), micros(12300)]) {
-      for (let value = 0; value < span; value++) {
-        const stored =
-          typeof curve === "number"
-            ? { mediaStart: value }
-            : { mediaStart: 725000, offset: value };
-        const map = decode(stored, curve, start, rate);
-        for (const target of targets) {
-          const roundTrip = decode(
-            encode(map, curve, target, rate),
+    for (const rate of rates) {
+      for (let index = 0; index < (full ? 166_667 : 360); index++) {
+        const speed =
+          index % 3 === 0
+            ? 0.1 + next(990000) / 100000
+            : fixed[next(fixed.length)];
+        const curve =
+          index % 2 === 0
+            ? speed
+            : {
+                target: "rate",
+                points: Array.from({ length: 2 + next(5) }, (_, point) => ({
+                  t: point * 4,
+                  v: 0.1 + next(990) / 100,
+                  curve: (next(201) - 100) / 100,
+                })),
+              };
+        const width =
+          periodFloor(typeof curve === "number" ? curve : 1, rate) - 1;
+        const first = -Math.floor(width / 2);
+        const remainder =
+          index % 5 === 0
+            ? first + (next(2) ? next(3) : width - 1 - next(3))
+            : first + next(width);
+        const map = {
+          c: next(1_300_001) - 1000,
+          tau: typeof curve === "number" ? 0 : remainder,
+          zero: typeof curve === "number" ? remainder : next(3_600_000_000),
+        };
+        const anchor = frames(next(1_300_001), rate);
+        const offGrid = micros(next(10_800_000_001));
+        const other = add(
+          add(frames(next(100_000), rates[next(rates.length)]), anchor),
+          offGrid,
+        );
+        const starts = [anchor, offGrid, other];
+        if (full) {
+          starts.push(
+            frames(next(1_300_001), rate),
+            micros(next(10_800_000_001)),
+            frames(next(1_300_001), rate),
+          );
+          if (index % 2 === 0)
+            starts.push(add(other, micros(next(10_800_000_001))));
+        }
+        for (const [startIndex, start] of starts.entries()) {
+          const stored = encode(map, curve, start, rate);
+          deepStrictEqual(decode(stored, curve, start, rate), map);
+          if (full && startIndex >= (index % 2 === 0 ? 1 : 2)) continue;
+          const by = next(10001) - 5000;
+          deepStrictEqual(
+            encode(
+              { ...map, c: map.c + by },
+              curve,
+              add(start, frames(by, rate)),
+              rate,
+            ),
+            stored,
+          );
+        }
+
+        const foreign = {
+          mediaStart: next(3_600_000_001),
+          ...(typeof curve === "number"
+            ? {}
+            : { offset: next(620_000_001) - 20_000_000 }),
+        };
+        const settled = decode(foreign, curve, other, rate);
+        const stored = encode(settled, curve, other, rate);
+        deepStrictEqual(decode(stored, curve, other, rate), settled);
+        deepStrictEqual(
+          decode(encode(settled, curve, anchor, rate), curve, anchor, rate),
+          settled,
+        );
+        strictEqual(
+          Math.abs((stored.offset ?? 0) - (foreign.offset ?? 0)) <= 1,
+          true,
+        );
+        strictEqual(
+          Math.abs(stored.mediaStart - foreign.mediaStart) <= 1,
+          true,
+        );
+
+        if (typeof curve === "number") {
+          const before = encode(map, curve, offGrid, rate).mediaStart;
+          const slip = next(60_000_001) - 30_000_000;
+          const after = decode(
+            { mediaStart: before + slip },
             curve,
-            target,
+            offGrid,
             rate,
           );
-          if (
-            roundTrip.c !== map.c ||
-            roundTrip.tau !== map.tau ||
-            roundTrip.zero !== map.zero
-          )
-            deepStrictEqual(
-              roundTrip,
-              map,
-              `rate ${rate.num}/${rate.den}, value ${value}`,
-            );
+          strictEqual(
+            Math.abs(
+              encode(after, curve, offGrid, rate).mediaStart - (before + slip),
+            ) <= 1,
+            true,
+          );
+          const lineDelta =
+            after.zero -
+            map.zero +
+            (curve * (map.c - after.c) * rate.den * 1e6) / rate.num;
+          strictEqual(Math.abs(lineDelta - slip) <= 2, true);
+          deepStrictEqual(
+            decode(encode(after, curve, anchor, rate), curve, anchor, rate),
+            after,
+          );
         }
       }
     }
-  }
-}, 30_000);
+  },
+  full ? 600_000 : 5_000,
+);
+
+test(
+  "exhaustively re-encodes three frame periods of stored values for selected rate and curve pairs",
+  () => {
+    const curves: Curve[] = [1, 1.03125, 0.1, 2, 3.3333333, ramp];
+    const reduced: [Fps, Curve][] = [
+      [ntsc, 1],
+      [thirty, 1.03125],
+      [film, 0.1],
+      [fps(240), 2],
+      [fps(120), 3.3333333],
+      [fps(128), ramp],
+      [fps(240), ramp],
+      [fps(60_000, 1001), 1],
+    ];
+    const pairs = full
+      ? rates
+          .slice(0, 13)
+          .flatMap((rate) => curves.map((curve): [Fps, Curve] => [rate, curve]))
+      : reduced;
+    for (const [rate, curve] of pairs) {
+      const period = (rate.den * 1_000_000) / rate.num;
+      const span = Math.ceil(
+        3 * period * (typeof curve === "number" ? curve : 1),
+      );
+      const targets = [
+        ...[0, 1, 2, 3, 31, 100_003].map((frame) => frames(frame, rate)),
+        ...[1, 48, 12_301, 7_200_000_123].map(micros),
+        fraction(BigInt(rate.den), 2n * BigInt(rate.num)),
+      ];
+      // Every in-point or offset is exercised at each pair's frame and off-grid start.
+      for (const start of [
+        ...[0, 1, 7].map((frame) => frames(frame, rate)),
+        ...[48, 12_300, 1_012_300].map(micros),
+      ]) {
+        for (let value = 0; value < span; value++) {
+          const stored =
+            typeof curve === "number"
+              ? { mediaStart: value }
+              : { mediaStart: 725000, offset: value };
+          const map = decode(stored, curve, start, rate);
+          for (const target of targets) {
+            const roundTrip = decode(
+              encode(map, curve, target, rate),
+              curve,
+              target,
+              rate,
+            );
+            if (
+              roundTrip.c !== map.c ||
+              roundTrip.tau !== map.tau ||
+              roundTrip.zero !== map.zero
+            )
+              deepStrictEqual(
+                roundTrip,
+                map,
+                `rate ${rate.num}/${rate.den}, value ${value}`,
+              );
+          }
+        }
+      }
+    }
+  },
+  full ? 1_800_000 : 180_000,
+);
 
 test("300 successive head trims preserve the source line at 30 and 29.97 fps", () => {
   for (const rate of [thirty, ntsc]) {
@@ -820,7 +892,7 @@ test("generated scene trees match an independent integer clock for placement, au
     rate: ntsc,
     count: 240n,
   };
-  for (let i = 0; i < 4000; i++) {
+  for (let i = 0; i < (full ? 400_000 : 4_000); i++) {
     // A separate tie and a mixed-rate scene occur even if the random fixture changes.
     const root =
       i === 0
@@ -913,12 +985,15 @@ test("generated scene trees match an independent integer clock for placement, au
         speed * row.start - shift * divisor,
         speed * nativeFrame,
       );
-      const candidates = [guess, guess - 1n, guess + 1n].map((c) => {
-        const raw =
-          shift - nearest(speed * (row.start - c * nativeFrame), divisor);
-        const zero = tickMin(hi, tickMax(lo, raw));
-        return { c, zero, error: tickAbs(raw - zero) };
-      });
+      const candidates = [guess, guess - 1n, guess + 1n].map(
+        (c) => {
+          const raw =
+            shift - nearest(speed * (row.start - c * nativeFrame), divisor);
+          const zero = tickMin(hi, tickMax(lo, raw));
+          return { c, zero, error: tickAbs(raw - zero) };
+        },
+        full ? 600_000 : 5_000,
+      );
       candidates.sort((a, b) => Number(a.error - b.error));
       const [{ c, zero }] = candidates;
       deepStrictEqual(

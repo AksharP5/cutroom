@@ -27,6 +27,7 @@ export function fraction(n: bigint, d = 1n): ExactTime {
 }
 
 const ZERO = fraction(0n);
+const ONE = fraction(1n);
 export const add = (a: ExactTime, b: ExactTime) =>
   fraction(a.n * b.d + b.n * a.d, a.d * b.d);
 export const subtract = (a: ExactTime, b: ExactTime) =>
@@ -245,6 +246,19 @@ function decimalRate(rate: string | number): ExactTime {
     : fraction(units * 10n ** BigInt(-scale));
 }
 
+// The period can sit just below an integer even when a floating-point product
+// rounds up to it. The inclusive remainder range depends on this floor.
+function sourcePeriodFloor(curve: Curve, fps: Fps) {
+  const rate = typeof curve === "object" ? ONE : decimalRate(curve);
+  const period =
+    (rate.n * BigInt(fps.den) * MICROS) / (rate.d * BigInt(fps.num));
+  if (period < 3n)
+    throw new RangeError(
+      "A source map requires at least three microseconds per frame.",
+    );
+  return Number(period);
+}
+
 function microsOf(time: ExactTime) {
   const numerator = time.n * MICROS;
   return (
@@ -266,6 +280,7 @@ export function encode(
   start: ExactTime,
   fps: Fps,
 ): StoredSource {
+  sourcePeriodFloor(curve, fps);
   const elapsed = since(start, map.c, fps);
   if (typeof curve !== "object")
     return { mediaStart: map.zero + roundMicros(Number(curve) * elapsed) };
@@ -286,12 +301,7 @@ export function decode(
   const frameUs = (fps.den * Number(MICROS)) / fps.num;
   const rate = ramp ? 1 : Number(curve);
   const period = rate * frameUs;
-  if (!Number.isFinite(period) || period < 3)
-    throw new RangeError(
-      "A source map requires at least three microseconds per frame.",
-    );
-
-  const count = Math.floor(period) - 1;
+  const count = sourcePeriodFloor(curve, fps) - 1;
   const lo = -Math.floor(count / 2);
   const hi = lo + count - 1;
   const offset = stored.offset ?? 0;
