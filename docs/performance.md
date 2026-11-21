@@ -444,7 +444,9 @@ Tracing found synchronous style/layout under viewport geometry reads and repeate
 
 `CUTROOM_PERF_DIR=artifacts/timeline-performance bun run bench:timeline-ui` reproduces the three-run production workload. `bun run test:perf` also runs three passes per size. For key zoom and ripple separately, it requires the median of the three per-run maximum frame gaps to stay below 150 ms. One isolated pause passes; a stall at or above 150 ms in two of three runs fails. Pooled p95 can hide a single bad frame that recurs on every edit, so the budget uses per-run maxima. The original 400-clip before-build ripple maxima were 171.4, 140.7 and 163.7 ms, giving a failing median of 163.7 ms; the after-build median was 68.2 ms. Both 500-clip medians passed.
 
-The previous single-maximum gate failed export PR #61. In CI run `42989564025`, the 400/500-clip ripple maxima were 174.1/168.1 ms, with one long task of 159/164 ms and second-worst frames of 118.4/81.3 ms. The worst gap was the first frame after Delete, as in the other inspected failures. These are real first-edit stalls; the samples alone do not establish whether code or runner speed caused them. Repetition keeps the ceiling while allowing one slow interaction run. It can miss a regression confined to the first edit, and it does not excuse sustained CPU starvation or promise 60 fps. CI runs the budget in its own job, on a fresh runner beside three browser-suite shards and a separate format, type, and unit-check job. Browser shards split at test boundaries with one worker each; the list reporter records per-test durations in CI logs. The 150-edit document and decoded-frame resource budgets run in the performance job alongside the frame-time budgets, so those long workloads do not accumulate in the last browser shard.
+The previous single-maximum gate failed export PR #61. In CI run `42989564025`, the 400/500-clip ripple maxima were 174.1/168.1 ms, with one long task of 159/164 ms and second-worst frames of 118.4/81.3 ms. The worst gap was the first frame after Delete, as in the other inspected failures. These are real first-edit stalls; the samples alone do not establish whether code or runner speed caused them. Repetition keeps the ceiling while allowing one slow interaction run. It can miss a regression confined to the first edit, and it does not excuse sustained CPU starvation or promise 60 fps. CI runs the budget in its own job, on a fresh runner beside four browser-suite shards and a separate format, type, and unit-check job. Browser shards split at test boundaries with one worker each; the list reporter records per-test durations in CI logs. The 150-edit document and decoded-frame resource budgets run in the performance job alongside the frame-time budgets, so those long workloads do not accumulate in the last browser shard.
+
+Playwright has a 27-minute budget per browser shard. The 30-minute job limit also covers runner setup and the production build. If the runner stays alive for a minute after the last test result, the teardown watchdog fails the run and logs active Node resources and direct child processes.
 
 `CUTROOM_PERF_RUNS` overrides the positive integer run count. The default is three; larger values use the upper median of per-run maxima, and setting it to one restores the stricter single-maximum check for a short diagnostic run. The `frame-times.json` attachment and `CUTROOM_PERF_DIR` output retain every frame and long task, pooled p50/p95/max, and the new `medianMax` statistic. Key/ripple summaries also appear in passing CI logs, since failure-only artifacts cannot supply a passing baseline. Set `CUTROOM_PERF_TRACE=1` for compressed Chromium traces. Profiled runs retain timings and check behavior; budgets run without the profiler's overhead.
 
@@ -531,6 +533,23 @@ Measured on November 15, 2026 with Chromium 1720x1050 on a shared machine: five 
 | Agent edit        |        3 / 3 |       1 / 1 |            27 ms |            8 ms |            100 ms |            80 ms |
 
 The interview workload shows the same counts, with read time falling from 28 to 5 ms per edit and 16 to 5 ms per agent edit. An outside edit now shows about 70 ms later (median 153 to 225 ms from the request to the last read on the interview workload), the cost of waiting for the rest of its burst. The editor's own edits are unaffected: they show before the server answers. `e2e/timeline-reads.spec.ts` fails when an edit, an undo or an agent edit reads more than this.
+
+## Saving linked timelines
+
+On November 20, 2026, the local server handled 12 saves of each edit on the numbered 1080p60 dialogue fixture. The 1,000-clip project runs 15 minutes and contains 486 linked picture and sound pairs, a music bed, titles and dissolves. Each edit was followed by Undo and the next revision was read from the server. The round trip includes receiving and parsing the JSON in the local benchmark client. Times are medians, compared with `5f20f8d4`.
+
+| Clips | Edit          | Server before | Server after | API round trip before | API round trip after |
+| ----: | ------------- | ------------: | -----------: | --------------------: | -------------------: |
+|   100 | Ripple delete |         42 ms |        26 ms |                 42 ms |                27 ms |
+|   100 | W             |         38 ms |        27 ms |                 39 ms |                28 ms |
+|   100 | Razor         |         37 ms |        31 ms |                 38 ms |                31 ms |
+| 1,000 | Ripple delete |        255 ms |       121 ms |                257 ms |               123 ms |
+| 1,000 | W             |        258 ms |       120 ms |                261 ms |               122 ms |
+| 1,000 | Razor         |        255 ms |       117 ms |                257 ms |               119 ms |
+
+At 1,000 clips, median Undo server time was 10–11 ms before and 9–10 ms after. All 72 edits and their undo steps produced identical composition, project settings and clip ID ledger bytes when replayed with the same piece IDs.
+
+Review indexes linked sound by link ID and uses the timeline's clip ownership rules to find authored byte ranges. It skips editor-only fields such as style and source restrictions, and still checks the referenced files on disk. The editor uses one HTML tree for media discovery and timeline projection. It parses each distinct inline clip style once per projection and still projects saved HTML to verify the edit before writing it. In a separate run, sharing the saved HTML tree with review changed the 1,000-clip medians to 132 ms, 111 ms and 114 ms for ripple delete, W and razor. The change did not consistently help across edits, so review keeps its independent source read.
 
 ## Trim preview
 
@@ -750,6 +769,36 @@ Both new cases require the live median below 80% of direct reload. The original 
 For live-supported edits, byte-identical live/fresh PNG comparisons cover all inspector control families and None, Fade, Slide and Wipe at entrance, hold and exit frames, plus cut boundaries, multiline HTML-like words, fonts, plates, undo/redo and MCP edits in two tabs. Edits involving Scale reload because scaled font/motion and plate changes did not pass the pixel comparison. A fresh/fresh diagnostic also differed despite equal computed state and geometry. This does not relax any live-path PNG assertion. Scale regressions require canonical replacement for font, size, plate and words. Enabling motion without proven initial animation discovery also reloads.
 
 The local full unit run passed 779 tests with five optional skips; the full functional run ran once with 445/448 passing. The scaled case became an explicit reload and the export/trim timeouts passed reruns. CI on `4599690` passed all 779 units, 449 functional tests and 11 performance cases before the final Scale restriction and main integration. On the integrated code, types, 56 focused units, 30 timing/title/gain workflows and both latency cases passed. The latest-main recheck passed 13 title/handoff workflows, including moved-playhead and playback continuity cases. The title/gain regression changes style, words, linked source timing and a fader in one operation, then retains the document for another title edit after a gain-only change. Final-head CI is linked in the PR.
+
+## Mixer
+
+The mixer must not cost playback, must be heard within about 50 ms of a fader move, and must paint every frame of a drag. Measured on November 20, 2026 on the shared i5-14400F, with other agents' browser runs between ours.
+
+Playback with the mixer open against `main` used `scripts/bench-vs-studio.ts --editor cutroom --footage-only --bus` (the five-minute, 100-cut 1080p project with its music bed through a bus with a compressor), adding `--mixer` on this branch. Headed Chromium on XWayland, two runs per invocation, in the order main, branch, branch, main. Late holds are 30 fps pictures held longer than two display frames in ten seconds of 1x playback, read from the frame numbers in the composited screencast; editor frames are the editor page's animation-frame intervals during the same ten seconds.
+
+| Build      |   Pictures/s | Late holds / 10 s |  Longest hold | Editor frame p95 | Editor frames over 25 ms |
+| ---------- | -----------: | ----------------: | ------------: | ---------------: | -----------------------: |
+| main       | 29.4 to 29.5 |      10, 14, 7, 6 | 133 to 150 ms |  18.0 to 18.5 ms |               2, 6, 0, 0 |
+| mixer open | 29.3 to 29.6 |      6, 5, 10, 12 | 116 to 133 ms |  17.8 to 18.6 ms |               2, 0, 2, 1 |
+
+Fader to sound, headed: a press on the Voices cap and one move from -30 dB to 0 dB while a tone played through the bus, timed from the editor's `pointermove` to the first sample of the bus's post-fader meter in the preview at least halfway (in dB) to the new level, on one clock (`performance.timeOrigin`). Eight trials: median 20.5 ms, longest 23.9 ms. That includes the meter's own read granularity.
+
+A 60-step drag at one move per animation frame moved the cap on all 60 frames, with a 17.5 ms frame p95 and no frame over 25 ms.
+
+The original 16-strip tone run took 3.63 ms per frame of editor main-thread task time with the mixer open and 1.94 ms closed. Script accounted for 0.28 ms open and 0.29 ms closed. The extra 1.69 ms exceeded the 1 ms budget. The earlier `clip-path` version had taken 4.56 ms open.
+
+The retest used the same i5-14400F, headed Chromium 155.0.8059.84 on a 60 Hz XWayland display, and all 16 meters in view at 2760 × 1451 CSS pixels and 0.625 device scale. Twelve tracks played stereo tones, three through separate buses, plus Main. The moving-level fixture modulated the stereo tones and ran a volume lane on one bus. Each table row averages two five-second windows per state at 1×, after playback had settled. All windows delivered 300 editor animation-frame intervals, with a 16.8 ms p95. The values are Chromium DevTools `TaskDuration` and `ScriptDuration` in editor-renderer CPU milliseconds per interval, using `threadTicks`. Task time includes script.
+
+| Fixture and build                            | Open task | Closed task | Added task | Open script | Closed script |
+| -------------------------------------------- | --------: | ----------: | ---------: | ----------: | ------------: |
+| Steady tones, `f0197b27`                     |     4.568 |       2.527 |      2.040 |       0.272 |         0.266 |
+| Steady tones, grouped layers                 |     2.021 |       2.267 |     -0.246 |       0.256 |         0.230 |
+| Moving levels and automation, `f0197b27`     |     8.826 |       2.580 |      6.246 |       0.313 |         0.232 |
+| Moving levels and automation, grouped layers |     3.482 |       2.604 |      0.878 |       0.285 |         0.236 |
+
+The baseline trace for moving levels put 5.71 ms per frame into Chromium's layer building with the mixer open, and 0.78 ms closed. The scrolling strips and pinned Main now each have a shared compositing layer. The meter bars still move in 3 px segments, the peak lines in 1 px steps, and the 16 meters still use one sample subscription. Idle fader caps release their layer hints, and the automated cap reads its range on resize. Stopped and closed states were checked in the running editor.
+
+These figures cover the editor main thread. The sandboxed preview renderer, compositor, GPU, and time preempted by other processes are outside the measurement. A separate run with moving levels and fixed bus gains during heavier host load measured 6.468 ms open and 4.582 ms closed, with script at 0.561 ms and 0.433 ms respectively. That run exceeded the budget and had up to 38 editor intervals over 25 ms in five seconds. Some exploratory windows fell to about 1 Hz, consistent with Chromium's background throttling. The steady and automated runs in the table held display cadence throughout.
 
 ## Range exports
 

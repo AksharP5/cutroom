@@ -72,16 +72,19 @@ import {
 import type { ProjectStore } from "../projects/store";
 import {
   compositionScope,
+  compositionMarkup,
+  projectTimeline,
   rebaseClipboard,
   declareTrackLayer,
   parseComposition,
   patchComposition,
   timelineContent,
+  authoredAudioGroupContent,
   settingsOf,
 } from "./composition";
 import type { HostedComposition, ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
-import { compositionMediaFacts, mediaFacts } from "./media";
+import { mediaFacts } from "./media";
 import { prepareFrozenFrames, saveFrozenFrames } from "./freeze";
 import { freezeCompanion } from "../projects/freezeAssets";
 import { versionFiles } from "./versions";
@@ -136,13 +139,19 @@ export function createTimelineRoutes(
     const settings = document.timelines[composition] ?? emptyTimelineSettings();
     // One scope for reading, media discovery, and the readback after an edit.
     const scope = compositionScope(composition);
-    const { lengths, footageRefusals, footageColours } =
-      await compositionMediaFacts(project, composition, source.content);
+    const markup = compositionMarkup(source.content, scope);
+    const [{ lengths, footageRefusals, footageColours }, inheritedFonts] =
+      await Promise.all([
+        mediaFacts(project, composition, markup.sources()),
+        composition === "index.html"
+          ? []
+          : readSource(project, "index.html").then(({ content }) =>
+              declaredFonts(content),
+            ),
+      ]);
     const fonts = new Set([
       ...declaredFonts(source.content),
-      ...(composition === "index.html"
-        ? []
-        : declaredFonts((await readSource(project, "index.html")).content)),
+      ...inheritedFonts,
     ]);
     return {
       source,
@@ -151,8 +160,7 @@ export function createTimelineRoutes(
       lengths,
       footageRefusals,
       footageColours,
-      parsed: parseComposition(source.content, settings, {
-        scope,
+      parsed: projectTimeline(markup, settings, {
         mediaLengths: lengths,
         fonts,
       }),
@@ -457,9 +465,10 @@ export function createTimelineRoutes(
         "This edit cannot be written to the composition exactly. Edit the source instead.",
       );
     const priorGroups = new Map(
-      timelineContent(current.parsed.timeline).authoredAudioGroups?.map(
-        (group) => [group.id, JSON.stringify(group)],
-      ),
+      current.parsed.timeline.authoredAudioGroups?.map((group) => [
+        group.id,
+        JSON.stringify(authoredAudioGroupContent(group)),
+      ]),
     );
     const routedGroups = new Set(
       batch.commands.flatMap((command) =>
@@ -469,13 +478,13 @@ export function createTimelineRoutes(
       ),
     );
     // Placing a scene or pasting a member can affect the source scope of an edited bus.
-    const writtenGroups = timelineContent(written).authoredAudioGroups ?? [];
-    for (const { id, sourceRestriction } of written.authoredAudioGroups ?? []) {
-      const content = writtenGroups.find((group) => group.id === id);
+    for (const group of written.authoredAudioGroups ?? []) {
+      const { id, sourceRestriction } = group;
       if (
         sourceRestriction &&
         (routedGroups.has(id) ||
-          priorGroups.get(id) !== JSON.stringify(content))
+          priorGroups.get(id) !==
+            JSON.stringify(authoredAudioGroupContent(group)))
       )
         throw new TimelineError("unsupported", sourceRestriction);
     }

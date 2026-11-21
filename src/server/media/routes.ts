@@ -11,6 +11,8 @@ import type { MediaService } from "./service";
 import { peakRange } from "./range";
 import { piecePlaylist } from "./pieces";
 import { frameGrid } from "./frames";
+import { mediaFileDetails } from "../timeline/media";
+import { mediaKind } from "../../shared/media";
 
 const PathSchema = z.string().min(1).max(4096);
 const KeySchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -120,6 +122,20 @@ export function createMediaRoutes(
         { headers: h },
       );
     });
+  // Length, size, picture and sound of one media file, so an agent can plan a cut without probing it.
+  api.get("/projects/:id/media/details", async (c) => {
+    const path = PathSchema.refine(
+      (value) => mediaKind(value) !== undefined,
+      "Choose a media file.",
+    ).parse(c.req.query("path"));
+    const details = await mediaFileDetails(
+      await store.get(c.req.param("id")),
+      path,
+    );
+    if (!details)
+      throw new HttpError(404, "Choose a media file in the project.");
+    return c.json(details);
+  });
   // Where export puts the video's frames, which the footage pipeline shows the same way.
   api.get("/projects/:id/media/frames", async (c) => {
     c.header("cache-control", "no-store");
