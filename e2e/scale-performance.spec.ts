@@ -5,12 +5,16 @@ import { scaleFps } from "../scripts/bench-vs-studio-project";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 
+function timecodeFrame(text: string) {
+  const [h, m, s, f] = text.split(":").map(Number);
+  return ((h! * 60 + m!) * 60 + s!) * scaleFps + f!;
+}
+
 async function playhead(page: Page) {
   const text = await page
     .getByRole("button", { name: /^Current time/ })
     .textContent();
-  const [h, m, s, f] = text!.split(":").map(Number);
-  return ((h! * 60 + m!) * 60 + s!) * scaleFps + f!;
+  return timecodeFrame(text!);
 }
 
 async function seek(page: Page, frame: number) {
@@ -93,13 +97,22 @@ for (const pipeline of [false, true]) {
       await page.keyboard.press("Space");
       await expect.poll(() => playhead(page)).toBeGreaterThan(at + 8);
       const firstPicture = await picture();
-      const firstFrame = await playhead(page);
-      const startedPlaying = Date.now();
-      await page.waitForTimeout(1250);
-      const lastFrame = await playhead(page);
-      const elapsed = (Date.now() - startedPlaying) / 1000;
-      expect((lastFrame - firstFrame) / elapsed).toBeGreaterThan(48);
-      expect((lastFrame - firstFrame) / elapsed).toBeLessThan(72);
+      const { first, last, seconds } = await page
+        .getByRole("button", { name: /^Current time/ })
+        .evaluate(async (clock) => {
+          const first = clock.textContent!;
+          const started = performance.now();
+          await new Promise((resolve) => setTimeout(resolve, 1250));
+          return {
+            first,
+            last: clock.textContent!,
+            seconds: (performance.now() - started) / 1000,
+          };
+        });
+      const playbackFramesPerSecond =
+        (timecodeFrame(last) - timecodeFrame(first)) / seconds;
+      expect(playbackFramesPerSecond).toBeGreaterThan(48);
+      expect(playbackFramesPerSecond).toBeLessThan(72);
       const lastPicture = await picture();
       expect(firstPicture).not.toBeNull();
       expect(lastPicture).not.toBeNull();
@@ -250,6 +263,7 @@ for (const pipeline of [false, true]) {
         JSON.stringify({
           pipeline,
           loaded,
+          playbackFramesPerSecond,
           rippleMs,
           lateRippleMs,
           trimKeysMs: keysMs,
