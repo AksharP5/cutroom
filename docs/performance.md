@@ -440,6 +440,8 @@ Shuttle and scrubbing are slow on this composition because of the preview, not t
 
 ### Zoom and ripple edits
 
+A change to the timeline length at the scroll origin uses the viewport dimensions already measured by the resize observer. Mounting, resizing, and edits while scrolled still read the current dimensions and offsets. Fit and edits keep their existing zoom and scroll behavior.
+
 The November 11, 2026 comparison used production builds on `81ba7b5`, before and after the timeline changes, Bun 1.4.4 and Chromium 155.0.8059.84 with SwiftShader, at 1720x1050 in dark mode. The workload has 190 or 240 linked picture/sound pairs and 20 titles. They reference a generated 60-second 640x360 H.264/AAC file, with actual filmstrips and waveform peaks loaded through the media service. Each project waits for the viewer's first confirmed paint and a 4.5-second warm-up.
 
 There are three runs per build and size. Key zoom sends twelve inputs 100 ms apart and samples at least 300 ms after the last one. Wheel zoom sends sixteen inputs, one per displayed frame. Ripple delete removes the fourth linked pair in Fit, followed by undo, redo and restoration; Fit is measured after twelve zoom steps. Edit windows last one second. Frame gaps use `performance.now()` at animation callback entry. Long tasks come from `PerformanceObserver`.
