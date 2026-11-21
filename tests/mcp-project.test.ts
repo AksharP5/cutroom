@@ -3,7 +3,15 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { fileURLToPath } from "node:url";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createApp } from "../src/server/app";
@@ -588,22 +596,24 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
           new URL(`http://127.0.0.1:${port}/mcp`),
         ),
       );
-      const result = z
-        .object({
-          structuredContent: z.object({
-            result: z.object({
-              files: z.array(z.looseObject({ path: z.string() })),
+      const list = async () =>
+        z
+          .object({
+            structuredContent: z.object({
+              result: z.object({
+                files: z.array(z.looseObject({ path: z.string() })),
+              }),
             }),
-          }),
-        })
-        .parse(
-          await client.callTool({
-            name: "media_files",
-            arguments: { projectId: project.id, query: "assets/" },
-          }),
-        ).structuredContent.result;
+          })
+          .parse(
+            await client.callTool({
+              name: "media_files",
+              arguments: { projectId: project.id, query: "assets/" },
+            }),
+          ).structuredContent.result.files;
+      let files = await list();
       const file = (name: string) =>
-        result.files.find(({ path }) => path === `assets/${name}`);
+        files.find(({ path }) => path === `assets/${name}`);
       const bytes = async (name: string) =>
         (await stat(join(assets, name))).size;
       expect(file("talk.mp4")).toEqual({
@@ -637,6 +647,40 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         src: "assets/logo.png",
         bytes: await bytes("logo.png"),
       });
+
+      // A replacement of the same size that keeps the old modification time is probed again:
+      // 2 s of mono and 1 s of stereo hold the same number of bytes.
+      const music = join(assets, "music.wav");
+      ffmpeg("-f", "lavfi", "-i", "sine=d=2", "-ac", "1", "-y", music);
+      files = await list();
+      const mono = await stat(music);
+      expect(file("music.wav")).toMatchObject({ duration: 2 });
+      const stereo = join(root, "stereo.wav");
+      ffmpeg("-f", "lavfi", "-i", "sine=d=1", "-ac", "2", stereo);
+      expect((await stat(stereo)).size).toBe(mono.size);
+      await rename(stereo, music);
+      await utimes(music, mono.atimeMs / 1000, mono.mtimeMs / 1000);
+      expect((await stat(music)).mtimeMs).toBe(mono.mtimeMs);
+      files = await list();
+      expect(file("music.wav")).toMatchObject({
+        bytes: mono.size,
+        duration: 1,
+      });
+
+      // A file that went, or a path outside the project, is refused and never probed.
+      await writeFile(join(root, "outside.wav"), "not inside the project");
+      for (const path of [
+        "assets/gone.wav",
+        "../../outside.wav",
+        join(root, "outside.wav"),
+      ])
+        expect(
+          (
+            await runtime.app.request(
+              `http://127.0.0.1:${port}/api/cutroom/projects/${project.id}/media/details?path=${encodeURIComponent(path)}`,
+            )
+          ).status,
+        ).toBe(404);
     } finally {
       await client.close();
       await runtime.dispose();

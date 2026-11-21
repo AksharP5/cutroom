@@ -44,11 +44,19 @@ interface Probe {
 }
 
 /**
- * Probe results keyed by path, modification time, and size, so each file version is probed once,
- * including files ffprobe cannot read (null). Nothing is kept while ffprobe is missing, so those
- * files are measured once it is available.
+ * Probes by path, for one version of the file (size, times and inode), so each version is probed
+ * once and callers asking at the same time share one ffprobe. Files ffprobe cannot read are kept
+ * as null. A probe that times out or fails is dropped and asked again; nothing is kept while
+ * ffprobe is missing, so those files are measured once it is available. An entry is a few hundred
+ * bytes, so the cache holds every file of a large project.
  */
-const probes = new Map<string, { version: string; result: Probe | null }>();
+const probes = new Map<
+  string,
+  { version: string; result: Promise<Probe | null> }
+>();
+const PROBE_CACHE_SIZE = 4096;
+/** ffprobe reads only headers; a file that takes longer is on a stalled disk or malformed. */
+const PROBE_TIMEOUT_MS = 15_000;
 
 async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   const child = Bun.spawn(
@@ -63,12 +71,16 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       "json",
       path,
     ],
-    { stdout: "pipe", stderr: "ignore" },
+    { stdout: "pipe", stderr: "ignore", timeout: PROBE_TIMEOUT_MS },
   );
   const [output, code] = await Promise.all([
     new Response(child.stdout).text(),
     child.exited,
   ]);
+  if (child.signalCode !== null)
+    throw new Error(
+      `ffprobe did not finish reading ${path} within ${PROBE_TIMEOUT_MS / 1000} s.`,
+    );
   if (code !== 0) return null;
   const { streams, format } = ProbeSchema.parse(JSON.parse(output));
   const seconds = format.duration;
@@ -134,19 +146,25 @@ async function probeFile(
   if (path === null) return null;
   const info = await stat(path).catch(() => null);
   if (!info?.isFile()) return null;
-  const version = fileFingerprint(path, info);
+  // Inode and change time catch a same-size replacement that kept the old modification time.
+  const version = `${fileFingerprint(path, info)}:${info.ino}:${info.ctimeMs}`;
   let cached = probes.get(path);
   if (cached?.version !== version) {
     if (!ffprobe) return { bytes: info.size, result: null };
-    cached = { version, result: await probe(ffprobe, path) };
+    const entry = { version, result: probe(ffprobe, path) };
+    entry.result.catch(() => {
+      if (probes.get(path) === entry) probes.delete(path);
+    });
+    cached = entry;
     probes.delete(path);
-    probes.set(path, cached);
-    if (probes.size > 256) probes.delete(probes.keys().next().value!);
+    probes.set(path, entry);
+    if (probes.size > PROBE_CACHE_SIZE)
+      probes.delete(probes.keys().next().value!);
   }
-  return { bytes: info.size, result: cached.result };
+  return { bytes: info.size, result: await cached.result };
 }
 
-/** Length, size, picture and sound of a project media file; null when it is missing. */
+/** Length, size, picture and sound of a project media file; null when it is missing. Throws when ffprobe stalls. */
 export async function mediaFileDetails(
   project: Project,
   path: string,
@@ -194,7 +212,14 @@ export async function mediaFacts(
     [...new Set(sources)].map(async (src) => {
       const relative = localMediaPath(composition, src);
       if (relative === null) return;
-      const result = (await probeFile(project, relative, ffprobe))?.result;
+      const probed = await probeFile(project, relative, ffprobe).catch(
+        (error: unknown) => {
+          // The timeline still opens; this file's length and sound stay unknown until a later read.
+          console.warn("Could not probe media:", error);
+          return null;
+        },
+      );
+      const result = probed?.result;
       if (!result) return;
       if (result.seconds) facts.lengths.set(src, result.seconds);
       if (result.silent) facts.silent.add(src);

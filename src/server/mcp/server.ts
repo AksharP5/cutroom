@@ -30,6 +30,7 @@ import {
 } from "../../shared/media";
 import { EDIT_SUMMARY_HEADER } from "../../shared/timeline/schema";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
+import type { MediaFileDetails } from "../../shared/media";
 import { animationEvents } from "./animationFollowup";
 import { registerTimelineTools } from "./timelineTools";
 import { registerExportTools } from "./exportTools";
@@ -323,18 +324,22 @@ export function createMcpServer(options: McpOptions = {}) {
             .sort((a, b) => a.path.localeCompare(b.path));
           const end = offset + 100;
           const page = assets.slice(offset, end);
-          const details = await Promise.all(
-            page.map(async ({ path }) => {
-              const response = await requestLocal(
-                `/api/cutroom/projects/${id(projectId)}/media/details?path=${id(path)}`,
-              );
-              // A file that went between the listing and this read keeps its path and kind.
-              if (response.status === 404) return {};
-              if (!response.ok)
-                throw new Error(
-                  `Cutroom returned ${response.status}: ${await response.text()}`,
-                );
-              return MediaFileDetailsSchema.parse(await response.json());
+          // A few probes at a time; a file that went, stalled or cannot be read keeps its path and kind.
+          const details: Partial<MediaFileDetails>[] = page.map(() => ({}));
+          let next = 0;
+          await Promise.all(
+            Array.from({ length: Math.min(8, page.length) }, async () => {
+              while (next < page.length) {
+                const index = next++;
+                const response = await requestLocal(
+                  `/api/cutroom/projects/${id(projectId)}/media/details?path=${id(page[index]!.path)}`,
+                ).catch(() => null);
+                if (response?.ok)
+                  details[index] = MediaFileDetailsSchema.parse(
+                    await response.json(),
+                  );
+                else await response?.body?.cancel();
+              }
             }),
           );
           return {
