@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   acceptMembers,
   appendEdit,
+  memberId,
   members,
   pending,
 } from "../src/server/projects/reviewLedger";
@@ -70,4 +71,47 @@ test("the owner's edits store no baseline for review", () => {
   );
   expect(ledger.edits[0]!.before).toBeUndefined();
   expect(ledger.targets.every((target) => !target.baselines.length)).toBe(true);
+});
+
+test("a pending row keeps its id when compaction renumbers the clips before it", () => {
+  const ledger: Ledger = { targets: [], edits: [] };
+  const ripple = (by: "agent" | "human", prefix: string, accepted: boolean) =>
+    appendEdit(
+      ledger,
+      { label: "Ripple delete", at: "", by, noteIds: [] },
+      Array.from({ length: 1000 }, (_, index) => ({
+        composition: "index.html",
+        clipId: `${prefix}-${index}`,
+        ...(by === "agent" && {
+          before: signature(prefix, index),
+          after: signature(prefix, index, "after"),
+        }),
+        accepted,
+      })),
+    );
+  ripple("agent", "early", true);
+  appendEdit(
+    ledger,
+    { label: "Set opacity", at: "", by: "agent", noteIds: [] },
+    [
+      {
+        composition: "index.html",
+        clipId: "title",
+        before: signature("title"),
+        after: signature("title", "after"),
+        accepted: false,
+      },
+    ],
+  );
+  const waiting = () =>
+    ledger.edits
+      .flatMap((entry) => [...members(ledger, entry)])
+      .filter(pending);
+  const [before] = waiting();
+  // The owner's later edits push the early rows out, so their targets are dropped.
+  for (const prefix of ["later-1", "later-2", "later-3"])
+    ripple("human", prefix, true);
+  const [after] = waiting();
+  expect(after!.index).not.toBe(before!.index);
+  expect(memberId(after!)).toBe(memberId(before!));
 });
