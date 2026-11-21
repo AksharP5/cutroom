@@ -83,7 +83,9 @@ const scale =
   options.scale === "1000" ? 1000 : options.scale === "100" ? 100 : null;
 const shots = scale && scaleShots(scale);
 const fps = scale ? scaleFps : studioFps;
-const editsAt = scale ? [4, 12] : [22, 23, 24, 27, 28];
+const editsAt = scale
+  ? [4, 12, scale === 1000 ? 400 : 38]
+  : [22, 23, 24, 27, 28];
 const sourceFrame = (index: number) =>
   (shots && shots[index]?.source) || Math.round(mediaStart(index) * fps);
 const shotFrames = (index: number) => {
@@ -469,7 +471,7 @@ async function session(
       viewport,
       args: [
         "--mute-audio",
-        "--ozone-platform=x11",
+        `--ozone-platform=${process.env.WAYLAND_DISPLAY ? "wayland" : "x11"}`,
         "--disable-background-timer-throttling",
         "--disable-renderer-backgrounding",
         "--disable-backgrounding-occluded-windows",
