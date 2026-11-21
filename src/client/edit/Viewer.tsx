@@ -412,7 +412,14 @@ export function Viewer({
           ) {
             const timing = new AbortController();
             const timingSignal = AbortSignal.any([signal, timing.signal]);
-            const timingTimer = window.setTimeout(() => timing.abort(), 2000);
+            // Native playback keeps the old picture until the timing update
+            // paints. A slow compile can still finish before a cold document
+            // would load and decode the same frame.
+            const timingTimeout = usePipeline.getState().enabled ? 2000 : 5000;
+            const timingTimer = window.setTimeout(
+              () => timing.abort(),
+              timingTimeout,
+            );
             const stop = useTransport.subscribe((state, previous) => {
               if (
                 state.state.kind !== "stopped" ||
