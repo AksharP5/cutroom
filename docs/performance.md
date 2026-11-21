@@ -47,7 +47,7 @@ Five distinct duration edits to the same saved shot measured the isolated timing
 | 100        | 60 ms (58 to 62)                | 6 ms (5 to 8)                 |
 | 1,000      | 637 ms (609 to 655)             | 29 ms (21 to 37)              |
 
-A CPU profile of the large preview attributed 15.8 seconds in an edit and history run to `getAnimations()`, mostly CSS duration inference. The runtime now lets both duration adapters share one document animation snapshot. Separately, the source timing check reuses the compiled layout for numeric timing changes on existing clips. A change that creates a clip, such as a W trim that splits the music bed, goes through the compiler. The compiled answer establishes a new comparison for later numeric edits in the same tab.
+A CPU profile of the large preview attributed 15.8 seconds in an edit and history run to `getAnimations()`, mostly CSS duration inference. The runtime now lets both duration adapters share one document animation snapshot. Separately, the source timing check reuses the compiled layout for numeric timing changes on existing clips. A change that creates a clip, such as a W trim that splits the music bed, goes through the compiler. The compiled answer establishes a new comparison for later numeric edits in the same tab. The paused native viewer gives a slow timing response time to arrive so it can seek in the loaded document and keep its decoded media.
 
 Compiled timing indexes the compiler's short IDs referenced in the document. On the 1,000-clip camera fixture, building the same timing snapshot from compiled markup dropped from 93 ms to 23 ms over 20 warmed samples per build. This measures the snapshot calculation in isolation, excluding compilation, network time and drawing.
 
