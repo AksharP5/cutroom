@@ -84,9 +84,9 @@ for (const pipeline of [false, true]) {
       await expect.poll(() => picture(page)).toBe(shots[259]!.source + 12);
       await page.keyboard.press("Space");
       await expect.poll(() => playhead(page)).toBeGreaterThan(at + 8);
-      const startedPlaying = Date.now();
-      const firstFrame = await playhead(page);
       const firstPicture = await picture(page);
+      const firstFrame = await playhead(page);
+      const startedPlaying = Date.now();
       await page.waitForTimeout(1250);
       const lastFrame = await playhead(page);
       const elapsed = (Date.now() - startedPlaying) / 1000;
