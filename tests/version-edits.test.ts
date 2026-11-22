@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import { sourceTimeAt } from "@hyperframes/core/speed-ramp";
-import { parseComposition } from "../src/server/timeline/composition";
+import {
+  parseComposition,
+  patchComposition,
+} from "../src/server/timeline/composition";
 import { applyAll } from "../src/shared/timeline/apply";
+import { editReply } from "../src/server/mcp/timelineReply";
 import { clipName } from "../src/shared/timeline/labels";
 import {
   CommandSchema,
@@ -13,6 +17,7 @@ import { versionStart } from "../src/shared/timeline/versions";
 const lengths = new Map([
   ["music.wav", 20],
   ["cue-b.wav", 20],
+  ["sting.wav", 1],
 ]);
 const timelineOf = (body: string) =>
   parseComposition(
@@ -103,4 +108,52 @@ test("a cut through a speed ramp moves every take by the same stretch of source"
     version: 1,
   }).clips.find(({ id }) => id === "tail")!;
   expect(shown.mediaStart).toBeCloseTo(seconds(tail, 1), 5);
+});
+
+test("an agent hears once that a take is too short, not again on each later trim", () => {
+  const music = timelineOf(
+    '<audio id="music" src="music.wav" data-start="0" data-duration="4" data-track-index="1"></audio>',
+  );
+  const view = (timeline: typeof music, revision: string) => ({
+    composition: "index.html",
+    revision,
+    timeline,
+  });
+  const listed = run(music, {
+    type: "setVersions",
+    clipId: "music",
+    versions: [...takes, { name: "Sting", src: "sting.wav" }],
+    active: 0,
+  });
+  const trimmed = run(listed, {
+    type: "trim",
+    clipId: "music",
+    edge: "start",
+    to: 10,
+  });
+  const warnings = (before: typeof music, after: typeof music) =>
+    editReply(view(before, "a"), view(after, "b"), false).warnings ?? [];
+  expect(warnings(music, listed)).toEqual([
+    { clipId: "music", warning: expect.stringContaining("Sting") },
+  ]);
+  expect(warnings(listed, trimmed)).toEqual([]);
+});
+
+test("a slip keeps the slot of a clip whose length came from its file", () => {
+  // Without a written length, the runtime plays to the file's end, so an earlier In would grow it.
+  const html = `<main data-composition-id="main" data-fps="30" data-duration="20"><audio id="music" src="music.wav" data-start="0" data-media-start="1" data-track-index="1"></audio></main>`;
+  const parsed = parseComposition(html, emptyTimelineSettings(), {
+    mediaLengths: lengths,
+  });
+  expect(parsed.timeline.clips[0]!.duration).toBe(570);
+  const slipped = run(parsed.timeline, {
+    type: "slip",
+    clipId: "music",
+    by: -15,
+  });
+  const written = patchComposition(parsed, slipped, new Map());
+  const reread = parseComposition(written, emptyTimelineSettings(), {
+    mediaLengths: lengths,
+  }).timeline.clips[0]!;
+  expect(reread).toMatchObject({ start: 0, duration: 570, mediaStart: 0.5 });
 });

@@ -304,21 +304,23 @@ export function editReply(
     }),
     ...(old.duration !== timeline.duration && { duration: timeline.duration }),
   };
-  // Report a take that stopped fitting, or one this edit added, once.
+  // Report a take once: when this edit adds it too short or makes it stop fitting.
   const previous = new Map(
     before.timeline.clips.map(({ id, versions }) => [id, versions]),
   );
   for (const clip of after.timeline.clips)
-    if (
-      clip.versions &&
-      JSON.stringify(clip.versions) !== JSON.stringify(previous.get(clip.id))
-    )
-      for (const version of clip.versions)
-        if (!version.offline && version.fits === false)
-          warnings.push({
-            clipId: clip.id,
-            warning: versionShortReason(version, timeline.fps),
-          });
+    for (const [index, version] of (clip.versions ?? []).entries()) {
+      const was = previous.get(clip.id)?.[index];
+      if (
+        !version.offline &&
+        version.fits === false &&
+        !(was?.src === version.src && was.fits === false)
+      )
+        warnings.push({
+          clipId: clip.id,
+          warning: versionShortReason(version, timeline.fps),
+        });
+    }
   return {
     revision: after.revision,
     composition: after.composition,

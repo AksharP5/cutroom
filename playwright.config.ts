@@ -29,7 +29,7 @@ export default defineConfig({
         "--no-sandbox",
         // Headless Chromium on the machine's GPU instead of SwiftShader. A headed window on a
         // shared desktop also receives the desktop's real pointer, which breaks hover tests.
-        ...(process.env.CUTROOM_E2E_GPU
+        ...(process.env.CUTROOM_E2E_GPU === "1"
           ? ["--use-angle=gl", "--ignore-gpu-blocklist"]
           : []),
       ],
