@@ -44,6 +44,41 @@ export function focusLibraryRow(element: HTMLElement | null | undefined) {
   element?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
+/**
+ * One observer for the whole list tells each row when it first comes into view, so opening 448
+ * rows sets up one observer instead of one per row.
+ */
+function posterObserver(list: RefObject<HTMLUListElement | null>) {
+  const waiting = new Map<Element, () => void>();
+  let observer: IntersectionObserver | null = null;
+  return {
+    observe(element: Element, seen: () => void) {
+      observer ??= new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            waiting.get(entry.target)?.();
+            waiting.delete(entry.target);
+            observer?.unobserve(entry.target);
+          }
+        },
+        { root: list.current },
+      );
+      waiting.set(element, seen);
+      observer.observe(element);
+      return () => {
+        waiting.delete(element);
+        observer?.unobserve(element);
+      };
+    },
+    dispose() {
+      observer?.disconnect();
+      waiting.clear();
+    },
+  };
+}
+type Posters = ReturnType<typeof posterObserver>;
+
 /** One item: its poster once the row has been on screen, its title, and a block's length. */
 const LibraryRow = memo(function LibraryRow({
   item,
@@ -51,7 +86,7 @@ const LibraryRow = memo(function LibraryRow({
   used,
   adding,
   tabbable,
-  list,
+  posters,
   onFocus,
 }: {
   item: LibraryItem;
@@ -59,7 +94,7 @@ const LibraryRow = memo(function LibraryRow({
   used: boolean;
   adding: boolean;
   tabbable: boolean;
-  list: RefObject<HTMLUListElement | null>;
+  posters: Posters;
   onFocus(name: string): void;
 }) {
   const fps = useFps();
@@ -72,15 +107,8 @@ const LibraryRow = memo(function LibraryRow({
   useEffect(() => {
     const element = row.current;
     if (!element || seen || !item.hasPoster) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry?.isIntersecting) setSeen(true);
-      },
-      { root: list.current },
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [seen, item.hasPoster, list]);
+    return posters.observe(element, () => setSeen(true));
+  }, [seen, item.hasPoster, posters]);
   const title = libraryTitle(item.title);
   const otherSize =
     item.dimensions &&
@@ -194,6 +222,8 @@ export function LibraryList({
   const [filter, setFilter] = useState<Filter>("all");
   const [focused, setFocused] = useState<string>();
   const list = useRef<HTMLUListElement>(null);
+  const posters = useMemo(() => posterObserver(list), []);
+  useEffect(() => () => posters.dispose(), [posters]);
 
   useEffect(() => {
     if (hidden) return;
@@ -338,7 +368,7 @@ export function LibraryList({
               used={used?.has(item.name) ?? false}
               adding={adding.has(item.name)}
               tabbable={item.name === tabbable}
-              list={list}
+              posters={posters}
               onFocus={setFocused}
             />
           ))}
