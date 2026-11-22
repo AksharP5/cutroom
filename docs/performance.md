@@ -40,7 +40,7 @@ The benchmark reads the numbered pictures from Chromium's tab screencast. It rep
 
 `e2e/scale-performance.spec.ts` runs in the performance gate with GPU playback on and off. It uses two 75-second source files and checks the playback clock against 60 fps, at most 16 loaded native media elements, the numbered pictures after an early and late ripple delete, undo, redo and a ruler scrub, and ten persisted W trims followed by ten undos and ten redos. The headless gate catches stalls and lost edits with wider timing budgets than the headed target. The playback clock is sampled inside the browser so browser-driver delay stays outside the interval.
 
-With GPU playback on, the gate measures three ripples at each position and checks the original picture between samples. Each position has a 1,300 ms median budget. The pooled 80th percentile must stay below 1,550 ms, and any one ripple must show the new picture within 2,250 ms. Native playback uses one ripple at each position and an 8,000 ms cap.
+With GPU playback on, the gate measures three ripples at each position and checks the original picture between samples. Each position has a 600 ms median budget. The pooled 80th percentile must stay below 800 ms, and any one ripple must show the new picture within 1,500 ms. Main measured 534 to 917 ms early and 389 to 1,071 ms late on CI before Fit stopped sliding clips that move less than 4 px (see Ripple near the start). Native playback uses one ripple at each position and an 8,000 ms cap.
 
 Five distinct duration edits to the same saved shot measured the isolated timing response after opening each project. The request included parsing the response and checking the saved duration. The GPU playback switch uses this same server path.
 
@@ -533,6 +533,21 @@ Paired 500-clip screenshots freeze both animation clocks at 110 ms, then capture
 On the 500-clip workload, the timeline read the animation's CSS duration after React changed the clip positions. A Chromium trace attributed 16 ms of synchronous layout to that read in the first Delete frame. Applying the clip translations then required a separate style pass over 982 elements. The same layout happened on subsequent edits, where command processing was already warm.
 
 The timeline now reads the slide duration and easing alongside its initial track sizes. It refreshes the timing when the reduced-motion preference changes and honors an inline override on the lanes. The browser can lay out the new positions and their first animation offsets together.
+
+#### Ripple near the start
+
+With GPU playback on, a ripple delete near the start of the 1,000-clip scale fixture took longer to reach the viewer than one near the end. In Fit, every clip after the cut slid about 2.5 px over 220 ms. Each animation frame restyled about 1,990 clip elements, 30 to 36 ms of style work per frame, against about 5 ms for a ripple at shot 400. The footage pipeline's decode and draw queued behind those frames and painted after the slide ended. Emulating reduced motion took the early paint from about 350 to 100 ms.
+
+Clips now land at once when they move less than 4 px or stay off screen for the whole slide. Only clips whose slide crosses the visible lanes are restyled.
+
+Paired runs on November 22, 2026, headless Chromium on the GPU (`CUTROOM_E2E_GPU=1`), 1720 × 1050. Each run made three ripples at shot 4 and three at shot 400, after a warm-up of each, and alternated main `7e838ce2` with the change. "Paint" is when the pipeline canvas first holds the new source frame, read from its pixels. "Picture" is the first screencast frame showing it. Both are timed from keydown. Medians of 15 samples in Fit (five pairs) and 9 at ten zoom steps in (three pairs):
+
+| View, position   | Picture, main | Picture, change | Paint, main | Paint, change |
+| ---------------- | ------------: | --------------: | ----------: | ------------: |
+| Fit, shot 4      |        372 ms |          123 ms |      357 ms |        106 ms |
+| Fit, shot 400    |        218 ms |           76 ms |      141 ms |         64 ms |
+| Zoomed, shot 4   |        113 ms |           99 ms |       82 ms |         66 ms |
+| Zoomed, shot 400 |         97 ms |           96 ms |       61 ms |         62 ms |
 
 ## Work counts
 

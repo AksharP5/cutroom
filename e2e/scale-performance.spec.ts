@@ -135,7 +135,7 @@ for (const pipeline of [false, true]) {
 
       const offset = 24;
       // Native playback can fall back to reloading and decoding the edited document.
-      const rippleBudgetMs = pipeline ? 2250 : 8000;
+      const rippleBudgetMs = pipeline ? 1500 : 8000;
       const ripple = async (shot: number) => {
         const frame = shots[shot]!.start + offset;
         await seek(page, frame);
@@ -189,11 +189,11 @@ for (const pipeline of [false, true]) {
           expect(
             times.toSorted((a, b) => a - b)[1]!,
             `${location} ripple median, ms`,
-          ).toBeLessThan(1300);
+          ).toBeLessThan(600);
         }
         const pooled = [...earlyRipples, ...lateRipples].sort((a, b) => a - b);
         const p80 = pooled[Math.ceil(pooled.length * 0.8) - 1]!;
-        expect(p80, "pooled ripple p80, ms").toBeLessThan(1550);
+        expect(p80, "pooled ripple p80, ms").toBeLessThan(800);
       }
 
       const historySize = async () => {
