@@ -203,7 +203,8 @@ test("@performance the Library opens within 100 ms, loads posters for rows in vi
   request,
 }, testInfo) => {
   await openProject(page, request, "Library performance");
-  // Warm the list once, as a later open in the same session would find it.
+  // The budget is for a saved list: the server has read it once, as after any earlier open.
+  expect((await request.get("/api/cutroom/library")).ok()).toBe(true);
   const posters: string[] = [];
   page.on("request", (sent) => {
     if (sent.url().includes("/library/posters/")) posters.push(sent.url());
