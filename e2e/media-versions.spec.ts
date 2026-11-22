@@ -667,16 +667,18 @@ for (const mode of playbackModes)
             (await pair()).find(({ id }) => id === "interview")?.versions,
         )
         .toBeUndefined();
-      await result(z.unknown(), "history_undo", { projectId });
+      // The person switched and kept the takes, so their own Undo reverses them.
+      const file = () => readFile(saved, "utf8");
+      await page.keyboard.press("Control+z");
       await expect(badge).toHaveText(count);
       await finishRecording?.();
       finishRecording = undefined;
-      await result(z.unknown(), "history_undo", { projectId });
-      expect(await readFile(saved, "utf8")).toBe(afterSwitch);
-      await result(z.unknown(), "history_undo", { projectId });
-      expect(await readFile(saved, "utf8")).toBe(beforeSwitch);
-      await result(z.unknown(), "history_redo", { projectId });
-      expect(await readFile(saved, "utf8")).toBe(afterSwitch);
+      await page.keyboard.press("Control+z");
+      await expect.poll(file).toBe(afterSwitch);
+      await page.keyboard.press("Control+z");
+      await expect.poll(file).toBe(beforeSwitch);
+      await page.keyboard.press("Control+Shift+z");
+      await expect.poll(file).toBe(afterSwitch);
       const { jobId } = await result(
         z.object({ jobId: z.string() }),
         "export_start",
