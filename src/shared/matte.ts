@@ -253,3 +253,57 @@ export function matteNeeds(timeline: Timeline, composition: string) {
     ];
   });
 }
+
+/**
+ * What agents read for a removed background, as `timeline_read` and `matte_status` give it. A clip
+ * that keeps its background reads null, as `setClip.background: null` sets it.
+ */
+export const ClipBackgroundSchema = z.object({
+  mode: z.literal("remove"),
+  /** Left out where the matte's progress was not read, as in an edit's reply. */
+  state: z
+    .enum(["ready", "waiting", "running", "needs-model", "failed"])
+    .optional(),
+  progress: z.number().min(0).max(1).optional(),
+  error: z.string().optional(),
+  shrink: z.number().int(),
+  soften: z.number().int(),
+});
+export type ClipBackground = z.infer<typeof ClipBackgroundSchema>;
+
+export function clipBackground(
+  status: MatteStatus,
+  composition: string,
+  clip: Clip,
+  fps: Fps,
+): ClipBackground | null {
+  if (!clip.background) return null;
+  const range = clipSourceRange(clip, fps);
+  const src = range && localMediaPath(composition, clip.src!);
+  const matte =
+    src && range ? clipMatte(status, src, range.from, range.to) : null;
+  const base = { mode: "remove" as const, ...clip.background };
+  if (!matte)
+    return {
+      ...base,
+      state: "failed",
+      error: "The clip has no local source to matte.",
+    };
+  if (matte.state === "ready") return { ...base, state: "ready" };
+  if (matte.state === "no-subject")
+    return {
+      ...base,
+      state: "failed",
+      error: "No person or subject found in this clip.",
+    };
+  if (matte.state === "failed")
+    return { ...base, state: "failed", error: matte.error };
+  if (status.model.status !== "ready") return { ...base, state: "needs-model" };
+  if (matte.state === "running")
+    return {
+      ...base,
+      state: "running",
+      progress: Math.round(matte.progress * 100) / 100,
+    };
+  return { ...base, state: "waiting" };
+}

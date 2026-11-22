@@ -1,3 +1,4 @@
+import type { ClipBackground } from "../../shared/matte";
 import {
   VOLUME_TARGET,
   parseAutomation,
@@ -49,7 +50,15 @@ export const agentVersions = (versions: readonly Version[], fps: Fps) =>
     }),
   }));
 
-export function agentTimeline(timeline: Timeline, whole = timeline) {
+/**
+ * A removed background reads `{mode: "remove"}` with its refine and, where the matte's progress was
+ * read, its state; a kept one reads null.
+ */
+export function agentTimeline(
+  timeline: Timeline,
+  whole = timeline,
+  backgrounds?: ReadonlyMap<string, ClipBackground>,
+) {
   const offsets = syncOffsets(whole);
   const members = new Map<string, number>();
   for (const { authoredAudioGroupId: group } of whole.clips)
@@ -72,6 +81,12 @@ export function agentTimeline(timeline: Timeline, whole = timeline) {
       const offset = offsets.get(rest.id);
       const clip = {
         ...rest,
+        background: rest.background
+          ? (backgrounds?.get(rest.id) ?? {
+              mode: "remove" as const,
+              ...rest.background,
+            })
+          : null,
         ...(versions && {
           versions: agentVersions(versions, timeline.fps),
         }),
@@ -107,6 +122,7 @@ function compactClip(clip: AgentClip) {
     fadeOut,
     style,
     fx,
+    background,
     ...fields
   } = clip;
   return {
@@ -121,6 +137,7 @@ function compactClip(clip: AgentClip) {
     ...(fadeOut !== 0 && { fadeOut }),
     ...(Object.keys(style).length > 0 && { style }),
     ...(fx.length > 0 && { fx }),
+    ...(background && { background }),
   };
 }
 
@@ -128,8 +145,13 @@ export function readTimelineReply(
   whole: Timeline,
   filters: TimelineFilters,
   format: ReplyFormat,
+  backgrounds?: ReadonlyMap<string, ClipBackground>,
 ) {
-  const timeline = agentTimeline(filterTimeline(whole, filters), whole);
+  const timeline = agentTimeline(
+    filterTimeline(whole, filters),
+    whole,
+    backgrounds,
+  );
   if (
     format === "legacy" ||
     (format === "auto" && fitsClipBudget(timeline.clips))

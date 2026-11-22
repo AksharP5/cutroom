@@ -370,6 +370,20 @@ The stages run in that order on the picture as the browser decodes it, display-r
 
 A colour-only grade on a video or still can stay in the direct FFmpeg export and the footage pipeline. To grade several clips together, insert a clip with `kind: "adjustment"` and omit `region`. Set its grade with `setClip.grade`. Each lower clip's grade runs before the adjustment grades the composite. MP4 applies the adjustment in FFmpeg over footage the direct exporter can draw. Titles, dissolves and other effects that require the browser still use frame capture for their own spans. Resolve gets a rendered composite on the adjustment's track.
 
+### Remove background
+
+A video clip's `background` is null while it keeps its background. When it is removed, it reads `{"mode": "remove", "state": "running", "progress": 0.42, "shrink": 1, "soften": 1}`. `state` is `ready` (the cutout shows in preview and export), `waiting`, `running` with `progress` from 0 to 1, `needs-model`, or `failed` with `error`, which also covers a clip with no person or subject in it. Edit replies leave `state` out, except for the clips the edit itself changed.
+
+```json
+{ "type": "setClip", "clipId": "interview", "background": { "mode": "remove" } }
+{ "type": "setClip", "clipId": "interview", "background": { "shrink": 2, "soften": 3 } }
+{ "type": "setClip", "clipId": "interview", "background": null }
+```
+
+The edit lands at once, as one undo step, and the matte job runs after it. The `timeline_edit` reply carries each changed clip's background under `background`. Shrink and soften need a removed background and take whole source pixels, 0 to 8. Audio, titles, scenes, images and adjustment layers have no background.
+
+`matte_status` reports the model (`ready`, `missing` with `bytes`, `downloading`, `failed`), every job of the project (its source, frames, frames done, status and elapsed seconds), and each video clip's `background`. An agent that needs the cutout before rendering polls it, as it polls `export_status`, although an export also waits for missing mattes by itself. `matte_cancel` stops a job and keeps the frames already made. The clip keeps `mode: "remove"` until it is set to keep. `matte_download` fetches the 168 MB model. It reaches the internet, so it asks every time, even with Always allow on.
+
 ### Transitions
 
 A transition sits on a cut between two video, image or audio clips on one track. Set it with `setTransition`, naming the clip that ends at the cut and the one that starts there:

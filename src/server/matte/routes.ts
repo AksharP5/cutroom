@@ -3,7 +3,8 @@ import { z } from "zod";
 import type { ProjectStore } from "../projects/store";
 import { canonicalProjectPath } from "../projects/path";
 import type { createTimelineRoutes } from "../timeline/routes";
-import { matteNeeds } from "../../shared/matte";
+import { clipBackground, matteNeeds } from "../../shared/matte";
+import { canRemoveBackground } from "../../shared/timeline/background";
 import { createMatteService } from "./service";
 import type { MatteService } from "./service";
 
@@ -21,9 +22,26 @@ export function createMatteRoutes(
   mattes: MatteService = createMatteService(),
 ) {
   const api = new Hono();
+  /** With `composition`, also each video clip's background as agents read it, by clip id. */
   api.get("/projects/:id/mattes", async (c) => {
     const project = await projects.get(c.req.param("id"));
-    return c.json(await mattes.status(project));
+    const status = await mattes.status(project);
+    const path = c.req.query("composition");
+    if (!path) return c.json(status);
+    const composition = canonicalProjectPath(path);
+    const view = await timelineSnapshot(project, composition);
+    return c.json({
+      ...status,
+      clips: Object.fromEntries(
+        (view.timeline?.clips ?? [])
+          .filter(canRemoveBackground)
+          // Null keeps the background, as setClip.background: null does.
+          .map((clip) => [
+            clip.id,
+            clipBackground(status, composition, clip, view.timeline!.fps),
+          ]),
+      ),
+    });
   });
   /**
    * Queues what the composition's Remove clips lack: after an edit, a trim past the handles, a
