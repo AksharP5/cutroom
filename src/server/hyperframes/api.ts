@@ -33,6 +33,7 @@ import {
 import { parseInput } from "../projects/routes";
 import { sourceWriteGuard } from "./source-guard";
 import {
+  canonicalProjectPath,
   listTimelines,
   projectStatePath,
   unavailableProjectFile,
@@ -428,6 +429,27 @@ export function createHyperframesApi(
     }),
   });
   const exportRequest = new AsyncLocalStorage<ExportRequest>();
+  /** The timeline the editor shows while it asks for lint; unset lints every timeline in full. */
+  const lintScope = new AsyncLocalStorage<string>();
+  const timelineLints = new Map<
+    string,
+    { hash: string; result: Awaited<ReturnType<typeof lintHyperframeHtml>> }
+  >();
+  /** One timeline's own lint as an entry, kept until its bytes change. */
+  const lintTimelineFile = async (dir: string, file: string) => {
+    const html = await readFile(join(dir, file), "utf8");
+    const hash = createHash("sha256").update(html).digest("hex");
+    const key = `${dir}\0${file}`;
+    const known = timelineLints.get(key);
+    if (known?.hash === hash) return known.result;
+    const result = await lintHyperframeHtml(html, {
+      filePath: join(dir, file),
+      compSrcPath: file,
+      host: "studio",
+    });
+    timelineLints.set(key, { hash, result });
+    return result;
+  };
   /** A composition's timeline and frame size, as the editor reads them, for an export. */
   const readComposition = async (projectId: string, composition: string) => {
     const project = await store.get(projectId);
@@ -1137,40 +1159,32 @@ export function createHyperframesApi(
     lint: (html, options) =>
       lintHyperframeHtml(html, { ...options, host: "studio" }),
     // Every root timeline is an entry Cutroom renders on its own, never one HyperFrames discovers,
-    // so several are not a fault, and each other timeline lints as an entry, not as a scene.
-    // Project-wide checks, such as probing media, run once.
+    // so several are not a fault. A timeline linted in full gets HyperFrames' project checks from
+    // it as the entry, such as missing media and scenes; the editor asks that only for the open
+    // one, and lints the others file by file, again only when their bytes change.
     lintProject: async (dir) => {
-      const [{ results }, timelines] = await Promise.all([
-        lintProject(dir, undefined, { host: "studio" }),
-        listTimelines({ path: dir }),
-      ]);
+      const open = lintScope.getStore();
+      const full = (file: string) =>
+        lintProject(dir, file === "index.html" ? undefined : join(dir, file), {
+          host: "studio",
+        }).then(({ results }) => results);
+      const results = await Promise.all(
+        (await listTimelines({ path: dir })).map((file) =>
+          open === undefined || open === file
+            ? full(file)
+            : lintTimelineFile(dir, file).then((result) => [{ file, result }]),
+        ),
+      );
       return {
-        results: [
-          ...results.map(({ file, result }) => ({
-            file,
-            result: {
-              ...result,
-              findings: result.findings.filter(
-                ({ code }) => code !== "multiple_root_compositions",
-              ),
-            },
-          })),
-          ...(await Promise.all(
-            timelines
-              .filter((file) => file !== "index.html")
-              .map(async (file) => ({
-                file,
-                result: await lintHyperframeHtml(
-                  await readFile(join(dir, file), "utf8"),
-                  {
-                    filePath: join(dir, file),
-                    compSrcPath: file,
-                    host: "studio",
-                  },
-                ),
-              })),
-          )),
-        ],
+        results: results.flat().map(({ file, result }) => ({
+          file,
+          result: {
+            ...result,
+            findings: result.findings.filter(
+              ({ code }) => code !== "multiple_root_compositions",
+            ),
+          },
+        })),
       };
     },
     runtimeUrl: "/api/runtime.js",
@@ -1997,6 +2011,11 @@ export function createHyperframesApi(
       );
     });
   }
+  api.get("/projects/:id/lint", async (c, next) => {
+    const composition = c.req.query("composition");
+    if (composition === undefined) return next();
+    await lintScope.run(canonicalProjectPath(composition), next);
+  });
   api.route("/", createStudioApi(adapter));
   return Object.assign(api, {
     /** The export running for this project, if any. One export runs at a time across projects. */

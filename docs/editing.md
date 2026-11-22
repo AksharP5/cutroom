@@ -92,7 +92,7 @@ A timeline is a composition at the project's root: `index.html` is the main one,
 
 Opening another timeline replaces the one shown, as its equal: the line above the ruler shows only its name, and Esc does not leave it. Each timeline keeps its own playhead and selection. A scene opened from Compositions opens from the timeline being edited, and Esc returns there. The project reopens on the timeline last shown, which `.cutroom/view.json` remembers; when that file is gone it opens `index.html`. Export and Export for Resolve render the timeline that is open, named after the project and the timeline, as `Interview Cut 2.mp4`; a timeline named after the project keeps its own name.
 
-Undo and redo are one history for the whole project, as with scenes. A step that lands in another timeline says so, such as "Undid Lifted clips in index.html." Undoing a duplicate while the copy is open returns to `index.html`. Each timeline's Changes list leaves out edits made in other timelines.
+Undo and redo are one history for the whole project, as with scenes. A step that lands in another timeline says so, such as "Undid Lifted clips in index.html." Undoing a duplicate while the copy is open returns to `index.html`. Edits made since in other timelines don't stand in its way; edits to the copy itself are taken back with it, or first. The Compositions list's lint checks the open timeline in full, including its media and scenes, and the others file by file. Each timeline's Changes list leaves out edits made in other timelines.
 
 ### Variables
 

@@ -50,7 +50,8 @@ export interface HistoryEntry {
   /** Set on an undo: the entry it reverted. Redo is undoing the undo. */
   undoes?: string;
   replay?: "ordinary" | "explicit" | "group";
-  category?: "marker" | "media" | "text" | "import";
+  /** `timeline`: a duplicated timeline, related only to later edits of the files it made. */
+  category?: "marker" | "media" | "text" | "import" | "timeline";
   requestId?: string;
   incomplete?: true;
   /** Set on a restore: the point (an entry id, or START) the files were made equal to. */

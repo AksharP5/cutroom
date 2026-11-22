@@ -265,11 +265,46 @@ async function validatePaths(project: Project, entry: Entry) {
   }
 }
 
+/** The files a duplicated timeline made: the copy and its captions files. */
+const madeFiles = (entry: Entry) =>
+  new Set(
+    entry.files.filter(({ before }) => before === null).map(({ path }) => path),
+  );
+
+/**
+ * Later entries that mount a file `original` made, by an HTML file they wrote naming it. Only a
+ * duplicated timeline asks: anything else that mounts a new scene is caught by the files it shares.
+ */
+async function mountingEntries(
+  entries: readonly Entry[],
+  original: Entry,
+  text: (hash: string) => Promise<string>,
+) {
+  if (original.category !== "timeline") return new Set<string>();
+  const names = [...madeFiles(original)].flatMap((path) => [
+    path,
+    encodeURI(path),
+  ]);
+  const later = entries.slice(entries.indexOf(original) + 1);
+  const mounting = await Promise.all(
+    later.map(async (entry) => {
+      for (const { path, after } of entry.files)
+        if (/\.html?$/i.test(path) && after) {
+          const source = await text(after);
+          if (names.some((name) => source.includes(name))) return [entry.id];
+        }
+      return [];
+    }),
+  );
+  return new Set(mounting.flat());
+}
+
 function relatedEdits(
   entries: readonly Entry[],
   target: Entry,
   original: Entry,
   direction: Direction,
+  mounting: ReadonlySet<string> = new Set(),
 ) {
   const byId = new Map<string, { index: number; root: Entry; entry: Entry }>();
   for (const [index, entry] of entries.entries())
@@ -305,6 +340,15 @@ function relatedEdits(
         byId.get(entry.undoes)!.index > anchor
       )
         return [];
+    }
+    // A duplicate relates only to edits of the files it made and to edits that mount them.
+    if (original.category === "timeline") {
+      const made = madeFiles(original);
+      const files = entry.files.filter(
+        ({ path }) =>
+          made.has(path) || (mounting.has(entry.id) && /\.html?$/i.test(path)),
+      );
+      return files.length ? [{ entry, files }] : [];
     }
     const category = root.category;
     const files = entry.files.filter(({ path, before, after }) => {
@@ -722,7 +766,15 @@ export async function replayHistory(
               !input.entryId || next?.id === target.id
                 ? "ordinary"
                 : "explicit";
-            const later = relatedEdits(entries, target, original, direction);
+            const later = relatedEdits(
+              entries,
+              target,
+              original,
+              direction,
+              await mountingEntries(entries, original, (hash) =>
+                cache.text(hash),
+              ),
+            );
             const conflicts = await plan.add(target, original, replay, later);
             if (!conflicts.length) {
               if (input.withEntries)

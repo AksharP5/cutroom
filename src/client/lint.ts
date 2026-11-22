@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { z } from "zod";
 import { create } from "zustand";
 import { compactLint } from "../shared/lint";
+import { useTimeline } from "./edit/timeline";
+import { useWorkspace } from "./workspace";
 import { subscribeProjectEvents } from "./api";
 
 type Lint = ReturnType<typeof compactLint>;
@@ -19,6 +21,12 @@ const useLintState = create<{
 
 const watchers = new Map<string, { count: number; stop(): void }>();
 
+/** The timeline being edited, the one above an open scene. */
+const openTimeline = () => {
+  const { composition, parents } = useTimeline.getState();
+  return parents[0] ?? composition;
+};
+
 /** Lints when the project opens and again after each source change, while anything watches. */
 function watch(projectId: string) {
   const known = watchers.get(projectId);
@@ -28,12 +36,20 @@ function watch(projectId: string) {
     let request = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const check = async () => {
+      // Until the editor knows which timeline it opens, there is nothing to lint in full. The
+      // legacy editor opens none, so it lints every timeline in full.
+      const opened = useTimeline.getState().projectId === projectId;
+      if (!opened && useWorkspace.getState().newEditor) return;
       request.abort();
       request = new AbortController();
       const { signal } = request;
       try {
         const response = await fetch(
-          `/api/projects/${encodeURIComponent(projectId)}/lint`,
+          `/api/projects/${encodeURIComponent(projectId)}/lint${
+            opened
+              ? `?${new URLSearchParams({ composition: openTimeline() })}`
+              : ""
+          }`,
           { signal },
         );
         const body: unknown = await response.json();
@@ -66,10 +82,24 @@ function watch(projectId: string) {
         timer = setTimeout(() => void check(), SETTLE_MS);
       },
     );
+    // The open timeline is linted in full, so switching timelines lints again, once the switch
+    // has read its timeline: lint holds the server for a few hundred milliseconds.
+    const stopTimeline = useTimeline.subscribe((state, previous) => {
+      if (
+        state.projectId === projectId &&
+        (previous.projectId !== projectId ||
+          (state.parents[0] ?? state.composition) !==
+            (previous.parents[0] ?? previous.composition))
+      ) {
+        clearTimeout(timer);
+        timer = setTimeout(() => void check(), SETTLE_MS);
+      }
+    });
     watchers.set(projectId, {
       count: 1,
       stop() {
         unsubscribe();
+        stopTimeline();
         clearTimeout(timer);
         request.abort();
       },

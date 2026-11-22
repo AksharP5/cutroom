@@ -8,7 +8,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `project_create`, `project_import`                              | Create a composition or register an existing folder.                        |
 | `project_rename`                                                | Change a project's display name. Its folder, history and ID stay.           |
 | `project_read`                                                  | Read annotations, transcript metadata and the timelines.                    |
-| `project_lint`                                                  | Run HyperFrames lint: counts and findings, errors first.                    |
+| `project_lint`                                                  | Run HyperFrames lint on every timeline: counts and findings, errors first.  |
 | `media_list`                                                    | Inspect local media elements and their timing.                              |
 | `media_files`                                                   | Find stills, video, and audio in the project, with length, size and rate.   |
 | `media_import`                                                  | Import files by absolute path through the local stdio bridge.               |
