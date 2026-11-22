@@ -423,7 +423,8 @@ test("a held slip retries once after an unrelated edit wins the revision", async
   await hold(6);
   await release();
   await expect.poll(sourceFrame).toBe(initial + 6);
-  expect(responses).toEqual([409, 200]);
+  // The server applies the retry before the route handler records its status.
+  await expect.poll(() => responses).toEqual([409, 200]);
   expect((await view()).timeline.markers.map(({ name }) => name)).toEqual([
     "Agent marker",
   ]);
