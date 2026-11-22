@@ -189,6 +189,9 @@ test.skipIf(!supported)(
          const {browser} = await launchCaptureBrowser();
          const page = await browser.newPage();
          await page.goto('data:text/html,<h1>Capture</h1>');
+         // A screenshot before the page's first compositor frame fails in Chromium.
+         await page.evaluate(() => new Promise((done) =>
+           requestAnimationFrame(() => requestAnimationFrame(done))));
          await page.screenshot();
          process.exit(0);`,
       ],
