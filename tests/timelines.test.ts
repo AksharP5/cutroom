@@ -419,3 +419,129 @@ test("undo names the timeline it changed, even when only its settings in cutroom
   await edit(composition, { type: "remove", clipIds: ["talk"] });
   expect(await step("undo")).toEqual([composition]);
 });
+
+const commands = async (path: string, list: unknown[]) => {
+  const view = TimelineViewSchema.parse(
+    await json(`/timeline?composition=${encodeURIComponent(path)}`),
+  );
+  await json("/commands", "POST", {
+    composition: path,
+    expectedRevision: view.revision,
+    commands: list,
+  });
+};
+const historyEntries = async () =>
+  z
+    .object({
+      entries: z.array(
+        z.object({ id: z.string(), label: z.string(), undone: z.boolean() }),
+      ),
+    })
+    .parse(await json("/history")).entries;
+
+test("undoing a duplicate passes later edits in other timelines, and stops at edits to the copy", async () => {
+  const { composition, historyId } = await duplicate({ name: "Cut" });
+  await commands("index.html", [
+    { type: "setMarker", frame: 30, name: "Beat" },
+  ]);
+  await commands("index.html", [{ type: "setTrack", index: 0, name: "Talk" }]);
+  const undo = (entryId: string) =>
+    fixture.request(`/projects/${project.id}/history/undo`, "POST", {
+      entryId,
+    });
+  expect((await undo(historyId)).status).toBe(200);
+  expect(await exists(composition)).toBe(false);
+  // The edits in index.html stand.
+  const settings = (await document()).timelines["index.html"]!;
+  expect(settings.markers.map(({ name }) => name)).toEqual(["Beat"]);
+  expect(settings.tracks.find(({ index }) => index === 0)?.name).toBe("Talk");
+
+  const again = await duplicate({ name: "Cut" });
+  await commands(again.composition, [{ type: "remove", clipIds: ["talk"] }]);
+  const refused = await undo(again.historyId);
+  expect(refused.status).toBe(409);
+  expect(await refused.text()).toContain(
+    "You made a related edit: Lifted clips",
+  );
+  expect(await exists(again.composition)).toBe(true);
+});
+
+test("an agent undoes its own duplicate after the owner edited another timeline", async () => {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: createMcpHttpHandler({
+      fetch: (url, init) => fixture.app.request(url, init),
+    }),
+  });
+  const client = new Client({ name: "undo-test", version: "1" });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${server.port}/mcp`),
+      ),
+    );
+    const called = await client.callTool({
+      name: "timeline_duplicate",
+      arguments: { projectId: project.id, name: "Agent cut" },
+    });
+    expect(called.isError, JSON.stringify(called)).not.toBe(true);
+    await commands("index.html", [
+      { type: "setMarker", frame: 15, name: "Owner beat" },
+    ]);
+    const undone = await client.callTool({
+      name: "history_undo",
+      arguments: { projectId: project.id },
+    });
+    expect(undone.isError, JSON.stringify(undone)).not.toBe(true);
+    expect(await exists("Agent cut.html")).toBe(false);
+    expect(
+      (await document()).timelines["index.html"]!.markers.map(
+        ({ name }) => name,
+      ),
+    ).toEqual(["Owner beat"]);
+    expect((await historyEntries()).at(-1)?.label).toBe(
+      "Undid: Duplicate Interview",
+    );
+  } finally {
+    await client.close();
+    await server.stop(true);
+  }
+});
+
+test("lint checks the open timeline's media and scenes in full, and every timeline when none is open", async () => {
+  fixture.app.route(
+    "/api",
+    createHyperframesApi(fixture.store, fixture.review),
+  );
+  const { composition } = await duplicate({ name: "Cut" });
+  // Only the copy plays footage that is not there.
+  await writeFile(
+    at(composition),
+    source.replace('src="talk.mp4"', 'src="gone.mp4"'),
+  );
+  const lint = async (open?: string) =>
+    z
+      .object({
+        findings: z.array(z.object({ code: z.string(), file: z.string() })),
+      })
+      .parse(
+        await (
+          await fixture.app.request(
+            `/api/projects/${project.id}/lint${open ? `?composition=${encodeURIComponent(open)}` : ""}`,
+          )
+        ).json(),
+      )
+      .findings.filter(({ file }) => file === composition)
+      .map(({ code }) => code);
+  const missing = (codes: string[]) => codes.includes("missing_local_asset");
+  // project_lint and the legacy editor name no timeline: the broken copy is reported.
+  expect(missing(await lint())).toBe(true);
+  expect(missing(await lint(composition))).toBe(true);
+  // While index.html is open the copy gets its own file's lint, and it follows the copy's bytes.
+  expect(missing(await lint("index.html"))).toBe(false);
+  const own = await lint("index.html");
+  expect(own).toContain("video_missing_muted");
+  await writeFile(at(composition), source.replace("<video ", "<video muted "));
+  expect(await lint("index.html")).not.toContain("video_missing_muted");
+});

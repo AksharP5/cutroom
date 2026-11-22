@@ -137,6 +137,7 @@ export async function duplicateTimeline(
       return path;
     },
     who,
+    { category: "timeline" },
   );
   await projectViews.copyTimeline(project, source, composition);
   return { composition, ...(entry && { historyId: entry.id }) };
