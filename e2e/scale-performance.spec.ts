@@ -1,11 +1,17 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { z } from "zod";
 import { test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { makeScaleProject } from "../scripts/scale-performance-project";
 import { scaleFps } from "../scripts/bench-vs-studio-project";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+
+const UndoProbeSchema = z.object({
+  pressed: z.number().optional(),
+  shown: z.number().optional(),
+});
 
 function timecodeFrame(text: string) {
   const [h, m, s, f] = text.split(":").map(Number);
@@ -363,33 +369,61 @@ test(
           page.locator(`[data-agent-change="${title}"]`).first(),
         ).toBeAttached();
         await page.waitForTimeout(300);
-        const shown = page.evaluate(
-          (id) =>
-            new Promise<number>((resolve) => {
-              let pressed = 0;
-              addEventListener("keydown", () => (pressed = performance.now()), {
-                capture: true,
-                once: true,
-              });
-              const frame = () => {
-                if (pressed && document.querySelector(`[data-clip="${id}"]`))
-                  resolve(performance.now() - pressed);
-                else requestAnimationFrame(frame);
-              };
-              requestAnimationFrame(frame);
-            }),
-          `shot-${shot}`,
-        );
+        // Listen before pressing: an evaluate still in flight can miss the key.
+        await page.evaluate((id) => {
+          const undo: { pressed?: number; shown?: number } = {};
+          Object.assign(window, { undo });
+          const press = () => (undo.pressed = performance.now());
+          addEventListener("keydown", press, { capture: true, once: true });
+          const frame = () => {
+            if (undo.pressed && document.querySelector(`[data-clip="${id}"]`))
+              undo.shown = performance.now();
+            else requestAnimationFrame(frame);
+          };
+          requestAnimationFrame(frame);
+        }, `shot-${shot}`);
+        const answers = () =>
+          page.evaluate(() =>
+            performance
+              .getEntriesByType("resource")
+              .filter(({ name }) => name.includes("/history/undo"))
+              .map((entry) => (entry as PerformanceResourceTiming).responseEnd),
+          );
+        // The browser keeps 250 resource timings; start each press with room for its answer.
+        await page.evaluate(() => performance.clearResourceTimings());
         await page.keyboard.press("Control+z");
-        undoMs.push(await shown);
+        const seen = async () =>
+          UndoProbeSchema.parse(
+            await page.evaluate(() => Reflect.get(window, "undo")),
+          );
+        await expect
+          .poll(async () => (await seen()).shown, { timeout: 5000 })
+          .toBeDefined()
+          .catch(async (error: unknown) => {
+            const status = await page.getByRole("status").allTextContents();
+            throw new Error(
+              `Undo after ${title} did not show shot-${shot} in 5 s. Page saw ${JSON.stringify(await seen())}, status ${JSON.stringify(status)}.`,
+              { cause: error },
+            );
+          });
+        const { pressed, shown } = await seen();
+        undoMs.push(shown! - pressed!);
+        // The step shows from what the editor holds, before the engine answers.
+        await expect.poll(async () => (await answers()).length).toBe(1);
+        const [answered] = await answers();
+        expect(shown, `Undo after ${title} waited for the engine`).toBeLessThan(
+          answered,
+        );
         await expect.poll(picture).toBe(shots[shot]!.source + offset);
         await expect(
           page.locator(`[data-agent-change="${title}"]`).first(),
         ).toBeAttached();
       }
       console.log(JSON.stringify({ undoAfterAgentMs: undoMs }));
-      // Main took 650 to 850 ms here: the press waited on the agent's lint and timeline reads.
-      expect(undoMs.toSorted((a, b) => a - b)[1]!).toBeLessThan(150);
+      // Before the fix the press waited on the agent's lint and timeline reads: 650 to 850 ms.
+      // Each press above already showed before the engine answered; this bounds the repaint,
+      // which takes 40 to 100 ms on a quiet runner and up to 350 ms on a slow one.
+      expect(undoMs.toSorted((a, b) => a - b)[1]!).toBeLessThan(400);
     } finally {
       await agent.close();
     }

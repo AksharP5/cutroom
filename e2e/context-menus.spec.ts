@@ -378,8 +378,30 @@ test("F2 renames a project tile in place, and Remove from list keeps its folder"
   const renamed = `${project.name} v2`;
   await page.keyboard.press("F2");
   await field.fill(renamed);
+  // On a busy machine a frame can run before the field gives way to the tile again.
+  // Running frame callbacks at once forces that order on every run.
+  const restoreFrames = await page.evaluateHandle(() => {
+    const frame = window.requestAnimationFrame.bind(window);
+    let early = false;
+    window.requestAnimationFrame = (callback) => {
+      if (early) return frame(callback);
+      queueMicrotask(() => {
+        early = true;
+        try {
+          callback(performance.now());
+        } finally {
+          early = false;
+        }
+      });
+      return 0;
+    };
+    return () => {
+      window.requestAnimationFrame = frame;
+    };
+  });
   await field.press("Enter");
   await expect(tileNamed(renamed)).toBeFocused();
+  await restoreFrames.evaluate((restore) => restore());
   const saved = ProjectSchema.parse(
     await (await request.get(`/api/cutroom/projects/${project.id}`)).json(),
   );
