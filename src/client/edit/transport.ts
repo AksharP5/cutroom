@@ -224,6 +224,18 @@ export function createTransport() {
   const transport = {
     use,
     clock: () => player?.clock() ?? null,
+    /**
+     * Where a shuttle's playhead is at page time `at`, in frames between whole ones; the frame
+     * shown is this rounded toward the start. Null unless shuttling.
+     */
+    shuttlePosition(at: number) {
+      const { state, fps } = get();
+      if (state.kind !== "shuttle") return null;
+      return (
+        origin.frame +
+        (((at - origin.at) / 1000) * velocity(state) * fps.num) / fps.den
+      );
+    },
     dispatch(event: TransportEvent) {
       run(transition(get().state, event));
     },

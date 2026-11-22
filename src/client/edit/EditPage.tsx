@@ -75,6 +75,7 @@ import { CodePanel } from "./code/CodePanel";
 import { codeCanLeave, openFile, useCode } from "./code/code";
 import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
+import { startScrubAudio } from "../scrubAudio/engine";
 import type { SaveNote } from "./NoteLayer";
 import { Viewer } from "./Viewer";
 import { useFollowVariables } from "./variables";
@@ -273,6 +274,7 @@ export function EditPage({
     };
   }, []);
   useEffect(() => publishSelection(projectId), [projectId]);
+  useEffect(() => startScrubAudio(transport), []);
 
   useEffect(() => {
     const change = () =>
