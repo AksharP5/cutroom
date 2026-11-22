@@ -124,8 +124,12 @@ function editable(entry: Entry) {
   return (
     isMediaOperation(entry) ||
     entry.files.every(
-      ({ path }) =>
+      ({ path, before }) =>
         !protectedPath(path) ||
+        // A library item's assets, which its add created.
+        (entry.category === "library" &&
+          before === null &&
+          !protectedPath(path, false)) ||
         inFreezeAssets(path) ||
         /^assets\/fonts\/[^/]+\.(?:woff2?|[ot]tf)$/i.test(path),
     )

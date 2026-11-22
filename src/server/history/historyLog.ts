@@ -51,7 +51,7 @@ export interface HistoryEntry {
   undoes?: string;
   replay?: "ordinary" | "explicit" | "group";
   /** `timeline`: a timeline duplicated, created or renamed, related only to later edits of its files. */
-  category?: "marker" | "media" | "text" | "import" | "timeline";
+  category?: "marker" | "media" | "text" | "import" | "timeline" | "library";
   requestId?: string;
   incomplete?: true;
   /** Set on a restore: the point (an entry id, or START) the files were made equal to. */

@@ -20,6 +20,7 @@ const unscoped = [
   "export_cancel",
   "lut_import",
   "media_import",
+  "library_add",
 ];
 const reads = [
   "projects_list",
@@ -40,6 +41,7 @@ const reads = [
   "layer_text_list",
   "fonts_list",
   "luts_list",
+  "library_search",
   "history_list",
   "review_list",
   "export_status",
@@ -100,12 +102,14 @@ test("claiming, finishing, blocking, and releasing a note and choosing destinati
       { tools: { review_claim: { approval_mode: "prompt" } } },
     ])["mcp_servers.cutroom_studio.tools.review_claim.approval_mode"],
   ).toBe("prompt");
-  // Export and project creation reach beyond the project, so not even Always allow covers them.
+  // Export, project creation and library items reach beyond the project, so not even Always allow
+  // covers them.
   for (const name of [
     "export_start",
     "export_cancel",
     "project_create",
     "project_duplicate",
+    "library_add",
   ])
     expect(asks(name, true)).toEqual({ claude: true, codex: true });
 });
@@ -164,6 +168,7 @@ test("native permission rules match every tool advertised over MCP", async () =>
       "mcp__cutroom_studio__project_duplicate",
       "mcp__cutroom_studio__media_import",
       "mcp__cutroom_studio__lut_import",
+      "mcp__cutroom_studio__library_add",
       "mcp__cutroom_studio__export_start",
       "mcp__cutroom_studio__export_cancel",
     ]);
