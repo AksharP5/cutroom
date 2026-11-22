@@ -33,7 +33,7 @@ import type { Selection } from "../timeline/selection";
 import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { pasteAttributes } from "./pasteAttributes";
-import { anchorsChanged, editAnchors } from "./anchors";
+import { anchorsChanged, editAnchors, undoOver } from "./anchors";
 import {
   outsideChanges,
   outsideMessage,
@@ -157,6 +157,32 @@ const historyPictures = new Map<
   string,
   { from: TimelineView; to: TimelineView }
 >();
+
+/**
+ * An Undo or Redo the engine has not answered yet, shown from the timelines around the edit it
+ * takes back. Like a pending edit, it is reapplied over every newer answer until its own arrives.
+ */
+let stepShown: {
+  projectId: string;
+  from: TimelineView;
+  to: TimelineView;
+} | null = null;
+
+/** Shows `target`'s step at once when its edit is remembered and later edits left it alone. */
+function showStep(projectId: string, target: string) {
+  const picture = historyPictures.get(target);
+  if (!picture || pending.length || confirmed?.projectId !== projectId)
+    return null;
+  const step = { projectId, ...picture };
+  stepShown = step;
+  const view = shown(projectId);
+  if (view?.timeline === confirmed.view.timeline) {
+    stepShown = null;
+    return null;
+  }
+  useTimeline.setState({ view });
+  return step;
+}
 
 function rememberHistoryPicture(
   id: string,
@@ -453,6 +479,7 @@ export function openTimeline(
   confirmed = null;
   answers.clear();
   historyPictures.clear();
+  stepShown = null;
   pending = [];
   clearOutsideNotice();
   dismissRipple();
@@ -669,6 +696,27 @@ function shown(projectId: string): TimelineView | null {
         throw error;
       }
     }, view.timeline);
+  const step =
+    stepShown?.projectId === projectId &&
+    stepShown.from.composition === view.composition
+      ? stepShown
+      : null;
+  const stepped =
+    step &&
+    (step.from.revision === view.revision && timeline === view.timeline
+      ? step.to.timeline
+      : undoOver(step.from.timeline, step.to.timeline, timeline));
+  if (step && stepped) {
+    const { from, to } = step;
+    const resized =
+      from.size?.width !== to.size?.width ||
+      from.size?.height !== to.size?.height;
+    return {
+      ...view,
+      timeline: stepped,
+      ...(resized && { size: to.size }),
+    };
+  }
   return timeline === view.timeline ? view : { ...view, timeline };
 }
 
@@ -1354,6 +1402,20 @@ export function stepHistory(
           ? unobservedTimelineHistory.entryId
           : undefined))
       : undefined) ?? nextId(observed);
+  // A press with nothing ahead of it shows at once, even while a read of another editor's change
+  // holds the queue. A press behind a save or another step shows when its turn comes.
+  const early =
+    !priorStep && !editPending && !notePending && !withEntries && !skip
+      ? (expectedHistoryId ?? seen)
+      : null;
+  let painted = early ? showStep(projectId, early) : null;
+  const unshow = () => {
+    if (painted && stepShown === painted) {
+      stepShown = null;
+      useTimeline.setState({ view: shown(projectId) });
+    }
+    painted = null;
+  };
   const run = queueNoteChange(projectId, () =>
     clipboardTask.then(() =>
       enqueue(async () => {
@@ -1381,22 +1443,11 @@ export function stepHistory(
               ? queued
               : seen);
         const standing = here ? confirmed?.view : undefined;
-        const prediction =
-          !withEntries && !skip && target && target === historyHead
-            ? historyPictures.get(target)
-            : undefined;
-        const painted =
-          standing &&
-          prediction?.from.revision === standing.revision &&
-          prediction.from.composition === standing.composition &&
-          !pending.length
-            ? {
-                ...standing,
-                timeline: prediction.to.timeline,
-                size: prediction.to.size,
-              }
-            : undefined;
-        if (painted) useTimeline.setState({ view: painted });
+        // The press showed the step it expected. The queue settles which step this is.
+        if (painted && painted.from !== historyPictures.get(target ?? "")?.from)
+          unshow();
+        if (!painted && here && !withEntries && !skip && target)
+          painted = showStep(projectId, target);
 
         let replay: z.output<typeof HistoryReplaySchema>;
         try {
@@ -1414,8 +1465,7 @@ export function stepHistory(
             }),
           );
         } catch (error) {
-          if (painted && useTimeline.getState().view === painted)
-            useTimeline.setState({ view: shown(projectId) });
+          unshow();
           if (
             !(error instanceof ApiError) ||
             error.status !== 409 ||
@@ -1484,6 +1534,8 @@ export function stepHistory(
           return;
         }
         const { entry, view, history } = replay;
+        // The answer replaces the step it showed.
+        if (painted && stepShown === painted) stepShown = null;
         if (replay.skipped) {
           if (here && isOpen(projectId, open.composition)) {
             if (history && standing) settle(projectId, standing, history);
@@ -1493,6 +1545,7 @@ export function stepHistory(
           return;
         }
         if (!entry) {
+          if (painted) useTimeline.setState({ view: shown(projectId) });
           if (useTimeline.getState().projectId === projectId)
             showToast(
               replay.message ?? `Nothing of yours to ${step}.`,
@@ -1592,6 +1645,7 @@ export function stepHistory(
   }
   history.add(run);
   const release = () => {
+    unshow();
     history.delete(run);
     if (!history.size) pendingHistory.delete(projectId);
   };

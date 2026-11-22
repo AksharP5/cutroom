@@ -22,7 +22,11 @@ import {
 } from "../src/client/timeline/gesture";
 import type { Drag, Gesture, Preview } from "../src/client/timeline/gesture";
 import { gainLevel } from "../src/client/timeline/mix";
-import { anchorsChanged, editAnchors } from "../src/client/edit/anchors";
+import {
+  anchorsChanged,
+  editAnchors,
+  undoOver,
+} from "../src/client/edit/anchors";
 
 const clip = (
   id: string,
@@ -368,6 +372,55 @@ test("frozen edit anchors include linked partners and ripple followers but ignor
       clips: before.clips.filter(({ id }) => id !== "c"),
     }),
   ).toBe(true);
+});
+
+test("an Undo past another editor's change shows at once only when that change left the edit alone", () => {
+  const before = sequence();
+  const ripple = applyAll(before, [
+    CommandSchema.parse({ type: "remove", clipIds: ["b"], ripple: true }),
+  ]);
+  const relabel = (timeline: Timeline, id: string) => ({
+    ...timeline,
+    clips: timeline.clips.map((clip) =>
+      clip.id === id ? { ...clip, label: "An agent's name" } : clip,
+    ),
+  });
+  // Ahead of the cut, the agent's rename stays and the cut comes back.
+  const undone = undoOver(ripple, before, relabel(ripple, "a"))!;
+  expect(places(undone)).toEqual(places(before));
+  expect(undone.clips.find(({ id }) => id === "a")?.label).toBe(
+    "An agent's name",
+  );
+  expect(undone.markers).toEqual(before.markers);
+  // Anything after the cut depends on the ripple, even a clip it did not move.
+  expect(
+    undoOver(ripple, before, {
+      ...ripple,
+      clips: [...ripple.clips, clip("d", 1, 250, 50)],
+    }),
+  ).toBeNull();
+  expect(
+    undoOver(ripple, before, {
+      ...ripple,
+      markers: ripple.markers.map((marker) => ({ ...marker, name: "Later" })),
+    }),
+  ).toBeNull();
+  // A marker added by the owner goes, wherever the agent edited.
+  const marked = {
+    ...before,
+    markers: [
+      ...before.markers,
+      { id: "n", frame: 50, duration: 0, name: "", note: "", color: "red" },
+    ],
+  } satisfies Timeline;
+  expect(undoOver(marked, before, relabel(marked, "c"))).toEqual(
+    relabel(before, "c"),
+  );
+  // The same clip edited by both is the engine's call.
+  const trimmed = applyAll(before, [
+    CommandSchema.parse({ type: "trim", clipId: "c", edge: "end", to: 380 }),
+  ]);
+  expect(undoOver(trimmed, before, relabel(trimmed, "c"))).toBeNull();
 });
 
 test("an overwrite freezes empty destination occupancy against both moved and inserted clips", () => {

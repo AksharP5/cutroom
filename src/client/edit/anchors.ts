@@ -153,3 +153,74 @@ export function anchorsChanged(
       seen.some((clip) => !sameClip(clip, clips.get(clip.id))),
   );
 }
+
+/**
+ * What an Undo of the edit from `restored` to `edited` should show when other editors changed
+ * the timeline to `current` since, or null when their changes meet the edit: the same clips,
+ * markers or settings, or anything from where the edit moved clips onward, which covers a
+ * restored clip's place. The engine decides; this paints its likely answer before it arrives.
+ */
+export function undoOver(
+  edited: Timeline,
+  restored: Timeline,
+  current: Timeline,
+): Timeline | null {
+  const settings = ({ clips: _clips, markers: _markers, ...rest }: Timeline) =>
+    rest;
+  const [from, to, now] = [edited, restored, current].map(settings);
+  const rest = sameValue(from, to) ? now : sameValue(from, now) ? to : null;
+  if (!rest) return null;
+  /** Every version of each item that differs between `a` and `b`, keyed by id. */
+  const changes = <T extends { id: string }>(
+    a: readonly T[],
+    b: readonly T[],
+    same: (x: T, y: T | undefined) => boolean,
+  ) => {
+    const earlier = new Map(a.map((item) => [item.id, item]));
+    const later = new Map(b.map((item) => [item.id, item]));
+    const changed = new Map<string, T[]>();
+    for (const [id, item] of earlier)
+      if (!same(item, later.get(id))) changed.set(id, [item]);
+    for (const [id, item] of later) {
+      const before = earlier.get(id);
+      if (!before || !same(before, item))
+        changed.set(id, [...(changed.get(id) ?? []), item]);
+    }
+    return changed;
+  };
+  const undoneClips = changes(edited.clips, restored.clips, sameClip);
+  const otherClips = changes(edited.clips, current.clips, sameClip);
+  const undoneMarkers = changes(edited.markers, restored.markers, sameValue);
+  const otherMarkers = changes(edited.markers, current.markers, sameValue);
+  if (
+    [...undoneClips.keys()].some((id) => otherClips.has(id)) ||
+    [...undoneMarkers.keys()].some((id) => otherMarkers.has(id))
+  )
+    return null;
+  // A ripple shifts what follows it, so a later change there depends on the edit.
+  const moved = [...undoneClips.values()].filter(
+    (versions) =>
+      versions.length < 2 ||
+      versions[0]!.start !== versions[1]!.start ||
+      versions[0]!.duration !== versions[1]!.duration ||
+      versions[0]!.track !== versions[1]!.track,
+  );
+  const boundary = Math.min(...moved.flat().map((clip) => clip.start));
+  const others = [...otherClips.values()].flat();
+  if (
+    others.some((clip) => clipEnd(clip) > boundary) ||
+    [...otherMarkers.values()].flat().some(({ frame }) => frame >= boundary)
+  )
+    return null;
+  return {
+    ...rest,
+    clips: [
+      ...current.clips.filter(({ id }) => !undoneClips.has(id)),
+      ...restored.clips.filter(({ id }) => undoneClips.has(id)),
+    ],
+    markers: [
+      ...current.markers.filter(({ id }) => !undoneMarkers.has(id)),
+      ...restored.markers.filter(({ id }) => undoneMarkers.has(id)),
+    ],
+  };
+}

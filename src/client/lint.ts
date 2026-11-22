@@ -83,7 +83,7 @@ function watch(projectId: string) {
       },
     );
     // The open timeline is linted in full, so switching timelines lints again, once the switch
-    // has read its timeline: lint holds the server for a few hundred milliseconds.
+    // has read its timeline: lint keeps a server thread busy for a few hundred milliseconds.
     const stopTimeline = useTimeline.subscribe((state, previous) => {
       if (
         state.projectId === projectId &&
