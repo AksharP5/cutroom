@@ -13,8 +13,11 @@ import { protectedPath } from "../../shared/sourcePaths";
 export const LIBRARY_REF = `v${hyperframesPackage.version}`;
 const REGISTRY = (ref: string) =>
   `https://raw.githubusercontent.com/heygen-com/hyperframes/${ref}/registry/`;
-/** Where items keep posters, preview videos and binary assets. */
-const ASSET_ORIGIN = "https://static.heygen.ai/hyperframes-oss/";
+/** Where items keep posters, preview videos and binary assets: HyperFrames' folders on its CDN. */
+const ASSET_PREFIXES = [
+  "https://static.heygen.ai/hyperframes-oss/",
+  "https://static.heygen.ai/hyperframes/templates/",
+];
 
 const TIMEOUT_MS = 10_000;
 const CONCURRENCY = 16;
@@ -211,7 +214,7 @@ export function createLibrary({
     url.protocol === "https:" &&
     !url.username &&
     !url.password &&
-    (url.href.startsWith(base) || url.href.startsWith(ASSET_ORIGIN));
+    [base, ...ASSET_PREFIXES].some((prefix) => url.href.startsWith(prefix));
 
   async function get(href: string, limit: number) {
     const url = new URL(href);
