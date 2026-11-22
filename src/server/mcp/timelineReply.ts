@@ -5,8 +5,17 @@ import {
 import { z } from "zod";
 import { volumePoints } from "../../shared/timeline/mix";
 import { compactFxNode } from "../../shared/timeline/fx";
+import {
+  versionSeconds,
+  versionShortReason,
+} from "../../shared/timeline/versions";
 import { syncOffsets } from "../../shared/timeline/sync";
-import type { Timeline, TimelineView } from "../../shared/timeline/schema";
+import type {
+  Fps,
+  Timeline,
+  TimelineView,
+  Version,
+} from "../../shared/timeline/schema";
 
 export const TimelineReplyFormatSchema = z.enum(["auto", "compact", "legacy"]);
 type ReplyFormat = z.infer<typeof TimelineReplyFormatSchema>;
@@ -28,6 +37,18 @@ const fitsClipBudget = (detail: unknown) =>
  * hundreds of points. Effects leave out parameters at their defaults. Linked picture and sound
  * that have drifted apart carry their offset, as the timeline's out-of-sync badge shows it.
  */
+/** Takes as agents read them: media takes give their In in source seconds. */
+export const agentVersions = (versions: readonly Version[], fps: Fps) =>
+  versions.map((version) => ({
+    name: version.name,
+    src: version.src,
+    ...(version.sourceIn !== undefined && {
+      sourceIn: versionSeconds(version, fps),
+      fits: version.fits,
+      offline: version.offline,
+    }),
+  }));
+
 export function agentTimeline(timeline: Timeline, whole = timeline) {
   const offsets = syncOffsets(whole);
   const members = new Map<string, number>();
@@ -47,10 +68,13 @@ export function agentTimeline(timeline: Timeline, whole = timeline) {
       ...track,
       fx: track.fx.map(compactFxNode),
     })),
-    clips: timeline.clips.map(({ automation, ...rest }) => {
+    clips: timeline.clips.map(({ automation, versions, ...rest }) => {
       const offset = offsets.get(rest.id);
       const clip = {
         ...rest,
+        ...(versions && {
+          versions: agentVersions(versions, timeline.fps),
+        }),
         fx: rest.fx.map(compactFxNode),
         ...(offset && { syncOffset: offset }),
       };
@@ -280,6 +304,23 @@ export function editReply(
     }),
     ...(old.duration !== timeline.duration && { duration: timeline.duration }),
   };
+  // Report a take once: when this edit adds it too short or makes it stop fitting.
+  const previous = new Map(
+    before.timeline.clips.map(({ id, versions }) => [id, versions]),
+  );
+  for (const clip of after.timeline.clips)
+    for (const [index, version] of (clip.versions ?? []).entries()) {
+      const was = previous.get(clip.id)?.[index];
+      if (
+        !version.offline &&
+        version.fits === false &&
+        !(was?.src === version.src && was.fits === false)
+      )
+        warnings.push({
+          clipId: clip.id,
+          warning: versionShortReason(version, timeline.fps),
+        });
+    }
   return {
     revision: after.revision,
     composition: after.composition,

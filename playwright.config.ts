@@ -22,7 +22,18 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${port}`,
     viewport: { width: 1720, height: 1050 },
     actionTimeout: 12_000,
-    launchOptions: { executablePath, args: ["--mute-audio", "--no-sandbox"] },
+    launchOptions: {
+      executablePath,
+      args: [
+        "--mute-audio",
+        "--no-sandbox",
+        // Headless Chromium on the machine's GPU instead of SwiftShader. A headed window on a
+        // shared desktop also receives the desktop's real pointer, which breaks hover tests.
+        ...(process.env.CUTROOM_E2E_GPU === "1"
+          ? ["--use-angle=gl", "--ignore-gpu-blocklist"]
+          : []),
+      ],
+    },
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
   },

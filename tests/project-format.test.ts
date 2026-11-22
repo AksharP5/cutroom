@@ -501,3 +501,32 @@ test("project formats require exportable dimensions and supported exact rates", 
   expect(matchProjectRate(59.84)).toEqual(rate(60000, 1001));
   expect(matchProjectRate(59.62)).toBeUndefined();
 });
+
+test("a frame rate change keeps every take's In with the clip's edge", () => {
+  const settings = {
+    tracks: [],
+    markers: [],
+    soloAudioGroups: [],
+    range: { in: null, out: null },
+  };
+  // Audio takes have no picture rate, so their In counts frames of the project.
+  const versions = JSON.stringify([
+    { name: "Take 1", src: "a.wav", sourceIn: 24 },
+    { name: "Take 2", src: "b.wav", sourceIn: 48 },
+  ]);
+  const parsed = parseComposition(
+    `<main data-composition-id="main" data-fps="24"><audio id="vo" src="a.wav" data-start="0.541667" data-duration="1" data-media-start="1" data-cutroom-versions='${versions}' data-cutroom-version-index="0"></audio></main>`,
+    settings,
+  );
+  const { timeline } = planFormat(parsed, settings, new Map(), {
+    ...size,
+    fps: rate(30),
+  });
+  const [clip] = timeline.clips;
+  // 13 frames at 24 fps lands on frame 16 at 30 fps, 1/120 s earlier in every take.
+  expect(clip).toMatchObject({ start: 16, mediaStart: 0.991667 });
+  // In points are stored to the microsecond, so a take's frame count is exact to 1e-4.
+  const [first, second] = clip!.versions!;
+  expect(first!.sourceIn).toBeCloseTo(29.75, 4);
+  expect(second!.sourceIn).toBeCloseTo(59.75, 4);
+});

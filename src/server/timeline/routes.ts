@@ -97,7 +97,11 @@ import { mediaFacts } from "./media";
 import { prepareFrozenFrames, saveFrozenFrames } from "./freeze";
 import { freezeCompanion } from "../projects/freezeAssets";
 import { versionFiles } from "./versions";
-import { isCompositionFile } from "../../shared/timeline/versions";
+import {
+  isCompositionFile,
+  mediaVersions,
+  versionMedia,
+} from "../../shared/timeline/versions";
 import {
   DuckRequestSchema,
   LoudnessRequestSchema,
@@ -149,15 +153,17 @@ export function createTimelineRoutes(
     // One scope for reading, media discovery, and the readback after an edit.
     const scope = compositionScope(composition);
     const markup = compositionMarkup(source.content, scope);
-    const [{ lengths, footageRefusals, footageColours }, inheritedFonts] =
-      await Promise.all([
-        mediaFacts(project, composition, markup.sources()),
-        composition === "index.html"
-          ? []
-          : readSource(project, "index.html").then(({ content }) =>
-              declaredFonts(content),
-            ),
-      ]);
+    const [
+      { lengths, rates, silent, files, footageRefusals, footageColours },
+      inheritedFonts,
+    ] = await Promise.all([
+      mediaFacts(project, composition, markup.sources({ versions: true })),
+      composition === "index.html"
+        ? []
+        : readSource(project, "index.html").then(({ content }) =>
+            declaredFonts(content),
+          ),
+    ]);
     const fonts = new Set([
       ...declaredFonts(source.content),
       ...inheritedFonts,
@@ -167,10 +173,15 @@ export function createTimelineRoutes(
       document,
       scope,
       lengths,
+      rates,
+      silent,
+      files,
       footageRefusals,
       footageColours,
       parsed: projectTimeline(markup, settings, {
         mediaLengths: lengths,
+        silentMedia: silent,
+        mediaFiles: files,
         fonts,
       }),
       revision: revisionOf(source.version, settings),
@@ -287,18 +298,6 @@ export function createTimelineRoutes(
         current.lengths,
         format,
       );
-    const inserted = await mediaFacts(
-      project,
-      composition,
-      batch.commands.flatMap((command) =>
-        command.type === "insert" &&
-        command.clip.kind !== "title" &&
-        command.clip.kind !== "composition" &&
-        command.clip.kind !== "adjustment"
-          ? [command.clip.src]
-          : [],
-      ),
-    );
     const versionSources = await versionFiles(
       project,
       composition,
@@ -313,7 +312,6 @@ export function createTimelineRoutes(
       ),
       ...versionSources.filter(isCompositionFile),
     ]);
-    const lengths = new Map([...current.lengths, ...inserted.lengths]);
     // A font no rule declares would fall back to a system face that export may not share.
     const fonts = new Set(
       batch.commands.flatMap((command) => {
@@ -373,9 +371,34 @@ export function createTimelineRoutes(
         },
       });
     }
+    // Copy-time facts can be stale. Check the rebased takes with the other new media in this batch.
+    const addedMedia = await mediaFacts(project, composition, [
+      ...batch.commands.flatMap((command) =>
+        command.type === "insert" &&
+        command.clip.kind !== "title" &&
+        command.clip.kind !== "composition" &&
+        command.clip.kind !== "adjustment"
+          ? [command.clip.src]
+          : [],
+      ),
+      ...versionSources.filter((src) => !isCompositionFile(src)),
+      ...[...snapshots.values()].flatMap(({ timeline }) =>
+        timeline.clips.flatMap(({ kind, versions }) =>
+          mediaVersions(kind) ? (versions?.map(({ src }) => src) ?? []) : [],
+        ),
+      ),
+    ]);
+    const lengths = new Map([...current.lengths, ...addedMedia.lengths]);
+    const rates = new Map([...current.rates, ...addedMedia.rates]);
+    const silent = new Set([...current.silent, ...addedMedia.silent]);
+    const files = new Set([...current.files, ...addedMedia.files]);
     for (const parsed of snapshots.values())
       for (const clip of parsed.timeline.clips)
-        if (clip.src !== null && clip.sourceDuration !== null)
+        if (
+          clip.src !== null &&
+          clip.sourceDuration !== null &&
+          !lengths.has(clip.src)
+        )
           lengths.set(clip.src, clip.sourceDuration);
     const origins = new Map<string, ClipOrigin>();
     const shifts = new Map<string, number>();
@@ -397,7 +420,14 @@ export function createTimelineRoutes(
             summaries.push(
               editLabel([command], before, "Edited timeline", "done"),
             );
-            if (!hasScript) return;
+            if (
+              !hasScript ||
+              command.type === "setVersions" ||
+              command.type === "setVersion" ||
+              command.type === "addVersion" ||
+              command.type === "keepVersion"
+            )
+              return;
             const previous = new Map(
               before.clips.map((clip) => [clip.id, clip]),
             );
@@ -422,10 +452,24 @@ export function createTimelineRoutes(
               reason,
             }),
           clipboards: new Map(
-            [...snapshots].map(([id, parsed]) => [id, parsed.timeline.clips]),
+            [...snapshots].map(([id, { timeline }]) => [
+              id,
+              timeline.clips.map((clip) =>
+                clip.versions && mediaVersions(clip.kind)
+                  ? {
+                      ...clip,
+                      versions: clip.versions.map((version) =>
+                        versionMedia(version, lengths, silent, files),
+                      ),
+                    }
+                  : clip,
+              ),
+            ]),
           ),
           mediaLengths: lengths,
-          silentMedia: inserted.silent,
+          silentMedia: silent,
+          mediaRates: rates,
+          mediaFiles: files,
           // No new clip takes an id the project used before, even one undone since.
           retired: await usedClipIds(project),
         }),
@@ -493,6 +537,8 @@ export function createTimelineRoutes(
     const writtenSource = parseComposition(html, settings, {
       scope: current.scope,
       mediaLengths: lengths,
+      silentMedia: silent,
+      mediaFiles: files,
       fonts: current.parsed.fonts,
     });
     const { timeline: written } = writtenSource;
@@ -888,6 +934,7 @@ export function createTimelineRoutes(
       return c.json({
         revision: source.version,
         colours: Object.fromEntries(footageColours),
+        sourceRefusals: Object.fromEntries(footageRefusals),
         plan: planPreviewPipeline(
           source.content,
           parsed.timeline.fps,

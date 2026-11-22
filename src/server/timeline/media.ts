@@ -23,6 +23,7 @@ const ProbeSchema = z.object({
         width: z.number().optional(),
         height: z.number().optional(),
         avg_frame_rate: z.string().optional(),
+        r_frame_rate: z.string().optional(),
         disposition: z
           .object({ attached_pic: z.number().optional() })
           .optional(),
@@ -42,6 +43,7 @@ interface Probe {
   seconds: number | null;
   /** The file was read and holds no audio stream. */
   silent: boolean;
+  rate?: number;
   /** The first moving picture stream, leaving out cover art. */
   picture: { width: number; height: number; fps: number | null } | null;
   footageRefusal?: string;
@@ -71,7 +73,7 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       "error",
       ...localMediaInputOptions,
       "-show_entries",
-      "format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode:stream_disposition=attached_pic",
+      "format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,pix_fmt,color_primaries,color_space,color_transfer,color_range:stream_tags=alpha_mode:stream_disposition=attached_pic",
       "-of",
       "json",
       path,
@@ -120,7 +122,15 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       stream.codec_type === "video" && !stream.disposition?.attached_pic,
   );
   const [num, den] = (picture?.avg_frame_rate ?? "").split("/").map(Number);
+  // Versions count source frames, so keep the stream's exact rate.
+  const rate = [picture?.avg_frame_rate, picture?.r_frame_rate]
+    .map((value) => {
+      const [num, den] = value?.split("/").map(Number) ?? [];
+      return (num ?? 0) / (den ?? 0);
+    })
+    .find((value) => Number.isFinite(value) && value > 0);
   return {
+    rate,
     picture:
       picture?.width && picture.height
         ? {
@@ -204,6 +214,8 @@ export interface MediaFacts {
   lengths: Map<string, number>;
   /** Every `src` that was read and holds no audio stream. */
   silent: Set<string>;
+  rates: Map<string, number>;
+  files: Set<string>;
   footageRefusals: Map<string, string>;
   footageColours: Map<string, FootageColour>;
 }
@@ -218,6 +230,8 @@ export async function mediaFacts(
   const facts: MediaFacts = {
     lengths: new Map(),
     silent: new Set(),
+    rates: new Map(),
+    files: new Set(),
     footageRefusals: new Map(),
     footageColours: new Map(),
   };
@@ -226,6 +240,7 @@ export async function mediaFacts(
       const relative = localMediaPath(composition, src);
       if (relative === null) return;
       const probed = await probeFile(project, relative, ffprobe);
+      if (probed) facts.files.add(src);
       // The timeline still opens; this file's length and sound stay unknown until a later read.
       const result = await probed?.result.catch((error: unknown) => {
         console.warn("Could not probe media:", error);
@@ -233,6 +248,7 @@ export async function mediaFacts(
       });
       if (!result) return;
       if (result.seconds) facts.lengths.set(src, result.seconds);
+      if (result.rate) facts.rates.set(src, result.rate);
       if (result.silent) facts.silent.add(src);
       if (result.colour) facts.footageColours.set(src, result.colour);
       if (result.footageRefusal)
@@ -251,7 +267,7 @@ export function compositionMediaFacts(
   return mediaFacts(
     project,
     composition,
-    mediaSources(html, compositionScope(composition)),
+    mediaSources(html, compositionScope(composition), { versions: true }),
   );
 }
 

@@ -1315,3 +1315,63 @@ Switching a clip's versions in the viewer posts one message to the shown documen
 Headed, that is the one frame the document needs to draw at 60 Hz. Hovering the version already shown sends nothing.
 
 Only one clip's versions are loaded at a time, and a clip holds at most 12, so the extra work is bounded by one clip's scenes, never the project's length. With the list open on that title, Chromium's processes held 1,204 MB against 1,130 MB before it opened (four scenes, three of them standing by), and the next document without them gives that back. The active version is the compiled one, so the viewer's picture with the list open matched the picture without it byte for byte in the e2e test.
+
+### Footage and audio versions
+
+The open list keeps the saved take, the shown take and the playable rows either side of it loaded, so moving one row or returning to the saved take finds its decoder open. Native preview parks the other media elements and drops their sources. GPU playback opens the eligible takes' sample indices and keeps a short decoder window for the shown take and its neighbours, borrowing the main decoder for the saved take. It asks for scrub proxies, which may need encoding, only for the shown take and its neighbours; a hovered row asks for its own. Before the first hover it warms only the next row, because a second decoder opening then slowed the first cold take by about 30 ms. The preview document that carries a clip's takes starts loading once the pointer has rested 150 ms on the clip's versions button. Passing over the button loads nothing. Leaving it, or closing the list, keeps that document until the next reload that happens anyway, with only the shown take loaded, so neither costs a preview load. The selected take requests its own frame before queuing lookahead. On a hover, a ready scrub proxy can use the export frame grid to draw the source frame while the original's index is still loading. If the source has no grid, the proxy uses the original's presentation index. The proxy decoder is temporary and the list releases the audition decoders and unused alternate source caches on close. Sound stays in the preview's existing audio graph, with a 10 ms gain ramp between takes.
+
+Nine localhost `setVersion` requests over the timeline command endpoint took 34.1 to 89.6 ms, with a 43.2 ms median. Each request saved the picture and its linked sound in one history step. This measurement ends at the server response.
+
+The first browser pass used headless Chromium 155 at 1720 × 1050 and four playable 1080p takes, including two In points from the same source file. A fifth take was too short and skipped warming. The timings start at the pointer event and end at the first Chromium screencast frame whose picture has the selected take's colour. PSS is the sum across Chromium processes.
+
+| Playback | Hover median |    Hover range | PSS before opening | PSS with list open |
+| -------- | -----------: | -------------: | -----------------: | -----------------: |
+| Native   |      53.9 ms |   33.9–71.1 ms |            747 MiB |          1,124 MiB |
+| GPU      |     128.1 ms | 111.3–310.4 ms |            793 MiB |          1,506 MiB |
+
+The headed retest after limiting residency used the same single-slot fixture at 1720 × 1050. Each mode exercised nine hovers and three clicks without first hovering the target. Memory is Chromium PSS in MiB before opening the list, while comparing a take, and 300 ms after the version preview was replaced.
+
+| Playback | Hover median (range) | Click median (range) | PSS before / open / closed |
+| -------- | -------------------: | -------------------: | -------------------------: |
+| Native   | 33.4 ms (31.6–128.1) |  24.8 ms (22.0–32.2) |            692 / 799 / 787 |
+| GPU      |  22.5 ms (16.5–62.7) | 39.3 ms (27.6–127.9) |            788 / 998 / 950 |
+
+The headed results exceed the 15–20 ms hover target. Jumping past the next playable row can require opening and seeking a new decoder. A click at a paused position outside the warmed frames can require decoding from a keyframe. A stand-in depends on the scrub proxy already being available, and the measurement includes Chromium compositing the resulting picture.
+
+Set `CUTROOM_VERSION_EVIDENCE` to a scratch directory to record timings from `e2e/media-versions.spec.ts`. With `CUTROOM_VERSION_SCALE=100`, the fixture has 100 cuts, ten with four 1080p versions each. To measure the GPU path alone, set `CUTROOM_VERSION_SCALE=100 CUTROOM_VERSION_GPU=1 CUTROOM_E2E_GPU=1` and run `bunx playwright test e2e/media-versions.spec.ts -g 'footage versions audition'` after building the app. `CUTROOM_E2E_GPU` runs headless Chromium on the machine's GPU instead of SwiftShader. Avoid `--headed` on a shared desktop: Xwayland delivers the desktop's real pointer to the test window even on a hidden workspace, so a hover the test made can end when someone moves the mouse.
+
+The runner starts capturing before opening the list for its first move to Wide. It then measures hovers after warmup, including jumps past the next cached row. `menuAgeMs` is time from opening the list to the gesture. `pictureMs` is time from the gesture to the expected image in the browser capture. A null `pictureMs` means the capture missed that image during its 800 ms window. The test still checks the final image before continuing. GPU results include WebCodecs decoders configured and explicitly closed in the editor frame, including footage playback, before opening, after closing, and across three more open and close cycles.
+
+Three paired headed rounds on the 100-cut project, each running the version before and after warming both neighbours, measured the times below. Chromium ran on X11 at 1720 × 1050. Times are medians with ranges in milliseconds: the cold Wide hover once per run, the forward and reverse sequences nine times each per run, and the three saved clicks per run.
+
+| Playback | Version |          Cold hover |           Forward |           Reverse |            Click |
+| -------- | ------- | ------------------: | ----------------: | ----------------: | ---------------: |
+| Native   | Before  | 496.6 (472.9–659.9) | 50.6 (30.9–135.9) | 76.6 (35.8–118.3) | 26.4 (16.1–33.2) |
+| Native   | After   | 502.2 (421.0–527.1) |  44.7 (27.1–59.9) | 48.7 (29.9–111.8) | 20.2 (14.7–28.6) |
+| GPU      | Before  | 160.8 (124.7–181.5) |  29.8 (11.3–89.2) | 54.1 (30.4–145.9) | 33.0 (21.0–54.2) |
+| GPU      | After   | 127.6 (109.9–130.5) |  23.1 (12.4–33.6) |  34.7 (14.8–65.4) | 29.2 (15.3–35.6) |
+
+A traced native run split the remaining time. A native cold hover waits for the preview document that carries the clip's takes. The list opens it, and in this test the pointer reaches Wide about 45 ms later, while the load takes about 350 ms. The test's click arrives with the pointer, so priming that document from the versions button cannot help it. In two runs that rested on the button for 500 ms before clicking, the same hover took 159.3 and 182.1 ms. The remainder is opening Wide's decoder, two rows from the saved take. Once a take is warm, about 10 ms passes before the editor handles the pointer, because the main thread is busy with playback, and the preview needs about 7 ms more to receive the message. Then the picture waits for the next frame and for compositing. The cold target of 50 ms and the warm target of 15–20 ms remain open.
+
+Each edit checks whether every take still fits its clip. The check now runs only for clips the edit replaced and their linked sound, and for every clip after a frame rate change or new media facts. On a timeline of 1,000 linked picture and sound pairs with four takes each, a one-frame trim through `applyAll` took a median 50.7 ms before and 1.7 ms after (1.1 ms with no takes). `tests/version-fits-performance.test.ts` keeps it within 10 ms of the same timeline without takes.
+
+Memory comes back after the list closes. On the 1,000-cut project with GPU playback, headless on the machine's GPU, 25 open, hover and close cycles left five WebCodecs decoders live after every close and eight while open. Their JavaScript heaps after a forced collection stayed at 17.1–17.4 MiB in the editor and 8.1–8.3 MiB in the preview. Playwright's renderer PSS still rose about 6.6 MiB per cycle, because its network inspection keeps response bodies in Blink's buffer partition. Over a bare DevTools connection without network inspection, the editor renderer stayed at 307–325 MiB from the second cycle. The preview renderer's decoded image cache grew to 460 MiB by cycle 21, and Chromium then reclaimed it to about 320 MiB. Total PSS after closing went from 1,101 MiB at cycle 2 to a 1,209 MiB peak, then 996 MiB at cycle 22 and 1,070 MiB at cycle 30. Set `CUTROOM_VERSION_SCALE=1000 CUTROOM_VERSION_GPU=1 CUTROOM_VERSION_CYCLES=10` to repeat the decoder and memory record per cycle.
+
+With no list open, `bench:timeline-ui` on main `f61dc9cd` and on this branch, three alternating rounds each, headless on the machine's GPU, gave the same frame times. Medians: key p95 20.5 ms on main and 19.9 ms here at 400 clips, 20.3 ms on both at 500 clips. Ripple p95 was 28.8 and 30.5 ms at 400 clips, and 31.4 and 29.9 ms at 500 clips. A single 200 ms ripple gap appeared once on each side.
+
+Loading that document when a clip with versions is selected, before its list opens, was measured and rejected. In one native run on the 100-cut project with the clip selected first, the cold hover took 159.4 ms, against 386.5 and 347.0 ms in two runs without it. While the selected clip's takes were loaded, each of four Start edits on it reloaded the whole preview and took 583–786 ms. Without it they applied in place in 140–193 ms. A document carrying takes copies each take's timing, so it cannot take a timing edit in place.
+
+25 consecutive headless runs on the GPU path with the machine's GPU all passed. Their cold hover median was 163.7 ms (69.8–226.3), forward 26.4 ms (10.6–113.6), reverse 35.1 ms (11.1–93.3) and click 31.1 ms (16.4–54.2). Earlier headed runs failed about once in seven with a hover that never showed. An idle headed page on the hidden workspace received 20 pointer events while the desktop's mouse moved, and the failed run's list saw its pointer leave at a position the test never used.
+
+The numbered-frame test holds the original's browser range requests while a prepared proxy draws. It checks for source frame 24 from a 24 fps take in a 30 fps timeline, observes the original replacing the proxy, then closes the list and checks that the viewer returns to timeline frame 50.
+
+The headed Chromium 155 retest of the same 100-cut sample measured 219.7 ms for cold Wide at a menu age of 63.3 ms. Nine forward hovers had a 37.1 ms median (25.3–128.7 ms) and nine reverse hovers had a 41.5 ms median (33.5–79.2 ms). The first opening still depends on original range reads when the scrub proxy is being made. These timings use Chromium's composited screencast samples. The 50 ms cold and 15–20 ms warm budgets remain open. Each of the three reopen cycles went from nine configured WebCodecs decoders to seven. Chromium PSS was 1,032 MiB before opening, 1,156 MiB with the list open and 1,190 MiB after the cycles.
+
+The 100-cut headed comparison used `e95f5eba` as the baseline. The menu was open on the first clip while playing an alternate. PSS is in MiB. The closed figure was sampled 300 ms after the audition preview was replaced.
+
+| Playback | PSS before / open / closed, baseline | PSS before / open / closed, bounded | List overhead, baseline → bounded | Hover median, baseline → bounded |
+| -------- | -----------------------------------: | ----------------------------------: | --------------------------------: | -------------------------------: |
+| Native   |                    834 / 1,012 / 895 |                     796 / 888 / 852 |                      178 → 92 MiB |                   35.7 → 43.9 ms |
+| GPU      |                1,070 / 1,431 / 1,302 |               1,018 / 1,272 / 1,277 |                     361 → 254 MiB |                   29.7 → 39.8 ms |
+
+Browser PSS includes Chromium's playback and compositor allocations. The GPU run still held 1,277 MiB at the closed sample. The bounded build releases its audition decoders on close, and this measurement does not establish when Chromium returns the remaining memory to the OS.

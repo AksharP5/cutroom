@@ -10,7 +10,10 @@ export function sourceCache<T>(open: (path: string) => Promise<T>) {
       let found = opened.get(path);
       if (!found) {
         found = open(path);
-        found.catch(() => failed.add(path));
+        const loading = found;
+        loading.catch(() => {
+          if (opened.get(path) === loading) failed.add(path);
+        });
         opened.set(path, found);
       }
       return found;
@@ -18,6 +21,12 @@ export function sourceCache<T>(open: (path: string) => Promise<T>) {
     forgetFailures() {
       for (const path of failed) opened.delete(path);
       failed.clear();
+    },
+    remove(path: string) {
+      const found = opened.get(path);
+      opened.delete(path);
+      failed.delete(path);
+      return found;
     },
     values: () => opened.values(),
   };

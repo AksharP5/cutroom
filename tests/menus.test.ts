@@ -87,6 +87,7 @@ const rows = (
     onDuck() {},
     onNormalize() {},
     onFreeze() {},
+    onAddVersion() {},
     ...state,
   }).filter((item): item is MenuEntry => item !== "separator");
 

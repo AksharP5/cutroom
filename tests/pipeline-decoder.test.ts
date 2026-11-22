@@ -82,7 +82,6 @@ test("a picture request runs before the rest of an already-running lookahead", a
     async () => new Uint8Array(90),
     90,
     {},
-    false,
   );
   Object.assign(globalThis, {
     VideoDecoder: Decoder,

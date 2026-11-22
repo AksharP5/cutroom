@@ -353,7 +353,11 @@ const ClipLabel = memo(function ClipLabel({
         </span>
       )}
       {clip.versions && (
-        <VersionsBadge clip={{ ...clip, versions: clip.versions }} />
+        <VersionsBadge
+          clip={{ ...clip, versions: clip.versions }}
+          fps={fps}
+          locked={row.track.locked}
+        />
       )}
       {offline && (
         <span className="tl-text-line tl-offline">Media offline</span>

@@ -1,3 +1,7 @@
+import {
+  VERSIONS_ATTRIBUTE,
+  VERSION_INDEX_ATTRIBUTE,
+} from "../timeline/versions";
 import { transform, transformStyleAttribute } from "lightningcss";
 import type { Declaration, Rule, SelectorComponent } from "lightningcss";
 import { defaultTreeAdapter, parse } from "parse5";
@@ -112,6 +116,8 @@ const VIDEO_ATTRIBUTES = new Set([
   "data-fade-in",
   "data-fade-out",
   "data-cutroom-muted",
+  VERSIONS_ATTRIBUTE,
+  VERSION_INDEX_ATTRIBUTE,
   "data-hf-id",
   ...POSITION_ATTRIBUTES,
 ]);

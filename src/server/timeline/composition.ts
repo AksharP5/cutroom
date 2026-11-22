@@ -83,6 +83,8 @@ import {
   versionAttributes,
   versionChanges,
   VERSIONS_ATTRIBUTE,
+  VERSION_INDEX_ATTRIBUTE,
+  VERSION_SILENT_ATTRIBUTE,
 } from "./versions";
 import {
   GRADE_ATTRIBUTE,
@@ -91,6 +93,11 @@ import {
   writeGrade,
 } from "../../shared/timeline/grade";
 import { posix } from "node:path";
+import {
+  mediaVersions,
+  updateVersionFits,
+  versionMedia,
+} from "../../shared/timeline/versions";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
   isSubCompositionHost,
@@ -449,14 +456,24 @@ export function compositionMarkup(
 ) {
   const tree = parseElements(html);
   const all = scopeElements(tree.roots, scope);
-  const sources = (images = false) => {
+  const sources = ({ images = false, versions = false } = {}) => {
     const urls = new Set<string>();
     for (const element of all) {
       const { tag } = element;
       if (tag !== "video" && tag !== "audio" && !(images && tag === "img"))
         continue;
       const src = sourceOf(element);
-      if (src !== null) urls.add(src);
+      if (src === null) continue;
+      urls.add(src);
+      const kind = clipKind(element);
+      if (!versions || !mediaVersions(kind)) continue;
+      const { versions: list = [] } = readVersions(
+        kind,
+        src,
+        element.attrs[VERSIONS_ATTRIBUTE],
+        element.attrs[VERSION_INDEX_ATTRIBUTE],
+      );
+      for (const version of list) urls.add(version.src);
     }
     return [...urls];
   };
@@ -467,9 +484,12 @@ export function compositionMarkup(
 export function mediaSources(
   html: string,
   scope: CompositionScope,
-  { images = false }: { images?: boolean } = {},
+  {
+    images = false,
+    versions = false,
+  }: { images?: boolean; versions?: boolean } = {},
 ): string[] {
-  return compositionMarkup(html, scope).sources(images);
+  return compositionMarkup(html, scope).sources({ images, versions });
 }
 
 type CompositionMarkup = ReturnType<typeof compositionMarkup>;
@@ -931,6 +951,10 @@ type ProjectionOptions = {
   fonts?: ReadonlySet<string>;
   /** Measured source lengths in seconds, by `src`. */
   mediaLengths?: ReadonlyMap<string, number>;
+  /** Every `src` that was read and holds no audio stream. */
+  silentMedia?: ReadonlySet<string>;
+  /** Every `src` found on disk; a take outside it is offline. */
+  mediaFiles?: ReadonlySet<string>;
 };
 
 const legacyRamp = z.object({
@@ -960,6 +984,8 @@ export function projectTimeline(
     mediaLengths,
     rootId,
     fonts = new Set(declaredFonts(markup.html)),
+    silentMedia = new Set(),
+    mediaFiles,
   }: ProjectionOptions = {},
 ): ParsedComposition {
   const { html, scope, roots, nodes, owned, all } = markup;
@@ -1021,8 +1047,10 @@ export function projectTimeline(
     const group = element.attrs["data-audio-group"];
     const authoredGroup = group && !managedGroups.has(group);
     const playbackRate = readPlaybackRate(attribute);
-    const hasAudio = isAudioKind(kind) || hasVideoAudio(element);
-    if (authoredGroup && hasAudio) authoredMembers.add(element);
+    const versionSilent = element.attrs[VERSION_SILENT_ATTRIBUTE] !== undefined;
+    const audioClip = isAudioKind(kind);
+    const hasAudio = audioClip ? !versionSilent : hasVideoAudio(element);
+    if (authoredGroup && (hasAudio || audioClip)) authoredMembers.add(element);
     const colorVariable = readColourVariable(element.attrs.style);
     const adjustment =
       kind === "element" && element.attrs[ADJUSTMENT_ATTRIBUTE] !== undefined;
@@ -1034,7 +1062,21 @@ export function projectTimeline(
         : kind === "element"
           ? null
           : sourceOf(element);
-    const versions = readVersions(kind, src, element.attrs[VERSIONS_ATTRIBUTE]);
+    const list = readVersions(
+      kind,
+      src,
+      element.attrs[VERSIONS_ATTRIBUTE],
+      element.attrs[VERSION_INDEX_ATTRIBUTE],
+    );
+    if (list.versions && mediaVersions(kind))
+      list.versions = list.versions.map((version) =>
+        versionMedia(
+          version,
+          mediaLengths ?? new Map(),
+          silentMedia,
+          mediaFiles,
+        ),
+      );
     const authoredSource = {
       playbackRate,
       mediaStart:
@@ -1128,7 +1170,7 @@ export function projectTimeline(
       ...(kind === "element" &&
         !adjustment && { textPreview: firstTextLine(element.text) }),
       ...(authoredGroup &&
-        hasAudio && {
+        (hasAudio || audioClip) && {
           authoredAudioGroupId: group,
           trackGainWarning: trackGainWarning(group),
         }),
@@ -1179,14 +1221,16 @@ export function projectTimeline(
         : toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
       transitionIn: edges.in,
       transitionOut: edges.out,
-      fx: hasAudio ? readableFx(element.attrs["data-fx-chain"]) : [],
+      fx:
+        hasAudio || audioClip ? readableFx(element.attrs["data-fx-chain"]) : [],
       grade: canHaveGrade(kind, adjustment)
         ? readableGrade(element.attrs[GRADE_ATTRIBUTE])
         : null,
       enabled:
         element.attrs["data-hidden"] === undefined ||
         element.attrs["data-cutroom-track-hidden"] !== undefined,
-      ...(versions && { versions }),
+      ...list,
+      ...(versionSilent && { versionSilent: true }),
       startRef:
         referenced && referencedEnd
           ? {
@@ -1269,7 +1313,7 @@ export function projectTimeline(
       .map((element) => html.slice(element.openEnd, element.end)),
     fonts,
   };
-  parsed.timeline = {
+  parsed.timeline = updateVersionFits({
     ...timeline,
     ...(fonts.size > 0 && { fonts: [...fonts] }),
     clips: timeline.clips.map((clip) => {
@@ -1284,7 +1328,7 @@ export function projectTimeline(
         ? { ...clip, sourceRestrictions: restrictions }
         : clip;
     }),
-  };
+  });
   return parsed;
 }
 
@@ -1305,7 +1349,17 @@ export function timelineContent(timeline: Timeline) {
       ),
     }),
     clips: timeline.clips.map(
-      ({ sourceRestrictions, variableBindings, ...clip }) => clip,
+      ({ sourceRestrictions, variableBindings, versions, ...clip }) => ({
+        ...clip,
+        ...(versions && {
+          versions: versions.map(({ name, src, sourceIn, sourceFps }) => ({
+            name,
+            src,
+            sourceIn,
+            sourceFps,
+          })),
+        }),
+      }),
     ),
   };
 }
@@ -1663,8 +1717,15 @@ function clipChanges(
   }
   if (after.authoredAudioGroupId !== before.authoredAudioGroupId)
     changes.push(["data-audio-group", after.authoredAudioGroupId ?? null]);
-  // Start and duration are written together so both land on the frame grid.
-  if (writeStart || before.duration !== after.duration) {
+  const pinSourceWindow =
+    mediaVersions(after.kind) &&
+    !has("data-duration") &&
+    !has("data-end") &&
+    ((!before.versions && after.versions) ||
+      before.src !== after.src ||
+      before.mediaStart !== after.mediaStart);
+  // A new source must keep the same slot even when the old length was inferred from its file.
+  if (writeStart || before.duration !== after.duration || pinSourceWindow) {
     changes.push(["data-duration", String(toSeconds(after.duration, fps))]);
     if (has("data-end")) changes.push(["data-end", null]);
   }
@@ -2171,7 +2232,7 @@ export function applyTrackMix(parsed: ParsedComposition): string {
   for (const clip of timeline.clips) {
     const element = parsed.elements.get(clip.id)!;
     const changes = clipChanges(clip, clip, element, timeline.fps, false, mix);
-    if (clip.hasAudio && !clip.authoredAudioGroupId) {
+    if ((clip.hasAudio || clip.versionSilent) && !clip.authoredAudioGroupId) {
       changes.push(["data-audio-group", memberships.get(clip.track)!]);
       if (!element.attrs["data-hf-id"] && identities.has(clip.id))
         changes.push(["data-hf-id", identities.get(clip.id)!]);
@@ -3366,10 +3427,22 @@ export function rebaseClipboard(
       scope: parsed.scope,
       fonts: parsed.fonts,
       mediaLengths: new Map(
-        parsed.timeline.clips.flatMap((clip) =>
-          clip.src !== null && clip.sourceDuration !== null
+        parsed.timeline.clips.flatMap((clip) => [
+          ...(clip.src !== null && clip.sourceDuration !== null
             ? [[rewrite(clip.src), clip.sourceDuration] as const]
-            : [],
+            : []),
+          ...(clip.versions ?? []).flatMap(({ src, sourceDuration }) =>
+            sourceDuration === undefined
+              ? []
+              : [[rewrite(src), sourceDuration] as const],
+          ),
+        ]),
+      ),
+      silentMedia: new Set(
+        parsed.timeline.clips.flatMap(({ versions }) =>
+          (versions ?? []).flatMap(({ src, silent }) =>
+            silent ? [rewrite(src)] : [],
+          ),
         ),
       ),
     },

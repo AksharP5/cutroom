@@ -1,3 +1,4 @@
+import { activeVersion, mediaVersions } from "../../shared/timeline/versions";
 import { constants } from "node:fs";
 import {
   copyFile,
@@ -407,6 +408,20 @@ async function writePackage(
   const markers = plan.markers ? join(folder, `${stem} markers.edl`) : null;
   if (markers && plan.markers)
     await writeFile(markers, plan.markers, { flag: "wx" });
+  const alternates = source.timeline.clips.flatMap((clip) => {
+    if (!clip.versions || !mediaVersions(clip.kind)) return [];
+    const active = activeVersion(clip);
+    const shown = clip.versions[active];
+    if (!shown) return [];
+    const others = clip.versions
+      .filter((_, index) => index !== active)
+      .map(({ name }) => name);
+    return [
+      oneLine(
+        `${label(clip)}: ${shown.name} exported. Other versions: ${others.join(", ")}.`,
+      ),
+    ];
+  });
   const summary = join(folder, "Summary.txt");
   await writeFile(
     summary,
@@ -430,6 +445,9 @@ async function writePackage(
       "",
       ...(layerNotes.length
         ? ["Rendered as layers:", ...layerNotes.map((note) => `- ${note}`), ""]
+        : []),
+      ...(alternates.length
+        ? ["Versions:", ...alternates.map((note) => `- ${note}`), ""]
         : []),
       ...(notes.length
         ? ["What to check or rebuild:", ...notes.map((note) => `- ${note}`)]

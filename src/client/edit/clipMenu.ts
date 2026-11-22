@@ -2,6 +2,11 @@ import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
 import type { MenuItem } from "../components/menu";
 import { isAudioKind } from "../../shared/timeline/schema";
+import {
+  canAddVersion,
+  mediaVersions,
+  versionOwner,
+} from "../../shared/timeline/versions";
 import { isTitle } from "../../shared/timeline/title";
 import { takesGrade } from "../../shared/timeline/grade";
 
@@ -26,6 +31,7 @@ export function clipMenuItems({
   onDuck,
   onNormalize,
   onFreeze,
+  onAddVersion,
   clicked,
 }: {
   timeline: Timeline;
@@ -51,6 +57,7 @@ export function clipMenuItems({
   /** Sets each clip's gain so it measures -16 LUFS. */
   onNormalize(clips: Clip[]): void;
   onFreeze(clip: Clip, frame: number): void;
+  onAddVersion(clip: Clip): void;
   /** The clip a right-click landed on, which Duck under voice lowers. */
   clicked?: Clip;
 }): MenuItem[] {
@@ -74,6 +81,8 @@ export function clipMenuItems({
         : pictures.length === 1
           ? pictures[0]
           : undefined;
+  const versioned = clicked ?? (clips.length === 1 ? clips[0] : undefined);
+  const versionClip = versioned && versionOwner(timeline.clips, versioned);
   const bed = sound.find((clip) => clip.id === clicked?.id) ?? sound[0];
   const voices = sound.filter((clip) => clip !== bed);
   return [
@@ -103,6 +112,15 @@ export function clipMenuItems({
     { action: "editBackspace", disabled: none },
     { action: "editDelete", disabled: none },
     { action: "editClipEnabled", disabled: none },
+    ...(versionClip && mediaVersions(versionClip.kind)
+      ? [
+          {
+            label: "Add version",
+            run: () => onAddVersion(versionClip),
+            disabled: !canAddVersion(versionClip, timeline),
+          },
+        ]
+      : []),
     {
       action: "editLink",
       disabled: clips.length < 2 && !clips.some((clip) => clip.link),

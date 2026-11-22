@@ -7,8 +7,10 @@ import {
   attrMicros,
   decode,
   encode,
+  firstFrame,
   frames,
   micros,
+  positionAtSource,
   regridSourceMap,
   resolvePiece,
 } from "./piece";
@@ -168,5 +170,26 @@ export function resolveClip(clip: Clip, fps: Fps, physical = false) {
             ),
     },
     fps,
+  );
+}
+
+/** Whole frames of media a clip has after its out point; unbounded for stills and unmeasured media. */
+export function framesAfterOut(clip: Clip, fps: Fps) {
+  if (clip.mediaStart === null || clip.sourceDuration === null) return Infinity;
+  const line = resolveClip(clip, fps);
+  const end = positionAtSource(line, micros(attrMicros(clip.sourceDuration)));
+  return Number(firstFrame(end, fps)) - (clip.start + clip.duration);
+}
+
+/** Whole frames of media a clip has before its in point. */
+export function framesBeforeIn(clip: Clip, fps: Fps) {
+  if (clip.mediaStart === null) return Infinity;
+  const line = resolveClip(clip, fps);
+  const start = Number(firstFrame(positionAtSource(line, micros(0)), fps));
+  // A handle must encode a nonnegative in-point in the document.
+  return (
+    clip.start -
+    start -
+    (encode(line, line.curve, frames(start, fps), fps).mediaStart < 0 ? 1 : 0)
   );
 }

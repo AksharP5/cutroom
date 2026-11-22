@@ -8,13 +8,37 @@ import { TrackGainPreviewSchema } from "../../shared/preview";
 /**
  * Compare rendered content, excluding only faders and the compiler's routing identities. A fader
  * is a Cutroom track bus or a bus with no automation, whose static gain the live preview can set.
+ * With `audition`, alternate takes the preview already mounts are excluded too.
  */
-export function trackGainPreview(html: string, composition = "index.html") {
+export function trackGainPreview(
+  html: string,
+  composition = "index.html",
+  audition = false,
+) {
   const document = parse(html);
+  const mediaAudition =
+    audition && html.includes("data-cutroom-version-owner=");
   const elements: DefaultTreeAdapterTypes.Element[] = [];
   const visit = (node: DefaultTreeAdapterTypes.ParentNode) => {
     node.childNodes = node.childNodes.filter(
       (child) =>
+        !(
+          mediaAudition &&
+          "tagName" in child &&
+          child.attrs.some(
+            ({ name }) => name === "data-cutroom-version-owner",
+          ) &&
+          child.attrs.some(
+            ({ name, value }) =>
+              name === "id" && value.startsWith("cutroom-version-"),
+          )
+        ) &&
+        !(
+          mediaAudition &&
+          "tagName" in child &&
+          child.tagName === "script" &&
+          child.attrs.some(({ name }) => name === "data-hf-media-codec-map")
+        ) &&
         !(
           "tagName" in child &&
           child.tagName === "meta" &&
@@ -27,6 +51,29 @@ export function trackGainPreview(html: string, composition = "index.html") {
     );
     for (const child of node.childNodes) {
       if (!("tagName" in child)) continue;
+      if (
+        mediaAudition &&
+        child.attrs.some(({ name }) => name === "data-cutroom-version-owner")
+      ) {
+        const silent = child.attrs.some(
+          ({ name, value }) =>
+            name === "data-cutroom-version-silent" && value !== "muted",
+        );
+        child.attrs = child.attrs.filter(
+          ({ name }) =>
+            ![
+              "src",
+              "data-media-start",
+              "data-playback-start",
+              "data-cutroom-version",
+              "data-cutroom-shown",
+              "data-cutroom-version-index",
+              "data-cutroom-version-silent",
+              "data-hf-render-id",
+              "data-hf-id",
+            ].includes(name) && !(silent && name === "muted"),
+        );
+      }
       elements.push(child);
       visit(child);
     }

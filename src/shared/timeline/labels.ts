@@ -1,5 +1,5 @@
 import { rateLabel } from "../projectFormat";
-import { activeVersion } from "./versions";
+import { activeVersion, mediaVersions } from "./versions";
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
 import { localMediaPath } from "../media";
 import { gapAt, toFrames } from "./apply";
@@ -637,6 +637,10 @@ export function editLabel(
           ? `Remove marker${marker?.name ? ` "${marker.name}"` : ""}`
           : "Removed marker";
       }
+      case "addVersion":
+        return `${pending ? "Add" : "Added"} a version${named ? ` to ${target([command.clipId])}` : ""}`;
+      case "renameVersion":
+        return `${pending ? "Rename" : "Renamed"} a version${named ? ` on ${target([command.clipId])}` : ""} to ${command.name}`;
       case "setVersions":
         return `${pending ? "Give" : "Gave"}${named ? ` ${target([command.clipId])}` : ""} ${command.versions.length} versions, showing "${command.versions[command.active]?.name ?? "the first"}"`;
       case "setVersion":
@@ -645,6 +649,8 @@ export function editLabel(
         const index = command.version ?? (clip && activeVersion(clip));
         const name =
           index === undefined ? undefined : clip?.versions?.[index]?.name;
+        if (clip && mediaVersions(clip.kind) && name)
+          return `${command.type === "setVersion" ? (pending ? "Show" : "Showed") : pending ? "Keep" : "Kept"} ${name}${named ? ` on ${target([command.clipId])}` : ""}`;
         const version = name === undefined ? "a version" : `version "${name}"`;
         if (command.type === "setVersion")
           return `${pending ? "Show" : "Showed"} ${version}${named ? ` of ${target([command.clipId])}` : ""}`;

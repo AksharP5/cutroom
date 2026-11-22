@@ -1,3 +1,4 @@
+import { rebaseVersions, VERSIONS_ATTRIBUTE } from "../timeline/versions";
 import { posix } from "node:path";
 import {
   decodeAuthoredAttribute,
@@ -265,19 +266,22 @@ function mapReferences(
           );
       }
       const next =
-        attr.name === "style"
-          ? css(value)
-          : attr.name === "data-composition-variables"
-            ? rewriteImageDeclarationUrls(value, (url) => path(url, true))
-            : attr.name === "data-variable-values"
-              ? instance
-              : attr.name === "srcset"
-                ? value.replace(
-                    /(^|,)\s*([^,\s]+)/g,
-                    (whole: string, _lead: string, url: string) =>
-                      whole.replace(url, path(url, true)),
-                  )
-                : path(value, !attr.quote);
+        attr.name === VERSIONS_ATTRIBUTE
+          ? // A take's src is compared with the clip's quoted src, so it is written the same way.
+            rebaseVersions(value, (src) => path(src, false))
+          : attr.name === "style"
+            ? css(value)
+            : attr.name === "data-composition-variables"
+              ? rewriteImageDeclarationUrls(value, (url) => path(url, true))
+              : attr.name === "data-variable-values"
+                ? instance
+                : attr.name === "srcset"
+                  ? value.replace(
+                      /(^|,)\s*([^,\s]+)/g,
+                      (whole: string, _lead: string, url: string) =>
+                        whole.replace(url, path(url, true)),
+                    )
+                  : path(value, !attr.quote);
       if (next === value) continue;
       const escaped = next
         .replaceAll("&", "&amp;")

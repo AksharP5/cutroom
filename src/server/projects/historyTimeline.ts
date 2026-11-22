@@ -139,7 +139,8 @@ export function timelineReplayCache() {
   return {
     structure,
     project,
-    media: (path: string, source: string) => markup(path, source).sources(true),
+    media: (path: string, source: string) =>
+      markup(path, source).sources({ images: true, versions: true }),
   };
 }
 

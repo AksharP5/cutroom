@@ -23,6 +23,7 @@ import type {
   Transition,
 } from "../../shared/timeline/schema";
 import { framesAfter, framesBefore } from "../../shared/timeline/transition";
+import { versionsAtEdge } from "../../shared/timeline/versions";
 import { formatWindows } from "./composition";
 import type { ParsedComposition } from "./composition";
 import { elementClip } from "./transitions";
@@ -174,6 +175,17 @@ export function planFormat(
     const next = {
       ...original,
       ...source,
+      // A take without its own frame rate counts frames on the project grid.
+      ...(clip.versions && {
+        versions: versionsAtEdge(
+          clip,
+          source.mediaStart,
+          frames(clip.start, oldRate),
+          frames(start, fps),
+          oldRate,
+          fps,
+        ),
+      }),
       // The source map is stored in whole microseconds.
       mediaStart:
         source.mediaStart !== null && source.mediaStart >= -1e-6

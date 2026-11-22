@@ -569,18 +569,19 @@ function name(commands: Command[], timeline: Timeline, composition: string) {
   return { commands: named, creates, origins, timeline: current };
 }
 
-function createsAudioGroup(commands: readonly Command[]) {
+function needsServerProjection(commands: readonly Command[]) {
   return commands.some(
     (command) =>
-      command.type === "routeAudioGroup" &&
-      command.group !== null &&
-      typeof command.group !== "string",
+      (command.type === "routeAudioGroup" &&
+        command.group !== null &&
+        typeof command.group !== "string") ||
+      (command.type === "addVersion" && command.version !== undefined),
   );
 }
 
 /**
- * Reapply pending edits that still fit the server's last answer. A new audio group
- * appears once the server returns its ID, so another edit can safely name it.
+ * Reapply pending edits that still fit the server's last answer. New groups need their saved
+ * IDs, and a take from a new file needs its measured length before it can be shown.
  */
 function shown(projectId: string): TimelineView | null {
   if (confirmed?.projectId !== projectId) return null;
@@ -597,7 +598,7 @@ function shown(projectId: string): TimelineView | null {
       if (hold)
         edit.anchors = editAnchors(hold.before, hold.after, edit.commands);
       if (
-        createsAudioGroup(edit.commands) ||
+        needsServerProjection(edit.commands) ||
         !sameRate(edit.fps, current.fps) ||
         anchorsChanged(edit.anchors, current)
       ) {
@@ -1114,11 +1115,10 @@ export async function editTimeline(
         rippleFeedback(before, after, commands, clipboards);
     };
     updateFeedback(commands, view.timeline, timeline);
-    // Other edits can look up this bus as soon as it appears in the inspector.
-    // Publish only the persisted ID from the server.
+    // Keep the shown view until a new group has its ID or a new file has been measured.
     pending.push(made);
     useTimeline.setState({
-      ...(!createsAudioGroup(commands) && { view: { ...view, timeline } }),
+      ...(!needsServerProjection(commands) && { view: { ...view, timeline } }),
       history: pendingEditHistory,
     });
     onApply?.(timeline, commands, named.origins);
@@ -1177,7 +1177,7 @@ export async function editTimeline(
             item.projectId === projectId &&
             item.composition === made.composition,
         );
-      const reconcile = report || createsAudioGroup(made.commands);
+      const reconcile = report || needsServerProjection(made.commands);
       if (more() && !reconcile) return;
       const history = await readHistory(projectId);
       if (confirmed?.projectId === projectId && (!more() || reconcile))

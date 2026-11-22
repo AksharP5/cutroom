@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { mkdir, rename } from "node:fs/promises";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
@@ -188,6 +190,355 @@ test("an agent gives a title four versions; each edit carries them and only the 
   } finally {
     await client.close();
     server.stop(true);
+    await fixture.close();
+  }
+});
+
+test("video versions bind native source frames to both linked elements through slips, cuts and history", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Media versions" });
+  const base = `/api/cutroom/projects/${project.id}`;
+  const post = (path: string, body: unknown) =>
+    fixture.app.request(base + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await fixture.app.request(base + "/timeline")).json(),
+    );
+  const source = () => Bun.file(`${project.path}/index.html`).text();
+  const edit = async (commands: unknown[]) => {
+    const response = await post("/commands", {
+      expectedRevision: (await read()).revision,
+      commands,
+    });
+    expect(response.ok, await response.clone().text()).toBe(true);
+    return TimelineViewSchema.parse(await response.json());
+  };
+  const clip = async (id: string) =>
+    (await read()).timeline.clips.find((clip) => clip.id === id);
+  try {
+    for (const [name, rate, duration, audio] of [
+      ["interview", 30, 5, true],
+      ["wide", 24, 5, false],
+      ["short", 30, 1, false],
+    ] as const) {
+      const process = Bun.spawn(
+        [
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          `color=s=64x64:r=${rate}:d=${duration}`,
+          ...(audio
+            ? [
+                "-f",
+                "lavfi",
+                "-i",
+                `sine=frequency=440:duration=${duration}`,
+                "-c:a",
+                "aac",
+              ]
+            : []),
+          "-c:v",
+          "libx264",
+          "-threads",
+          "1",
+          `${project.path}/${name}.mp4`,
+        ],
+        { stderr: "pipe" },
+      );
+      expect(
+        await process.exited,
+        await new Response(process.stderr).text(),
+      ).toBe(0);
+    }
+    await edit([
+      {
+        type: "insert",
+        track: 3,
+        at: 30,
+        linkedAudio: { id: "sound" },
+        clip: {
+          kind: "video",
+          src: "interview.mp4",
+          id: "picture",
+          duration: 60,
+          mediaStart: 1,
+        },
+      },
+    ]);
+    await edit([{ type: "addVersion", clipId: "picture" }]);
+    await edit([{ type: "slip", clipId: "picture", by: 12 }]);
+    expect(await clip("picture")).toMatchObject({
+      versionIndex: 1,
+      mediaStart: 1.4,
+      versions: [
+        { name: "Take 1", sourceIn: 30 },
+        { name: "Take 2", sourceIn: 42 },
+      ],
+    });
+    expect(await clip("sound")).toMatchObject({
+      mediaStart: 1.4,
+      hasAudio: true,
+    });
+    await edit([
+      {
+        type: "setVersions",
+        clipId: "picture",
+        versions: [
+          // Commands give the In in seconds; the timeline counts source frames.
+          { name: "Take 1", src: "interview.mp4", sourceIn: 1 },
+          { name: "Wide", src: "wide.mp4", sourceIn: 1.5 },
+          { name: "Short", src: "short.mp4" },
+        ],
+      },
+    ]);
+    expect(await clip("picture")).toMatchObject({
+      versions: [{ fits: true }, { fits: true }, { fits: false, shortBy: 30 }],
+    });
+    await edit([{ type: "setVersion", clipId: "picture", version: 1 }]);
+    expect(await clip("picture")).toMatchObject({
+      src: "wide.mp4",
+      mediaStart: 1.5,
+      start: 30,
+      duration: 60,
+    });
+    expect(await clip("sound")).toMatchObject({
+      src: "wide.mp4",
+      mediaStart: 1.5,
+      hasAudio: false,
+    });
+    expect(await source()).toMatch(/<audio[^>]*src="wide.mp4"[^>]*muted=""/);
+
+    await edit([
+      {
+        type: "split",
+        at: 45,
+        clipIds: ["picture"],
+        ids: { picture: ["tail"], sound: ["tail-sound"] },
+      },
+    ]);
+    expect(await clip("picture")).toMatchObject({
+      versions: [{ sourceIn: 30 }, { sourceIn: 36 }, { sourceIn: 0 }],
+    });
+    expect(await clip("tail")).toMatchObject({
+      duration: 45,
+      mediaStart: 2,
+      versionIndex: 1,
+      versions: [
+        { sourceIn: 45 },
+        { sourceIn: 48 },
+        { sourceIn: 15, fits: false },
+      ],
+    });
+    await edit([{ type: "trim", clipId: "tail", edge: "start", to: 51 }]);
+    expect(await clip("tail")).toMatchObject({
+      versions: [{ sourceIn: 51 }, { sourceIn: 52.8 }, { sourceIn: 21 }],
+    });
+    await edit([{ type: "setVersion", clipId: "tail", version: 0 }]);
+    expect(await clip("tail-sound")).toMatchObject({
+      src: "interview.mp4",
+      mediaStart: 1.7,
+      hasAudio: true,
+    });
+    const complete = await source();
+    await edit([{ type: "keepVersion", clipId: "tail" }]);
+    expect((await clip("tail"))?.versions).toBeUndefined();
+    expect((await post("/history/undo", {})).ok).toBe(true);
+    expect(await source()).toBe(complete);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an offline take stays unavailable after a rename or a cross-folder paste", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Offline take" });
+  const base = `/projects/${project.id}`;
+  const entry = "index.html";
+  const scene = "compositions/scene.html";
+  const read = async (composition: string) =>
+    TimelineViewSchema.parse(
+      await (
+        await fixture.request(`${base}/timeline?composition=${composition}`)
+      ).json(),
+    );
+  const edit = async (composition: string, commands: unknown[]) =>
+    fixture.request(`${base}/commands`, "POST", {
+      composition,
+      expectedRevision: (await read(composition)).revision,
+      commands,
+    });
+  const versionState = ({ timeline }: z.infer<typeof TimelineViewSchema>) =>
+    timeline.clips[0]?.versions?.map(({ name, src, offline }) => ({
+      name,
+      src,
+      offline: offline === true,
+    }));
+  try {
+    const live = join(project.path, "live.wav");
+    const alternate = join(project.path, "alternate.wav");
+    const parked = join(project.path, "moved.wav");
+    const ffmpeg = Bun.spawnSync([
+      "ffmpeg",
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=duration=2",
+      live,
+    ]);
+    expect(ffmpeg.exitCode, ffmpeg.stderr.toString()).toBe(0);
+    await Bun.write(alternate, Bun.file(live));
+    await Bun.write(
+      join(project.path, entry),
+      '<main data-composition-id="main" data-fps="30"><audio id="voice" src="live.wav" data-start="0" data-duration="2" data-track-index="0"></audio></main>',
+    );
+    await mkdir(join(project.path, "compositions"), { recursive: true });
+    await Bun.write(
+      join(project.path, scene),
+      '<template><div data-composition-id="scene" data-fps="30"></div></template>',
+    );
+    const seeded = await edit(entry, [
+      {
+        type: "setVersions",
+        clipId: "voice",
+        versions: [
+          { name: "Live", src: "live.wav" },
+          { name: "Alternate", src: "alternate.wav" },
+        ],
+      },
+    ]);
+    expect(seeded.status, await seeded.text()).toBe(200);
+
+    await rename(alternate, parked);
+    const renamed = TimelineViewSchema.parse(
+      await (
+        await edit(entry, [
+          {
+            type: "renameVersion",
+            clipId: "voice",
+            version: 1,
+            name: "Alternate read",
+          },
+        ])
+      ).json(),
+    );
+    expect(versionState(renamed)).toEqual([
+      { name: "Live", src: "live.wav", offline: false },
+      { name: "Alternate read", src: "alternate.wav", offline: true },
+    ]);
+
+    await rename(parked, alternate);
+    const copied = await fixture.request(`${base}/timeline/copy`, "POST", {
+      composition: entry,
+      expectedRevision: (await read(entry)).revision,
+      clipIds: ["voice"],
+    });
+    const clipboard = z.object({ id: z.string() }).parse(await copied.json());
+    await rename(alternate, parked);
+    const paste = {
+      type: "paste",
+      clipboardId: clipboard.id,
+      at: 0,
+      ids: { voice: ["pasted"] },
+    };
+    const refused = await edit(scene, [
+      paste,
+      { type: "setVersion", clipId: "pasted", version: 1 },
+    ]);
+    expect(refused.status, await refused.clone().text()).toBe(422);
+    expect(await refused.text()).toContain("Alternate read is offline");
+    const pasted = TimelineViewSchema.parse(
+      await (await edit(scene, [paste])).json(),
+    );
+    expect(versionState(pasted)).toEqual([
+      { name: "Live", src: "../live.wav", offline: false },
+      { name: "Alternate read", src: "../alternate.wav", offline: true },
+    ]);
+    expect(versionState(await read(scene))).toEqual(versionState(pasted));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("renaming a take's file in Media renames it in the clip's versions", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Renamed take" });
+  const base = `/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await fixture.request(`${base}/timeline`)).json(),
+    );
+  try {
+    const live = join(project.path, "live.wav");
+    const ffmpeg = Bun.spawnSync([
+      "ffmpeg",
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=duration=2",
+      live,
+    ]);
+    expect(ffmpeg.exitCode, ffmpeg.stderr.toString()).toBe(0);
+    await Bun.write(join(project.path, "alternate.wav"), Bun.file(live));
+    await Bun.write(
+      join(project.path, "index.html"),
+      '<main data-composition-id="main" data-fps="30"><audio id="voice" src="live.wav" data-start="0" data-duration="2" data-track-index="0"></audio></main>',
+    );
+    const seeded = await fixture.request(`${base}/commands`, "POST", {
+      expectedRevision: (await read()).revision,
+      commands: [
+        {
+          type: "setVersions",
+          clipId: "voice",
+          versions: [
+            { name: "Live", src: "live.wav" },
+            { name: "Alternate", src: "alternate.wav", sourceIn: 0.5 },
+          ],
+        },
+      ],
+    });
+    expect(seeded.status, await seeded.text()).toBe(200);
+    const renamed = await fixture.request(`${base}/media/rename`, "POST", {
+      path: "alternate.wav",
+      name: "second read.wav",
+    });
+    expect(renamed.status, await renamed.text()).toBe(200);
+    const [voice] = (await read()).timeline.clips;
+    expect(
+      voice!.versions!.map(({ name, src, offline }) => ({
+        name,
+        src,
+        offline,
+      })),
+    ).toEqual([
+      { name: "Live", src: "live.wav", offline: undefined },
+      { name: "Alternate", src: "second read.wav", offline: undefined },
+    ]);
+    // The take keeps its In through the rename.
+    expect(voice!.versions![1]!.sourceIn).toBeCloseTo(15, 6);
+  } finally {
     await fixture.close();
   }
 });

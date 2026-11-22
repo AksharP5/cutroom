@@ -1,19 +1,107 @@
 import { create } from "zustand";
+import { mediaKind, sourceUrl } from "../../shared/media";
+import { clipName } from "../../shared/timeline/labels";
 import type { Clip } from "../../shared/timeline/schema";
-import { activeVersion } from "../../shared/timeline/versions";
+import {
+  activeVersion,
+  canAddVersion,
+  mediaVersions,
+  versionOwner,
+  versionPartners,
+} from "../../shared/timeline/versions";
 import { auditionPicture } from "./preview";
-import { useTimeline } from "./timeline";
+import { editTimeline, useTimeline } from "./timeline";
 import { transport, useTransport } from "./transport";
+import { api } from "../api";
+import { SourceViewSchema } from "../../shared/timeline/view";
+import { showToast } from "../workspace";
+import type { MediaDrag } from "../timeline/mediaDrag";
+
+export function versionMediaTarget(
+  state: ReturnType<typeof useTimeline.getState>,
+  kind: MediaDrag["kind"],
+) {
+  if (!state.view || kind === "image") return undefined;
+  const { clips } = state.view.timeline;
+  const ofKind = clips.filter(
+    (clip) =>
+      state.selection.ids.has(clip.id) &&
+      (kind === "video"
+        ? clip.kind === "video"
+        : clip.kind === "audio" || clip.kind === "voiceover") &&
+      versionOwner(clips, clip) === clip,
+  );
+  return ofKind.length === 1 &&
+    state.selection.ids.size ===
+      1 +
+        versionPartners(clips, ofKind[0]!).filter(({ id }) =>
+          state.selection.ids.has(id),
+        ).length
+    ? ofKind[0]
+    : undefined;
+}
+
+export function addClipVersion(
+  clip: Clip,
+  file?: Pick<MediaDrag, "path" | "start">,
+) {
+  const { projectId, view } = useTimeline.getState();
+  if (!projectId || !view || !canAddVersion(clip, view.timeline)) return;
+  const leaf = file?.path.split("/").at(-1);
+  const name = leaf
+    ?.slice(0, leaf.lastIndexOf("."))
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+  void editTimeline(projectId, `Added a version to ${clipName(clip)}`, () => [
+    {
+      type: "addVersion",
+      clipId: clip.id,
+      ...(file && {
+        version: {
+          name: name || leaf || "Take",
+          src: sourceUrl(view.composition, file.path),
+        },
+        sourceSeconds: file.start ?? 0,
+      }),
+    },
+  ]);
+}
+
+export async function addMediaVersion(
+  projectId: string,
+  clip: Clip,
+  path: string,
+) {
+  try {
+    const marks = await api(
+      `/projects/${encodeURIComponent(projectId)}/source-marks?path=${encodeURIComponent(path)}`,
+      SourceViewSchema,
+    );
+    const state = useTimeline.getState();
+    const kind = mediaKind(path)?.kind;
+    if (
+      state.projectId === projectId &&
+      kind &&
+      versionMediaTarget(state, kind)?.id === clip.id
+    )
+      addClipVersion(clip, { path, start: marks.in ?? 0 });
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error));
+  }
+}
 
 /**
- * A clip's versions in the editor. The preview document can carry every version of one clip,
- * hidden but loaded, so the picture switches between them within a frame: that clip is the one
- * whose list is open, or else the one selected clip with versions. Its active version is the
- * one the compiler built, so it draws exactly as export does.
+ * The preview can audition the versions of one clip. While its list is open, media keeps the
+ * saved take, the shown take and the rows either side of it loaded. The document carrying them
+ * starts loading when the pointer reaches the clip's versions button, and a selected title or
+ * scene is prepared the same way. The compiler builds the active version as export does.
  */
 export const useVersions = create(() => ({
   /** The clip whose versions list is open. */
   open: null as string | null,
+  /** The clip whose versions button the pointer rests on, so its list is likely to open. */
+  primed: null as string | null,
   /** The version the pointer or keys rest on in that list, which the picture plays. */
   hovered: null as number | null,
   /** The clip whose versions the shown document carries, and that document. */
@@ -29,12 +117,13 @@ const findClip = (id: string | null) =>
 
 /** The clip whose versions the next preview document should carry, or null. */
 export function auditionClip(): string | null {
-  const { open } = useVersions.getState();
-  if (open) return open;
+  const { open, primed } = useVersions.getState();
+  if (open ?? primed) return open ?? primed;
   const { selection } = useTimeline.getState();
   if (selection.ids.size !== 1) return null;
   const [id = null] = selection.ids;
-  return findClip(id)?.versions ? id : null;
+  const clip = findClip(id);
+  return clip?.versions && !mediaVersions(clip.kind) ? id : null;
 }
 
 /** The preview query that asks for a document carrying `clipId`'s versions. */
@@ -47,34 +136,61 @@ function showVersion() {
   const { loaded, open, hovered } = useVersions.getState();
   const clip = findClip(loaded?.clipId ?? null);
   if (!loaded || !clip?.versions) return;
-  const index =
-    open === clip.id && hovered !== null ? hovered : activeVersion(clip);
-  const key = `${loaded.gen}:${clip.id}:${index}`;
+  const listed = open === clip.id;
+  const index = listed && hovered !== null ? hovered : activeVersion(clip);
+  const key = `${loaded.gen}:${clip.id}:${index}:${listed}`;
   if (key === shown) return;
   shown = key;
-  auditionPicture(index);
+  auditionPicture(index, listed);
 }
 useVersions.subscribe(showVersion);
 useTimeline.subscribe(showVersion);
 
 /** Where the playhead was before the list started playing a clip, to return to. */
-let returnTo: number | null = null;
+let returnTo: { frame: number; playing: boolean } | null = null;
+
+function stopAudition() {
+  useVersions.setState({ hovered: null });
+  if (!returnTo) return;
+  const prior = returnTo;
+  returnTo = null;
+  transport.loopSpan(null);
+  if (!prior.playing) transport.dispatch({ type: "stop" });
+  transport.seek(prior.frame);
+}
 
 /** Plays `clip` in a loop showing version `index`, or with null stops and returns. */
 export function hoverVersion(clip: Clip, index: number | null) {
-  useVersions.setState({ hovered: index });
   if (index === null) {
-    if (returnTo === null) return;
-    transport.loopSpan(null);
-    transport.seek(returnTo);
-    returnTo = null;
+    stopAudition();
     return;
   }
+  useVersions.setState({ hovered: index });
   if (returnTo !== null) return;
-  returnTo = useTransport.getState().frame;
+  const { frame, state } = useTransport.getState();
+  returnTo = { frame, playing: state.kind === "playing" };
   transport.loopSpan({ first: clip.start, end: clip.start + clip.duration });
   transport.seek(clip.start);
-  transport.dispatch({ type: "toggle" });
+  if (!returnTo.playing) transport.dispatch({ type: "toggle" });
+}
+
+let priming: ReturnType<typeof setTimeout> | undefined;
+/**
+ * Start loading a clip's versions once the pointer rests on its button, or stop with null. A
+ * pointer passing over the button loads nothing, and leaving it never reloads the preview: the
+ * loaded takes stay until the next reload that happens anyway.
+ */
+export function primeVersions(clipId: string | null) {
+  clearTimeout(priming);
+  if (clipId === null) {
+    if (useVersions.getState().primed !== null)
+      useVersions.setState({ primed: null });
+    return;
+  }
+  priming = setTimeout(() => {
+    if (useVersions.getState().primed !== clipId)
+      useVersions.setState({ primed: clipId });
+  }, 150);
 }
 
 export function openVersions(clipId: string) {
@@ -82,7 +198,6 @@ export function openVersions(clipId: string) {
 }
 
 export function closeVersions() {
-  const clip = findClip(useVersions.getState().open);
-  if (clip) hoverVersion(clip, null);
-  useVersions.setState({ open: null, hovered: null });
+  stopAudition();
+  useVersions.setState({ open: null, hovered: null, primed: null });
 }
