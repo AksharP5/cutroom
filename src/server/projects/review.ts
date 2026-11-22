@@ -108,6 +108,27 @@ const LedgerFileSchema = z.object({
 });
 type ReviewFile = { items: z.infer<typeof items>; ledger: Ledger };
 
+/**
+ * review.json's notes alone, for a project copy: rows an older build kept for the ledger point at
+ * history the copy does not have. Null when the file cannot be read, so the copy keeps its bytes.
+ */
+export function reviewNotesOnly(raw: string) {
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const file = ReviewFileSchema.safeParse(json);
+  const combined = CombinedFileSchema.safeParse(json);
+  const notes = file.success
+    ? file.data.items
+    : combined.success
+      ? combined.data.items
+      : null;
+  return notes && `${JSON.stringify({ schemaVersion: 1, items: notes })}\n`;
+}
+
 function writableLedger({ targets, edits }: Ledger): Ledger {
   return {
     targets: targets.map((target) => ({

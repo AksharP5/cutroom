@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, createWriteStream, readFileSync } from "node:fs";
 import {
   chmod,
   copyFile,
-  link,
   lstat,
   mkdir,
   open,
@@ -12,12 +11,18 @@ import {
   realpath,
   rename,
   rm,
+  rmdir,
+  statfs,
   symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, posix } from "node:path";
+import { hostname } from "node:os";
+import { dirname, isAbsolute, join, posix, sep } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { Hono } from "hono";
+import type { Context } from "hono";
+import { z } from "zod";
 import {
   hasCode,
   pinnedDirectory,
@@ -25,35 +30,49 @@ import {
 } from "../../local/mediaImport";
 import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
-import { MEDIA_TRASH, mediaKind } from "../../shared/media";
+import { MEDIA_TRASH } from "../../shared/media";
 import type { DuplicateJob, Project } from "../../shared/project";
-import { AGENT_HEADER } from "../../shared/review";
+import { AGENT_HEADER, REVIEW_STATE_PATH } from "../../shared/review";
 import { projectMutationGuard } from "./authorization";
-import { cannotLink, copyMedia, onCopyQueue, stagedName } from "./mediaImport";
-import type { MediaCopy } from "./mediaImport";
+import { onCopyQueue, stagedName } from "./mediaImport";
+import { reviewNotesOnly } from "./review";
 import type { ReviewService } from "./review";
 import { projectSlug } from "./store";
 import type { ProjectStore } from "./store";
+import { VIEW_PATH } from "./view";
 
 const STAGING_PREFIX = ".cutroom-duplicate-";
 const stagingName =
   /^\.cutroom-duplicate-([1-9]\d*)-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 /** Inside every staging folder, so the startup sweep only ever removes folders Cutroom made. */
 const MARKER = ".cutroom-duplicate";
-const CACHE = ".cutroom/cache";
+const MarkerSchema = z.object({
+  host: z.string(),
+  boot: z.string().nullable(),
+  pid: z.number(),
+});
+/** A staging folder this young may belong to a Cutroom whose process the sweep cannot see. */
+const SWEEP_AGE_MS = 10 * 60 * 1000;
+/** Files above this copy after the snapshot, so they never hold the project's edits. */
+const SMALL_BYTES = 1024 * 1024;
 /**
- * The original's history, outputs and trash. The copy starts its own history, so these would
- * only point at entries it does not have.
+ * The original's history, outputs, trash and cache. The copy starts its own history, so these
+ * would only point at entries it does not have. Cache keys name the source file's inode and
+ * times, which a copy never matches, so the copy makes its own.
  */
 const LEFT_BEHIND = new Set([
   ".hyperframes",
   ".thumbnails",
   MEDIA_TRASH,
+  ".cutroom/cache",
   ".cutroom/renders",
   ".cutroom/renders.json",
   ".cutroom/review-ledger.json",
+  ".cutroom/review.v1.json",
   ".cutroom/history-skips.json",
 ]);
+/** Replaced atomically outside the project lock, so they are copied as they are when copied. */
+const UNPINNED = new Set([VIEW_PATH, REVIEW_STATE_PATH]);
 
 const directoryFlags =
   constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
@@ -75,8 +94,7 @@ type FileEntry = {
   path: string;
   identity: string;
   size: bigint;
-  /** Text and other small files copy with the snapshot; media and cache copy after it. */
-  phase: "snapshot" | "media" | "cache";
+  mode: number;
 };
 type Entry =
   | { kind: "directory"; path: string; mode: number }
@@ -95,11 +113,16 @@ export function copyName(name: string, taken: Iterable<string>) {
   }
 }
 
-/** A link the copy can keep: relative, and resolving inside the project. */
-const staysInside = (path: string, target: string) => {
-  if (isAbsolute(target)) return false;
-  const resolved = posix.normalize(posix.join(posix.dirname(path), target));
-  return resolved !== ".." && !resolved.startsWith("../");
+const inside = (root: string, path: string) =>
+  path === root || path.startsWith(`${root}${sep}`);
+
+/** Identifies this boot, so a staging folder from before a restart is known to be abandoned. */
+const bootId = () => {
+  try {
+    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  } catch {
+    return null;
+  }
 };
 
 /**
@@ -112,22 +135,22 @@ async function snapshot(root: string) {
     const handle = await open(directory, directoryFlags);
     try {
       const pinned = pinnedDirectory(directory, handle.fd);
-      for (const name of await readdir(pinned)) {
+      for (const raw of await readdir(pinned, { encoding: "buffer" })) {
+        const name = raw.toString("utf8");
         const path = parent ? `${parent}/${name}` : name;
+        if (!Buffer.from(name, "utf8").equals(raw))
+          throw new HttpError(
+            422,
+            `"${path}" has a name that is not valid UTF-8. Rename it, then duplicate the project.`,
+          );
         if (LEFT_BEHIND.has(path) || stagedName.test(name)) continue;
-        const cache = path.startsWith(`${CACHE}/`);
-        // Scratch folders and partial files in the cache are work in progress.
-        if (cache && name.startsWith(".")) continue;
+        // Atomic writes in progress.
+        if (parent === ".cutroom" && name.endsWith(".tmp")) continue;
         const absolute = join(pinned, name);
         const info = await lstat(absolute, { bigint: true });
+        const mode = Number(info.mode & 0o777n);
         if (info.isDirectory()) {
-          // Cache folders are made as their files clone, so an unclonable cache leaves none.
-          if (!cache)
-            entries.push({
-              kind: "directory",
-              path,
-              mode: Number(info.mode & 0o777n),
-            });
+          entries.push({ kind: "directory", path, mode });
           await visit(absolute, path);
         } else if (info.isFile())
           entries.push({
@@ -135,11 +158,14 @@ async function snapshot(root: string) {
             path,
             identity: sourceIdentity(info),
             size: info.size,
-            phase: cache ? "cache" : mediaKind(name) ? "media" : "snapshot",
+            mode,
           });
         else if (info.isSymbolicLink()) {
+          // Kept only when it resolves inside the project, through every link along the way.
           const target = await readlink(absolute);
-          if (staysInside(path, target))
+          if (isAbsolute(target)) continue;
+          const resolved = await realpath(join(root, path)).catch(() => null);
+          if (resolved && inside(root, resolved))
             entries.push({ kind: "link", path, target });
         }
       }
@@ -157,31 +183,53 @@ const changed = (entry: FileEntry) =>
     `${entry.path} changed while the project was being copied. Try again.`,
   );
 
-/**
- * Clones one file, or byte-copies it when `fallback` allows. True when it cloned. The source is
- * opened without following a link and must still be the file the snapshot saw.
- */
-async function cloneFile(
-  root: string,
-  stage: string,
-  entry: FileEntry,
-  fallback: "copy" | "none",
-) {
+/** Opens a source without following a link; a pinned one must still be the file the walk saw. */
+async function openSource(root: string, entry: FileEntry) {
   const file = await open(join(root, entry.path), fileFlags).catch(
     (error: unknown) => {
       if (hasCode(error, "ENOENT", "ENOTDIR", "ELOOP")) throw changed(entry);
       throw error;
     },
   );
+  const unchanged = async () => {
+    const info = await file.stat({ bigint: true });
+    if (
+      !info.isFile() ||
+      (!UNPINNED.has(entry.path) && sourceIdentity(info) !== entry.identity)
+    )
+      throw changed(entry);
+  };
   try {
-    const unchanged = async () => {
-      const info = await file.stat({ bigint: true });
-      if (!info.isFile() || sourceIdentity(info) !== entry.identity)
-        throw changed(entry);
-    };
     await unchanged();
-    const from = pinnedDirectory(join(root, entry.path), file.fd);
+  } catch (error) {
+    await file.close();
+    throw error;
+  }
+  return {
+    file,
+    unchanged,
+    from: pinnedDirectory(join(root, entry.path), file.fd),
+  };
+}
+
+/** Clones one file, or byte-copies it when `fallback` allows. True when it cloned. */
+async function cloneFile(
+  root: string,
+  stage: string,
+  entry: FileEntry,
+  fallback: "copy" | "none",
+) {
+  const { file, unchanged, from } = await openSource(root, entry);
+  try {
     const to = join(stage, entry.path);
+    if (entry.path === REVIEW_STATE_PATH) {
+      const raw = await file.readFile("utf8");
+      await writeFile(to, reviewNotesOnly(raw) ?? raw, {
+        flag: "wx",
+        mode: entry.mode,
+      });
+      return false;
+    }
     const cloned = await copyFile(
       from,
       to,
@@ -202,103 +250,117 @@ async function cloneFile(
   }
 }
 
-/** A hard link, as import makes on the same disk. Cutroom never rewrites media in place. */
-async function linkFile(root: string, stage: string, entry: FileEntry) {
-  const to = join(stage, entry.path);
-  const linked = await link(join(root, entry.path), to).then(
-    () => true,
-    (error: unknown) => {
-      if (cannotLink(error)) return false;
-      if (hasCode(error, "ENOENT", "ENOTDIR")) throw changed(entry);
-      throw error;
-    },
-  );
-  if (!linked) return false;
-  const info = await lstat(to, { bigint: true });
-  if (!info.isFile() || sourceIdentity(info) !== entry.identity)
-    throw changed(entry);
-  return true;
-}
-
-/** Media and the cache: clones first, then links, then byte copies after a free-space check. */
-async function copyLater(
+/**
+ * Large files: clones first, then byte copies after a free-space check, with progress. Never hard
+ * links: an agent or tool rewriting a file in place in the copy must not change the original.
+ */
+async function copyLarge(
   root: string,
   stage: string,
   files: FileEntry[],
   signal: AbortSignal,
   progress: (copied: number, total: number) => void,
 ) {
-  const copies: MediaCopy[] = [];
-  let cacheClones = true;
+  const copies: FileEntry[] = [];
   for (const entry of files) {
     signal.throwIfAborted();
-    if (entry.phase === "cache") {
-      if (!cacheClones) continue;
-      await mkdir(dirname(join(stage, entry.path)), {
-        recursive: true,
-        mode: 0o700,
-      });
-      // Proxies and waveforms are made again on demand, so a cache that cannot clone is skipped.
-      cacheClones = await cloneFile(root, stage, entry, "none").catch(
-        (error: unknown) => {
-          if (error instanceof HttpError && error.status === 409) return true;
-          throw error;
-        },
-      );
-      continue;
-    }
-    if (await cloneFile(root, stage, entry, "none")) continue;
-    if (await linkFile(root, stage, entry)) continue;
-    copies.push({
-      source: { path: join(root, entry.path), identity: entry.identity },
-      name: basename(entry.path),
-      temp: join(stage, entry.path),
-      copyBytes: entry.size,
-    });
+    if (!(await cloneFile(root, stage, entry, "none"))) copies.push(entry);
   }
-  if (copies.length)
-    await copyMedia(
-      stage,
-      copies,
-      signal,
-      ({ copied, total }) => progress(copied, total),
+  const total = copies.reduce((sum, { size }) => sum + size, 0n);
+  if (!total) return;
+  const { bavail, bsize } = await statfs(stage, { bigint: true });
+  if (total > bavail * bsize)
+    throw new HttpError(
+      409,
       "There is not enough free space to copy this project.",
     );
+  let copied = 0;
+  let reported = -Infinity;
+  progress(0, Number(total));
+  for (const entry of copies) {
+    signal.throwIfAborted();
+    const { file, unchanged } = await openSource(root, entry);
+    const start = copied;
+    try {
+      const to = join(stage, entry.path);
+      await pipeline(
+        file.createReadStream({ autoClose: false, highWaterMark: 1024 * 1024 }),
+        async function* (chunks: AsyncIterable<Buffer>) {
+          for await (const chunk of chunks) {
+            copied += chunk.length;
+            if (copied - start > Number(entry.size)) throw changed(entry);
+            if (performance.now() - reported >= 75) {
+              reported = performance.now();
+              progress(copied, Number(total));
+            }
+            yield chunk;
+          }
+        },
+        createWriteStream(to, { flags: "wx", mode: 0o600 }),
+        { signal },
+      );
+      if (copied - start !== Number(entry.size)) throw changed(entry);
+      await unchanged();
+      await chmod(to, entry.mode);
+    } finally {
+      await file.close();
+    }
+  }
+  progress(copied, Number(total));
 }
 
 /**
  * Removes staging folders a crashed Cutroom left in these folders: only folders with the staging
- * name, owned by this account, holding the marker, whose process is gone.
+ * name, owned by this account, holding a marker from this machine at least ten minutes old, whose
+ * process is gone or whose boot has ended.
  */
 export async function sweepDuplicates(folders: Iterable<string>) {
   const uid = process.getuid?.();
+  const host = hostname();
+  const boot = bootId();
   for (const folder of new Set(folders)) {
     const names = await readdir(folder).catch(() => []);
     for (const name of names) {
       const match = stagingName.exec(name);
       if (!match) continue;
-      const pid = Number(match[1]);
-      if (pid > 2_147_483_647) continue;
-      try {
-        process.kill(pid, 0);
-        continue;
-      } catch (error) {
-        if (!hasCode(error, "ESRCH")) continue;
-      }
       const path = join(folder, name);
       try {
         const info = await lstat(path);
-        const marker = await lstat(join(path, MARKER));
-        if (
-          !info.isDirectory() ||
-          !marker.isFile() ||
-          info.uid !== uid ||
-          marker.uid !== uid
-        )
-          continue;
+        if (!info.isDirectory() || info.uid !== uid) continue;
+        const handle = await open(join(path, MARKER), fileFlags);
+        let marker: z.infer<typeof MarkerSchema>;
+        try {
+          const made = await handle.stat();
+          if (
+            !made.isFile() ||
+            made.uid !== uid ||
+            Date.now() - made.mtimeMs < SWEEP_AGE_MS
+          )
+            continue;
+          const parsed = MarkerSchema.safeParse(
+            JSON.parse(await handle.readFile("utf8")),
+          );
+          if (!parsed.success) continue;
+          marker = parsed.data;
+        } finally {
+          await handle.close();
+        }
+        if (marker.host !== host || marker.pid !== Number(match[1])) continue;
+        // A different boot means the process is gone; otherwise it must have exited.
+        if (boot === null || marker.boot === null || marker.boot === boot) {
+          try {
+            process.kill(marker.pid, 0);
+            continue;
+          } catch (error) {
+            if (!hasCode(error, "ESRCH")) continue;
+          }
+        }
         await rm(path, { recursive: true, force: true });
       } catch (error) {
-        if (!hasCode(error, "ENOENT", "ENOTDIR"))
+        if (
+          !hasCode(error, "ENOENT", "ENOTDIR", "ELOOP") &&
+          !(error instanceof SyntaxError)
+        )
           console.warn(
             `Could not clean up an interrupted duplicate ${path}:`,
             error,
@@ -308,9 +370,23 @@ export async function sweepDuplicates(folders: Iterable<string>) {
   }
 }
 
+/** A failure's message without the `/proc/self/fd` paths the copy works through. */
+const publicError = (error: unknown) => {
+  if (hasCode(error, "ENOSPC", "EDQUOT"))
+    return new HttpError(
+      409,
+      "There is not enough free space to copy this project.",
+    );
+  if (error instanceof HttpError || !(error instanceof Error)) return error;
+  if (!("code" in error)) return error;
+  console.warn("Duplicate failed:", error);
+  return new Error(`The project could not be copied (${String(error.code)}).`);
+};
+
 /**
  * Copies whole projects beside their originals. The snapshot is taken under the source's
- * mutation lock; media copies after it on the import copy queue while the original stays editable.
+ * mutation lock; files over 1 MiB copy after it on the import copy queue while the original stays
+ * editable.
  * `busy` names work that must finish first; `native` is true when the running agent asked.
  */
 export function createDuplicateRoutes(
@@ -370,7 +446,7 @@ export function createDuplicateRoutes(
         await rm(staging, { recursive: true, force: true });
     };
     let root: string;
-    let files: FileEntry[];
+    let large: FileEntry[];
     try {
       root = await realpath(project.path);
       const parent = dirname(root);
@@ -392,13 +468,13 @@ export function createDuplicateRoutes(
         (await handle.stat()).uid !== process.getuid?.()
       )
         throw new HttpError(403, "The folder for the copy changed.");
-      await writeFile(join(stage, MARKER), "Cutroom duplicate in progress\n", {
-        flag: "wx",
-        mode: 0o600,
-      });
-      await chmod(stage, Number((await lstat(root)).mode & 0o777) | 0o700);
+      await writeFile(
+        join(stage, MARKER),
+        JSON.stringify({ host: hostname(), boot: bootId(), pid: process.pid }),
+        { flag: "wx", mode: 0o600 },
+      );
       const source = root;
-      files = await store.serializeMutation(project, async () => {
+      large = await store.serializeMutation(project, async () => {
         const reason = busy(project, native);
         if (reason) throw new HttpError(409, reason);
         await (await store.history(project)).checkpoint();
@@ -412,7 +488,7 @@ export function createDuplicateRoutes(
           if (entry.kind === "directory")
             await mkdir(to, { mode: entry.mode | 0o700 });
           else if (entry.kind === "link") await symlink(entry.target, to);
-          else if (entry.phase === "snapshot")
+          else if (entry.size <= SMALL_BYTES || UNPINNED.has(entry.path))
             await cloneFile(source, stage, entry, "copy");
           else later.push(entry);
         }
@@ -423,13 +499,13 @@ export function createDuplicateRoutes(
       jobs.delete(id);
       finished.resolve();
       await cleanup();
-      throw spaceError(error);
+      throw publicError(error);
     }
 
     void (async () => {
       try {
         await onCopyQueue(() =>
-          copyLater(root, stage, files, signal, (copied, total) => {
+          copyLarge(root, stage, large, signal, (copied, total) => {
             if (machine.state.status === "running")
               machine.transition({
                 status: "running",
@@ -440,20 +516,40 @@ export function createDuplicateRoutes(
         signal.throwIfAborted();
         // From here the copy is complete, so Cancel no longer applies.
         job.publishing = true;
-        const destination = join(
-          dirname(root),
-          `${projectSlug(view.name)}-${randomUUID().slice(0, 8)}`,
-        );
-        const exists = await lstat(destination).then(
-          () => true,
-          (error: unknown) => {
-            if (hasCode(error, "ENOENT")) return false;
+        await chmod(stage, Number((await lstat(root)).mode & 0o777) | 0o700);
+        // An empty folder of our own takes the name, and the rename replaces only it: a folder
+        // someone else made, or filled meanwhile, is never overwritten.
+        let destination = "";
+        for (let attempt = 0; !destination; attempt++) {
+          const candidate = join(
+            dirname(root),
+            `${projectSlug(view.name)}-${randomUUID().slice(0, 8)}`,
+          );
+          await mkdir(candidate, { mode: 0o700 }).then(
+            () => (destination = candidate),
+            (error: unknown) => {
+              if (!hasCode(error, "EEXIST") || attempt > 4) throw error;
+            },
+          );
+        }
+        await rename(staging!, destination).catch(async (error: unknown) => {
+          await rmdir(destination).catch((cleanup: unknown) =>
+            console.warn(`Could not remove ${destination}:`, cleanup),
+          );
+          throw error;
+        });
+        // Listed only once complete and named. The marker stays until then.
+        const copy = await store
+          .importProject({ path: destination, name: view.name })
+          .catch(async (error: unknown) => {
+            await rename(destination, staging!).catch((undo: unknown) =>
+              console.warn(
+                `Could not move the unlisted copy ${destination} back to ${staging}:`,
+                undo,
+              ),
+            );
             throw error;
-          },
-        );
-        if (exists) throw new HttpError(409, `${destination} already exists.`);
-        // Named only once complete, and listed only once named.
-        await rename(staging!, destination);
+          });
         published = true;
         await unlink(join(destination, MARKER)).catch((error: unknown) =>
           console.warn(
@@ -461,15 +557,11 @@ export function createDuplicateRoutes(
             error,
           ),
         );
-        const copy = await store.importProject({
-          path: destination,
-          name: view.name,
-        });
         view.projectId = copy.id;
         machine.transition({ status: "done", progress: 1 });
       } catch (error) {
         const { progress } = machine.state;
-        const failure = spaceError(error);
+        const failure = publicError(error);
         if (machine.state.status === "cancelling")
           machine.transition({ status: "cancelled", progress });
         else
@@ -497,8 +589,28 @@ export function createDuplicateRoutes(
       reviews.authorize(c.req.header(AGENT_HEADER), project.id) !== undefined;
     return c.json(await start(project, native), 202);
   });
-  api.get("/duplicates", (c) => c.json({ jobs: [...jobs.keys()].map(show) }));
-  api.get("/duplicates/:job", (c) => c.json(show(c.req.param("job"))));
+  /** An in-app agent sees only the duplicates of the project its turn runs in. */
+  const visible = (c: Context, sourceId: string) => {
+    try {
+      reviews.authorize(c.req.header(AGENT_HEADER), sourceId);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  api.get("/duplicates", (c) =>
+    c.json({
+      jobs: [...jobs.values()]
+        .filter(({ view }) => visible(c, view.sourceId))
+        .map(({ view }) => show(view.id)),
+    }),
+  );
+  api.get("/duplicates/:job", (c) => {
+    const job = jobs.get(c.req.param("job"));
+    if (!job || !visible(c, job.view.sourceId))
+      throw new HttpError(404, "Duplicate not found.");
+    return c.json(show(job.view.id));
+  });
   // Cancel removes the unfinished copy, so only the owner does it.
   api.post("/duplicates/:job/cancel", (c) => {
     if (c.req.header(AGENT_HEADER) !== undefined)

@@ -32,7 +32,7 @@ import { projectStatePath, unavailableProjectFile } from "./path";
 import type { ReviewService } from "./review";
 import type { ProjectStore } from "./store";
 
-export const cannotLink = (error: unknown) =>
+const cannotLink = (error: unknown) =>
   hasCode(
     error,
     "EXDEV",
@@ -56,11 +56,6 @@ type StagedMedia = {
   copyBytes: bigint;
   linked: boolean;
 };
-/** A byte copy of one source into a new file at `temp`. */
-export type MediaCopy = Pick<
-  StagedMedia,
-  "source" | "name" | "temp" | "copyBytes"
->;
 
 const directoryFlags =
   constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
@@ -243,18 +238,20 @@ export async function importMedia(
   }
 }
 
-/** Byte-copies each source after checking there is room for all of them, refusing any that changes. */
-export async function copyMedia(
+async function copyMedia(
   pinned: string,
-  copies: MediaCopy[],
+  copies: StagedMedia[],
   signal: AbortSignal,
   progress?: (event: MediaImportProgress) => Promise<unknown> | void,
-  noSpace = "There is not enough free space to import these files.",
 ) {
   const totalBytes = copies.reduce((sum, entry) => sum + entry.copyBytes, 0n);
   if (totalBytes) {
     const { bavail, bsize } = await statfs(pinned, { bigint: true });
-    if (totalBytes > bavail * bsize) throw new HttpError(409, noSpace);
+    if (totalBytes > bavail * bsize)
+      throw new HttpError(
+        409,
+        "There is not enough free space to import these files.",
+      );
   }
   const total = Number(totalBytes);
   let copied = 0;

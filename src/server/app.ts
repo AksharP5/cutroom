@@ -202,6 +202,7 @@ export async function createApp(
     dataDir,
     projects,
     agents,
+    review,
     editor,
     mediaImport,
     dispose() {

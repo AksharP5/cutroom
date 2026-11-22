@@ -283,7 +283,7 @@ export function createMcpServer(options: McpOptions = {}) {
     "project_duplicate",
     {
       description:
-        'Copy a whole project into a new project beside its folder, named "<name> copy", to try a risky change without touching the original. Media is cloned or hard-linked where the disk allows, so a copy costs little space; text, timelines, review notes, ids and view settings come along. The copy starts with empty undo history. Runs in the background: returns a job whose state is running until it is done (projectId is then the copy, ready for every project tool) or failed with error. Read it with project_duplicate_status. Refused while an export runs in the project or another agent is working in it.',
+        'Copy a whole project into a new project beside its folder, named "<name> copy", to try a risky change without touching the original. The copy owns every file, so rewriting one never changes the original. On disks that clone (btrfs, APFS) it costs almost no space; elsewhere large files are copied byte for byte after a free-space check. Timelines, review notes, ids and view settings come along. The copy starts with empty undo history. Runs in the background: returns a job whose state is running until it is done (projectId is then the copy, ready for every project tool) or failed with error. Read it with project_duplicate_status. Refused while an export runs in the project or another agent is working in it.',
       inputSchema: project,
       annotations: edit,
     },
