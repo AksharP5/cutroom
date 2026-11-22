@@ -37,6 +37,10 @@ export const activeVersion = (
 export const sourceRate = (version: Version, fps: Fps) =>
   version.sourceFps ?? fps.num / fps.den;
 
+/** A take's In in seconds as agents read it, without float noise from the frame count. */
+export const versionSeconds = (version: Version, fps: Fps) =>
+  Math.round(versionStart(version, fps) * 1e6) / 1e6 + 0;
+
 export const versionStart = (version: Version, fps: Fps) =>
   (version.sourceIn ?? 0) / sourceRate(version, fps);
 

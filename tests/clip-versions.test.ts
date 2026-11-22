@@ -295,8 +295,9 @@ test("video versions bind native source frames to both linked elements through s
         type: "setVersions",
         clipId: "picture",
         versions: [
-          { name: "Take 1", src: "interview.mp4", sourceIn: 30 },
-          { name: "Wide", src: "wide.mp4", sourceIn: 36 },
+          // Commands give the In in seconds; the timeline counts source frames.
+          { name: "Take 1", src: "interview.mp4", sourceIn: 1 },
+          { name: "Wide", src: "wide.mp4", sourceIn: 1.5 },
           { name: "Short", src: "short.mp4" },
         ],
       },

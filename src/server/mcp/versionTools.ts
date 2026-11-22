@@ -10,11 +10,12 @@ import {
 import type {
   Clip,
   CommandInput,
+  Fps,
   TimelineView,
 } from "../../shared/timeline/schema";
 import { activeVersion, mediaVersions } from "../../shared/timeline/versions";
 import type { RequestOptions } from "./server";
-import { editReply } from "./timelineReply";
+import { agentVersions, editReply } from "./timelineReply";
 
 type ReadView = (
   projectId: string,
@@ -54,21 +55,17 @@ const pick = z
   .describe("The version's number in the list (0 is the first) or its name");
 
 /** A clip's versions as an agent reads them. */
-const listing = (clip: Clip) => ({
+const listing = (clip: Clip, fps: Fps) => ({
   clipId: clip.id,
   kind: clip.kind,
   start: clip.start,
   duration: clip.duration,
   track: clip.track,
   active: activeVersion(clip),
-  versions: (clip.versions ?? []).map(
-    ({ name, src, sourceIn, fits, offline }, index) => ({
-      index,
-      name,
-      src,
-      ...(sourceIn !== undefined && { sourceIn, fits, offline }),
-    }),
-  ),
+  versions: agentVersions(clip.versions ?? [], fps).map((version, index) => ({
+    index,
+    ...version,
+  })),
 });
 
 /**
@@ -138,7 +135,7 @@ export function registerVersionTools(
     "clip_versions_set",
     {
       description:
-        'Give one clip several versions to choose between, for "give me 5 versions of this": write each version as its own composition file first (source_write, e.g. compositions/title-orbit.html, each a full scene the clip\'s length), then call this once with all of them. The owner sees a versions badge on the clip, previews each in the viewer and keeps one; only the active version plays in preview and export. A scene clip takes composition files. A title or text clip becomes a scene clip in its place, with the same track, start, length and name; the reply names its new id. An image clip takes image files. Footage and audio take media of the same kind, with optional sourceIn in source frames. Send linked takes to the picture. Replaces any versions the clip had. One undo step.',
+        "Give one clip several versions to choose between, for \"give me 5 versions of this\": write each version as its own composition file first (source_write, e.g. compositions/title-orbit.html, each a full scene the clip's length), then call this once with all of them. The owner sees a versions badge on the clip, previews each in the viewer and keeps one; only the active version plays in preview and export. A scene clip takes composition files. A title or text clip becomes a scene clip in its place, with the same track, start, length and name; the reply names its new id. An image clip takes image files. Footage and audio take media of the same kind, with an optional sourceIn in source seconds (default: the clip's In for its own file, else 0). Send linked takes to the picture. Replaces any versions the clip had. One undo step.",
       inputSchema: {
         ...target,
         versions: VersionsSchema.describe(
@@ -207,7 +204,7 @@ export function registerVersionTools(
     async ({ projectId, composition, clipId }) => {
       const found = await find(projectId, composition, clipId);
       if (!found.ok) return found.failure;
-      const result = listing(found.clip);
+      const result = listing(found.clip, found.view.timeline.fps);
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
         structuredContent: { result },

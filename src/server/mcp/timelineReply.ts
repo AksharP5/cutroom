@@ -5,9 +5,17 @@ import {
 import { z } from "zod";
 import { volumePoints } from "../../shared/timeline/mix";
 import { compactFxNode } from "../../shared/timeline/fx";
-import { versionShortReason } from "../../shared/timeline/versions";
+import {
+  versionSeconds,
+  versionShortReason,
+} from "../../shared/timeline/versions";
 import { syncOffsets } from "../../shared/timeline/sync";
-import type { Timeline, TimelineView } from "../../shared/timeline/schema";
+import type {
+  Fps,
+  Timeline,
+  TimelineView,
+  Version,
+} from "../../shared/timeline/schema";
 
 export const TimelineReplyFormatSchema = z.enum(["auto", "compact", "legacy"]);
 type ReplyFormat = z.infer<typeof TimelineReplyFormatSchema>;
@@ -29,6 +37,18 @@ const fitsClipBudget = (detail: unknown) =>
  * hundreds of points. Effects leave out parameters at their defaults. Linked picture and sound
  * that have drifted apart carry their offset, as the timeline's out-of-sync badge shows it.
  */
+/** Takes as agents read them: media takes give their In in source seconds. */
+export const agentVersions = (versions: readonly Version[], fps: Fps) =>
+  versions.map((version) => ({
+    name: version.name,
+    src: version.src,
+    ...(version.sourceIn !== undefined && {
+      sourceIn: versionSeconds(version, fps),
+      fits: version.fits,
+      offline: version.offline,
+    }),
+  }));
+
 export function agentTimeline(timeline: Timeline, whole = timeline) {
   const offsets = syncOffsets(whole);
   const members = new Map<string, number>();
@@ -53,11 +73,7 @@ export function agentTimeline(timeline: Timeline, whole = timeline) {
       const clip = {
         ...rest,
         ...(versions && {
-          versions: versions.map(({ name, src, sourceIn, fits, offline }) => ({
-            name,
-            src,
-            ...(sourceIn !== undefined && { sourceIn, fits, offline }),
-          })),
+          versions: agentVersions(versions, timeline.fps),
         }),
         fx: rest.fx.map(compactFxNode),
         ...(offset && { syncOffset: offset }),

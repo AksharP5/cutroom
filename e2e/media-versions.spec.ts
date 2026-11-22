@@ -443,10 +443,10 @@ for (const mode of playbackModes)
               .map(({ name, src }, i) => ({
                 name,
                 src,
-                sourceIn: i === 1 ? 70 : 0,
+                sourceIn: i === 1 ? 70 / 30 : 0,
               })),
             ...(measure
-              ? [{ name: "Closer", src: "interview.mp4", sourceIn: 24 }]
+              ? [{ name: "Closer", src: "interview.mp4", sourceIn: 0.8 }]
               : []),
           ],
         },
@@ -484,7 +484,7 @@ for (const mode of playbackModes)
         : null;
       if (!measure) await badge.click();
       const menu = page.getByRole("menu", {
-        name: "Versions of interview.mp4",
+        name: /^Versions of /,
       });
       const second = menu.getByRole("menuitemradio", { name: /Take 2/ });
       const wide = menu.getByRole("menuitemradio", { name: /Wide/ });
@@ -1033,7 +1033,7 @@ test("audio versions can be added in the clip menu, Media and Source", async ({
     .toBe(false);
 
   await badge.click();
-  const menu = page.getByRole("menu", { name: "Versions of music.wav" });
+  const menu = page.getByRole("menu", { name: /^Versions of / });
   const sting = menu.getByRole("menuitemradio", { name: /sting/i });
   await expect(sting).toHaveAttribute(
     "title",

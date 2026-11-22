@@ -314,9 +314,14 @@ export const VersionSchema = z.object({
     .number()
     .nonnegative()
     .optional()
-    .describe("In point in source frames; defaults to zero on media"),
+    .describe(
+      "In point in source seconds. Defaults to the clip's In for its own file, otherwise zero",
+    ),
 });
-/** Source storage adds the rate used to convert frames to exact source time. */
+/**
+ * Source storage counts the In in source frames and adds the rate that converts them to exact
+ * source time. Commands give the In in seconds.
+ */
 export const StoredVersionSchema = VersionSchema.extend({
   sourceIn: z.number().optional(),
   sourceFps: z.number().positive().optional(),

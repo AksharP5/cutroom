@@ -2273,13 +2273,24 @@ function editVersions(
         `"${version.src}" is not a source for a ${target.kind} version.`,
       );
     if (!media) return version;
+    const rated = {
+      ...version,
+      ...(batch.mediaRates.has(version.src) && {
+        sourceFps: batch.mediaRates.get(version.src),
+      }),
+    };
+    // A take of the clip's own file without an In keeps the clip's current In.
+    const current =
+      version.src === target.src && target.mediaStart !== null
+        ? versionOffset(rated, target.mediaStart, fps)
+        : 0;
     return versionMedia(
       {
-        ...version,
-        sourceIn: version.sourceIn ?? 0,
-        ...(batch.mediaRates.has(version.src) && {
-          sourceFps: batch.mediaRates.get(version.src),
-        }),
+        ...rated,
+        sourceIn:
+          version.sourceIn === undefined
+            ? current
+            : versionOffset(rated, version.sourceIn, fps),
       },
       batch.mediaLengths,
       batch.silentMedia,
@@ -2322,7 +2333,6 @@ function editVersions(
           `A clip holds at most ${MAX_VERSIONS} versions.`,
         );
       const first = take({ name: "Take 1", src: target.src });
-      first.sourceIn = versionOffset(first, target.mediaStart ?? 0, fps);
       first.sourceDuration ??= target.sourceDuration ?? undefined;
       const list = versions ?? [first];
       const shown = list[active >= 0 ? active : 0]!;
@@ -2408,7 +2418,6 @@ function editVersions(
       ...rest,
       src: version.src,
       ...(media && {
-        label: clip.label ?? clipName(clip),
         mediaStart: partner
           ? start + (clip.mediaStart ?? 0) - (target.mediaStart ?? 0)
           : start,
@@ -2435,10 +2444,7 @@ function editVersions(
         : {
             ...next,
             versions,
-            ...(media && {
-              versionIndex: index,
-              label: next.label ?? clipName(target),
-            }),
+            ...(media && { versionIndex: index }),
           };
     }),
   };
