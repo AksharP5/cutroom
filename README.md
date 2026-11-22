@@ -29,6 +29,8 @@ For the browser interface, run `bun start` and open `http://127.0.0.1:4317`. For
 
 Create a project or open a HyperFrames folder containing `index.html`. New projects live in `~/Videos/Cutroom`, and application data lives in `~/.local/share/cutroom`. Set `CUTROOM_PROJECTS_DIR` or `CUTROOM_DATA_DIR` to change those paths.
 
+Right-click a project on Home to rename it or remove it from the list. Removing never deletes files: open the folder again to bring the project back with its undo history.
+
 Install and authenticate Codex or Claude Code to use the Agent panel. Type `$` in the composer to choose a native skill. Cutroom uses the provider's own configuration and shows its approvals in chat. [Agent setup and review workflow](docs/agents.md).
 
 [Editing and export](docs/editing.md) · [Keyboard shortcuts](docs/keyboard.md) · [Local transcription](docs/transcription.md)

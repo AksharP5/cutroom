@@ -44,7 +44,7 @@ import { Logo } from "./components/Logo";
 import { MediaPanel } from "./components/MediaPanel";
 import { Modal } from "./components/Modal";
 import { ProjectsHome } from "./components/ProjectsHome";
-import { ContextMenuHost } from "./components/ContextMenu";
+import { ContextMenuHost, revealAction } from "./components/ContextMenu";
 import { ShortcutSheet } from "./components/ShortcutSheet";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { saveReviewNote } from "./review";
@@ -158,7 +158,13 @@ export function App() {
   const [dialog, setDialog] = useState<
     "projects" | "create" | "settings" | "shortcuts" | null
   >(null);
-  useKeymap({ resolveCustomizedActions: () => setDialog("shortcuts") });
+  useKeymap({
+    resolveCustomizedActions: () => setDialog("shortcuts"),
+    // Home is already the project list.
+    fileProjectManager: () => {
+      if (activeProjectId.current) setDialog("projects");
+    },
+  });
   const [picker, setPicker] = useState<"file" | "directory" | null>(null);
   const [projectFormat, setProjectFormat] = useState(() => {
     try {
@@ -600,6 +606,37 @@ export function App() {
             onOpen={openProject}
             onCreate={() => setDialog("create")}
             onImport={() => setPicker("directory")}
+            onRename={async (item, name) => {
+              await api(
+                `/projects/${encodeURIComponent(item.id)}`,
+                ProjectSchema,
+                json("PATCH", { name }),
+              );
+              await loadProjects();
+            }}
+            onRemove={(item) =>
+              api(
+                `/projects/${encodeURIComponent(item.id)}`,
+                ProjectSchema,
+                json("DELETE"),
+              )
+                .then(async () => {
+                  await loadProjects();
+                  const reveal = revealAction(item.path);
+                  showToast(
+                    `Removed ${item.name}. Files stay in ${item.path}.`,
+                    reveal && { label: "Show folder", run: reveal },
+                    { tone: "info" },
+                  );
+                  return true;
+                })
+                .catch((error: unknown) => {
+                  showToast(
+                    error instanceof Error ? error.message : String(error),
+                  );
+                  return false;
+                })
+            }
           />
         ) : (
           <EmptyState

@@ -41,6 +41,7 @@ export const keymap = {
     label: "Export",
     keys: ["Shift+8"],
   },
+  fileProjectManager: { area: "View", label: "Projects", keys: ["Shift+1"] },
   editPointer: { area: "Tools", label: "Select", keys: ["A"] },
   editTrim: { area: "Tools", label: "Trim", keys: ["T"] },
   editBlade: { area: "Tools", label: "Blade", keys: ["B"] },

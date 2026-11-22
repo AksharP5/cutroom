@@ -142,6 +142,18 @@ export async function createApp(
       transcripts,
       media.media.proxyState,
       timeline.timelineSnapshot,
+      (project) => {
+        if (editor.runningExport(project.id))
+          return `"${project.name}" is exporting. Wait for the export to finish or cancel it, then remove the project.`;
+        const working = agents
+          .list(project.id)
+          .find(
+            (session) =>
+              session.status === "running" || session.status === "waiting",
+          );
+        if (working)
+          return `An agent is working in "${project.name}" (${working.title}). Stop it or wait for it to finish, then remove the project.`;
+      },
     ),
   );
   app.route("/api/cutroom", timeline);

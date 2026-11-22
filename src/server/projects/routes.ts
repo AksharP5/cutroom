@@ -15,6 +15,7 @@ import {
   CreateProjectSchema,
   CutWordsSchema,
   ImportProjectSchema,
+  RenameProjectSchema,
   SourceWriteSchema,
   TranscribeInputSchema,
   TranscriptImportSchema,
@@ -86,6 +87,8 @@ export function createProjectRoutes(
   timelineSnapshot?: ReturnType<
     typeof createTimelineRoutes
   >["timelineSnapshot"],
+  /** Why a project cannot leave the list yet, such as a running export; undefined when it can. */
+  removalBlocker: (project: Project) => string | undefined = () => undefined,
 ) {
   const api = new Hono();
   const agentWho = (c: Context, project: Project) =>
@@ -109,6 +112,16 @@ export function createProjectRoutes(
   api.get("/projects/:id", async (c) =>
     c.json(await store.get(c.req.param("id"))),
   );
+  api.patch("/projects/:id", async (c) => {
+    const { name } = parseInput(RenameProjectSchema, await c.req.json());
+    return c.json(await store.rename(c.req.param("id"), name));
+  });
+  // Removing only forgets the registry entry, and only the owner does it.
+  api.delete("/projects/:id", async (c) => {
+    if (c.req.header(AGENT_HEADER) !== undefined)
+      throw new HttpError(403, "Only the owner can remove a project.");
+    return c.json(await store.remove(c.req.param("id"), removalBlocker));
+  });
   api.get("/projects/:id/export-defaults", async (c) => {
     const query = parseInput(
       ExportDestinationSchema.partial({ directory: true }),

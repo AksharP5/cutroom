@@ -1952,6 +1952,11 @@ export function createHyperframesApi(
   }
   api.route("/", createStudioApi(adapter));
   return Object.assign(api, {
+    /** The export running for this project, if any. One export runs at a time across projects. */
+    runningExport(projectId: string) {
+      const job = renders.active();
+      return job?.projectId === projectId ? job : undefined;
+    },
     subscribeExports(
       projectId: string,
       listener: (job: ReturnType<typeof snapshot>) => void,

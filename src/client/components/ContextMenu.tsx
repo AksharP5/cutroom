@@ -59,24 +59,22 @@ export function openContextMenu(
   }));
 }
 
+/** Shows a file or folder in the system's file manager. Null in a browser, which has no way to. */
+export function revealAction(path: string): (() => void) | null {
+  const desktop = window.cutroomDesktop;
+  if (!desktop) return null;
+  return () =>
+    void desktop
+      .reveal(path)
+      .catch((error: unknown) =>
+        showToast(error instanceof Error ? error.message : String(error)),
+      );
+}
+
 /** The desktop's row for showing a file or folder in the file manager; a browser has none. */
 export function revealRows(path: string): MenuItem[] {
-  const desktop = window.cutroomDesktop;
-  return desktop
-    ? [
-        {
-          label: "Reveal in folder",
-          run: () =>
-            void desktop
-              .reveal(path)
-              .catch((error: unknown) =>
-                showToast(
-                  error instanceof Error ? error.message : String(error),
-                ),
-              ),
-        },
-      ]
-    : [];
+  const run = revealAction(path);
+  return run ? [{ label: "Reveal in folder", run }] : [];
 }
 
 function close(restore: boolean) {

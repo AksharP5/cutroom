@@ -6,7 +6,9 @@ import type { Action } from "../keymap";
  * keymap and runs the handler that key runs, so the menu can never say or do something else.
  */
 export type MenuEntry = (
-  { action: Action } | { label: string; run(): void }
+  | { action: Action }
+  /** `keys` hints at a key the row's own surface handles, such as F2 on a focused tile. */
+  | { label: string; run(): void; keys?: string }
 ) & {
   disabled?: boolean;
   /** Present on a row that shows a state: a check mark when true. */
@@ -20,7 +22,7 @@ export type MenuItem = MenuEntry | "separator";
 export const itemText = (item: MenuEntry) =>
   "action" in item
     ? { label: keymap[item.action].label, keys: keymap[item.action].keys[0] }
-    : { label: item.label, keys: undefined };
+    : { label: item.label, keys: item.keys };
 
 /** Letters typed within half a second of each other search together. */
 export interface MenuSearch {

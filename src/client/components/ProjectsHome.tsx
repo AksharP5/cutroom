@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { FolderOpen, Plus } from "@phosphor-icons/react";
 import { ProjectSummarySchema } from "../../shared/project";
 import type { Project, ProjectSummary } from "../../shared/project";
@@ -10,6 +10,7 @@ import {
   gridStep,
   posterUrl,
 } from "../home";
+import { showToast } from "../workspace";
 import { openContextMenu, revealRows } from "./ContextMenu";
 import { Logo } from "./Logo";
 import "./home.css";
@@ -18,6 +19,69 @@ import "./home.css";
 const cancelWhenRemoved = (image: HTMLImageElement) => () =>
   image.removeAttribute("src");
 
+/** The name being typed over a tile's name. Enter or leaving the field saves it; Esc keeps the old one. */
+function RenameField({
+  project,
+  onRename,
+  onDone,
+}: {
+  project: Project;
+  onRename: (name: string) => Promise<void>;
+  onDone: () => void;
+}) {
+  const field = useRef<HTMLInputElement>(null);
+  const [value, setValue] = useState(project.name);
+  const [saving, setSaving] = useState(false);
+  const ended = useRef(false);
+  useLayoutEffect(() => {
+    field.current?.focus();
+    field.current?.select();
+  }, []);
+  const finish = async (save: boolean) => {
+    if (ended.current || saving) return;
+    const name = value.trim();
+    if (!save || !name || name === project.name) {
+      ended.current = true;
+      onDone();
+      return;
+    }
+    setSaving(true);
+    try {
+      await onRename(name);
+      ended.current = true;
+      onDone();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error));
+      field.current?.focus();
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <input
+      ref={field}
+      className="home-name home-rename"
+      aria-label="Project name"
+      maxLength={120}
+      value={value}
+      readOnly={saving}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={() => void finish(true)}
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing) return;
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void finish(true);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          void finish(false);
+        }
+      }}
+    />
+  );
+}
+
 /** One project: its poster frame, name, length, shape, and when it was last edited. */
 function ProjectTile({
   project,
@@ -25,17 +89,22 @@ function ProjectTile({
   tabbable,
   onFocus,
   onOpen,
+  onRename,
+  onRemove,
 }: {
   project: Project;
   now: number;
   tabbable: boolean;
   onFocus: () => void;
   onOpen: () => void;
+  onRename: (name: string) => Promise<void>;
+  onRemove: () => void;
 }) {
   const name = useId();
   const meta = useId();
+  const [renaming, setRenaming] = useState(false);
   // Compositions are read and frames rendered only for tiles that have been on screen.
-  const tile = useRef<HTMLButtonElement>(null);
+  const tile = useRef<HTMLElement>(null);
   const [seen, setSeen] = useState(false);
   useEffect(() => {
     const element = tile.current;
@@ -52,7 +121,7 @@ function ProjectTile({
 
   const [summary, setSummary] = useState<ProjectSummary | null>(null);
   const [unreadable, setUnreadable] = useState("");
-  const [poster, setPoster] = useState<"pending" | "ready" | "missing">(
+  const [posterState, setPoster] = useState<"pending" | "ready" | "missing">(
     "pending",
   );
   useEffect(() => {
@@ -74,28 +143,15 @@ function ProjectTile({
   }, [seen, project.id, project.updatedAt]);
 
   const empty = summary?.duration === 0;
-  return (
-    <button
-      ref={tile}
-      className="home-project"
-      title={project.path}
-      aria-labelledby={name}
-      aria-describedby={meta}
-      tabIndex={tabbable ? 0 : -1}
-      data-poster={
-        unreadable ? "missing" : empty ? "empty" : seen ? poster : undefined
-      }
-      onFocus={onFocus}
-      onClick={onOpen}
-      onContextMenu={(event) =>
-        openContextMenu(
-          event,
-          project.name,
-          [{ label: "Open", run: onOpen }, ...revealRows(project.path)],
-          event.currentTarget,
-        )
-      }
-    >
+  const poster = unreadable
+    ? "missing"
+    : empty
+      ? "empty"
+      : seen
+        ? posterState
+        : undefined;
+  const contents = (
+    <>
       <span className="home-well">
         <span
           className="home-frame"
@@ -126,9 +182,20 @@ function ProjectTile({
         </span>
         <span className="home-selection" />
       </span>
-      <span className="home-name" id={name}>
-        {project.name}
-      </span>
+      {renaming ? (
+        <RenameField
+          project={project}
+          onRename={onRename}
+          onDone={() => {
+            setRenaming(false);
+            requestAnimationFrame(() => tile.current?.focus());
+          }}
+        />
+      ) : (
+        <span className="home-name" id={name}>
+          {project.name}
+        </span>
+      )}
       <span className="home-meta" id={meta}>
         {summary && (
           <>
@@ -147,6 +214,57 @@ function ProjectTile({
           {editedLabel(project.updatedAt, now)}
         </time>
       </span>
+    </>
+  );
+  // A field cannot sit inside a button, so the tile stops being one while its name is typed.
+  if (renaming)
+    return (
+      <div
+        ref={(element) => {
+          tile.current = element;
+        }}
+        className="home-project"
+        data-poster={poster}
+        data-renaming
+      >
+        {contents}
+      </div>
+    );
+  return (
+    <button
+      ref={(element) => {
+        tile.current = element;
+      }}
+      className="home-project"
+      title={project.path}
+      aria-labelledby={name}
+      aria-describedby={meta}
+      tabIndex={tabbable ? 0 : -1}
+      data-poster={poster}
+      onFocus={onFocus}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key !== "F2" || event.altKey || event.ctrlKey) return;
+        event.preventDefault();
+        setRenaming(true);
+      }}
+      onContextMenu={(event) =>
+        openContextMenu(
+          event,
+          project.name,
+          [
+            { label: "Open", run: onOpen },
+            "separator",
+            { label: "Rename", keys: "F2", run: () => setRenaming(true) },
+            ...revealRows(project.path),
+            "separator",
+            { label: "Remove from list", run: onRemove },
+          ],
+          event.currentTarget,
+        )
+      }
+    >
+      {contents}
     </button>
   );
 }
@@ -157,11 +275,16 @@ export function ProjectsHome({
   onOpen,
   onCreate,
   onImport,
+  onRename,
+  onRemove,
 }: {
   projects: Project[];
   onOpen: (project: Project) => void;
   onCreate: () => void;
   onImport: () => void;
+  onRename: (project: Project, name: string) => Promise<void>;
+  /** Resolves true once the project has left the list. */
+  onRemove: (project: Project) => Promise<boolean>;
 }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -177,6 +300,15 @@ export function ProjectsHome({
     : projects[0]?.id;
   // The most recent project is one Enter away.
   useEffect(() => grid.current?.querySelector("button")?.focus(), []);
+  // A removed tile hands focus to the one that takes its place.
+  const refocus = useRef<number | null>(null);
+  useEffect(() => {
+    const index = refocus.current;
+    if (index === null) return;
+    refocus.current = null;
+    const tiles = grid.current?.querySelectorAll<HTMLElement>(".home-project");
+    tiles?.[Math.min(index, tiles.length - 1)]?.focus();
+  }, [projects]);
 
   return (
     <main className="home">
@@ -216,7 +348,7 @@ export function ProjectsHome({
           tiles[next]?.focus();
         }}
       >
-        {projects.map((project) => (
+        {projects.map((project, index) => (
           <li key={project.id}>
             <ProjectTile
               project={project}
@@ -224,6 +356,13 @@ export function ProjectsHome({
               tabbable={project.id === tabbable}
               onFocus={() => setActive(project.id)}
               onOpen={() => onOpen(project)}
+              onRename={(name) => onRename(project, name)}
+              onRemove={() => {
+                refocus.current = index;
+                void onRemove(project).then((removed) => {
+                  if (!removed) refocus.current = null;
+                });
+              }}
             />
           </li>
         ))}
