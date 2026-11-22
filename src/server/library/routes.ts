@@ -48,10 +48,11 @@ export function createLibraryRoutes(
       library.catalog(),
       cachedNames(),
     ]);
+    // A saved list never needs the network, so a failed download is what says it is offline.
     return {
       ref: library.ref,
       savedAt,
-      offline,
+      offline: offline || !(await library.reachable()),
       items: items.map((item) => library.describe(item, cached.has(item.name))),
     };
   };

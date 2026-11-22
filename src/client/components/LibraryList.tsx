@@ -244,7 +244,7 @@ export function LibraryList({
     const matches = librarySearch(needle);
     return catalog.items.flatMap((item) => {
       // Too new or deprecated items show only to a search for their exact name.
-      if (item.disabled && needle !== item.name) return [];
+      if (item.hidden && needle !== item.name) return [];
       if (
         filter === "project"
           ? !used?.has(item.name)

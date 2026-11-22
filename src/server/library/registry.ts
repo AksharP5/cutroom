@@ -233,11 +233,14 @@ export function createLibrary({
   fetchImpl = fetch,
   ref = LIBRARY_REF,
   commit = LIBRARY_RELEASE.commit,
+  retryMs = 30_000,
 }: {
   dataDir: string;
   fetchImpl?: typeof fetch;
   ref?: string;
   commit?: string;
+  /** How long an unreachable registry waits before a list read checks it again. */
+  retryMs?: number;
 }) {
   const base = REGISTRY(commit);
   const root = join(dataDir, "library", ref);
@@ -250,6 +253,9 @@ export function createLibrary({
     !url.password &&
     [base, ...ASSET_PREFIXES].some((prefix) => url.href.startsWith(prefix));
 
+  /** The last request could not reach the registry: a network failure or a server error. */
+  let down = false;
+  let checked = 0;
   async function get(href: string, limit: number) {
     const url = new URL(href);
     if (!allowed(url))
@@ -264,8 +270,10 @@ export function createLibrary({
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
     } catch (error) {
+      down = true;
       throw unreachable(error instanceof Error ? error.message : String(error));
     }
+    down = response.status >= 500;
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel();
       throw unreachable(`${url.href} redirected, which the library refuses.`);
@@ -532,11 +540,30 @@ export function createLibrary({
         : entry.online
           ? "Needs online scripts"
           : undefined,
+    hidden:
+      !!entry.deprecated ||
+      (!!entry.minCliVersion &&
+        newer(entry.minCliVersion, hyperframesPackage.version)),
   });
+
+  /**
+   * Whether the registry answers. Once a request has failed, a list read asks again with the
+   * small manifest, at most every `retryMs`, so the panel says when it is back.
+   */
+  async function reachable() {
+    if (!down) return true;
+    if (Date.now() - checked < retryMs) return false;
+    checked = Date.now();
+    return get(new URL("registry.json", base).href, MANIFEST_BYTES).then(
+      () => true,
+      () => false,
+    );
+  }
 
   return {
     ref,
     catalog,
+    reachable,
     item,
     files,
     cachedFiles,

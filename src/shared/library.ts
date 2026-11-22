@@ -54,6 +54,8 @@ export const LibraryItemSchema = z.object({
   cached: z.boolean(),
   /** Why it cannot be added, such as a newer HyperFrames; absent when it can. */
   disabled: z.string().optional(),
+  /** Deprecated or too new: listed only to a search for its exact name. */
+  hidden: z.boolean().optional(),
 });
 export type LibraryItem = z.infer<typeof LibraryItemSchema>;
 
