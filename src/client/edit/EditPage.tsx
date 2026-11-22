@@ -308,7 +308,7 @@ export function EditPage({
     };
   }, []);
   useEffect(() => publishSelection(projectId), [projectId]);
-  useEffect(() => startScrubAudio(transport), []);
+  useEffect(() => startScrubAudio(), []);
 
   useEffect(() => {
     const change = () =>

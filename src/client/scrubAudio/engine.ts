@@ -1,12 +1,12 @@
 import { useWorkspace } from "../workspace";
 import { useTimeline } from "../edit/timeline";
-import { velocity } from "../edit/transport";
+import { sourcePlayer, useSource } from "../edit/source";
+import { transport as timeline, velocity } from "../edit/transport";
 import type { Transport } from "../edit/transport";
 import { chunksNear, createChunkCache, loadChunk } from "./chunks";
 import { scrubPlan } from "./plan";
 import { sourceId } from "./segment";
 import type { Segment } from "./segment";
-import type { TimelineView } from "../../shared/timeline/schema";
 import type { FromWorklet, Probe, ToWorklet } from "./worklet";
 import workletUrl from "./worklet.ts?worker&url";
 
@@ -43,19 +43,18 @@ declare global {
  * stays quiet. A shuttle runs the worklet on the audio clock, re-anchored if it strays more than
  * a frame from the playhead; a drag reports each frame the pointer reaches and the worklet
  * follows it as tape; a step plays that frame's samples once. Drags and steps sound only while
- * Audio scrubbing is on.
+ * Audio scrubbing is on. It follows the playhead the keys drive: the source viewer's while it
+ * shows a file, whose sound plays straight from that file at unity gain, and otherwise the
+ * timeline's.
  */
-export function startScrubAudio(transport: Transport) {
+export function startScrubAudio() {
   let audio: {
     context: AudioContext;
     node: AudioWorkletNode | null;
     cache: ReturnType<typeof createChunkCache>;
   } | null = null;
-  let plan: {
-    view: TimelineView;
-    files: Readonly<Record<string, string | null>>;
-    segments: Segment[];
-  } | null = null;
+  /** The segments that can sound and what they were built from. */
+  let plan: { from: readonly unknown[]; segments: Segment[] } | null = null;
   /** The held window's centre, in output samples. */
   let centre = Number.NaN;
   let anchor: { frame: number; position: number; velocity: number } | null =
@@ -82,6 +81,14 @@ export function startScrubAudio(transport: Transport) {
     sounded: null,
   };
   window.cutroomScrubAudio = hook;
+
+  /** The playhead the keys drive, and the source file when that is the source viewer's. */
+  function active() {
+    const { file, shown } = useSource.getState();
+    return file && shown
+      ? { player: sourcePlayer, file }
+      : { player: timeline, file: null };
+  }
 
   function post(message: ToWorklet, transfer: Transferable[] = []) {
     audio?.node?.port.postMessage(message, transfer);
@@ -154,22 +161,52 @@ export function startScrubAudio(transport: Transport) {
       });
   }
 
-  /** The segments that can sound, rebuilt only when the timeline or the file listing changed. */
+  /**
+   * The segments that can sound, rebuilt only when what they come from changed: the timeline and
+   * the file listing, or the source file and its length.
+   */
   function segments() {
-    const { view } = useTimeline.getState();
+    const { file } = active();
     const files = useWorkspace.getState().fileChanges;
-    if (!view) return [];
-    if (plan?.view !== view || plan.files !== files) {
+    const { view } = useTimeline.getState();
+    const { duration, fps } = sourcePlayer.use.getState();
+    const from = file ? [file, files, duration, fps] : [view, files];
+    if (plan?.from.every((value, index) => value === from[index]))
+      return plan.segments;
+    centre = Number.NaN;
+    if (file) {
+      const version = files[file.path];
+      const samplesPerFrame = (SAMPLE_RATE * fps.den) / fps.num;
       plan = {
-        view,
-        files,
-        segments: scrubPlan(view.timeline, {
-          composition: view.composition,
-          versions: files,
-        }).filter(({ gain }) => gain.some(({ gain }) => gain > 0)),
+        from,
+        // Frame n of a source is n frames into the file, which is where its samples start.
+        segments:
+          file.hasAudio && version !== null
+            ? [
+                {
+                  clipId: "source",
+                  source: { path: file.path, version: version ?? "" },
+                  samples: {
+                    start: 0,
+                    end: Math.ceil(duration * samplesPerFrame),
+                  },
+                  map: { kind: "line", offset: 0 },
+                  gain: [{ at: 0, gain: 1 }],
+                },
+              ]
+            : [],
       };
-      centre = Number.NaN;
+      return plan.segments;
     }
+    plan = {
+      from,
+      segments: view
+        ? scrubPlan(view.timeline, {
+            composition: view.composition,
+            versions: files,
+          }).filter(({ gain }) => gain.some(({ gain }) => gain > 0))
+        : [],
+    };
     return plan.segments;
   }
 
@@ -218,6 +255,7 @@ export function startScrubAudio(transport: Transport) {
   }
 
   function sync() {
+    const { player: transport } = active();
     const { state, frame, fps, muted } = transport.use.getState();
     const scrubbing = useWorkspace.getState().audioScrubbing && !muted;
     const samplesPerFrame = (SAMPLE_RATE * fps.den) / fps.num;
@@ -310,28 +348,44 @@ export function startScrubAudio(transport: Transport) {
     });
   }
 
-  const unsubscribe = transport.use.subscribe((now, before) => {
-    if (now.steps !== before.steps && useWorkspace.getState().audioScrubbing) {
-      const samplesPerFrame = (SAMPLE_RATE * now.fps.den) / now.fps.num;
-      const first = Math.round(now.frame * samplesPerFrame);
-      step = {
-        position: first,
-        length: Math.round((now.frame + 1) * samplesPerFrame) - first,
-        at: performance.now(),
-      };
-    } else if (
-      now.state === before.state &&
-      now.muted === before.muted &&
-      now.state.kind !== "shuttle" &&
-      now.state.kind !== "scrubbing" &&
-      !audio?.node
-    )
-      return;
-    sync();
-  });
+  const follow = (transport: Transport) =>
+    transport.use.subscribe((now, before) => {
+      if (active().player !== transport) return;
+      if (
+        now.steps !== before.steps &&
+        useWorkspace.getState().audioScrubbing
+      ) {
+        const samplesPerFrame = (SAMPLE_RATE * now.fps.den) / now.fps.num;
+        const first = Math.round(now.frame * samplesPerFrame);
+        step = {
+          position: first,
+          length: Math.round((now.frame + 1) * samplesPerFrame) - first,
+          at: performance.now(),
+        };
+      } else if (
+        now.state === before.state &&
+        now.muted === before.muted &&
+        now.state.kind !== "shuttle" &&
+        now.state.kind !== "scrubbing" &&
+        !audio?.node
+      )
+        return;
+      sync();
+    });
+  const unsubscribe = [
+    follow(timeline),
+    follow(sourcePlayer),
+    // Showing or closing a source hands the sound to the other playhead, with nothing left playing.
+    useSource.subscribe((now, before) => {
+      if (now.file === before.file && now.shown === before.shown) return;
+      quiet();
+      step = null;
+      sync();
+    }),
+  ];
 
   return () => {
-    unsubscribe();
+    for (const stop of unsubscribe) stop();
     clearTimeout(suspend);
     clearTimeout(parked);
     if (window.cutroomScrubAudio === hook) delete window.cutroomScrubAudio;
