@@ -725,16 +725,24 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
       const late = ["-itsoffset", "0.25", ...wav];
       const shifted = ["-itsoffset", "0.25", ...picture, ...late];
       const pcm = [...video, "-c:a", "pcm_s16le"];
-      // MPEG-TS starts its clock at 1.4 s; SMPTE 302M carries 16-bit sound in it unchanged.
-      const ts = [...video, "-ac", "2", "-c:a", "s302m", "-strict", "-2"];
+      // MPEG-TS starts its clock at 1.4 s; Blu-ray PCM carries the samples in it unchanged.
+      const ts = [
+        ...video,
+        "-c:a",
+        "pcm_bluray",
+        "-f",
+        "mpegts",
+        "-mpegts_m2ts_mode",
+        "1",
+      ];
       for (const [name, args] of [
         // The sound a quarter second after the picture.
         ["late.mkv", [...picture, ...late, ...pcm]],
-        ["late.ts", [...picture, ...late, ...ts]],
+        ["late.m2ts", [...picture, ...late, ...ts]],
         // Both a quarter second after timestamp zero, which MP4 plays from.
         ["shifted.mov", [...shifted, ...pcm, "-avoid_negative_ts", "disabled"]],
         // Both at the transport stream's start, which is media time zero.
-        ["together.ts", [...picture, ...wav, ...ts]],
+        ["together.m2ts", [...picture, ...wav, ...ts]],
       ] as const)
         await ffmpeg([...args, join(project.path, name)]);
 
@@ -746,9 +754,9 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
 
       for (const [path, lead] of [
         ["late.mkv", 12000],
-        ["late.ts", 12000],
+        ["late.m2ts", 12000],
         ["shifted.mov", 12000],
-        ["together.ts", 0],
+        ["together.m2ts", 0],
       ] as const) {
         const { bytes } = await pcmOf(media, project, path);
         expect(bytes.length, path).toBe(2 * (lead + counting.length / 2));
@@ -757,9 +765,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
           bytes.readInt16LE(2 * k),
         ).findIndex((sample) => sample !== 0);
         expect(first, path).toBe(lead + 1);
-        // FFmpeg's stereo-to-mono downmix scales the transport streams' copies.
-        if (!path.endsWith(".ts"))
-          expect(bytes.subarray(2 * lead).equals(counting), path).toBe(true);
+        expect(bytes.subarray(2 * lead).equals(counting), path).toBe(true);
       }
 
       await ffmpeg([...picture, ...video, join(project.path, "silent.mp4")]);
