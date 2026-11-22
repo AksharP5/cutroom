@@ -309,3 +309,88 @@ test("dragging the playhead sounds as tape, rests silent, and frame steps play t
   console.log(report);
   expect(median).toBeLessThan(15);
 });
+
+test("K held with J or L steps a frame on a tap and plays half speed with sound on a hold", async ({
+  page,
+  request,
+}) => {
+  await openTone(page, request, "K with J and L");
+  const viewer = page.getByRole("region", { name: "Viewer" });
+  const speed = page.getByLabel("Shuttle speed");
+  const now = page.getByRole("button", { name: /^Current time/ });
+  const frame = async () => {
+    const [h, m, s, f] = (await now.textContent())!.split(":").map(Number);
+    return ((h! * 60 + m!) * 60 + s!) * 30 + f!;
+  };
+  await seekFrame(page, 150);
+  await viewer.click();
+  // A shuttle makes the context and asks for the source's samples.
+  await page.keyboard.press("l");
+  await page.keyboard.press("l");
+  await expect.poll(() => peakOver(page, 100)).toBeGreaterThan(0.05);
+  await page.keyboard.press("k");
+  await expect.poll(() => peakOver(page, 100)).toBe(0);
+
+  // K held, L tapped: one frame forward, playing exactly that frame.
+  const start = await frame();
+  await page.keyboard.down("k");
+  await page.keyboard.down("l");
+  await page.keyboard.up("l");
+  await page.waitForTimeout(150);
+  expect(await frame()).toBe(start + 1);
+  const tapped = (await probe(page))!;
+  expect(tapped.peak).toBeGreaterThan(0.05);
+  expect([tapped.low, tapped.high]).toEqual([
+    (start + 1) * 1600,
+    (start + 2) * 1600 - 1,
+  ]);
+  // J tapped: one frame back.
+  await page.keyboard.down("j");
+  await page.keyboard.up("j");
+  await page.waitForTimeout(100);
+  expect(await frame()).toBe(start);
+
+  // K held, L held: a key repeat does not step again; past the hold, half speed with sound.
+  await page.keyboard.down("l");
+  await page.keyboard.down("l");
+  await page.waitForTimeout(100);
+  expect(await frame()).toBe(start + 1);
+  await expect(speed).toHaveText("0.5x");
+  await expect.poll(() => peakOver(page, 100)).toBeGreaterThan(0.05);
+  const from = (await probe(page))!.source!;
+  const at = Date.now();
+  await page.waitForTimeout(500);
+  const to = (await probe(page))!.source!;
+  // Half speed reads about 24,000 samples a second.
+  const rate = (to - from) / ((Date.now() - at) / 1000);
+  expect(rate).toBeGreaterThan(18_000);
+  expect(rate).toBeLessThan(30_000);
+  // Releasing L stops.
+  await page.keyboard.up("l");
+  await expect(speed).toHaveText("");
+  await expect(page.getByRole("button", { name: "Stop" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await page.keyboard.up("k");
+
+  // L held first, then K: half speed forward at once; releasing K stops.
+  await page.keyboard.down("l");
+  await page.keyboard.down("k");
+  await expect(speed).toHaveText("0.5x");
+  await page.keyboard.up("k");
+  await expect(speed).toHaveText("");
+  await page.keyboard.up("l");
+
+  // K held, J held: half speed in reverse, reading backwards.
+  await page.keyboard.down("k");
+  await page.keyboard.down("j");
+  await expect(speed).toHaveText("-0.5x");
+  await expect.poll(() => peakOver(page, 100)).toBeGreaterThan(0.05);
+  const back = (await probe(page))!.source!;
+  await page.waitForTimeout(300);
+  expect((await probe(page))!.source).toBeLessThan(back);
+  await page.keyboard.up("k");
+  await expect(speed).toHaveText("");
+  await page.keyboard.up("j");
+});
