@@ -194,7 +194,8 @@ export async function toolSubject(
       const media = text("path");
       return media && fileName(media);
     }
-    case "project_create": {
+    case "project_create":
+    case "project_rename": {
       const title = text("name");
       return title && `“${title}”`;
     }
