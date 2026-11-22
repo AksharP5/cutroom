@@ -76,6 +76,7 @@ const artifacts = {
   proxy: "proxy.mp4",
   pieces: "pieces.json",
   ramp: "ramp.wav",
+  pcm: "audio.pcm",
 } satisfies Record<MediaKind, string>;
 /** A clip with no editing proxy shows no picture at all, so its proxy comes before strips. */
 const priority = {
@@ -86,6 +87,7 @@ const priority = {
   proxy: 2,
   ramp: 2,
   filmstrip: 3,
+  pcm: 3,
   scrub: 4,
 } satisfies Record<MediaKind, number>;
 /** Each kind's recipe; a new one keys new cache entries. */
@@ -98,6 +100,7 @@ const recipe = {
   proxy: "media-v8",
   pieces: "media-v12",
   ramp: "ramp-v1",
+  pcm: "pcm-v1",
 } satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
 /**
@@ -108,7 +111,7 @@ const wanted = (job: MediaJob) =>
   !!job.work &&
   (job.work.waiting > 0 || performance.now() - job.work.polledAt < 3000);
 const background = (kind: MediaKind) =>
-  kind === "filmstrip" || kind === "scrub" || kind === "ramp";
+  kind === "filmstrip" || kind === "scrub" || kind === "ramp" || kind === "pcm";
 
 export type MediaService = ReturnType<typeof createMediaService>;
 
@@ -466,7 +469,7 @@ export function createMediaService(
       const probe = await request(project, path, "probe");
       if (!probe.artifact) return probe;
       info = MediaInfoSchema.parse(await Bun.file(probe.artifact).json());
-      if (kind === "peaks" && !info.channels)
+      if ((kind === "peaks" || kind === "pcm") && !info.channels)
         throw new HttpError(422, "The media has no audio stream.");
       if (
         (kind === "filmstrip" ||

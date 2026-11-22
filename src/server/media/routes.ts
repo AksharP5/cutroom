@@ -58,6 +58,7 @@ export function createMediaRoutes(
     "frame",
     "scrub",
     "proxy",
+    "pcm",
   ] as const)
     api.get(`/projects/:id/media/${kind}`, async (c) => {
       c.header("cache-control", "no-store");
@@ -102,7 +103,7 @@ export function createMediaRoutes(
           ? "image/jpeg"
           : kind === "scrub" || kind === "proxy"
             ? "video/mp4"
-            : kind === "peaks"
+            : kind === "peaks" || kind === "pcm"
               ? "application/octet-stream"
               : "application/json",
       );

@@ -24,8 +24,8 @@ import { mediaSettings } from "../../shared/media";
 import { proxyFilter, scaleFilter, scrubFilter, tileWidth } from "./settings";
 import { chromeColourGuess } from "../hyperframes/videoColour";
 import { localMediaInputOptions } from "./input";
-import { sourcePictures } from "./pictureIndex";
-import { secondsOf } from "../../shared/timeline/piece";
+import { mediaClock, mediaStreamsArgs, sourcePictures } from "./pictureIndex";
+import { AUDIO_SAMPLE_RATE, secondsOf } from "../../shared/timeline/piece";
 
 const task = MediaTaskSchema.parse(await Bun.stdin.json());
 const abort = new AbortController();
@@ -271,6 +271,47 @@ try {
         },
       },
     );
+  } else if (task.kind === "pcm") {
+    if (!task.info?.channels) throw new Error("The media has no audio stream.");
+    // Sample k is media time k / 48000: timestamps keep their place on the media clock, and
+    // the time before the first decoded sound is silence.
+    const { zero } = mediaClock(
+      z
+        .string()
+        .parse(
+          await run([
+            task.ffprobe,
+            "-v",
+            "error",
+            ...mediaStreamsArgs,
+            task.source,
+          ]),
+        ),
+    );
+    await run([
+      ...ffmpeg,
+      ...localMediaInputOptions,
+      "-copyts",
+      "-i",
+      task.source,
+      "-map",
+      "0:a:0",
+      "-vn",
+      "-af",
+      [
+        ...(zero.n === 0n ? [] : [`asetpts=PTS-(${secondsOf(zero)})/TB`]),
+        "aresample=async=1:first_pts=0",
+      ].join(","),
+      "-ar",
+      String(AUDIO_SAMPLE_RATE),
+      "-ac",
+      "1",
+      "-c:a",
+      "pcm_s16le",
+      "-f",
+      "s16le",
+      "audio.pcm",
+    ]);
   } else {
     const video = task.info?.video;
     if (!video) throw new Error("The media has no video stream.");
