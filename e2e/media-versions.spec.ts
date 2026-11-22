@@ -1048,9 +1048,10 @@ test("audio versions can be added in the clip menu, Media and Source", async ({
   await expect.poll(async () => (await music())?.src).toBe("cue-c.wav");
   await source.getByRole("button", { name: "Close source" }).click();
 
+  // The clip is named after the take it shows.
   await media("sting.wav").click({ button: "right" });
   await page
-    .getByRole("menuitem", { name: "Add as version of music.wav" })
+    .getByRole("menuitem", { name: "Add as version of cue-c.wav" })
     .click();
   await expect(badge).toHaveText("5");
   await expect
@@ -1062,11 +1063,11 @@ test("audio versions can be added in the clip menu, Media and Source", async ({
   const sting = menu.getByRole("menuitemradio", { name: /sting/i });
   await expect(sting).toHaveAttribute(
     "title",
-    "sting is 3:00 shorter than the clip.",
+    "sting is 00:00:03:00 shorter than the clip.",
   );
   await expect(sting).toBeDisabled();
   const driving = menu.getByRole("menuitemradio", { name: /cue-b/ });
-  await expect(driving).toContainText("+0:12");
+  await expect(driving).toContainText("00:00:00:12");
   await driving.getByText("cue-b", { exact: true }).dblclick();
   const field = menu.getByRole("textbox", { name: "Version name" });
   await field.fill("Driving");
