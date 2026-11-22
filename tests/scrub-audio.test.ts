@@ -188,6 +188,99 @@ test("a chunk not yet held fades tape out and keeps grains silent", () => {
   expect(largestJump(grains.out, FADE)).toBeLessThan(0.02);
 });
 
+test("a frame step plays exactly that frame's samples, with 1 ms edges", () => {
+  const player = new Player();
+  player.setVoices(voice(indexed));
+  // Frame 5 at 30 fps: output samples 8000 to 9599.
+  player.blip(8000, 1600, 0);
+  const out = new Float32Array(2048);
+  for (let at = 0; at < out.length; at += 128)
+    player.process(out.subarray(at, at + 128), at);
+  const heard = Array.from(out, (value) => Math.round(value * 32_768));
+  expect(heard.slice(48, 1552)).toEqual(
+    Array.from({ length: 1504 }, (_, i) => 8048 + i),
+  );
+  // The edges ramp over 1 ms, and nothing sounds past the frame.
+  expect(heard[0]).toBeLessThan(8000 / 40);
+  expect(heard.slice(1600).every((value) => value === 0)).toBe(true);
+  expect([player.reading.low, player.reading.high]).toEqual([8000, 9599]);
+  expect(player.sounding).toBe(false);
+});
+
+/**
+ * Tape at speed v moves a 220 Hz sine at 0.5 by at most 0.5 * 2π * 220 / 48000 * v a sample, and
+ * a 5 ms crossover adds at most 1/240. The speed is read back from the source each block reached.
+ */
+function tapeBound(sources: number[]) {
+  const speed = Math.max(
+    ...sources.slice(1).map((at, i) => Math.abs(at - sources[i]!) / 128),
+  );
+  return 0.5 * ((2 * Math.PI * 220) / 48_000) * speed * 1.1 + 1 / 240;
+}
+
+/** Drags a tape over the voices with a report every 16 ms from `path`, then rests. */
+function drag(voices: Voice[], path: number[], rest = 1600) {
+  const player = new Player();
+  player.setVoices(voices);
+  const every = 768;
+  const out = new Float32Array((path.length + 4) * every);
+  const sources: number[] = [];
+  for (let at = 0; at < out.length; at += 128) {
+    const report = at / every;
+    if (Number.isInteger(report) && report < path.length) {
+      const previous = path[report - 1] ?? path[report]!;
+      player.chase(
+        {
+          frame: at,
+          position: path[report]!,
+          velocity: report ? (path[report]! - previous) / every : 0,
+          rest,
+        },
+        at,
+      );
+    }
+    player.process(out.subarray(at, at + 128), at);
+    sources.push(player.reading.source ?? NaN);
+  }
+  return { out, sources, player, end: (path.length - 1) * every };
+}
+
+test("a drag follows the pointer as tape and changes speed and direction without a jump", () => {
+  // Speeding up to 3x, slowing, turning back to 2x reverse.
+  const speeds = [0, 0.5, 1, 2, 3, 3, 2, 1, 0.5, -0.5, -1, -2, -2, -2];
+  const path = speeds.reduce<number[]>(
+    (positions, speed) => [...positions, positions.at(-1)! + speed * 768],
+    [100_000],
+  );
+  const { out, sources, end } = drag(voice(sine(220)), path);
+  expect(largestJump(out, 0, end)).toBeLessThan(tapeBound(sources));
+  // Reading backwards once the pointer turns.
+  // Reports 10 to 14 move backwards, six blocks each.
+  const back = sources.slice(10 * 6 + 3, 14 * 6);
+  expect(back).toEqual(back.toSorted((a, b) => b - a));
+  expect(new Set(back).size).toBe(back.length);
+});
+
+test("a drag goes silent within a frame of the pointer resting", () => {
+  const path = Array.from({ length: 10 }, (_, i) => 100_000 + i * 768);
+  const { out, player, end } = drag(voice(sine(220)), path);
+  expect(out.subarray(end - 768, end).some((value) => value !== 0)).toBe(true);
+  // One 30 fps frame of rest, then the 5 ms fade.
+  expect(
+    out.subarray(end + 1600 + FADE + 128).every((value) => value === 0),
+  ).toBe(true);
+  expect(player.sounding).toBe(false);
+});
+
+test("a drag that jumps far crosses over to where the pointer is", () => {
+  const path = [100_000, 100_768, 101_536, 200_000, 200_768, 201_536];
+  const { out, sources, end } = drag(voice(sine(220)), path);
+  // Crossing over, with no jump of its own: a cut would move the sine by up to its full swing.
+  expect(largestJump(out, 0, end)).toBeLessThan(
+    tapeBound(sources.filter((at, i) => i < 17 || i > 19)),
+  );
+});
+
 test("the worklet fades out to idle after stop and reports its first audible block", async () => {
   const posted: unknown[] = [];
   let Processor:

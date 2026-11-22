@@ -16,6 +16,10 @@ const REACH = 20 * SAMPLE_RATE;
 /** How far the playhead moves before the held window follows it. */
 const REFRESH = 5 * SAMPLE_RATE;
 const SUSPEND_MS = 5000;
+/** After a pause this long in a drag, in samples of time, the pointer's speed is measured afresh. */
+const PAUSE = 0.2 * SAMPLE_RATE;
+/** A playhead moving faster than 16x jumped rather than dragged. */
+const FASTEST_DRAG = 16;
 
 /** What end-to-end tests read through `window.cutroomScrubAudio`. */
 export type ScrubAudioProbe = {
@@ -23,7 +27,7 @@ export type ScrubAudioProbe = {
   context(): AudioContextState | null;
   /** The worklet's own counters, or null before it exists. */
   probe(): Promise<Probe | null>;
-  /** When the latest shuttle first sounded: page time the block was posted and heard. */
+  /** When the latest shuttle, drag or step first sounded: page time the block was posted and heard. */
   sounded: { posted: number; heard: number; outputLatency: number } | null;
 };
 
@@ -34,9 +38,12 @@ declare global {
 }
 
 /**
- * Shuttle sound. Silent until the first shuttle of the session, which creates the AudioContext.
- * In `playing` and `stopped` the preview runtime owns sound and this stays quiet; a shuttle runs
- * the worklet on the audio clock, re-anchored if it strays more than a frame from the playhead.
+ * Shuttle, drag and frame step sound. Silent until the first of them in the session, which
+ * creates the AudioContext. In `playing` and `stopped` the preview runtime owns sound and this
+ * stays quiet. A shuttle runs the worklet on the audio clock, re-anchored if it strays more than
+ * a frame from the playhead; a drag reports each frame the pointer reaches and the worklet
+ * follows it as tape; a step plays that frame's samples once. Drags and steps sound only while
+ * Audio scrubbing is on.
  */
 export function startScrubAudio(transport: Transport) {
   let audio: {
@@ -53,6 +60,12 @@ export function startScrubAudio(transport: Transport) {
   let centre = Number.NaN;
   let anchor: { frame: number; position: number; velocity: number } | null =
     null;
+  /** What sounds until told to stop. A frame step stops by itself. */
+  let sounding: "shuttle" | "drag" | null = null;
+  /** The pointer's last frame in a drag, in output samples, and its speed in samples per sample. */
+  let drag: { position: number; at: number; velocity: number } | null = null;
+  /** A frame step waiting for the context to start. */
+  let step: { position: number; length: number; at: number } | null = null;
   let suspend = 0;
   let resuming: Promise<void> | null = null;
   let parked = 0;
@@ -174,8 +187,10 @@ export function startScrubAudio(transport: Transport) {
 
   /** Stops any sound, and lets the context sleep once nothing has sounded for a while. */
   function quiet() {
-    if (anchor) post({ type: "stop" });
+    if (sounding) post({ type: "stop" });
+    sounding = null;
     anchor = null;
+    drag = null;
     if (!audio || suspend || audio.context.state !== "running") return;
     const { context } = audio;
     suspend = window.setTimeout(() => {
@@ -184,12 +199,39 @@ export function startScrubAudio(transport: Transport) {
     }, SUSPEND_MS);
   }
 
+  /** The running context once its worklet has loaded; null while it is made or resumed. */
+  function ready() {
+    if (!audio) {
+      create();
+      return null;
+    }
+    const { context, node } = audio;
+    if (!node) return null;
+    clearTimeout(suspend);
+    suspend = 0;
+    if (context.state === "running") return context;
+    resuming ??= context.resume().finally(() => {
+      resuming = null;
+      sync();
+    });
+    return null;
+  }
+
   function sync() {
     const { state, frame, fps, muted } = transport.use.getState();
-    const speed = velocity(state);
+    const scrubbing = useWorkspace.getState().audioScrubbing && !muted;
     const samplesPerFrame = (SAMPLE_RATE * fps.den) / fps.num;
     const position = frame * samplesPerFrame;
-    if (state.kind !== "shuttle" || muted) {
+    // A step the context was not ready for plays if it is still recent.
+    if (step && (!scrubbing || performance.now() - step.at > 250)) step = null;
+    if (step && ready()) {
+      hold(step.position);
+      post({ type: "frame", position: step.position, length: step.length });
+      step = null;
+    }
+    const shuttle = state.kind === "shuttle" && !muted;
+    const dragging = state.kind === "scrubbing" && scrubbing;
+    if (!shuttle && !dragging) {
       quiet();
       // A parked playhead fetches what is under it, once the engine has been used.
       if (audio?.node && state.kind === "stopped") {
@@ -198,25 +240,25 @@ export function startScrubAudio(transport: Transport) {
       }
       return;
     }
-    if (!audio) return create();
-    const { context, node } = audio;
-    if (!node) return;
-    clearTimeout(suspend);
-    suspend = 0;
+    const context = ready();
+    if (!context) return;
     hold(position);
-    if (context.state !== "running") {
-      resuming ??= context.resume().finally(() => {
-        resuming = null;
-        sync();
-      });
-      return;
-    }
     const now = performance.now();
     const heard = frameAt(context, now);
-    // The next frame of the shuttle asks again.
+    // The next frame asks again.
     if (heard === null) return;
+    if (dragging) {
+      // A drag can take over from a shuttle without a stop between them.
+      if (sounding === "shuttle") {
+        post({ type: "stop" });
+        sounding = null;
+        anchor = null;
+      }
+      return chase(heard, position, samplesPerFrame, now);
+    }
+    const speed = velocity(state);
     const at = (transport.shuttlePosition(now) ?? frame) * samplesPerFrame;
-    if (anchor?.velocity === speed) {
+    if (sounding === "shuttle" && anchor?.velocity === speed) {
       // The output clock jitters by a few milliseconds, and the picture moves once per display
       // refresh, which at 8x spans several frames: within a frame or a refresh of motion,
       // whichever is longer, the sound is in step with the picture.
@@ -228,14 +270,60 @@ export function startScrubAudio(transport: Transport) {
       if (Math.abs(sound - at) <= tolerance) return;
     }
     anchor = { frame: heard, position: at, velocity: speed };
+    sounding = "shuttle";
+    drag = null;
     post({ type: "run", ...anchor });
   }
 
+  /**
+   * Reports the frame a drag reached. The pointer's speed is measured between frames: a press,
+   * a move after a long pause, or a jump no hand drags at only marks where the pointer is.
+   */
+  function chase(
+    heard: number,
+    position: number,
+    samplesPerFrame: number,
+    now: number,
+  ) {
+    const last = drag;
+    if (last?.position === position) return;
+    const elapsed = last ? ((now - last.at) / 1000) * SAMPLE_RATE : Infinity;
+    const measured = last ? (position - last.position) / elapsed : 0;
+    const moving = elapsed <= PAUSE && Math.abs(measured) <= FASTEST_DRAG;
+    const speed = !moving
+      ? 0
+      : sounding === "drag"
+        ? (last!.velocity + measured) / 2
+        : measured;
+    drag = { position, at: now, velocity: speed };
+    // A sounding drag crosses over to where a jump lands; otherwise wait for motion.
+    if (!moving && sounding !== "drag") return;
+    sounding = "drag";
+    anchor = null;
+    post({
+      type: "chase",
+      frame: heard,
+      position,
+      velocity: speed,
+      // Silent within a frame of the pointer resting, but never between two display refreshes.
+      rest: Math.max(samplesPerFrame, SAMPLE_RATE / 30),
+    });
+  }
+
   const unsubscribe = transport.use.subscribe((now, before) => {
-    if (
+    if (now.steps !== before.steps && useWorkspace.getState().audioScrubbing) {
+      const samplesPerFrame = (SAMPLE_RATE * now.fps.den) / now.fps.num;
+      const first = Math.round(now.frame * samplesPerFrame);
+      step = {
+        position: first,
+        length: Math.round((now.frame + 1) * samplesPerFrame) - first,
+        at: performance.now(),
+      };
+    } else if (
       now.state === before.state &&
       now.muted === before.muted &&
       now.state.kind !== "shuttle" &&
+      now.state.kind !== "scrubbing" &&
       !audio?.node
     )
       return;

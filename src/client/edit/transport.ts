@@ -110,6 +110,8 @@ export function createTransport() {
      * too. Any playback or seek paints the playhead's frame again.
      */
     held: false as Hold,
+    /** Counts frame steps, so a step's sound can follow it. */
+    steps: 0,
   }));
 
   const get = use.getState;
@@ -263,6 +265,7 @@ export function createTransport() {
     },
     step(frames: number) {
       transport.seek(get().frame + frames);
+      set({ steps: get().steps + 1 });
     },
     /** Seeks while a pointer drags the playhead; `release` ends it. */
     scrub(frame: number) {

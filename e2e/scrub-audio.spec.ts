@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { expect, test } from "./fixtures";
 import { seekFrame } from "./position-helpers";
@@ -18,14 +18,12 @@ async function peakOver(page: Page, ms: number) {
   return (await probe(page))!.peak;
 }
 
-test("J and L shuttle sounds through the audio worklet, backwards in reverse and silent when muted", async ({
-  page,
-  request,
-}) => {
+/** A 20 s, 30 fps timeline of one 440 Hz tone from 0, so output sample `n` is source sample `n`. */
+async function openTone(page: Page, request: APIRequestContext, name: string) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
-        data: { name: "Shuttle sound", duration: 20 },
+        data: { name, duration: 20 },
       })
     ).json(),
   );
@@ -42,6 +40,16 @@ test("J and L shuttle sounds through the audio worklet, backwards in reverse and
   await expect(page.locator(".edit-stage")).toHaveAttribute(
     "data-preview-ready",
   );
+}
+
+const context = (page: Page) =>
+  page.evaluate(() => window.cutroomScrubAudio!.context());
+
+test("J and L shuttle sounds through the audio worklet, backwards in reverse and silent when muted", async ({
+  page,
+  request,
+}) => {
+  await openTone(page, request, "Shuttle sound");
   const context = () =>
     page.evaluate(() => window.cutroomScrubAudio!.context());
   const speed = page.getByLabel("Shuttle speed");
@@ -153,4 +161,151 @@ test("J and L shuttle sounds through the audio worklet, backwards in reverse and
   await page.waitForTimeout(500);
   expect((await probe(page))!.runs).toBe(asleep + 1);
   await page.keyboard.press("k");
+});
+
+test("dragging the playhead sounds as tape, rests silent, and frame steps play their frame; the toggle and mute silence both", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  await openTone(page, request, "Drag sound");
+  const ruler = await page.locator(".tl-ruler").boundingBox();
+  const y = ruler!.y + ruler!.height / 2;
+  let x = ruler!.x + ruler!.width * 0.3;
+  /** Moves the pointer `steps` times by `dx`, about once a display refresh. */
+  const move = async (steps: number, dx: number) => {
+    for (let i = 0; i < steps; i++) {
+      x += dx;
+      await page.mouse.move(x, y);
+      await page.waitForTimeout(16);
+    }
+  };
+  const viewer = page.getByRole("region", { name: "Viewer" });
+  expect(await context(page)).toBeNull();
+
+  // The first drag makes the context and asks for the source's samples.
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await expect
+    .poll(
+      async () => {
+        await move(6, 3);
+        await move(6, -3);
+        return (await probe(page))!.peak;
+      },
+      { timeout: 20_000 },
+    )
+    .toBeGreaterThan(0.05);
+
+  // Dragging right reads forwards, and the sound stops within a frame of the pointer resting.
+  const forward: number[] = [];
+  await probe(page);
+  for (let i = 0; i < 5; i++) {
+    await move(4, 3);
+    const { source, peak } = (await probe(page))!;
+    forward.push(source!);
+    expect(peak).toBeGreaterThan(0.05);
+  }
+  expect(forward).toEqual(forward.toSorted((a, b) => a - b));
+  expect(new Set(forward).size).toBe(forward.length);
+  await page.waitForTimeout(33 + 5 + 30);
+  expect(await peakOver(page, 150)).toBe(0);
+
+  // Dragging left reads backwards.
+  const back: number[] = [];
+  await probe(page);
+  for (let i = 0; i < 5; i++) {
+    await move(4, -3);
+    const { source, peak } = (await probe(page))!;
+    back.push(source!);
+    expect(peak).toBeGreaterThan(0.05);
+  }
+  expect(back).toEqual(back.toSorted((a, b) => b - a));
+  expect(new Set(back).size).toBe(back.length);
+  await page.mouse.up();
+
+  // A frame step plays exactly the frame it lands on: frame 91 is output samples 145600 to 147199.
+  await seekFrame(page, 90);
+  await viewer.click();
+  await page.waitForTimeout(500);
+  await probe(page);
+  await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(150);
+  const stepped = (await probe(page))!;
+  expect(stepped.peak).toBeGreaterThan(0.05);
+  expect([stepped.low, stepped.high]).toEqual([91 * 1600, 92 * 1600 - 1]);
+
+  // Shift+S silences drags and steps, not the shuttle, and is kept for next time.
+  const toggle = page.getByRole("button", { name: "Audio scrubbing" });
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Shift+S");
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  expect(
+    await page.evaluate(() => localStorage.getItem("cutroom.audioScrubbing")),
+  ).toBe("false");
+  const silentGestures = async () => {
+    await probe(page);
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await move(10, 3);
+    await page.mouse.up();
+    await viewer.click();
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(150);
+    return (await probe(page))!.peak;
+  };
+  expect(await silentGestures()).toBe(0);
+  await page.keyboard.press("l");
+  await page.keyboard.press("l");
+  await expect.poll(() => peakOver(page, 100)).toBeGreaterThan(0.05);
+  await page.keyboard.press("k");
+  await page.keyboard.press("Shift+S");
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+  // The viewer's mute silences them too.
+  await page.getByRole("button", { name: "Mute", exact: true }).click();
+  await page.waitForTimeout(100);
+  expect(await silentGestures()).toBe(0);
+  await page.getByRole("button", { name: "Mute", exact: true }).click();
+
+  // From pointer move to the first audible block, over 30 drags.
+  await page.evaluate(() => {
+    const moves: number[] = [];
+    (window as Window & { moves?: number[] }).moves = moves;
+    addEventListener("pointermove", (event) => moves.push(event.timeStamp), {
+      capture: true,
+    });
+  });
+  // The context slept while the gestures above were silent; one drag wakes it.
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await move(20, 2);
+  await page.mouse.up();
+  const rendered: number[] = [];
+  for (let gesture = 0; gesture < 30; gesture++) {
+    x = ruler!.x + ruler!.width * (0.2 + (gesture % 5) * 0.1);
+    const before = await page.evaluate(() => performance.now());
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.waitForTimeout(40);
+    await move(3, 4);
+    await page.waitForTimeout(60);
+    await page.mouse.up();
+    const latency = await page.evaluate((before) => {
+      const { sounded } = window.cutroomScrubAudio!;
+      if (!sounded || sounded.posted < before) return null;
+      const at = sounded.heard - sounded.outputLatency * 1000;
+      const moves = (window as Window & { moves?: number[] }).moves!;
+      const move = moves.filter((time) => time <= at).at(-1);
+      return move === undefined ? null : at - move;
+    }, before);
+    expect(latency).not.toBeNull();
+    rendered.push(latency!);
+    await page.waitForTimeout(60);
+  }
+  const median = rendered.toSorted((a, b) => a - b)[15]!;
+  const report = `pointer move to first audible block: median ${median.toFixed(1)} ms (max ${Math.max(...rendered).toFixed(1)}) before device latency`;
+  test.info().annotations.push({ type: "latency", description: report });
+  console.log(report);
+  expect(median).toBeLessThan(15);
 });
