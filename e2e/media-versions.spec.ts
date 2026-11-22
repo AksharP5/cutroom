@@ -236,7 +236,11 @@ async function timePicture(
   return latency;
 }
 
-const longProject = process.env.CUTROOM_VERSION_SCALE === "100";
+/** 100 or 1,000 cuts, ten of them with four 1080p versions each. */
+const cuts = Number(process.env.CUTROOM_VERSION_SCALE ?? 1);
+const longProject = cuts >= 100;
+/** Open and close cycles after the timings, counting decoders and memory each time. */
+const cycles = Number(process.env.CUTROOM_VERSION_CYCLES ?? 3);
 const playbackModes = comparison
   ? (["record", "native", "gpu"] as const)
   : (["native"] as const);
@@ -247,7 +251,9 @@ for (const mode of playbackModes)
     baseURL,
     request,
   }, testInfo) => {
-    test.setTimeout(longProject ? 240_000 : 120_000);
+    test.setTimeout(
+      longProject ? 240_000 + cuts * 300 + cycles * 10_000 : 120_000,
+    );
     const client = new Client({ name: "media-versions", version: "1" });
     await client.connect(
       new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
@@ -324,7 +330,7 @@ for (const mode of playbackModes)
       const starter = (await read()).timeline.clips.map(({ id }) => id);
       const more = [];
       if (longProject) {
-        for (let i = 1; i < 100; i++) {
+        for (let i = 1; i < cuts; i++) {
           const src = `cut-${(i - 1) % 15}.mp4`;
           if (i <= 15)
             await link(join(project.path, "wide.mp4"), join(project.path, src));
@@ -363,8 +369,10 @@ for (const mode of playbackModes)
             mediaStart: 0,
           },
         },
-        ...more,
       ]);
+      // An edit takes at most 1,000 commands.
+      for (let at = 0; at < more.length; at += 900)
+        await edit(more.slice(at, at + 900));
       const measure =
         longProject ||
         Boolean(comparison && mode !== "record") ||
@@ -469,6 +477,9 @@ for (const mode of playbackModes)
       if (longProject) {
         const zoom = page.getByRole("button", { name: "Zoom in", exact: true });
         for (let i = 0; i < 6; i++) await zoom.click();
+        // A longer timeline starts further out.
+        for (let i = 0; i < 12 && !(await badge.count()); i++)
+          await zoom.click();
       }
       await expect(badge).toHaveText(count);
       const baseline = measure ? await browserMemory(browser) : 0;
@@ -571,7 +582,7 @@ for (const mode of playbackModes)
         const decodersClosed = gpu ? await decoderCounts() : null;
         const reopenedDecoders = [];
         if (gpu) {
-          for (let i = 0; i < 3; i++) {
+          for (let i = 0; i < cycles; i++) {
             await badge.click();
             await expect(
               preview.locator("video[data-cutroom-version]"),
@@ -590,12 +601,17 @@ for (const mode of playbackModes)
             ).toHaveCount(0);
             await expect(stage).toHaveAttribute("data-handoff", "showing");
             await expect.poll(picture).toBe("red");
-            reopenedDecoders.push({ open, closed: await decoderCounts() });
+            await page.waitForTimeout(300);
+            reopenedDecoders.push({
+              open,
+              closed: await decoderCounts(),
+              closedMiB: await browserMemory(browser),
+            });
           }
         }
         const stats = {
           mode: gpu ? "gpu" : "native",
-          cuts: longProject ? 100 : 1,
+          cuts,
           cold,
           samples,
           nonAdjacent,
