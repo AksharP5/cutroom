@@ -725,24 +725,17 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
       const late = ["-itsoffset", "0.25", ...wav];
       const shifted = ["-itsoffset", "0.25", ...picture, ...late];
       const pcm = [...video, "-c:a", "pcm_s16le"];
-      // MPEG-TS starts its clock at 1.4 s; Blu-ray PCM carries the samples in it unchanged.
-      const ts = [
-        ...video,
-        "-c:a",
-        "pcm_bluray",
-        "-f",
-        "mpegts",
-        "-mpegts_m2ts_mode",
-        "1",
-      ];
+      // An MPEG program stream starts its clock at 0.54 s and keeps DVD PCM's samples unchanged.
+      // (CI's static FFmpeg 7.0.2 crashes on any transport stream, so MPEG-TS cannot stand in.)
+      const ps = ["-c:v", "mpeg2video", "-c:a", "pcm_dvd", "-f", "vob"];
       for (const [name, args] of [
         // The sound a quarter second after the picture.
         ["late.mkv", [...picture, ...late, ...pcm]],
-        ["late.m2ts", [...picture, ...late, ...ts]],
+        ["late.mpg", [...picture, ...late, ...ps]],
         // Both a quarter second after timestamp zero, which MP4 plays from.
         ["shifted.mov", [...shifted, ...pcm, "-avoid_negative_ts", "disabled"]],
-        // Both at the transport stream's start, which is media time zero.
-        ["together.m2ts", [...picture, ...wav, ...ts]],
+        // Both at the program stream's start, which is media time zero.
+        ["together.mpg", [...picture, ...wav, ...ps]],
       ] as const)
         await ffmpeg([...args, join(project.path, name)]);
 
@@ -754,9 +747,9 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
 
       for (const [path, lead] of [
         ["late.mkv", 12000],
-        ["late.m2ts", 12000],
+        ["late.mpg", 12000],
         ["shifted.mov", 12000],
-        ["together.m2ts", 0],
+        ["together.mpg", 0],
       ] as const) {
         const { bytes } = await pcmOf(media, project, path);
         expect(bytes.length, path).toBe(2 * (lead + counting.length / 2));
