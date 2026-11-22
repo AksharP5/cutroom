@@ -16,9 +16,11 @@ const tools = Array.from(cutroomToolRegistry, ([name, tool]) => {
   return {
     name,
     readOnly: tool.annotations?.readOnlyHint === true,
-    // These tools can read or write files outside the project.
+    // These tools can read or write files outside the project. A library item is code from the
+    // network, so adding one asks even when the owner always allows project edits.
     projectScoped:
       name !== "export_start" &&
+      name !== "library_add" &&
       name !== "project_duplicate" &&
       name !== "lut_import" &&
       name !== "media_import" &&

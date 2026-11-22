@@ -1,0 +1,127 @@
+import { readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { Hono } from "hono";
+import { LibraryAddSchema, LibrarySearchSchema } from "../../shared/library";
+import type { LibraryCatalog, LibraryItem } from "../../shared/library";
+import { AGENT_HEADER } from "../../shared/review";
+import { projectMutationGuard } from "../projects/authorization";
+import type { ReviewService } from "../projects/review";
+import { historyWho, parseInput } from "../projects/routes";
+import type { ProjectStore } from "../projects/store";
+import type { createTimelineRoutes } from "../timeline/routes";
+import { addLibraryItem } from "./add";
+import type { Library } from "./registry";
+
+/** Every word of the query appears in the item's title, name, tags or description. */
+export function librarySearch(query: string) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return (item: LibraryItem) => {
+    const text =
+      `${item.title} ${item.name} ${item.tags.join(" ")} ${item.description}`.toLowerCase();
+    return words.every((word) => text.includes(word));
+  };
+}
+
+export function createLibraryRoutes(
+  store: ProjectStore,
+  reviews: ReviewService,
+  library: Library,
+  editInWindow: ReturnType<typeof createTimelineRoutes>["editInWindow"],
+) {
+  const api = new Hono();
+  api.use("/projects/:id/*", projectMutationGuard(reviews));
+
+  /** Names whose files are already in the cache, read from the cache folder in one listing. */
+  const cachedNames = async () => {
+    const root = library.itemDir("");
+    const names = await readdir(root).catch(() => []);
+    const cached = await Promise.all(
+      names.map((name) =>
+        stat(join(root, name, ".files.json")).then(
+          () => name,
+          () => null,
+        ),
+      ),
+    );
+    return new Set(cached.filter((name) => name !== null));
+  };
+
+  const catalog = async (): Promise<LibraryCatalog> => {
+    const [{ items, savedAt, offline }, cached] = await Promise.all([
+      library.catalog(),
+      cachedNames(),
+    ]);
+    return {
+      ref: library.ref,
+      savedAt,
+      offline,
+      items: items.map((item) => library.describe(item, cached.has(item.name))),
+    };
+  };
+
+  api.get("/library", async (c) => {
+    c.header("cache-control", "no-store");
+    return c.json(await catalog());
+  });
+
+  api.get("/library/posters/:name", async (c) => {
+    const poster = await library.poster(
+      await library.item(c.req.param("name")),
+    );
+    if (!poster) return c.notFound();
+    return new Response(Bun.file(poster.path), {
+      headers: {
+        "content-type": poster.type,
+        "cache-control": "private, max-age=31536000, immutable",
+      },
+    });
+  });
+
+  /** The search agents use: up to `limit` matches, each saying whether the project has it. */
+  api.get("/projects/:id/library", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const { query, category, limit } = parseInput(
+      LibrarySearchSchema,
+      c.req.query(),
+    );
+    const [{ items, offline }, document] = await Promise.all([
+      catalog(),
+      store.document(project),
+    ]);
+    const inProject = new Set(document.library?.map(({ name }) => name));
+    const matches = librarySearch(query);
+    return c.json({
+      offline,
+      items: items
+        .filter(
+          (item) =>
+            !item.disabled &&
+            (!category || item.category === category) &&
+            matches(item),
+        )
+        .slice(0, limit)
+        .map(({ hasPoster: _, cached: __, ...item }) => ({
+          ...item,
+          inProject: inProject.has(item.name),
+        })),
+    });
+  });
+
+  api.post("/projects/:id/library", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(LibraryAddSchema, await c.req.json());
+    return c.json(
+      await addLibraryItem({
+        store,
+        reviews,
+        library,
+        editInWindow,
+        project,
+        input,
+        token: c.req.header(AGENT_HEADER),
+        who: historyWho(reviews, c, project),
+      }),
+    );
+  });
+  return api;
+}

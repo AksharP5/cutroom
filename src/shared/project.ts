@@ -85,6 +85,19 @@ export const TranscriptViewSchema = TranscriptSchema.extend({
   ),
   duration: z.number().nonnegative(),
 });
+/** A HyperFrames library item the project took files from, kept for its license and source. */
+export const LibraryRecordSchema = z.object({
+  name: z.string(),
+  /** The registry tag it was read at. */
+  ref: z.string(),
+  /** Its folder in the HyperFrames registry, such as registry/blocks/lt-clean-bar. */
+  source: z.string(),
+  license: z.string().optional(),
+  author: z.string().optional(),
+  /** Project files it added, for "In this project" and the export summary. */
+  files: z.array(z.string()),
+});
+export type LibraryRecord = z.infer<typeof LibraryRecordSchema>;
 const LegacyDocumentSchema = z.looseObject({ schemaVersion: z.literal(1) });
 /** Version 2 adds per-composition timeline settings. Older documents migrate on read. */
 export const ProjectDocumentSchema = z.preprocess(
@@ -99,6 +112,7 @@ export const ProjectDocumentSchema = z.preprocess(
     annotations: z.array(AnnotationSchema),
     transcripts: z.array(TranscriptSchema),
     timelines: z.record(z.string(), TimelineSettingsSchema),
+    library: z.array(LibraryRecordSchema).optional(),
   }),
 );
 export const ProjectSchema = z.object({
