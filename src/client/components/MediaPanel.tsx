@@ -48,6 +48,8 @@ import { TimecodeText } from "./TimecodeText";
 import { openContextMenu, revealRows } from "./ContextMenu";
 import { Modal } from "./Modal";
 import { CompositionList, useCompositions } from "./CompositionList";
+import { LibraryList, offlineReason } from "./LibraryList";
+import { useLibrary } from "../edit/library";
 import { RenameField } from "./RenameField";
 
 const acceptedFiles = mediaKinds
@@ -420,8 +422,21 @@ export function MediaPanel({
   const desktop = window.cutroomDesktop;
   const compositions = useCompositions(projectId);
   // The list is the timeline bin, so it is there from the project's first timeline.
-  const [view, setView] = useState<"media" | "compositions">("media");
-  const showing = compositions?.length ? view : ("media" as const);
+  const [view, setView] = useState<"media" | "compositions" | "library">(
+    "media",
+  );
+  const showing =
+    view === "compositions" && !compositions?.length ? "media" : view;
+  // The Library reads nothing until it is first opened, then keeps its search and scroll.
+  const [libraryOpened, setLibraryOpened] = useState(false);
+  const librarySearch = useRef<HTMLInputElement>(null);
+  /** Counts Ctrl+6 presses; the list takes focus for each once its rows are drawn. */
+  const [libraryFocus, setLibraryFocus] = useState(0);
+  const libraryCatalog = useLibrary((state) => state.catalog);
+  const openLibrary = () => {
+    setView("library");
+    setLibraryOpened(true);
+  };
   const [message, setMessage] = useState("");
   const [renaming, setRenaming] = useState<string>();
   /** A file the timeline still uses, waiting for the owner's answer. */
@@ -442,8 +457,14 @@ export function MediaPanel({
   const panel = useRef<HTMLElement>(null);
   // Its panel key lands on the list's current file, or on Import while there is none.
   useKeymap({
+    viewActiveWindowSelectionEffects: () => {
+      if (hidden) return;
+      openLibrary();
+      setLibraryFocus((count) => count + 1);
+    },
     viewActiveWindowSelectionMediaPoolClips: () => {
       if (hidden) return;
+      if (showing === "library") setView("media");
       focusMediaRow(
         panel.current?.querySelector<HTMLElement>('.media-row[tabindex="0"]') ??
           search.current ??
@@ -772,32 +793,47 @@ export function MediaPanel({
       }}
     >
       <header className="panel-header">
-        {compositions?.length ? (
-          <h2 className="panel-views">
-            {(
-              [
-                ["media", "Media", media?.length ?? 0],
-                ["compositions", "Compositions", compositions.length],
-              ] as const
-            ).map(([value, label, count]) => (
-              <button
-                key={value}
-                className="panel-view"
-                aria-pressed={showing === value}
-                onClick={() => setView(value)}
-              >
-                {label}
-                {count > 0 && <span className="panel-count">{count}</span>}
-              </button>
-            ))}
-          </h2>
-        ) : (
-          <>
-            <h2>Media</h2>
-            {media && media.length > 0 && (
-              <span className="panel-count">{media.length}</span>
-            )}
-          </>
+        <h2 className="panel-views">
+          {(
+            [
+              ["media", "Media", media?.length ?? 0],
+              ...(compositions?.length
+                ? [
+                    [
+                      "compositions",
+                      "Compositions",
+                      compositions.length,
+                    ] as const,
+                  ]
+                : []),
+            ] as const
+          ).map(([value, label, count]) => (
+            <button
+              key={value}
+              className="panel-view"
+              aria-pressed={showing === value}
+              onClick={() => setView(value)}
+            >
+              {label}
+              {count > 0 && <span className="panel-count">{count}</span>}
+            </button>
+          ))}
+          <button
+            className="panel-view"
+            aria-pressed={showing === "library"}
+            title={hint("viewActiveWindowSelectionEffects")}
+            onClick={openLibrary}
+          >
+            Library
+          </button>
+        </h2>
+        {showing === "library" && libraryCatalog?.offline && (
+          <span
+            className="library-status"
+            title={offlineReason(libraryCatalog.savedAt)}
+          >
+            Offline
+          </span>
         )}
         <button
           ref={importButton}
@@ -865,6 +901,14 @@ export function MediaPanel({
         </p>
       )}
       <div className="media-body">
+        {libraryOpened && (
+          <LibraryList
+            projectId={projectId}
+            hidden={showing !== "library"}
+            search={librarySearch}
+            focusRequest={libraryFocus}
+          />
+        )}
         {showing === "media" && (!!media?.length || !!query) && (
           <div className="media-search">
             <MagnifyingGlass aria-hidden />
@@ -894,7 +938,8 @@ export function MediaPanel({
             />
           </div>
         )}
-        {showing === "compositions" && compositions ? (
+        {showing === "library" ? null : showing === "compositions" &&
+          compositions ? (
           <CompositionList projectId={projectId} paths={compositions} />
         ) : query.trim() && visibleMedia?.length === 0 ? (
           <div className="media-empty" role="status">

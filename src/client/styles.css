@@ -888,6 +888,61 @@ option {
   color: var(--text-tertiary);
   font-size: var(--type-2xs);
 }
+/* Library. Rows are Media rows; only the poster thumb and the filter row are its own. */
+.library-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.library-filter {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+.library-filter .media-search {
+  flex: 1;
+  min-width: 0;
+}
+.library-filter .select-trigger {
+  flex: none;
+  margin: var(--space-2) var(--space-3) 0 0;
+  height: var(--size-field);
+  padding: 0 var(--space-2);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
+.library-thumb {
+  background: var(--surface-raised);
+}
+.library-thumb > img {
+  object-fit: cover;
+}
+.media-row[aria-disabled="true"] .media-name {
+  color: var(--text-tertiary);
+}
+.media-row[aria-disabled="true"] .media-thumb {
+  opacity: var(--track-locked-opacity);
+}
+.library-status {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--type-xs);
+  font-weight: var(--weight-regular);
+}
+.library-message {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--type-sm);
+}
+.library-message .text-button {
+  padding: 0;
+}
 .media-empty {
   flex: 1;
   display: flex;

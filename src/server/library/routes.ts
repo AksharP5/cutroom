@@ -1,8 +1,12 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { LibraryAddSchema, LibrarySearchSchema } from "../../shared/library";
-import type { LibraryCatalog, LibraryItem } from "../../shared/library";
+import {
+  LibraryAddSchema,
+  LibrarySearchSchema,
+  librarySearch,
+} from "../../shared/library";
+import type { LibraryCatalog } from "../../shared/library";
 import { AGENT_HEADER } from "../../shared/review";
 import { projectMutationGuard } from "../projects/authorization";
 import type { ReviewService } from "../projects/review";
@@ -11,16 +15,6 @@ import type { ProjectStore } from "../projects/store";
 import type { createTimelineRoutes } from "../timeline/routes";
 import { addLibraryItem } from "./add";
 import type { Library } from "./registry";
-
-/** Every word of the query appears in the item's title, name, tags or description. */
-export function librarySearch(query: string) {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  return (item: LibraryItem) => {
-    const text =
-      `${item.title} ${item.name} ${item.tags.join(" ")} ${item.description}`.toLowerCase();
-    return words.every((word) => text.includes(word));
-  };
-}
 
 export function createLibraryRoutes(
   store: ProjectStore,
@@ -54,10 +48,11 @@ export function createLibraryRoutes(
       library.catalog(),
       cachedNames(),
     ]);
+    // A saved list never needs the network, so a failed download is what says it is offline.
     return {
       ref: library.ref,
       savedAt,
-      offline,
+      offline: offline || !(await library.reachable()),
       items: items.map((item) => library.describe(item, cached.has(item.name))),
     };
   };
@@ -78,6 +73,12 @@ export function createLibraryRoutes(
         "cache-control": "private, max-age=31536000, immutable",
       },
     });
+  });
+
+  /** The items this project took files from, for the panel's "In this project". */
+  api.get("/projects/:id/library/used", async (c) => {
+    const document = await store.document(await store.get(c.req.param("id")));
+    return c.json({ names: document.library?.map(({ name }) => name) ?? [] });
   });
 
   /** The search agents use: up to `limit` matches, each saying whether the project has it. */

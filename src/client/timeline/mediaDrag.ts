@@ -1,3 +1,4 @@
+import type { LibraryItem } from "../../shared/library";
 import type { ProjectFormat } from "../../shared/projectFormat";
 import type {
   InsertClip,
@@ -18,6 +19,8 @@ export interface MediaDrag {
   start?: number;
   hasAudio: boolean;
   format?: ProjectFormat;
+  /** A Library item, which the server copies into the project as it lands. */
+  library?: LibraryItem;
 }
 
 /**
