@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join, posix } from "node:path";
 import { isCompositionVariable } from "@hyperframes/core/variables";
 import hyperframesPackage from "hyperframes/package.json" with { type: "json" };
@@ -572,7 +580,23 @@ export function createLibrary({
     /** Where an item's cached files live, for preview and copying. */
     itemDir,
     /** Where an item's preview at one size is built. */
-    previewDir: (folder: string) => join(root, "previews", folder),
+    /** Where an item's preview is built: its files once, and a page for each size. */
+    previewDir: (name: string) => join(root, "previews", name),
+    /**
+     * Removes the caches of other HyperFrames releases, which nothing reads once Cutroom pins
+     * a new one. Run once at startup.
+     */
+    async removeOtherReleases() {
+      const releases = join(dataDir, "library");
+      for (const entry of await readdir(releases, {
+        withFileTypes: true,
+      }).catch(() => []))
+        if (entry.isDirectory() && entry.name !== ref)
+          await rm(join(releases, entry.name), {
+            recursive: true,
+            force: true,
+          });
+    },
   };
 }
 export type Library = ReturnType<typeof createLibrary>;

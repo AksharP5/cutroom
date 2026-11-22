@@ -17,7 +17,7 @@ export function registerLibraryTools(
     "library_search",
     {
       description:
-        "Search the HyperFrames library: blocks (scenes with their own length, such as lower thirds, transitions, title cards and charts) and components (effects and text treatments, 3 seconds once added), at the registry tag matching Cutroom's HyperFrames. Returns name, title, kind, duration in seconds for blocks, category, description, tags, variables with defaults, and inProject. Reads HyperFrames' public registry; nothing from the project is sent.",
+        "Search the HyperFrames library: blocks (scenes with their own length, such as lower thirds, transitions, title cards and charts) and components (effects and text treatments, 3 seconds once added), from the HyperFrames release Cutroom pins. Returns name, title, kind, duration in frames at the timeline's rate (the length library_add places), category, description, tags, variables with defaults, and inProject. Reads HyperFrames' public registry; nothing from the project is sent.",
       inputSchema: { projectId, ...LibrarySearchSchema.shape },
       annotations: {
         readOnlyHint: true,

@@ -43,7 +43,7 @@ import type { Drag, Gesture, Hit, Outcome, Preview, Tool } from "./gesture";
 import { LENGTH_MIN_WIDTH, clipsByTrack, rowsBetween } from "./math";
 import type { Row, RowLayout, TrackClips } from "./math";
 import { addFromLibrary } from "../edit/library";
-import { showToast } from "../workspace";
+import { toFrames } from "../../shared/timeline/apply";
 import { MEDIA_DRAG_TYPE, mediaDrag } from "./mediaDrag";
 import { slideClips } from "./motion";
 import type { Offset } from "./motion";
@@ -1280,15 +1280,6 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const dragged = mediaDrag();
     const library = dragged?.library;
     if (!library) return settle(drop, undefined, dragged?.format);
-    if ((dragged.start ?? 0) > 0) {
-      clear();
-      showToast(
-        "Place a library item from its first frame. Clear the In mark.",
-        null,
-        { tone: "info", transient: true },
-      );
-      return;
-    }
     // A Library item is not in the project yet: the server copies its files and places it where
     // the preview showed, in one undo step.
     const insert = drop.commands.find((command) => command.type === "insert");
@@ -1301,6 +1292,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
         // A part marked in the source viewer is shorter than the item.
         ...(insert.clip.kind === "composition" && {
           duration: insert.clip.duration,
+        }),
+        // From the source viewer's In mark, the clip plays the item from there.
+        ...(dragged.start && {
+          start: toFrames(dragged.start, latest.current.timeline.fps),
         }),
       });
   }

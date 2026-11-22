@@ -178,22 +178,21 @@ export function placeSource(projectId: string, mode: SourcePlacement) {
     return;
   }
   if (media.library) {
-    // A scene clip always plays its composition from the start, so only an Out mark applies.
     const { range, duration } = sourcePlayer.use.getState();
-    if (mode === "replace" || mode === "top" || (range.in ?? 0) > 0) {
-      showToast(
-        mode === "replace" || mode === "top"
-          ? "Insert or overwrite a library item."
-          : "Place a library item from its first frame. Clear the In mark.",
-        null,
-        { tone: "info", transient: true },
-      );
+    if (mode === "replace" || mode === "top") {
+      showToast("Insert or overwrite a library item.", null, {
+        tone: "info",
+        transient: true,
+      });
       return;
     }
+    // In to out, or all of it: the clip plays the item from its In mark.
+    const start = range.in ?? 0;
     void placeLibraryAtPlayhead(
       media.library,
       mode,
-      range.out ?? duration,
+      (range.out ?? duration) - start,
+      start,
     ).then(() => showSource(false));
     return;
   }

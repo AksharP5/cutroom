@@ -189,6 +189,11 @@ export async function createApp(
   app.route("/api/cutroom", createFontRoutes(projects, review));
   app.route("/api/cutroom", createGradeRoutes(projects, review));
   const library = createLibrary({ dataDir });
+  await library
+    .removeOtherReleases()
+    .catch((error: unknown) =>
+      console.error("Cannot remove old library caches:", error),
+    );
   app.route(
     "/api/cutroom",
     createLibraryRoutes(projects, review, library, timeline),

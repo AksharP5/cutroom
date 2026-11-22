@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -659,10 +659,118 @@ test("a preview serves only its own files, under a sandboxing policy", async () 
     // Nothing outside the built folder, no hidden file, and no folder that was never built.
     for (const path of [
       `${page}..%2F..%2F..%2Fcatalog.json`,
-      `${page}.preview.html`,
+      `${page}.preview@640x360.html`,
       page.replace("640x360", "1920x1080"),
     ])
       expect((await request(path)).status, path).toBe(404);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a part marked from an In point keeps its place and length and plays from there, in one step", async () => {
+  const { fixture, project, ok, read, timelineView } = await libraryFixture();
+  try {
+    const added = LibraryAddedSchema.parse(
+      await ok(`/projects/${project.id}/library`, "POST", {
+        name: "lt-clean-bar",
+        track: 0,
+        at: 30,
+        start: 24,
+        duration: 60,
+      }),
+    );
+    const clip = (await timelineView()).timeline.clips.find(
+      ({ id }) => id === added.clipId,
+    );
+    // 24 frames in at 30 fps.
+    expect(clip).toMatchObject({ start: 30, duration: 60, mediaStart: 0.8 });
+    expect(await read("index.html")).toContain('data-playback-start="0.8"');
+    await ok(`/projects/${project.id}/history/undo`, "POST");
+    expect((await timelineView()).timeline.clips).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("search gives lengths in the timeline's frames, as library_add takes them", async () => {
+  const { fixture, project, ok } = await libraryFixture();
+  try {
+    const found = (await ok(
+      `/projects/${project.id}/library?query=${encodeURIComponent("lower third")}`,
+    )) as { items: { name: string; duration: number }[] };
+    // 4.8 seconds at the timeline's 30 fps.
+    expect(found.items).toEqual([
+      expect.objectContaining({ name: "lt-clean-bar", duration: 144 }),
+    ]);
+    const component = (await ok(
+      `/projects/${project.id}/library?query=blur`,
+    )) as { items: { name: string; duration: number }[] };
+    expect(component.items[0]).toMatchObject({ name: "blur-in", duration: 90 });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("previews at two sizes share the item's files, and only a component host is drawn per size", async () => {
+  const fixture = await projectFixture();
+  try {
+    const registry = registryFetch();
+    const library = createLibrary({
+      dataDir: join(fixture.directory, "data"),
+      fetchImpl: registry.fetchImpl,
+      ref: REF,
+    });
+    const previews = createLibraryPreviews(library);
+    for (const [name, size] of [
+      ["lt-clean-bar", "width=640&height=360"],
+      ["lt-clean-bar", "width=1080&height=1920"],
+      ["blur-in", "width=640&height=360"],
+      ["blur-in", "width=1080&height=1920"],
+    ])
+      expect(
+        (await previews.request(`/cutroom/library/${name}/preview?${size}`))
+          .status,
+      ).toBe(302);
+    const files = async (name: string) =>
+      (await readdir(library.previewDir(name), { recursive: true })).sort();
+    expect(await files("lt-clean-bar")).toEqual([
+      ".preview@1080x1920.html",
+      ".preview@640x360.html",
+      "assets",
+      "assets/lt",
+      "assets/lt/bar.png",
+      "assets/vendor",
+      "assets/vendor/gsap.min.js",
+      "compositions",
+      "compositions/lt-clean-bar.html",
+      "index@1080x1920.html",
+      "index@640x360.html",
+    ]);
+    expect(
+      (await files("blur-in")).filter((path) =>
+        path.startsWith("compositions/"),
+      ),
+    ).toEqual([
+      "compositions/blur-in@1080x1920.html",
+      "compositions/blur-in@640x360.html",
+    ]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("startup removes the caches of other HyperFrames releases", async () => {
+  const fixture = await projectFixture();
+  try {
+    const root = join(fixture.directory, "data/library");
+    await mkdir(join(root, "v0.9.20/items/old"), { recursive: true });
+    await mkdir(join(root, REF), { recursive: true });
+    await createLibrary({
+      dataDir: join(fixture.directory, "data"),
+      ref: REF,
+    }).removeOtherReleases();
+    expect(await readdir(root)).toEqual([REF]);
   } finally {
     await fixture.close();
   }
