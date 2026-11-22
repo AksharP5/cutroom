@@ -512,19 +512,41 @@ function wrapExact(time: ExactTime, start: ExactTime, length: ExactTime) {
   return add(start, fraction(numerator % divisor, elapsed.d * length.d));
 }
 
+function wrapRamp(loop: Loop | null, time: number) {
+  return loop?.kind === "ramp" &&
+    loop.length !== null &&
+    time - loop.start >= loop.length
+    ? loop.start + ((time - loop.start) % loop.length)
+    : time;
+}
+
 export function sourceAt(piece: Piece, position: ExactTime): SourceTime {
   const time = lineAt(piece.line, piece.zero, position);
   const { loop } = piece;
   if (loop?.length == null) return time;
   if (loop.kind === "exact" && typeof time !== "number")
     return wrapExact(time, loop.start, loop.length);
-  if (
-    loop.kind === "ramp" &&
-    typeof time === "number" &&
-    time - loop.start >= loop.length
-  )
-    return loop.start + ((time - loop.start) % loop.length);
-  return time;
+  return typeof time === "number" ? wrapRamp(loop, time) : time;
+}
+
+/**
+ * A ramp's source seconds at `count` positions `step` seconds apart from `from`, on the integral
+ * `sourceAt` reads. Exact arithmetic runs once, so a long table costs one integral per entry.
+ */
+export function rampSourceTimes(
+  piece: Piece,
+  from: ExactTime,
+  step: number,
+  count: number,
+) {
+  if (piece.line.kind !== "ramp")
+    throw new TypeError("Only a ramp has a table of source times.");
+  const { rate, curveZero } = piece.line;
+  const elapsed = secondsOf(subtract(from, curveZero));
+  const zero = piece.zero / Number(MICROS);
+  return Float64Array.from({ length: count }, (_, index) =>
+    wrapRamp(piece.loop, zero + sourceTimeAt(rate, elapsed + index * step)),
+  );
 }
 
 /** Timeline position at a source time on the unwrapped, monotone line. */

@@ -28,8 +28,8 @@ import {
   framesBefore,
   takesTransition,
 } from "../../shared/timeline/transition";
+import { elementClip } from "../../shared/timeline/element";
 import {
-  elementClip,
   isCrossfadeAutomation,
   readTransitions,
   TRANSITION_STYLE_ATTRIBUTE,
