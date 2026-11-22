@@ -57,8 +57,14 @@ import {
 import { sameHeldKey } from "../keymap";
 import type { HeldKey } from "../keymap";
 
-/** The project's entry composition, which the editor opens first. */
+/** The project's main timeline. */
 export const ROOT_COMPOSITION = "index.html";
+
+/** A composition as the Compositions list names it: index.html in full, others by file name. */
+export const compositionName = (path: string) =>
+  path === ROOT_COMPOSITION
+    ? path
+    : (path.split("/").at(-1) ?? path).replace(/\.html?$/i, "");
 
 const clipboards = new Map<string, readonly Clip[]>();
 const clipboardIds = new Map<string, string>();
@@ -130,6 +136,8 @@ const HistoryReplaySchema = z.object({
     .optional(),
   removedNotes: z.array(z.string()).optional(),
   notesBefore: z.array(ReviewItemSchema).optional(),
+  /** The timelines the step changed, by file or by their settings. */
+  timelines: z.array(z.string()).optional(),
 });
 const UndoTogetherSchema = z.object({
   entryId: z.string(),
@@ -400,8 +408,18 @@ function noticeOutside(
   );
 }
 
-/** Opens a project's timeline, dropping what was shown for the last one. */
-export function openTimeline(projectId: string, signal?: AbortSignal) {
+let compositionGone: ((projectId: string) => void) | undefined;
+/** What the editor does when the open timeline's file is gone; navigation sets it. */
+export function onCompositionGone(listener: (projectId: string) => void) {
+  compositionGone = listener;
+}
+
+/** Opens a project at `composition`, dropping what was shown for the last one. */
+export function openTimeline(
+  projectId: string,
+  signal?: AbortSignal,
+  composition = ROOT_COMPOSITION,
+) {
   compositionRequest++;
   dismissAnimationFeedback();
   confirmed = null;
@@ -418,7 +436,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
   committedHere.clear();
   useTimeline.setState({
     projectId,
-    composition: ROOT_COMPOSITION,
+    composition,
     parents: [],
     view: null,
     failedRead: null,
@@ -803,12 +821,19 @@ async function refreshOpenTimeline(
   notify = true,
 ) {
   if (signal?.aborted || useTimeline.getState().projectId !== projectId) return;
-  const { composition } = useTimeline.getState();
+  const { composition, parents } = useTimeline.getState();
   try {
     await read(projectId, signal, notify, composition);
   } catch (error) {
-    if (!signal?.aborted && isOpen(projectId, composition))
-      reportEditorError("timeline", error);
+    if (signal?.aborted || !isOpen(projectId, composition)) return;
+    if (
+      error instanceof ApiError &&
+      error.status === 404 &&
+      composition !== ROOT_COMPOSITION &&
+      !parents.length
+    )
+      return compositionGone?.(projectId);
+    reportEditorError("timeline", error);
   }
 }
 
@@ -1467,6 +1492,13 @@ export function stepHistory(
             );
           },
         };
+        // History is project-wide; a step in another timeline says which one.
+        const showing = useTimeline.getState().composition;
+        const landed = replay.timelines ?? [];
+        const elsewhere =
+          landed.length && !landed.includes(showing)
+            ? `${entry.label.replace(/^(Undid|Redid): /, "$1 ")} in ${compositionName(landed[0]!)}.`
+            : null;
         const first = replay.removedNotes?.[0];
         if (first && replay.notesBefore) {
           dispatchNote(projectId, {
@@ -1505,8 +1537,8 @@ export function stepHistory(
               redo,
               { tone: "info" },
             );
-          }
-        }
+          } else if (elsewhere) showToast(elsewhere, redo, { tone: "info" });
+        } else if (elsewhere) showToast(elsewhere, null, { tone: "info" });
       }),
     ),
   );

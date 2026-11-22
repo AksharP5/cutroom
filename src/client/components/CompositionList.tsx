@@ -4,9 +4,14 @@ import { z } from "zod";
 import { frameTime } from "../../shared/timeline/apply";
 import { TimelineViewSchema } from "../../shared/timeline/schema";
 import { api, frameTimecode, subscribeProjectEvents } from "../api";
-import { openComposition } from "../edit/compositions";
+import { isTimelinePath } from "../../shared/sourcePaths";
+import { duplicateTimeline, openComposition } from "../edit/compositions";
 import { placeAtPlayhead } from "../edit/placeMedia";
-import { ROOT_COMPOSITION, useTimeline } from "../edit/timeline";
+import {
+  ROOT_COMPOSITION,
+  compositionName,
+  useTimeline,
+} from "../edit/timeline";
 import { useLint } from "../lint";
 import { MEDIA_DRAG_TYPE, setMediaDrag } from "../timeline/mediaDrag";
 import type { MediaDrag } from "../timeline/mediaDrag";
@@ -24,11 +29,14 @@ const FileChangeSchema = z.object({
 const SETTLE_MS = 150;
 
 const isHtml = (path: string) => /\.html?$/i.test(path);
-const rootFirst = (a: string, b: string) =>
-  a === ROOT_COMPOSITION ? -1 : b === ROOT_COMPOSITION ? 1 : a.localeCompare(b);
+const rank = (path: string) =>
+  path === ROOT_COMPOSITION ? 0 : isTimelinePath(path) ? 1 : 2;
+/** The main timeline, then the other timelines, then scenes. */
+const timelinesFirst = (a: string, b: string) =>
+  rank(a) - rank(b) || a.localeCompare(b);
 
 /**
- * The project's composition files, root first. Read again only when an HTML file appears or is
+ * The project's composition files, timelines first. Read again only when an HTML file appears or is
  * removed, since an edit to one never changes the list. Null until the first listing.
  */
 export function useCompositions(projectId: string) {
@@ -50,7 +58,7 @@ export function useCompositions(projectId: string) {
         ).json(),
       );
       if (signal.aborted) return;
-      known = compositions.toSorted(rootFirst);
+      known = compositions.toSorted(timelinesFirst);
       setPaths(known);
     };
     const reload = () =>
@@ -173,9 +181,6 @@ function useLengths(projectId: string, paths: readonly string[]) {
   };
 }
 
-const compositionName = (path: string) =>
-  (path.split("/").at(-1) ?? path).replace(/\.html?$/i, "");
-
 /**
  * Every composition with a picture, its length and its lint. Double-click or Enter opens one in
  * the editor; dragging one onto the timeline, or Insert or Overwrite at playhead, places it as a
@@ -273,6 +278,14 @@ export function CompositionList({
                     disabled: path === open,
                     run: () => openComposition(projectId, path),
                   },
+                  ...(isTimelinePath(path)
+                    ? [
+                        {
+                          label: "Duplicate",
+                          run: () => duplicateTimeline(projectId, path),
+                        },
+                      ]
+                    : []),
                   "separator",
                   {
                     label: "Insert at playhead",
@@ -298,9 +311,7 @@ export function CompositionList({
                 />
               )}
             </span>
-            <span className="media-name">
-              {path === ROOT_COMPOSITION ? path : compositionName(path)}
-            </span>
+            <span className="media-name">{compositionName(path)}</span>
             {findings.length > 0 && (
               <span
                 className="composition-lint"

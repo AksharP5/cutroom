@@ -32,9 +32,16 @@ import {
 } from "../projects/history";
 import { parseInput } from "../projects/routes";
 import { sourceWriteGuard } from "./source-guard";
-import { projectStatePath, unavailableProjectFile } from "../projects/path";
+import {
+  listTimelines,
+  projectStatePath,
+  unavailableProjectFile,
+} from "../projects/path";
 import { checkProjectVariableValues } from "../projects/variables";
-import { rebasePreviewSceneSources } from "../projects/sceneSources";
+import {
+  affectedCompositions,
+  rebasePreviewSceneSources,
+} from "../projects/sceneSources";
 import { watch } from "node:fs";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import {
@@ -934,7 +941,11 @@ export function createHyperframesApi(
             content,
             affectsPreview: affects,
             affectedCompositions: affects
-              ? compositionsAffectedBy(project.dir, path)
+              ? await affectedCompositions(
+                  project.dir,
+                  path,
+                  compositionsAffectedBy(project.dir, path),
+                )
               : [],
             ...(receipt ? { writeToken: receipt.writeToken } : {}),
           };
@@ -1125,7 +1136,43 @@ export function createHyperframesApi(
     },
     lint: (html, options) =>
       lintHyperframeHtml(html, { ...options, host: "studio" }),
-    lintProject: (dir) => lintProject(dir, undefined, { host: "studio" }),
+    // Every root timeline is an entry Cutroom renders on its own, never one HyperFrames discovers,
+    // so several are not a fault, and each other timeline lints as an entry, not as a scene.
+    // Project-wide checks, such as probing media, run once.
+    lintProject: async (dir) => {
+      const [{ results }, timelines] = await Promise.all([
+        lintProject(dir, undefined, { host: "studio" }),
+        listTimelines({ path: dir }),
+      ]);
+      return {
+        results: [
+          ...results.map(({ file, result }) => ({
+            file,
+            result: {
+              ...result,
+              findings: result.findings.filter(
+                ({ code }) => code !== "multiple_root_compositions",
+              ),
+            },
+          })),
+          ...(await Promise.all(
+            timelines
+              .filter((file) => file !== "index.html")
+              .map(async (file) => ({
+                file,
+                result: await lintHyperframeHtml(
+                  await readFile(join(dir, file), "utf8"),
+                  {
+                    filePath: join(dir, file),
+                    compSrcPath: file,
+                    host: "studio",
+                  },
+                ),
+              })),
+          )),
+        ],
+      };
+    },
     runtimeUrl: "/api/runtime.js",
     gsapLocalRoot: "/api/vendor/npm",
     rendersDir: (project) => join(project.dir, ".cutroom", "renders"),

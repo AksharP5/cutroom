@@ -45,3 +45,6 @@ export function protectedPath(path: string, sourceOnly = true) {
     (sourceOnly && !projectSourceTypes.has(dot > 0 ? name.slice(dot) : ""))
   );
 }
+
+/** A timeline is an HTML composition at the project root; files in folders are its scenes. */
+export const isTimelinePath = (path: string) => /^[^/\\]+\.html?$/i.test(path);

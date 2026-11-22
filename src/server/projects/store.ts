@@ -17,7 +17,15 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import {
   applyFileMutations,
   fileContentVersion,
@@ -291,6 +299,37 @@ export async function createProjectStore(options: {
     absolute: string,
     content: string | Uint8Array,
   ) => captureWrite(absolute, null, recordedHash(content));
+  /**
+   * Writes a new file at the first of `paths` nobody has, never over an existing one, as part of
+   * the running mutation's history entry. Null when every path is taken.
+   */
+  const createFile = async (
+    project: Project,
+    paths: Iterable<string>,
+    content: (path: string) => string,
+  ) => {
+    for (const path of paths) {
+      const absolute = await projectWritePath(project, path, {
+        allowMissing: true,
+      });
+      await mkdir(dirname(absolute), { recursive: true });
+      const text = content(path);
+      const written = await writeFile(absolute, text, { flag: "wx" }).then(
+        () => true,
+        (error: unknown) => {
+          if (!(error instanceof Error && "code" in error)) throw error;
+          if (error.code === "EEXIST") return false;
+          if (error.code === "ENAMETOOLONG")
+            throw new HttpError(400, "That name is too long for a file.");
+          throw error;
+        },
+      );
+      if (!written) continue;
+      captureHistoryCreation(absolute, text);
+      return path;
+    }
+    return null;
+  };
   const mutateWithEntry = <T>(
     project: Project,
     label: string,
@@ -490,6 +529,7 @@ export async function createProjectStore(options: {
     mutate,
     mutateWithEntry,
     captureHistoryCreation,
+    createFile,
     serializeMutation,
     document,
     writeDocument,

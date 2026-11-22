@@ -27,6 +27,8 @@ const SourceEntrySchema = SourceMarksSchema.safeExtend({
 const ViewFileSchema = z.object({
   timelines: z.record(z.string(), TimelineViewSettingsSchema),
   sources: z.record(z.string(), SourceEntrySchema),
+  /** The timeline the project reopens on. */
+  open: z.string().optional(),
 });
 type Views = z.infer<typeof ViewFileSchema>;
 const records = z.record(z.string(), z.unknown());
@@ -83,9 +85,11 @@ async function readViews(project: Project): Promise<Views> {
         identity: { size: legacy.data[1], duration: null },
       });
   }
+  const open = z.string().safeParse(sections.data?.open);
   return {
     timelines: Object.fromEntries(timelines),
     sources: Object.fromEntries(sources),
+    ...(open.success && { open: open.data }),
   };
 }
 
@@ -130,6 +134,7 @@ export function createProjectViewStore() {
     if (pending.timer) clearTimeout(pending.timer);
     scheduled.delete(project.id);
     void write(project, (current) => ({
+      ...current,
       timelines: { ...current.timelines, ...pending.updates.timelines },
       sources: { ...current.sources, ...pending.updates.sources },
     })).then(pending.completion.resolve, pending.completion.reject);
@@ -184,6 +189,37 @@ export function createProjectViewStore() {
           entry.identity.duration === identity.duration)
         ? { in: entry.in, out: entry.out }
         : emptySourceMarks();
+    },
+    /** Gives `to` the view settings `from` has, as a duplicated timeline starts. */
+    copyTimeline(project: Project, from: string, to: string) {
+      flush(project);
+      return write(project, (current) => {
+        const settings = preferenceAt(current.timelines, from);
+        return settings
+          ? { ...current, timelines: { ...current.timelines, [to]: settings } }
+          : current;
+      });
+    },
+    /** Drops the view settings of a timeline whose file is gone, as when its duplicate is undone. */
+    forgetTimeline(project: Project, path: string) {
+      flush(project);
+      return write(project, (current) => {
+        if (!preferenceAt(current.timelines, path)) return current;
+        const timelines = { ...current.timelines };
+        delete timelines[path];
+        return { ...current, timelines };
+      });
+    },
+    async readOpen(project: Project) {
+      await writes.get(project.id);
+      return (await readViews(project)).open;
+    },
+    saveOpen(project: Project, composition: string) {
+      return write(project, (current) =>
+        current.open === composition
+          ? current
+          : { ...current, open: composition },
+      );
     },
     saveSource(project: Project, path: string, entry: SourceMarksSave) {
       return save(project, { timelines: {}, sources: { [path]: entry } });

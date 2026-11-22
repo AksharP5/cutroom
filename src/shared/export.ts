@@ -189,14 +189,23 @@ export const ResolveExportSchema = z.object({
 });
 export type ResolveExport = z.infer<typeof ResolveExportSchema>;
 
-/** What an export of one composition is called: the project, then the scene's file name. */
+/**
+ * What an export of one composition is called: the project, then the file's name. A timeline
+ * already named after the project, as a duplicate of the main one is, keeps its name.
+ */
 export const compositionExportName = (
   projectName: string,
   composition: string,
-) =>
-  composition === "index.html"
-    ? projectName
-    : `${projectName} ${(composition.split("/").at(-1) ?? composition).replace(/\.html?$/i, "")}`;
+) => {
+  if (composition === "index.html") return projectName;
+  const name = (composition.split("/").at(-1) ?? composition).replace(
+    /\.html?$/i,
+    "",
+  );
+  return name === projectName || name.startsWith(`${projectName} `)
+    ? name
+    : `${projectName} ${name}`;
+};
 
 export const exportFilename = (name: string, format: ExportFormat = "mp4") =>
   `${

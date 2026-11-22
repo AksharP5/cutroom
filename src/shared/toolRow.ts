@@ -301,6 +301,11 @@ const cutroomTools: Record<
     kind: "edit",
     object: () => "transitions",
   },
+  timeline_duplicate: {
+    verb: ["Duplicated", "Duplicating", "Duplicate"],
+    kind: "edit",
+    object: (target) => target ?? "the timeline",
+  },
   timeline_destinations: {
     verb: ["Checked", "Checking", "Check"],
     kind: "project",

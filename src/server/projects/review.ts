@@ -1,3 +1,5 @@
+import { isTimelinePath } from "../../shared/sourcePaths";
+import { playedCompositions } from "./sceneSources";
 import { randomUUID } from "node:crypto";
 import type { HistoryEntry, HistoryWho } from "../history/historyLog";
 import type { HistoryResult, ProjectHistory } from "../history/projectHistory";
@@ -747,6 +749,8 @@ export function createReviewService(store: ProjectStore) {
         ReturnType<typeof describeMember>
       >();
       const compositions = new Map<string, ReturnType<typeof describeMember>>();
+      // Another timeline is an equal, so its edits are listed only where this one plays it.
+      let played: Promise<Set<string>> | undefined;
       for (const entry of entries) {
         if (keys && !keys.has(entry.id)) continue;
         const local = compositionsOf(ledger, entry).has(path);
@@ -780,6 +784,13 @@ export function createReviewService(store: ProjectStore) {
             if (detail) clipEdits.push(describeMember(member, resolved));
             continue;
           }
+          if (
+            isTimelinePath(composition) &&
+            !(await (played ??= playedCompositions(project.path, path))).has(
+              composition,
+            )
+          )
+            continue;
           const key = JSON.stringify([
             entry.historyId ?? memberId(member),
             composition,

@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ExportDestinationSchema } from "../src/shared/export";
+import {
+  ExportDestinationSchema,
+  compositionExportName,
+} from "../src/shared/export";
 import { projectFixture } from "./project-fixture";
 
 test("export defaults read the chosen folder, fill numbering gaps and never reserve a file", async () => {
@@ -46,4 +49,18 @@ test("export defaults read the chosen folder, fill numbering gaps and never rese
   } finally {
     await fixture.close();
   }
+});
+
+test("a timeline is exported under the project's name once, even when it is named after the project", () => {
+  expect(compositionExportName("Interview", "index.html")).toBe("Interview");
+  expect(compositionExportName("Interview", "Cut v2.html")).toBe(
+    "Interview Cut v2",
+  );
+  expect(compositionExportName("Interview", "Interview copy.html")).toBe(
+    "Interview copy",
+  );
+  expect(compositionExportName("GT", "GTA intro.html")).toBe("GT GTA intro");
+  expect(
+    compositionExportName("Interview", "compositions/lower-third.html"),
+  ).toBe("Interview lower-third");
 });

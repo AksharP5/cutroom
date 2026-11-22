@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { parseFpsWithDefault } from "@hyperframes/core";
 import { parseSourceDocument } from "@hyperframes/studio-server";
 import type { FileMutationInput } from "@hyperframes/studio-server";
@@ -17,6 +18,7 @@ import {
 } from "../../shared/timeline/apply";
 import type { Fps } from "../../shared/timeline/schema";
 import { readSource } from "../projects/store";
+import type { ProjectStore } from "../projects/store";
 import { projectWritePath } from "../projects/path";
 import { setElementAttributes } from "../timeline/composition";
 import { transcriptView } from "../transcript/cuts";
@@ -344,4 +346,32 @@ export async function followTranscript(
     html: patched,
     files: [await captionsWrite(project, placed, layout.captions, duration)],
   };
+}
+
+/** A new captions file beside `sourceFile`, `compositions/captions.html` unless that is taken. */
+export async function createCaptionsFile(
+  store: ProjectStore,
+  project: Project,
+  sourceFile: string,
+  html: (id: string) => string,
+) {
+  const folder = posix.dirname(sourceFile);
+  const id = (path: string) => posix.basename(path, ".html");
+  const file = await store.createFile(
+    project,
+    Array.from({ length: 99 }, (_, index) =>
+      posix.join(
+        folder,
+        "compositions",
+        `${index ? `captions-${index + 1}` : "captions"}.html`,
+      ),
+    ),
+    (path) => html(id(path)),
+  );
+  if (!file)
+    throw new HttpError(
+      409,
+      "Too many captions files. Remove unused ones from compositions/.",
+    );
+  return { id: id(file), file };
 }

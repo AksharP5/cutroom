@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { relative, sep } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { join, relative, sep } from "node:path";
 import {
   checkSubCompositionUsability,
   parseHTMLContent,
@@ -14,6 +15,8 @@ import {
   scanHtmlOpeningTags,
 } from "@hyperframes/parsers";
 import { parseDeclarations } from "../../shared/variables.ts";
+import { isTimelinePath } from "../../shared/sourcePaths.ts";
+import { rootHtmlFiles } from "./path.ts";
 
 /** Both compilers read the document defaults, then the root selected by the mount. */
 export function mountedSceneVariables(html: string, compositionId: string) {
@@ -101,4 +104,82 @@ export function rebasePreviewSceneSources(
     end = attr.valueEnd;
   }
   return end ? parts.join("") + html.slice(end) : html;
+}
+
+// Each file's own mounts, kept while its size and modification time stay the same.
+const mountsByFile = new Map<
+  string,
+  { mtimeMs: number; size: number; mounts: string[] }
+>();
+
+/** The project files `path` mounts directly, through `data-composition-src`. */
+async function directMounts(projectDir: string, path: string) {
+  const absolute = join(projectDir, path);
+  const info = await stat(absolute).catch(() => null);
+  if (!info?.isFile()) return [];
+  const known = mountsByFile.get(absolute);
+  if (known?.mtimeMs === info.mtimeMs && known.size === info.size)
+    return known.mounts;
+  const html = await readFile(absolute, "utf8").catch(() => "");
+  const mounts: string[] = [];
+  if (html.includes("data-composition-src"))
+    for (const { attributes } of scanHtmlOpeningTags(html)) {
+      const attr = attributes.find(
+        ({ name }) => name === "data-composition-src",
+      );
+      if (attr?.kind !== "value") continue;
+      const selected = resolvePreviewCompositionSrc(
+        projectDir,
+        path,
+        decodeAuthoredAttribute(attr.value),
+      );
+      if (selected)
+        mounts.push(relative(projectDir, selected.file).split(sep).join("/"));
+    }
+  mountsByFile.set(absolute, {
+    mtimeMs: info.mtimeMs,
+    size: info.size,
+    mounts,
+  });
+  return mounts;
+}
+
+/** The compositions `composition` plays, itself included, through its scenes and theirs. */
+export async function playedCompositions(
+  projectDir: string,
+  composition: string,
+) {
+  const played = new Set<string>();
+  const visit = async (path: string): Promise<void> => {
+    if (played.has(path)) return;
+    played.add(path);
+    for (const mounted of await directMounts(projectDir, path))
+      await visit(mounted);
+  };
+  await visit(composition);
+  return played;
+}
+
+/**
+ * The compositions a change to `path` shows in, from what HyperFrames reports, which follows
+ * mounts from index.html only: every other timeline that plays it is added. A timeline it does
+ * not reach is one nothing mounts, so a change to it affects only itself. Null means any.
+ */
+export async function affectedCompositions(
+  projectDir: string,
+  path: string,
+  fromIndex: readonly string[] | null,
+) {
+  if (fromIndex === null) return isTimelinePath(path) ? [path] : null;
+  const others = (await rootHtmlFiles({ path: projectDir })).filter(
+    (timeline) => timeline !== "index.html" && !fromIndex.includes(timeline),
+  );
+  const playing = await Promise.all(
+    others.map(async (timeline) =>
+      (await playedCompositions(projectDir, timeline)).has(path)
+        ? [timeline]
+        : [],
+    ),
+  );
+  return [...fromIndex, ...playing.flat()];
 }
