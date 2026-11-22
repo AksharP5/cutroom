@@ -93,6 +93,8 @@ export const LibraryRecordSchema = z.object({
   /** Its folder in the HyperFrames registry, such as registry/blocks/lt-clean-bar. */
   source: z.string(),
   license: z.string().optional(),
+  /** The item names no license, so it carries the registry repository's. */
+  licenseInherited: z.literal(true).optional(),
   author: z.string().optional(),
   /** Project files it added, for "In this project" and the export summary. */
   files: z.array(z.string()),

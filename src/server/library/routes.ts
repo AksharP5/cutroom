@@ -26,7 +26,10 @@ export function createLibraryRoutes(
   store: ProjectStore,
   reviews: ReviewService,
   library: Library,
-  editInWindow: ReturnType<typeof createTimelineRoutes>["editInWindow"],
+  timeline: Pick<
+    ReturnType<typeof createTimelineRoutes>,
+    "editInWindow" | "timelineSnapshot"
+  >,
 ) {
   const api = new Hono();
   api.use("/projects/:id/*", projectMutationGuard(reviews));
@@ -115,7 +118,7 @@ export function createLibraryRoutes(
         store,
         reviews,
         library,
-        editInWindow,
+        timeline,
         project,
         input,
         token: c.req.header(AGENT_HEADER),

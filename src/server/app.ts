@@ -189,12 +189,7 @@ export async function createApp(
   app.route("/api/cutroom", createGradeRoutes(projects, review));
   app.route(
     "/api/cutroom",
-    createLibraryRoutes(
-      projects,
-      review,
-      createLibrary({ dataDir }),
-      timeline.editInWindow,
-    ),
+    createLibraryRoutes(projects, review, createLibrary({ dataDir }), timeline),
   );
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api/cutroom", media);

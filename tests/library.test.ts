@@ -10,11 +10,11 @@ import { ProjectDocumentSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { claudeToolPermissions } from "../src/server/agents/tool-permissions";
 import { componentHost } from "../src/server/library/add";
-import { createLibrary } from "../src/server/library/registry";
+import { LIBRARY_RELEASE, createLibrary } from "../src/server/library/registry";
 import { createLibraryRoutes } from "../src/server/library/routes";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { projectFixture } from "./project-fixture";
-import { REF, fragmentHtml, registryFetch } from "./library-fixture";
+import { COMMIT, REF, fragmentHtml, registryFetch } from "./library-fixture";
 
 const index = `<!doctype html><html><head></head><body><main data-composition-id="main" data-width="1280" data-height="720" data-duration="12" data-fps="30"></main></body></html>`;
 
@@ -30,12 +30,7 @@ async function libraryFixture() {
   fixture.app.route("/api/cutroom", timeline);
   fixture.app.route(
     "/api/cutroom",
-    createLibraryRoutes(
-      fixture.store,
-      fixture.review,
-      library,
-      timeline.editInWindow,
-    ),
+    createLibraryRoutes(fixture.store, fixture.review, library, timeline),
   );
   const project = await fixture.store.create({ name: "Library" });
   await writeFile(join(project.path, "index.html"), index);
@@ -61,7 +56,8 @@ test("the list keeps valid blocks and components, says which can't be added, and
   const { fixture, registry, ok } = await libraryFixture();
   try {
     const catalog = LibraryCatalogSchema.parse(await ok("/library"));
-    // An item writing outside the project fails validation and is left out, as are examples.
+    // Items that would write outside the project, at its root, under node_modules, or fetch code
+    // from outside the pinned registry fail validation and are left out, as are examples.
     expect(catalog.items.map((item) => item.name)).toEqual([
       "lt-clean-bar",
       "blur-in",
@@ -69,6 +65,10 @@ test("the list keeps valid blocks and components, says which can't be added, and
       "old-title",
       "future-chart",
       "elsewhere",
+      "globe",
+      "eased",
+      "redirected",
+      "oversize",
     ]);
     const byName = new Map(catalog.items.map((item) => [item.name, item]));
     expect(byName.get("lt-clean-bar")).toMatchObject({
@@ -86,6 +86,17 @@ test("the list keeps valid blocks and components, says which can't be added, and
       "Deprecated: Use title-card instead",
     );
     expect(byName.get("future-chart")?.disabled).toBe("Needs HyperFrames 0.10");
+    // three.js from a CDN cannot load in preview or export; GSAP and its plugins can, locally.
+    expect(byName.get("globe")?.disabled).toBe("Needs online scripts");
+    expect(byName.get("eased")?.disabled).toBeUndefined();
+    // Items are read at the release's commit, never at a tag that could move.
+    expect(
+      registry.state.requests.every(
+        (url) =>
+          !url.includes("raw.githubusercontent.com") ||
+          url.includes(`/hyperframes/${COMMIT}/registry/`),
+      ),
+    ).toBe(true);
 
     // The pinned tag never changes, so a complete list is not fetched again, even after a restart.
     const requests = registry.state.requests.length;
@@ -98,12 +109,12 @@ test("the list keeps valid blocks and components, says which can't be added, and
         fetchImpl: registry.fetchImpl,
         ref: REF,
       }),
-      createTimelineRoutes(fixture.store, fixture.review).editInWindow,
+      createTimelineRoutes(fixture.store, fixture.review),
     );
     const again = LibraryCatalogSchema.parse(
       await (await restarted.request("/library")).json(),
     );
-    expect(again.items).toHaveLength(6);
+    expect(again.items).toHaveLength(10);
     expect(again.offline).toBe(false);
     expect(registry.state.requests.length).toBe(requests);
   } finally {
@@ -336,12 +347,17 @@ test("refused items leave the project untouched", async () => {
       at: 0,
     });
     expect(deprecated.status).toBe(422);
-    const missing = await call(`/projects/${project.id}/library`, "POST", {
-      name: "escape",
-      track: 0,
-      at: 0,
-    });
-    expect(missing.status).toBe(404);
+    // Items that would write outside the project, at its root (bunfig.toml), under node_modules, or
+    // take code from outside the pinned registry are not in the library at all.
+    for (const name of ["escape", "root-config", "node-modules", "cdn-code"]) {
+      const refused = await call(`/projects/${project.id}/library`, "POST", {
+        name,
+        track: 0,
+        at: 0,
+      });
+      expect(refused.status, name).toBe(404);
+    }
+    expect(existsSync(join(project.path, "bunfig.toml"))).toBe(false);
     expect(await read("index.html")).toBe(before);
     expect(existsSync(join(project.path, "compositions"))).toBe(false);
   } finally {
@@ -378,4 +394,173 @@ test("agents search freely, and adding from the library always asks", () => {
   expect(permissions.settings.permissions.ask).toContain(
     "mcp__cutroom_studio__library_add",
   );
+});
+
+test("a placement the timeline refuses writes nothing and leaves no history", async () => {
+  const { fixture, project, call, ok, read } = await libraryFixture();
+  try {
+    const view = TimelineViewSchema.parse(
+      await ok(`/projects/${project.id}/timeline`),
+    );
+    await ok(`/projects/${project.id}/commands`, "POST", {
+      expectedRevision: view.revision,
+      commands: [{ type: "setTrack", index: 1, kind: "audio" }],
+    });
+    const entries = async () =>
+      (
+        (await ok(`/projects/${project.id}/history`)) as {
+          entries: unknown[];
+        }
+      ).entries.length;
+    const before = {
+      entries: await entries(),
+      source: await read("index.html"),
+    };
+    const refused = await call(`/projects/${project.id}/library`, "POST", {
+      name: "lt-clean-bar",
+      track: 1,
+      at: 0,
+    });
+    expect(refused.status).toBe(422);
+    expect(await entries()).toBe(before.entries);
+    expect(await read("index.html")).toBe(before.source);
+    expect(existsSync(join(project.path, "compositions"))).toBe(false);
+    expect(existsSync(join(project.path, "assets/lt"))).toBe(false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("item files and posters refuse redirects and bodies past their caps", async () => {
+  const { fixture, project, call } = await libraryFixture();
+  try {
+    for (const [name, reason] of [
+      ["redirected", "redirected"],
+      ["oversize", "larger than"],
+    ] as const) {
+      const added = await call(`/projects/${project.id}/library`, "POST", {
+        name,
+        track: 0,
+        at: 0,
+      });
+      expect(added.status, name).toBe(502);
+      expect(added.body).toMatchObject({
+        error: expect.stringContaining(reason),
+      });
+    }
+    expect(existsSync(join(project.path, "compositions"))).toBe(false);
+    const poster = await call("/library/posters/redirected");
+    expect(poster.status).toBe(502);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a damaged or tampered cache counts as not downloaded", async () => {
+  const { fixture, registry, project, ok, read } = await libraryFixture();
+  try {
+    const add = (at: number) =>
+      ok(`/projects/${project.id}/library`, "POST", {
+        name: "lt-clean-bar",
+        track: 0,
+        at,
+      });
+    await add(0);
+    const cached = join(
+      fixture.directory,
+      "data/library",
+      REF,
+      "items/lt-clean-bar",
+    );
+    await writeFile(join(cached, ".files.json"), "{not json");
+    await writeFile(join(cached, "assets/lt/bar.png"), "tampered");
+    const fetched = registry.state.requests.length;
+    await rm(join(project.path, "assets/lt/bar.png"));
+    await add(200);
+    // Both were fetched again, so the project gets the registry's bytes, not the tampered ones.
+    expect(registry.state.requests.length).toBeGreaterThan(fetched);
+    expect(await read("assets/lt/bar.png")).toBe("PNG bytes");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("GSAP plugins load from the project's own copies", async () => {
+  const { fixture, project, ok, read } = await libraryFixture();
+  try {
+    const added = LibraryAddedSchema.parse(
+      await ok(`/projects/${project.id}/library`, "POST", {
+        name: "eased",
+        track: 0,
+        at: 0,
+      }),
+    );
+    expect(added.added).toContain("assets/vendor/CustomEase.min.js");
+    const scene = await read("compositions/eased.html");
+    expect(scene).toContain('src="../assets/vendor/CustomEase.min.js"');
+    expect(scene).not.toContain("cdn.jsdelivr.net");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an item without a license records the registry's, marked as inherited", async () => {
+  const { fixture, project, ok, read } = await libraryFixture();
+  try {
+    await ok(`/projects/${project.id}/library`, "POST", {
+      name: "blur-in",
+      track: 0,
+      at: 0,
+    });
+    expect(
+      ProjectDocumentSchema.parse(JSON.parse(await read("cutroom.json")))
+        .library,
+    ).toEqual([
+      {
+        name: "blur-in",
+        ref: REF,
+        source: "registry/components/blur-in",
+        license: "Apache-2.0",
+        licenseInherited: true,
+        files: ["compositions/blur-in.html"],
+      },
+    ]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("undoing a second use keeps the files the first one placed", async () => {
+  const { fixture, project, ok, read, timelineView } = await libraryFixture();
+  try {
+    const add = (at: number) =>
+      ok(`/projects/${project.id}/library`, "POST", {
+        name: "lt-clean-bar",
+        track: 0,
+        at,
+      }).then((body) => LibraryAddedSchema.parse(body));
+    const first = await add(0);
+    await add(200);
+    await ok(`/projects/${project.id}/history/undo`, "POST");
+    expect(
+      (await timelineView()).timeline.clips.map((clip) => clip.id),
+    ).toEqual([first.clipId]);
+    expect(await read("assets/lt/bar.png")).toBe("PNG bytes");
+    expect(await read("compositions/lt-clean-bar.html")).toContain(
+      "lt-clean-bar",
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("the Library reads the release Cutroom's HyperFrames packages pin", async () => {
+  const pinned = JSON.parse(
+    await readFile(
+      new URL("../node_modules/hyperframes/package.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { version: string };
+  expect<string>(LIBRARY_RELEASE.version).toBe(pinned.version);
+  expect(LIBRARY_RELEASE.commit).toBe(COMMIT);
 });

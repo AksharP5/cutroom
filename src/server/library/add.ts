@@ -1,14 +1,16 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, posix } from "node:path";
+import { z } from "zod";
 import { HttpError } from "../../shared/errors";
 import { COMPONENT_SECONDS, libraryTitle } from "../../shared/library";
 import type { LibraryAdd, LibraryAdded } from "../../shared/library";
 import { sourceUrl } from "../../shared/media";
 import type { Project } from "../../shared/project";
-import { toFrames } from "../../shared/timeline/apply";
-import { emptyTimelineSettings } from "../../shared/timeline/schema";
-import type { Timeline } from "../../shared/timeline/schema";
+import { applyAll, toFrames } from "../../shared/timeline/apply";
+import { TimelineError } from "../../shared/timeline/errors";
+import { CommandSchema } from "../../shared/timeline/schema";
+import type { Timeline, TimelineView } from "../../shared/timeline/schema";
 import { checkVariableValues } from "../../shared/variables";
 import type { HistoryWho } from "../history/historyLog";
 import { projectWritePath } from "../projects/path";
@@ -16,28 +18,17 @@ import type { ReviewService } from "../projects/review";
 import { readSource } from "../projects/store";
 import type { ProjectStore } from "../projects/store";
 import type { createTimelineRoutes } from "../timeline/routes";
-import {
-  compositionScope,
-  compositionSize,
-  parseComposition,
-  setElementAttributes,
-} from "../timeline/composition";
+import { setElementAttributes } from "../timeline/composition";
+import { REGISTRY_LICENSE } from "./registry";
 import type { Library, RegistryItem } from "./registry";
+import { PROJECT_VENDOR, gsapDist, withProjectScripts } from "./scripts";
 
-type EditInWindow = ReturnType<typeof createTimelineRoutes>["editInWindow"];
+type TimelineRoutes = Pick<
+  ReturnType<typeof createTimelineRoutes>,
+  "editInWindow" | "timelineSnapshot"
+>;
 
-/** Where Cutroom projects keep the pinned GSAP build, which preview and export load offline. */
-const PROJECT_GSAP = "assets/vendor/gsap.min.js";
-/** Registry items load GSAP's core from this CDN, which the sandboxed preview cannot reach. */
-const CDN_GSAP =
-  /(["'])https:\/\/cdn\.jsdelivr\.net\/npm\/gsap@[\d.]+\/dist\/gsap\.min\.js\1/g;
-
-/** An item's HTML with its GSAP script pointed at the project's own copy. */
-export const withProjectGsap = (html: string, path: string) =>
-  html.replace(
-    CDN_GSAP,
-    (_, quote: string) => `${quote}${sourceUrl(path, PROJECT_GSAP)}${quote}`,
-  );
+const PROJECT_GSAP = `${PROJECT_VENDOR}/gsap.min.js`;
 
 const sha256 = (bytes: Uint8Array | string) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -114,16 +105,111 @@ const numbered = (path: string, copy: number) =>
   copy === 1 ? path : path.replace(/(\.[^./]+)?$/, `-${copy}$1`);
 
 /**
+ * An item's files as they land in a project, its scene first: GSAP and its plugins pointed at the
+ * project's own copies (which join the list), and a fragment component replaced by its host.
+ * `size` is the timeline's, which a host is drawn at.
+ */
+export async function itemProjectFiles(
+  library: Library,
+  item: RegistryItem,
+  size: { width: number; height: number },
+) {
+  const cached = await library.files(item);
+  const bytesOf = (target: string) =>
+    readFile(join(library.itemDir(item.name), target));
+  const scene =
+    item.files.find((file) => file.type === "hyperframes:composition") ??
+    item.files.find((file) => file.type === "hyperframes:snippet");
+  if (!scene || !cached.some(({ target }) => target === scene.target))
+    throw new HttpError(422, `${item.title} has no composition to place.`);
+  const text = new TextDecoder();
+  const snippet = text.decode(await bytesOf(scene.target));
+  const fragment =
+    item.type === "hyperframes:component" && !isComposition(snippet);
+  const files: { path: string; bytes: Uint8Array | string }[] = [];
+  const vendored = new Set<string>();
+  const local = (html: string, path: string) => {
+    const result = withProjectScripts(html, path);
+    for (const file of result.vendored) vendored.add(file);
+    return result.html;
+  };
+  for (const { target } of cached) {
+    // A fragment plays from its host, which holds it; on its own it is no composition.
+    if (fragment && target === scene.target) continue;
+    const bytes = await bytesOf(target);
+    files.push({
+      path: target,
+      bytes: /\.html?$/i.test(target)
+        ? local(text.decode(bytes), target)
+        : bytes,
+    });
+  }
+  const host = posix.join("compositions", `${item.name}.html`);
+  if (fragment) {
+    vendored.add("gsap.min.js");
+    files.push({
+      path: host,
+      bytes: componentHost(item, local(snippet, host), size, host),
+    });
+  }
+  for (const file of vendored)
+    files.push({
+      path: `${PROJECT_VENDOR}/${file}`,
+      bytes: await readFile(join(gsapDist, file)),
+    });
+  const scenePath = fragment ? host : scene.target;
+  files.sort(
+    (a, b) => Number(b.path === scenePath) - Number(a.path === scenePath),
+  );
+  return { scene: scenePath, files };
+}
+
+/** The commands that place the item: its track made first when it is new, then the clip. */
+function placement(
+  timeline: Timeline,
+  input: {
+    track: number;
+    at: number;
+    mode: "insert" | "overwrite";
+    duration?: number;
+  },
+  item: RegistryItem,
+  src: string,
+  label: string,
+) {
+  return z.array(CommandSchema).parse([
+    ...(timeline.tracks.some(({ index }) => index === input.track)
+      ? []
+      : [{ type: "setTrack", index: input.track, kind: "video" }]),
+    {
+      type: "insert",
+      mode: input.mode,
+      track: input.track,
+      at: input.at,
+      clip: {
+        kind: "composition",
+        src,
+        duration:
+          input.duration ??
+          toFrames(item.duration ?? COMPONENT_SECONDS, timeline.fps),
+        label,
+      },
+    },
+  ]);
+}
+
+/**
  * Copies a library item into the project and places it as a scene clip, in one history entry.
  * Files the project already has unchanged are reused. An edited copy of the item's scene keeps
  * its edits and the new one goes in beside it as `name-2.html`; an edited asset is kept as it is.
- * The item's license, author and source are recorded in cutroom.json beside the files it added.
+ * The item's license, author and source are recorded in cutroom.json beside the files it added;
+ * an item without a license of its own carries the registry's, marked as inherited.
  */
 export async function addLibraryItem({
   store,
   reviews,
   library,
-  editInWindow,
+  timeline,
   project,
   input,
   token,
@@ -132,7 +218,7 @@ export async function addLibraryItem({
   store: ProjectStore;
   reviews: ReviewService;
   library: Library;
-  editInWindow: EditInWindow;
+  timeline: TimelineRoutes;
   project: Project;
   input: Required<Pick<LibraryAdd, "composition" | "mode">> &
     Omit<LibraryAdd, "composition" | "mode">;
@@ -143,20 +229,37 @@ export async function addLibraryItem({
   const { disabled } = library.describe(item, false);
   if (disabled) throw new HttpError(422, `${item.title}: ${disabled}`);
   const variables = checkVariableValues(input.variables ?? {}, item.variables);
-  // Downloads happen before the edit starts, so a slow network never holds the project.
-  const cached = await library.files(item);
-  const bytesOf = (target: string) =>
-    readFile(join(library.itemDir(item.name), target));
-  const scene =
-    item.files.find((file) => file.type === "hyperframes:composition") ??
-    item.files.find((file) => file.type === "hyperframes:snippet");
-  if (!scene || !cached.some(({ target }) => target === scene.target))
-    throw new HttpError(422, `${item.title} has no composition to place.`);
-  const fragment =
-    item.type === "hyperframes:component" &&
-    !isComposition(new TextDecoder().decode(await bytesOf(scene.target)));
   const title = libraryTitle(item.title);
   const label = `Added ${title} from the HyperFrames library`;
+  // A placement the engine refuses, such as onto an audio or locked track, is refused before
+  // anything is downloaded or written.
+  const current: TimelineView | { error: string } =
+    await timeline.timelineSnapshot(project, input.composition);
+  if ("error" in current) throw new HttpError(422, current.error);
+  const refusal = (error: unknown) =>
+    error instanceof TimelineError ? new HttpError(422, error.message) : error;
+  try {
+    applyAll(
+      current.timeline,
+      placement(
+        current.timeline,
+        input,
+        item,
+        "compositions/placed.html",
+        title,
+      ),
+      { composition: input.composition },
+    );
+  } catch (error) {
+    throw refusal(error);
+  }
+  // Downloads happen before the edit starts, so a slow network never holds the project.
+  // The preview and export draw a composition without a size at 1920 x 1080.
+  const { scene, files } = await itemProjectFiles(
+    library,
+    item,
+    current.size ?? { width: 1920, height: 1080 },
+  );
 
   return reviews.editComposition(
     project,
@@ -214,83 +317,32 @@ export async function addLibraryItem({
             );
           };
 
-          const text = new TextDecoder();
-          let scenePath = scene.target;
-          let gsap = false;
-          for (const { target } of cached) {
-            // A fragment plays from the host below, which holds it; on its own it is no composition.
-            if (fragment && target === scene.target) continue;
-            let bytes: Uint8Array | string = await bytesOf(target);
-            if (/\.html?$/i.test(target)) {
-              const html = text.decode(bytes);
-              bytes = withProjectGsap(html, target);
-              gsap ||= bytes !== html;
-            }
-            const placed = await place(target, bytes, target === scene.target);
-            if (target === scene.target) scenePath = placed;
+          let scenePath = scene;
+          for (const file of files) {
+            // An edited scene stays beside the new copy; an edited asset or GSAP is the owner's.
+            const placed = await place(
+              file.path,
+              file.bytes,
+              file.path === scene,
+            );
+            if (file.path === scene) scenePath = placed;
           }
-
-          if (fragment) {
-            const { content } = await readSource(project, input.composition);
-            const size = compositionSize(
-              parseComposition(content, emptyTimelineSettings(), {
-                scope: compositionScope(input.composition),
-              }).root,
-            );
-            const host = posix.join("compositions", `${item.name}.html`);
-            scenePath = await place(
-              host,
-              componentHost(
-                item,
-                text.decode(await bytesOf(scene.target)),
-                size,
-                host,
-              ),
-              true,
-            );
-            gsap = true;
-          }
-          // An imported project may not have the copy yet; an edited one is the owner's to keep.
-          if (gsap)
-            await place(
-              PROJECT_GSAP,
-              await readFile(
-                Bun.resolveSync("gsap/dist/gsap.min.js", import.meta.dir),
-              ),
-              false,
-            );
 
           let before = new Set<string>();
           const src = sourceUrl(input.composition, scenePath);
-          const view = await editInWindow(
-            project,
-            input.composition,
-            (current: Timeline) => {
-              before = new Set(current.clips.map((clip) => clip.id));
-              const duration =
-                input.duration ??
-                toFrames(item.duration ?? COMPONENT_SECONDS, current.fps);
-              return [
-                ...(current.tracks.some(({ index }) => index === input.track)
-                  ? []
-                  : [
-                      {
-                        type: "setTrack" as const,
-                        index: input.track,
-                        kind: "video" as const,
-                      },
-                    ]),
-                {
-                  type: "insert",
-                  mode: input.mode,
-                  track: input.track,
-                  at: input.at,
-                  clip: { kind: "composition", src, duration, label: title },
-                },
-              ];
-            },
-            token !== undefined,
-          );
+          const view = await timeline
+            .editInWindow(
+              project,
+              input.composition,
+              (latest: Timeline) => {
+                before = new Set(latest.clips.map((clip) => clip.id));
+                return placement(latest, input, item, src, title);
+              },
+              token !== undefined,
+            )
+            .catch((error: unknown) => {
+              throw refusal(error);
+            });
           const clip = view.timeline.clips.find(
             (candidate) =>
               !before.has(candidate.id) &&
@@ -326,11 +378,12 @@ export async function addLibraryItem({
             name: item.name,
             ref: library.ref,
             source: `registry/${item.type === "hyperframes:block" ? "blocks" : "components"}/${item.name}`,
-            ...(item.license && { license: item.license }),
+            license: item.license ?? REGISTRY_LICENSE,
+            ...(item.license ? {} : { licenseInherited: true as const }),
             ...(item.author && { author: item.author }),
-            files: [
-              ...new Set([...cached.map(({ target }) => target), scenePath]),
-            ],
+            files: files
+              .map(({ path }) => (path === scene ? scenePath : path))
+              .filter((path) => !path.startsWith(`${PROJECT_VENDOR}/`)),
           };
           const others = (document.library ?? []).filter(
             (entry) => entry.name !== item.name,

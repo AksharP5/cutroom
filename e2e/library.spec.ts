@@ -49,6 +49,7 @@ const items = [
     dimensions: { width: 640, height: 360 },
     duration: 2,
     variables: [],
+    online: false,
     files: [
       {
         path: "lt-fixture.html",
@@ -64,6 +65,7 @@ const items = [
     description: "A red word that fades in",
     tags: ["text-effect"],
     variables: [],
+    online: false,
     files: [
       {
         path: "fx-fixture.html",
@@ -84,6 +86,7 @@ async function seedLibrary() {
   await write(
     "catalog.json",
     JSON.stringify({
+      version: 2,
       savedAt: new Date().toISOString(),
       complete: true,
       items,

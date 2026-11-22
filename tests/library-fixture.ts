@@ -3,7 +3,8 @@
  * the network. Each file is what the real registry serves, cut down.
  */
 export const REF = "v0.9.26";
-const BASE = `https://raw.githubusercontent.com/heygen-com/hyperframes/${REF}/registry/`;
+export const COMMIT = "0c6c7fca45bddc9838ebc6c0f0280e9efea1f18a";
+const BASE = `https://raw.githubusercontent.com/heygen-com/hyperframes/${COMMIT}/registry/`;
 const CDN = "https://static.heygen.ai/hyperframes-oss/";
 
 export const blockHtml = `<!doctype html>
@@ -139,8 +140,8 @@ const items: Record<string, unknown> = {
   "blocks/escape": {
     name: "escape",
     type: "hyperframes:block",
-    title: "Escape",
-    description: "Writes outside the project",
+    title: "escape",
+    description: "A fixture block",
     tags: [],
     dimensions: { width: 1920, height: 1080 },
     duration: 3,
@@ -152,24 +153,169 @@ const items: Record<string, unknown> = {
       },
     ],
   },
+  "blocks/root-config": {
+    name: "root-config",
+    type: "hyperframes:block",
+    title: "root-config",
+    description: "A fixture block",
+    tags: [],
+    dimensions: { width: 1920, height: 1080 },
+    duration: 3,
+    files: [
+      {
+        path: "r.html",
+        target: "compositions/r.html",
+        type: "hyperframes:composition",
+      },
+      { path: "bunfig.toml", target: "bunfig.toml", type: "hyperframes:asset" },
+    ],
+  },
+  "blocks/node-modules": {
+    name: "node-modules",
+    type: "hyperframes:block",
+    title: "node-modules",
+    description: "A fixture block",
+    tags: [],
+    dimensions: { width: 1920, height: 1080 },
+    duration: 3,
+    files: [
+      {
+        path: "n.html",
+        target: "compositions/n.html",
+        type: "hyperframes:composition",
+      },
+      {
+        path: "index.js",
+        target: "assets/node_modules/pkg/index.js",
+        type: "hyperframes:asset",
+      },
+    ],
+  },
+  "blocks/cdn-code": {
+    name: "cdn-code",
+    type: "hyperframes:block",
+    title: "cdn-code",
+    description: "A fixture block",
+    tags: [],
+    dimensions: { width: 1920, height: 1080 },
+    duration: 3,
+    files: [
+      {
+        path: "c.html",
+        target: "compositions/cdn-code.html",
+        type: "hyperframes:composition",
+      },
+      {
+        path: "x.js",
+        url: `${CDN}registry/x.js`,
+        target: "compositions/lib/x.js",
+        type: "hyperframes:asset",
+      },
+    ],
+  },
   "blocks/elsewhere": {
     name: "elsewhere",
     type: "hyperframes:block",
-    title: "Elsewhere",
-    description: "Fetches from a host the library does not trust",
+    title: "elsewhere",
+    description: "A fixture block",
     tags: [],
     dimensions: { width: 1920, height: 1080 },
     duration: 3,
     files: [
       {
         path: "x.html",
-        url: "https://example.com/x.html",
         target: "compositions/elsewhere.html",
+        type: "hyperframes:composition",
+      },
+      {
+        path: "bar.png",
+        url: "https://example.com/bar.png",
+        target: "assets/elsewhere.png",
+        type: "hyperframes:asset",
+      },
+    ],
+  },
+  "blocks/globe": {
+    name: "globe",
+    type: "hyperframes:block",
+    title: "globe",
+    description: "A fixture block",
+    tags: [],
+    dimensions: { width: 1920, height: 1080 },
+    duration: 3,
+    files: [
+      {
+        path: "globe.html",
+        target: "compositions/globe.html",
         type: "hyperframes:composition",
       },
     ],
   },
+  "blocks/eased": {
+    name: "eased",
+    type: "hyperframes:block",
+    title: "eased",
+    description: "A fixture block",
+    tags: [],
+    dimensions: { width: 1920, height: 1080 },
+    duration: 3,
+    files: [
+      {
+        path: "eased.html",
+        target: "compositions/eased.html",
+        type: "hyperframes:composition",
+      },
+    ],
+  },
+  "blocks/redirected": {
+    name: "redirected",
+    type: "hyperframes:block",
+    title: "redirected",
+    description: "A fixture block",
+    tags: [],
+    dimensions: { width: 1920, height: 1080 },
+    duration: 3,
+    preview: { poster: `${CDN}docs/far.png` },
+    files: [
+      {
+        path: "redirected.html",
+        target: "compositions/redirected.html",
+        type: "hyperframes:composition",
+      },
+      {
+        path: "far.png",
+        url: `${CDN}registry/far.png`,
+        target: "assets/far.png",
+        type: "hyperframes:asset",
+      },
+    ],
+  },
+  "blocks/oversize": {
+    name: "oversize",
+    type: "hyperframes:block",
+    title: "oversize",
+    description: "A fixture block",
+    tags: [],
+    dimensions: { width: 1920, height: 1080 },
+    duration: 3,
+    files: [
+      {
+        path: "oversize.html",
+        target: "compositions/oversize.html",
+        type: "hyperframes:composition",
+      },
+      {
+        path: "huge.png",
+        url: `${CDN}registry/huge.png`,
+        target: "assets/huge.png",
+        type: "hyperframes:asset",
+      },
+    ],
+  },
 };
+
+const page = (id: string, body = "") =>
+  `<!doctype html><html><body><div id="root" data-composition-id="${id}" data-duration="3" data-width="1920" data-height="1080">${body}</div></body></html>`;
 
 const files: Record<string, string> = {
   [`${BASE}blocks/lt-clean-bar/lt-clean-bar.html`]: blockHtml,
@@ -178,7 +324,43 @@ const files: Record<string, string> = {
   [`${BASE}components/blur-in/blur-in.html`]: fragmentHtml,
   [`${BASE}components/grain/grain.html`]: grainHtml,
   [`${CDN}docs/images/catalog/blocks/lt-clean-bar.png`]: "poster bytes",
-  "https://example.com/x.html": "<div></div>",
+  [`${BASE}blocks/old-title/a.html`]: page("old-title"),
+  [`${BASE}blocks/future-chart/c.html`]: page("future-chart"),
+  [`${BASE}blocks/elsewhere/x.html`]: page("elsewhere"),
+  "https://example.com/bar.png": "PNG bytes",
+  [`${BASE}blocks/globe/globe.html`]: page(
+    "globe",
+    '<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>',
+  ),
+  [`${BASE}blocks/eased/eased.html`]: page(
+    "eased",
+    '<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script><script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/CustomEase.min.js"></script>',
+  ),
+  [`${BASE}blocks/redirected/redirected.html`]: page("redirected"),
+  [`${BASE}blocks/oversize/oversize.html`]: page("oversize"),
+};
+
+/** Files whose answer is not a plain body: a redirect, or a size beyond any cap. */
+const special: Record<string, () => Response> = {
+  [`${CDN}registry/far.png`]: () =>
+    new Response("", {
+      status: 302,
+      headers: { location: "https://example.com/far.png" },
+    }),
+  [`${CDN}docs/far.png`]: () =>
+    new Response("", {
+      status: 302,
+      headers: { location: "https://example.com/far.png" },
+    }),
+  // A body that runs past the 64 MB file cap, without the test holding 64 MB.
+  [`${CDN}registry/huge.png`]: () =>
+    new Response(
+      new ReadableStream({
+        pull(controller) {
+          controller.enqueue(new Uint8Array(8 * 1024 * 1024));
+        },
+      }),
+    ),
 };
 
 /** The registry, served by URL; `offline` makes every request fail as a dropped network does. */
@@ -212,6 +394,8 @@ export function registryFetch() {
       const value = items[`${item[1]}/${item[2]}`];
       return value ? Response.json(value) : new Response("", { status: 404 });
     }
+    const answer = special[url];
+    if (answer) return answer();
     const body = files[url];
     return body === undefined
       ? new Response("", { status: 404 })

@@ -8,11 +8,21 @@ import { HttpError } from "../../shared/errors";
 import { LibraryNameSchema } from "../../shared/library";
 import type { LibraryCategory, LibraryItem } from "../../shared/library";
 import { protectedPath } from "../../shared/sourcePaths";
+import { onlineReferences } from "./scripts";
 
-/** The registry tag matching the pinned HyperFrames, so the list never shifts under a project. */
-export const LIBRARY_REF = `v${hyperframesPackage.version}`;
-const REGISTRY = (ref: string) =>
-  `https://raw.githubusercontent.com/heygen-com/hyperframes/${ref}/registry/`;
+/**
+ * The HyperFrames release the Library reads: the one Cutroom pins, by the commit its tag names,
+ * so a moved tag cannot change what is fetched. Update both together with the packages.
+ */
+export const LIBRARY_RELEASE = {
+  version: "0.9.26",
+  commit: "0c6c7fca45bddc9838ebc6c0f0280e9efea1f18a",
+} as const;
+export const LIBRARY_REF = `v${LIBRARY_RELEASE.version}`;
+const REGISTRY = (commit: string) =>
+  `https://raw.githubusercontent.com/heygen-com/hyperframes/${commit}/registry/`;
+/** The registry repository's license, which an item without one of its own carries. */
+export const REGISTRY_LICENSE = "Apache-2.0";
 /** Where items keep posters, preview videos and binary assets: HyperFrames' folders on its CDN. */
 const ASSET_PREFIXES = [
   "https://static.heygen.ai/hyperframes-oss/",
@@ -40,8 +50,9 @@ const unreachable = (detail?: string) =>
   );
 
 /**
- * A path an item writes into a project, relative to its root: no absolute paths, no `..`, no
- * hidden or tooling files, and no HTML at the root, where it would become a timeline.
+ * A path an item writes into a project, relative to its root: inside a folder, never at the root
+ * where tools read their configuration (bunfig.toml, Makefile) and HTML becomes a timeline; never
+ * under node_modules, which runtimes load; no absolute paths, no `..`, no hidden or tooling files.
  */
 const TargetSchema = z
   .string()
@@ -53,34 +64,47 @@ const TargetSchema = z
       !target.includes("\\") &&
       !target.includes("\0") &&
       posix.normalize(target) === target &&
-      !target.split("/").some((part) => part === "..") &&
-      !protectedPath(target, false) &&
-      !(!target.includes("/") && /\.html?$/i.test(target)),
+      target.includes("/") &&
+      !target
+        .split("/")
+        .some((part) => part === ".." || part === "node_modules") &&
+      !protectedPath(target, false),
     "Unsafe registry file target.",
   );
 
-const FileSchema = z.object({
-  path: z
-    .string()
-    .min(1)
-    .max(300)
-    .refine(
-      (path) =>
-        !path.startsWith("/") &&
-        !path.includes("\\") &&
-        !path.split("/").some((part) => part === ".." || part === ""),
-      "Unsafe registry source path.",
-    ),
-  url: z.string().max(2_000).optional(),
-  target: TargetSchema,
-  type: z.enum([
-    "hyperframes:composition",
-    "hyperframes:asset",
-    "hyperframes:snippet",
-    "hyperframes:style",
-    "hyperframes:timeline",
-  ]),
-});
+/** The only files an item may fetch from outside the pinned registry: pictures, sound, fonts. */
+const MEDIA_FILE =
+  /\.(png|jpe?g|webp|gif|avif|mp4|webm|mov|m4v|mp3|wav|m4a|aac|ogg|oga|flac|woff2?|ttf|otf)$/i;
+
+const FileSchema = z
+  .object({
+    path: z
+      .string()
+      .min(1)
+      .max(300)
+      .refine(
+        (path) =>
+          !path.startsWith("/") &&
+          !path.includes("\\") &&
+          !path.split("/").some((part) => part === ".." || part === ""),
+        "Unsafe registry source path.",
+      ),
+    url: z.string().max(2_000).optional(),
+    target: TargetSchema,
+    type: z.enum([
+      "hyperframes:composition",
+      "hyperframes:asset",
+      "hyperframes:snippet",
+      "hyperframes:style",
+      "hyperframes:timeline",
+    ]),
+  })
+  .refine(
+    (file) =>
+      file.url === undefined ||
+      (file.type === "hyperframes:asset" && MEDIA_FILE.test(file.target)),
+    "Only pictures, sound and fonts may come from outside the registry.",
+  );
 
 /** What Cutroom reads of a registry-item.json; everything else in it is ignored. */
 const RegistryItemSchema = z.object({
@@ -136,11 +160,19 @@ const ManifestSchema = z.object({
     .max(10_000),
 });
 
+/** An item as the list keeps it: whether it loads anything from the network was read once. */
+const CachedItemSchema = RegistryItemSchema.extend({
+  /** Its HTML, CSS or scripts load from the network, which preview and export cannot reach. */
+  online: z.boolean(),
+});
+type CachedItem = z.infer<typeof CachedItemSchema>;
+
 const CatalogCacheSchema = z.object({
+  version: z.literal(2),
   savedAt: z.string(),
   /** Every manifest entry was read, so the pinned list never needs the network again. */
   complete: z.boolean(),
-  items: z.array(RegistryItemSchema),
+  items: z.array(CachedItemSchema),
 });
 
 /** One file of an item as cached: its target and the hash of its bytes. */
@@ -200,12 +232,14 @@ export function createLibrary({
   dataDir,
   fetchImpl = fetch,
   ref = LIBRARY_REF,
+  commit = LIBRARY_RELEASE.commit,
 }: {
   dataDir: string;
   fetchImpl?: typeof fetch;
   ref?: string;
+  commit?: string;
 }) {
-  const base = REGISTRY(ref);
+  const base = REGISTRY(commit);
   const root = join(dataDir, "library", ref);
   const catalogPath = join(root, "catalog.json");
   const itemsRoot = join(root, "items");
@@ -290,7 +324,7 @@ export function createLibrary({
       (entry): entry is { name: string; type: RegistryItem["type"] } =>
         entry.type !== "hyperframes:example",
     );
-    const items: RegistryItem[] = [];
+    const items: CachedItem[] = [];
     let complete = true;
     let next = 0;
     await Promise.all(
@@ -311,25 +345,54 @@ export function createLibrary({
           );
           // An item that fails to validate is left out rather than failing the whole list.
           if (
-            parsed?.success &&
-            parsed.data.name === entry.name &&
-            parsed.data.type === entry.type
-          )
-            items.push(parsed.data);
-          else if (!parsed) complete = false;
+            !parsed?.success ||
+            parsed.data.name !== entry.name ||
+            parsed.data.type !== entry.type
+          ) {
+            if (!parsed) complete = false;
+            continue;
+          }
+          // Read its code once, to know whether it needs the network; it is fetched again to add.
+          const online = await Promise.all(
+            parsed.data.files
+              .filter(
+                (file) =>
+                  file.url === undefined &&
+                  /\.(html?|m?js|css)$/i.test(file.target),
+              )
+              .map(async (file) => {
+                const { bytes } = await get(
+                  itemUrl(parsed.data, file.path),
+                  FILE_BYTES,
+                );
+                return (
+                  onlineReferences(new TextDecoder().decode(bytes)).length > 0
+                );
+              }),
+          ).then(
+            (found) => found.some(Boolean),
+            () => null,
+          );
+          if (online === null) complete = false;
+          else items.push({ ...parsed.data, online });
         }
       }),
     );
     if (!items.length) throw unreachable("No library item could be read.");
     const order = new Map(wanted.map((entry, index) => [entry.name, index]));
     items.sort((a, b) => order.get(a.name)! - order.get(b.name)!);
-    const saved = { savedAt: new Date().toISOString(), complete, items };
+    const saved = {
+      version: 2 as const,
+      savedAt: new Date().toISOString(),
+      complete,
+      items,
+    };
     await atomicWrite(catalogPath, JSON.stringify(saved));
     return saved;
   }
 
   let catalogLoad: Promise<{
-    items: RegistryItem[];
+    items: CachedItem[];
     savedAt: string;
     offline: boolean;
   }> | null = null;
@@ -368,11 +431,33 @@ export function createLibrary({
   const itemDir = (name: string) => join(itemsRoot, name);
   const filesRecord = (name: string) => join(itemDir(name), ".files.json");
 
-  async function cachedFiles(name: string) {
-    const raw = await readFile(filesRecord(name), "utf8").catch(() => null);
+  /**
+   * The item's saved files, when the record is readable, names every file the item lists, and
+   * each file still has the bytes it was saved with. Anything else counts as not downloaded.
+   */
+  async function cachedFiles(entry: RegistryItem) {
+    const raw = await readFile(filesRecord(entry.name), "utf8").catch(
+      () => null,
+    );
     if (raw === null) return null;
-    const parsed = FilesCacheSchema.safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data.files : null;
+    let parsed;
+    try {
+      parsed = FilesCacheSchema.safeParse(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+    if (!parsed.success) return null;
+    const files = parsed.data.files;
+    const wanted = entry.files.map(({ target }) => target).sort();
+    const have = files.map(({ target }) => target).sort();
+    if (wanted.join("\0") !== have.join("\0")) return null;
+    for (const file of files) {
+      const bytes = await readFile(
+        join(itemDir(entry.name), file.target),
+      ).catch(() => null);
+      if (!bytes || sha256(bytes) !== file.sha256) return null;
+    }
+    return files;
   }
 
   const downloads = new Map<string, Promise<CachedFile[]>>();
@@ -381,7 +466,7 @@ export function createLibrary({
     let pending = downloads.get(entry.name);
     if (pending) return pending;
     pending = (async () => {
-      const cached = await cachedFiles(entry.name);
+      const cached = await cachedFiles(entry);
       if (cached) return cached;
       const written: CachedFile[] = [];
       let total = 0;
@@ -423,7 +508,7 @@ export function createLibrary({
   }
 
   /** An item as the panel and agents see it. */
-  const describe = (entry: RegistryItem, cached: boolean): LibraryItem => ({
+  const describe = (entry: CachedItem, cached: boolean): LibraryItem => ({
     name: entry.name,
     title: entry.title,
     kind: entry.type === "hyperframes:block" ? "block" : "component",
@@ -444,7 +529,9 @@ export function createLibrary({
       : entry.minCliVersion &&
           newer(entry.minCliVersion, hyperframesPackage.version)
         ? `Needs HyperFrames ${entry.minCliVersion.split(".").slice(0, 2).join(".")}`
-        : undefined,
+        : entry.online
+          ? "Needs online scripts"
+          : undefined,
   });
 
   return {
