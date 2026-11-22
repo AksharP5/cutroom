@@ -7,6 +7,7 @@ Projects → New project focuses Project name, so typing and Enter create the pr
 | Action                                       | Keys                                                                                                           | Action id                                              |
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | Export                                       | `Shift+8`                                                                                                      | `workspacePrimaryWorkspaceDeliver`                     |
+| Projects                                     | `Shift+1`                                                                                                      | `fileProjectManager`                                   |
 | Select                                       | `A`                                                                                                            | `editPointer`                                          |
 | Trim                                         | `T`                                                                                                            | `editTrim`                                             |
 | Blade                                        | `B`                                                                                                            | `editBlade`                                            |
@@ -178,7 +179,7 @@ Each press is one undo step. During a burst, pending saves and undo or redo requ
 
 In the timeline, Ctrl+wheel, Alt+wheel, and a trackpad pinch zoom at the cursor, Shift+wheel scrolls through time, and the wheel scrolls tracks. Ctrl-click adds or removes a clip, Shift-click selects through to it, Alt-click leaves linked clips out, and dragging from an empty lane draws a marquee.
 
-On home, the arrow keys, Home, and End move between projects, and Enter opens the selected one. The most recently edited project is selected when home opens.
+On home, the arrow keys, Home, and End move between projects, and Enter opens the selected one. The most recently edited project is selected when home opens. F2 renames the selected project in place: Enter or clicking away saves, Esc keeps the old name. In the editor, Shift+1 opens the project list, matching `fileProjectManager` in the owner's Resolve preset.
 
 ## Panels
 
@@ -197,7 +198,7 @@ Unlike other shortcuts, the panel keys also work while a text field has focus, s
 
 ## Menus
 
-Right-click a clip, a track header, a file in Media, the picture, or a project on home to open its menu. The menu key and Shift+F10 open the same menu from the keyboard: for the selected clips, or for the focused track header, Media file or project. Up and Down move between rows and wrap, Home and End jump, letters search by name, Enter or Space chooses, and Esc closes the menu and returns focus to where it was. A row with a shortcut shows its key and runs the same edit as that key, as one undo step. Unavailable rows use quieter text and stay in the menu. Navigation skips them. In the clip versions menu, End reaches Keep for the current version, and Enter applies it.
+Right-click a clip, a track header, a file in Media, the picture, or a project on home to open its menu. A project's menu holds Open, Rename, Reveal in folder (desktop app only) and Remove from list. The menu key and Shift+F10 open the same menu from the keyboard: for the selected clips, or for the focused track header, Media file or project. Up and Down move between rows and wrap, Home and End jump, letters search by name, Enter or Space chooses, and Esc closes the menu and returns focus to where it was. A row with a shortcut shows its key and runs the same edit as that key, as one undo step. Unavailable rows use quieter text and stay in the menu. Navigation skips them. In the clip versions menu, End reaches Keep for the current version, and Enter applies it.
 
 A right-click on a clip selects it with its linked partners, unless it is already selected, so the menu acts on the whole selection. A right-click on an empty lane clears the selection. On the picture, with the Select tool, a right-click picks the clip drawn under it and keeps the selection when nothing is. Split at the playhead needs the playhead inside a selected clip. Reveal media moves focus to the clip's file in Media, and Inspector opens or closes the inspector. Add title is in the clip menu, on an empty lane and in every track header's menu, and does what Alt+Shift+T does.
 

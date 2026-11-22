@@ -115,9 +115,20 @@ export const ProjectSummarySchema = z.object({
   /** Seconds. */
   duration: z.number().nonnegative(),
 });
+/** A project's display name: one line of text, shown on Home, in the header and in export names. */
+export const ProjectNameSchema = z
+  .string()
+  .trim()
+  .min(1, "Enter a project name.")
+  .max(120, "Keep the project name to 120 characters.")
+  .refine(
+    // Control characters and bidirectional overrides would hide or reorder what the name shows.
+    (name) => !/[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069]/u.test(name),
+    "A project name cannot contain control characters.",
+  );
 export const CreateProjectSchema = z
   .object({
-    name: z.string().trim().min(1).max(120),
+    name: ProjectNameSchema,
     width: ProjectFormatSchema.shape.width.default(defaultFormat.width),
     height: ProjectFormatSchema.shape.height.default(defaultFormat.height),
     fps: ProjectFormatSchema.shape.fps.default(defaultFormat.fps),
@@ -126,8 +137,9 @@ export const CreateProjectSchema = z
   .refine(withinPictureArea, pictureSizeRule);
 export const ImportProjectSchema = z.object({
   path: z.string().min(1),
-  name: z.string().trim().min(1).max(120).optional(),
+  name: ProjectNameSchema.optional(),
 });
+export const RenameProjectSchema = z.object({ name: ProjectNameSchema });
 export const TranscriptImportSchema = z.object({
   mediaPath: z.string().min(1),
   sourceFile: z.string().default("index.html"),

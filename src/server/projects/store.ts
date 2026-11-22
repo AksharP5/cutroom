@@ -28,6 +28,7 @@ import { z } from "zod";
 import {
   CreateProjectSchema,
   ProjectDocumentSchema,
+  ProjectNameSchema,
   ProjectSchema,
   emptyProjectDocument,
   PROJECT_DOCUMENT_PATH,
@@ -240,9 +241,13 @@ export async function createProjectStore(options: {
     registryQueue = pending.catch(() => undefined);
     return pending;
   };
-  const get = async (id: string) => {
+  const find = (id: string) => {
     const project = projects.find((item) => item.id === id);
     if (!project) throw new HttpError(404, "Project not found.");
+    return project;
+  };
+  const get = async (id: string) => {
+    const project = find(id);
     await stat(project.path).catch(() => {
       throw new HttpError(404, "The project folder is unavailable.");
     });
@@ -561,6 +566,42 @@ export async function createProjectStore(options: {
         };
         projects.push(project);
         await saveRegistry();
+        return project;
+      });
+    },
+    /** Changes only the display name. The folder, its history and every agent keep their keys. */
+    async rename(id: string, name: string) {
+      return track(async () => {
+        const project = find(id);
+        const previous = project.name;
+        project.name = ProjectNameSchema.parse(name);
+        await saveRegistry().catch((error: unknown) => {
+          project.name = previous;
+          throw error;
+        });
+        return project;
+      });
+    },
+    /**
+     * Takes a project off the list and leaves its folder and history on disk, so importing the
+     * folder again brings the history back. `busy` names work that must finish first.
+     */
+    async remove(id: string, busy: (project: Project) => string | undefined) {
+      return track(async () => {
+        const project = find(id);
+        // Edits already admitted finish first; later ones find no project.
+        await serializeMutation(project, async () => {
+          const reason = busy(project);
+          if (reason) throw new HttpError(409, reason);
+          projects = projects.filter((item) => item !== project);
+          await saveRegistry().catch((error: unknown) => {
+            projects = [...projects, project];
+            throw error;
+          });
+        });
+        const opened = histories.peek(project.path);
+        histories.forget(project.path);
+        await opened?.then((history) => history?.close());
         return project;
       });
     },

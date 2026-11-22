@@ -91,6 +91,11 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => target ?? "a project folder",
   },
+  project_rename: {
+    verb: ["Renamed", "Renaming", "Rename"],
+    kind: "edit",
+    object: (target) => (target ? `the project to ${target}` : "the project"),
+  },
   project_read: { verb: read, kind: "project", object: () => "the project" },
   media_list: {
     verb: ["Listed", "Listing", "List"],

@@ -16,6 +16,7 @@ import {
   CreateProjectSchema,
   CutWordsSchema,
   ImportProjectSchema,
+  RenameProjectSchema,
   SourceWriteSchema,
   TranscribeInputSchema,
   TranscriptImportSchema,
@@ -263,6 +264,17 @@ export function createMcpServer(options: McpOptions = {}) {
       annotations: edit,
     },
     (input) => request("/projects/import", "POST", input),
+  );
+  registry.registerTool(
+    "project_rename",
+    {
+      description:
+        "Change a project's display name on Home and in export names. The folder, history and project ID stay the same.",
+      inputSchema: RenameProjectSchema.extend(project),
+      annotations: edit,
+    },
+    ({ projectId, ...input }) =>
+      request(`/projects/${id(projectId)}`, "PATCH", input),
   );
   registry.registerTool(
     "project_read",
