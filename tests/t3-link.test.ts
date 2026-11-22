@@ -224,7 +224,7 @@ test("a linked chat mirrors T3 and sends review context while a local run owns t
         token: "local-token",
       });
       try {
-        const note = await addAnnotation(projects, project, {
+        const { value: note } = await addAnnotation(projects, project, {
           kind: "comment",
           body: "Move the synthetic slate",
           time: 1,

@@ -225,12 +225,26 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
     await expect(
       agentRow.getByRole("button", { name: "Accept", exact: true }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    expect(
+      (
+        await client.callTool({
+          name: "history_undo",
+          arguments: { projectId: project.id },
+        })
+      ).isError,
+    ).not.toBe(true);
     await expect(agentRow).toHaveCount(0);
     await expect(
       inspector.getByRole("textbox", { name: "Opacity", exact: true }),
     ).toHaveValue("50%");
-    await page.getByRole("button", { name: "Redo", exact: true }).click();
+    expect(
+      (
+        await client.callTool({
+          name: "history_redo",
+          arguments: { projectId: project.id },
+        })
+      ).isError,
+    ).not.toBe(true);
     await expect(
       agentRow.getByRole("button", { name: "Accept", exact: true }),
     ).toBeVisible();

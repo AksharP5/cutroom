@@ -55,8 +55,14 @@ try {
     const save = (revision: number) =>
       writeFile(`${project.path}/index.html`, source(revision));
     await save(0);
-    await review.editComposition(project, "index.html", "external", () =>
-      save(1),
+    await review.editComposition(
+      project,
+      "index.html",
+      "external",
+      async () => {
+        await save(1);
+        return { value: undefined, entry: null };
+      },
     );
     const signatureChanged = await measure(
       () => clipVersions(project, "index.html"),

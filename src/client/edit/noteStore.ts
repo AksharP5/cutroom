@@ -17,6 +17,9 @@ export function dispatchNote(projectId: string, event: NoteEvent) {
 }
 
 const changes = new Map<string, Promise<void>>();
+export const unobservedNoteHistory = new Map<string, string>();
+export const hasQueuedNoteChange = (projectId: string) =>
+  changes.has(projectId);
 const captures = new Map<string, Set<Promise<unknown>>>();
 
 /** Track from the save's start until its frame has been attached, without holding later saves. */

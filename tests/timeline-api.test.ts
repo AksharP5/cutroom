@@ -34,6 +34,21 @@ const timelineFixture = async () => {
   return { ...fixture, project, files };
 };
 
+async function stepMcp(
+  client: Client,
+  projectId: string,
+  action: "undo" | "redo" = "undo",
+) {
+  const reply = await client.callTool({
+    name: `history_${action}`,
+    arguments: { projectId },
+  });
+  expect(reply.isError, JSON.stringify(reply.content)).not.toBe(true);
+  expect(reply.structuredContent).toMatchObject({
+    result: { entry: { id: expect.any(String) } },
+  });
+}
+
 test("a project summary reports the picture size and length the editor would show", async () => {
   const fixture = await timelineFixture();
   try {
@@ -134,10 +149,18 @@ test("outside HTML uses persisted mute and solo on read without a history write 
     expect(await read()).toEqual(mixed);
     expect(await readFile(index, "utf8")).toBe(raw);
     expect((await readTrackMix(fixture.store, project))[0]!.html).toBe(written);
-    await fixture.request(`/projects/${project.id}/history/undo`, "POST", {});
+    const undo = await fixture.request(
+      `/projects/${project.id}/history/undo`,
+      "POST",
+      {},
+    );
+    expect(undo.status).toBe(200);
     expect(
-      (await read()).timeline.clips.some((clip) => clip.id === "music"),
-    ).toBe(false);
+      (await read()).timeline.tracks.every(
+        ({ muted, solo }) => !muted && !solo,
+      ),
+    ).toBe(true);
+    expect(await readFile(index, "utf8")).toBe(raw);
   } finally {
     await fixture.close();
   }
@@ -240,6 +263,56 @@ test("a command batch is atomic, one undo step, and refuses stale revisions", as
     expect(await fixture.files()).toEqual(original);
   } finally {
     await fixture.close();
+  }
+});
+
+test("command receipts and review rows use the committed edit even when history advances", async () => {
+  const f = await timelineFixture();
+  const base = `/projects/${f.project.id}`;
+  const history = await f.store.history(f.project);
+  const commit = f.store.mutateWithEntry;
+  let outsideRevision = 0;
+  f.store.mutateWithEntry = async (project, label, work, who, options) => {
+    const result = await commit(project, label, work, who, options);
+    await writeFile(
+      join(project.path, "outside.js"),
+      `const later = ${++outsideRevision};`,
+    );
+    await history.checkpoint();
+    return result;
+  };
+  try {
+    const before = TimelineViewSchema.parse(
+      await (await f.request(`${base}/timeline`)).json(),
+    );
+    const edit = await f.request(`${base}/commands`, "POST", {
+      expectedRevision: before.revision,
+      label: "Change the heading",
+      commands: [{ type: "setClip", clipId: "headline", text: "Edited" }],
+    });
+    const body = await edit.json();
+    expect(edit.status).toBe(200);
+    const [committed, later] = history.list();
+    expect(committed).toMatchObject({ label: "Change the heading" });
+    expect(later).toMatchObject({ who: { kind: "outside" } });
+    expect(edit.headers.get(EDIT_HISTORY_HEADER)).toBe(committed?.id);
+    expect(body).toEqual(await (await f.request(`${base}/timeline`)).json());
+    expect(body).not.toHaveProperty("historyId");
+    const detail = TimelineViewSchema.parse(
+      await (await f.request(`${base}/timeline?clipEdits=1`)).json(),
+    );
+    expect(detail.clipEdits).toContainEqual(
+      expect.objectContaining({ clipId: "headline", historyId: committed?.id }),
+    );
+    const noOp = await f.request(`${base}/commands`, "POST", {
+      expectedRevision: detail.revision,
+      commands: [{ type: "setClip", clipId: "headline", text: "Edited" }],
+    });
+    expect(noOp.status).toBe(200);
+    expect(noOp.headers.get(EDIT_HISTORY_HEADER)).toBeNull();
+    expect(history.list().at(-1)?.who.kind).toBe("outside");
+  } finally {
+    await f.close();
   }
 });
 
@@ -538,10 +611,7 @@ test("an MCP agent reads and edits the timeline through the batch endpoint", asy
         }),
       ).structuredContent.result,
     ).toEqual(mixed);
-    await fixture.request(
-      `/projects/${fixture.project.id}/history/undo`,
-      "POST",
-    );
+    await stepMcp(client, fixture.project.id);
     expect(
       result.parse(
         await client.callTool({
@@ -1005,7 +1075,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
       expect(html).toMatch(/<video id="sound"[^>]*muted/);
       expect(pair[1]?.track).not.toBe(4);
       expect(html).toMatch(/<audio[^>]*src="sound.mp4"[^>]*data-hidden/);
-      await fixture.request(`/projects/${id}/history/undo`, "POST");
+      await stepMcp(client, id);
       expect(await fixture.files()).toEqual(original);
     } finally {
       await client.close();
@@ -1104,7 +1174,7 @@ test("MCP gain, authored fades and automation read back exactly and undo in one 
       { t: 1, v: 1 },
       { t: 3, v: 0.25 },
     ]);
-    await fixture.request(`/projects/${project.id}/history/undo`, "POST");
+    await stepMcp(client, project.id);
     expect((await read()).timeline).toEqual(initial.timeline);
     const gain = 10 ** (-12 / 20);
     const changed = await edit([
@@ -1126,10 +1196,10 @@ test("MCP gain, authored fades and automation read back exactly and undo in one 
       fadeOut: 120,
     });
     expect((await read()).timeline).toEqual(changed.timeline);
-    await fixture.request(`/projects/${project.id}/history/undo`, "POST");
+    await stepMcp(client, project.id);
     expect((await read()).timeline).toEqual(initial.timeline);
     expect(await fixture.files()).toEqual(originalFiles);
-    await fixture.request(`/projects/${project.id}/history/redo`, "POST");
+    await stepMcp(client, project.id, "redo");
     expect((await read()).timeline).toEqual(changed.timeline);
   } finally {
     await client.close();
@@ -1252,7 +1322,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         edited.timeline.clips.find((c) => c.id === "b-roll-sound"),
       ).toMatchObject({ track: 3, link: "b-roll" });
       expect(await read()).toEqual(edited);
-      await fixture.request(`/projects/${id}/history/undo`, "POST");
+      await stepMcp(client, id);
       expect(await fixture.files()).toEqual(before);
     } finally {
       await client.close();
@@ -1314,11 +1384,7 @@ test("MCP reports clips left whole by auto-select razor and refuses an explicit 
         before.timeline.clips.find((clip) => clip.id === "lower"),
       );
       expect(await readFile(index, "utf8")).toContain(title);
-      await fixture.request(
-        `/projects/${fixture.project.id}/history/undo`,
-        "POST",
-        {},
-      );
+      await stepMcp(client, fixture.project.id);
       expect((await read()).timeline).toEqual(before.timeline);
       expect(await readFile(index, "utf8")).toBe(html);
     }
@@ -1473,7 +1539,7 @@ for (const [name, command, expectedPicture] of [
         before.timeline.clips.filter((clip) => clip.track === 1),
       );
       expect((await read()).timeline).toEqual(edited.timeline);
-      await fixture.request(`${api}/history/undo`, "POST", {});
+      await stepMcp(client, project.id);
       expect((await read()).timeline).toEqual(optedOut.timeline);
       await fixture.request(`${api}/history/undo`, "POST", {});
       expect((await read()).timeline).toEqual(before.timeline);
@@ -1623,7 +1689,9 @@ for (const destination of ["new", "free", "partner"] as const) {
             [4, 165, 15],
           ]);
         expect((await read()).timeline).toEqual(edited.timeline);
-        await fixture.request(`${api}/history/undo`, "POST");
+        if (route === "http")
+          await fixture.request(`${api}/history/undo`, "POST");
+        else await stepMcp(client, project.id);
         expect((await read()).timeline).toEqual(before.timeline);
       }
     } finally {
@@ -1750,13 +1818,13 @@ test("MCP clipboard snapshots survive cuts and timeline switches, paste once, an
     expect(
       await readFile(join(project.path, "scenes/other.html"), "utf8"),
     ).toContain("<span>Copied content</span>");
-    await fixture.request(`${api}/history/undo`, "POST");
+    await stepMcp(client, project.id);
     expect((await read("scenes/other.html")).timeline).toEqual(
       otherBefore.timeline,
     );
-    await fixture.request(`${api}/history/redo`, "POST");
+    await stepMcp(client, project.id, "redo");
     expect((await read("scenes/other.html")).timeline).toEqual(other.timeline);
-    await fixture.request(`${api}/history/undo`, "POST");
+    await stepMcp(client, project.id);
     const repasted = await edit("scenes/other.html", [paste]);
     expect(
       repasted.timeline.clips.every(
@@ -2130,8 +2198,8 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
       expect(
         (await timeline()).clips.find(({ id }) => id === "voice")!.volume,
       ).toBeCloseTo(10 ** ((-16 - measured!.measured) / 20), 4);
-      await fixture.request(`/projects/${project.id}/history/undo`, "POST");
-      await fixture.request(`/projects/${project.id}/history/undo`, "POST");
+      await stepMcp(client, project.id);
+      await stepMcp(client, project.id);
       expect(await timeline()).toEqual(initial);
     } finally {
       await client.close();

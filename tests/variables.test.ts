@@ -460,7 +460,7 @@ test("agents list, preview, default and declare variables through typed tools, a
         .declarations,
     ).toContainEqual(declaration);
     expect(await f.source()).toContain('data-var-src="cover-image"');
-    await f.undo();
+    expect((await call("history_undo", {})).isError).not.toBe(true);
     expect(await f.source()).toBe(beforeImage);
     const invalid = await call("variables_declare", {
       variable: { ...declaration, default: "../cover.svg" },
@@ -517,7 +517,7 @@ test("agents list, preview, default and declare variables through typed tools, a
     expect(changed).toContain(wrapper);
     expect(changed).toContain("Scene changed");
     expect(changed).not.toContain("Scene default");
-    await f.undo();
+    expect((await call("history_undo", {})).isError).not.toBe(true);
     expect(await readFile(scene, "utf8")).toBe(source);
   } finally {
     await client.close();
@@ -749,9 +749,9 @@ test("one scene instance owns its overrides, including guarded MCP saves", async
       ).structuredContent?.result,
     );
     expect(reset.values).toEqual(committed.values);
-    await f.undo();
+    expect((await call("history_undo", {})).isError).not.toBe(true);
     expect(await f.source()).toBe(authored);
-    await f.undo();
+    expect((await call("history_undo", {})).isError).not.toBe(true);
     await f.undo();
     expect(await f.source()).toBe(parent);
 

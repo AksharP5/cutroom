@@ -228,6 +228,7 @@ test("repair and non-HTML fast paths validate the binding even when called direc
             "active",
             async () => {
               ran = true;
+              return { value: undefined, entry: null };
             },
           ),
         ).rejects.toThrow("No Cutroom run");

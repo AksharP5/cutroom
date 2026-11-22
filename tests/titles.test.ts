@@ -722,11 +722,11 @@ test("an MCP agent adds a title in one call, an undeclared font is refused, and 
     expect(history.map((entry) => entry.label)).toEqual([
       "Added title at 00:00:01:00; Moved 24 px right; Moved 12 px up; Set opacity to 35%; Disabled clip",
     ]);
-    const undo = await fixture.request(
-      `/projects/${project.id}/history/undo`,
-      "POST",
-    );
-    expect(undo.status).toBe(200);
+    const undo = await client.callTool({
+      name: "history_undo",
+      arguments: { projectId: project.id },
+    });
+    expect(undo.isError, JSON.stringify(undo.content)).not.toBe(true);
     expect(await files()).toEqual(original);
   } finally {
     await client.close();

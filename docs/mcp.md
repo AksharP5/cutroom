@@ -32,7 +32,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `variables_instance_read`, `variables_instance_set`             | Read or save variable overrides on one mounted scene clip.                  |
 | `fonts_list`, `fonts_add`                                       | List the project's and Google's fonts; download a Google font into it.      |
 | `luts_list`, `lut_import`, `grade_save_lut`                     | List the project's LUTs, import a `.cube`, or bake a clip's grade into one. |
-| `history_list`, `history_undo`, `history_redo`                  | Use the editor's shared history.                                            |
+| `history_list`, `history_undo`, `history_redo`                  | Read project history and undo or redo this MCP session's edits.             |
 | `timeline_read`, `timeline_edit`                                | Read the timeline in frames and apply a batch of commands.                  |
 | `timeline_format_preview`                                       | Check a proposed project format and report clip edge movement.              |
 | `timeline_add_transitions`                                      | Add transitions between selected clips.                                     |
@@ -52,11 +52,13 @@ Start with `projects_list` and retain the returned project ID. Before saving an 
 
 `media_files` filters the project's files by name or relative path. Use the returned `path` for file operations such as `source_marks`. For `timeline_edit` insertion, pass the destination `composition` to `media_files` and use the returned `kind` and `src`. Each file also has `bytes`, its size on disk. Video and audio files add `duration` in seconds and `audio`, whether the file holds a sound stream, and video adds `width`, `height` and `fps`, so an agent can plan a cut without probing files itself. Stills, and files FFmpeg cannot read, have only `bytes`. Each page holds up to 100 results. Pass `nextOffset` as `offset` to read the next page.
 
-`media_import` takes `projectId` and `paths`, an array of absolute paths to readable video, audio, or image files. It returns `files`, the imported paths under `assets/`. An occupied name like `recording.mp4` gets the next free name, such as `recording 2.mp4`. Cutroom hard-links files on the same filesystem when possible and copies the rest with no upload size limit. A batch is one undo step. Cancelling the tool during a copy discards the staged files.
+`media_import` takes `projectId` and `paths`, an array of absolute paths to readable video, audio, or image files. It returns `files`, the imported paths under `assets/`. An occupied name like `recording.mp4` gets the next free name, such as `recording 2.mp4`. Cutroom hard-links files on the same filesystem when possible and copies the rest with no upload size limit. Imported files stay in Media when you undo an edit. Cancelling the tool during a copy discards the staged files.
 
 Run it through the local stdio bridge using the MCP command shown in Cutroom. The bridge opens each source under its own filesystem permissions before Cutroom imports it. Source symlinks, directories, and special files are refused. The HTTP MCP endpoint accepts other tools from local clients and directs `media_import` calls to stdio.
 
 `media_rename` takes a media file's project path and its new name with the same extension. The file stays in its folder, every reference in the project's sources follows it, and the rename is one undo step. `media_remove` moves a file to the project's `trash` folder and `history_undo` moves it back. A file used by clips, CSS backgrounds or composition scripts is refused with 409 and its use count; pass `confirmUsed: true` to remove it anyway, which leaves those clips in place playing nothing. Files already in `trash` are not media: neither tool takes them. [Details](editing.md#media-files).
+
+`history_list` includes the caller's next undo and redo in the shared history. Entries include the author, `mine` for the calling session, and `step` for edits that can be reversed. `history_undo` and `history_redo` take `projectId` and act on that session's edits. Two connections with the same client name have separate undo histories. A new connection starts with an empty undo history. For explicit replay, pass the original `entryId` to `history_undo` or the exact undo ID to `history_redo`. Timeline edits return their ID in MCP structured content as `historyId`. Media Rename and Remove return the ID with the operation result. When an inverse conflicts with later work, MCP returns the edit IDs, labels, and authors in the way and leaves the files in place. Use the same optional `requestId` to retry a committed undo or redo after a lost reply.
 
 `timeline_view` takes `frame` for one frame or `frames` for up to eight, and returns one JPEG per frame, each followed by a line such as `Frame 30 (1.000s)`. `width` scales each image down to that many pixels wide, keeping the aspect ratio, and never past the composition's size; without it, images are full size. A 480 px frame is about 4 KB against about 27 KB at 1920 px, and is enough to check layout, text and timing. Scaling uses FFmpeg, which exports already need.
 
@@ -84,7 +86,7 @@ Timeline approvals list each pending command in plain words through the shared e
 
 For an existing project, read `timeline_read` for `revision`, `size` and `timeline.fps`. Pass that revision as `expectedRevision` to `timeline_format_preview`, along with `projectId` and `format: {width, height, fps}`. The result gives `movedEdges` and `maxShiftMs`. A refused change names the timing that cannot fit. Preview writes nothing.
 
-Apply through `timeline_edit` with the same revision and a single command, for example `{"type":"setFormat","width":1080,"height":1920,"fps":{"num":60000,"den":1001}}`. This edits the main composition. Clip edges snap to the nearest new frame, with ties going to the later frame. Edges that would extend past the source snap inward. The media keeps its source timing. The reply always includes the full timeline and size, and the format edit is one shared undo step. Use the returned frame grid for subsequent edits.
+Apply through `timeline_edit` with the same revision and a single command, for example `{"type":"setFormat","width":1080,"height":1920,"fps":{"num":60000,"den":1001}}`. This edits the main composition. Clip edges snap to the nearest new frame, with ties going to the later frame. Edges that would extend past the source snap inward. The media keeps its source timing. The reply always includes the full timeline and size, and the format edit is one undo step for the editor who applied it. Use the returned frame grid for subsequent edits.
 
 ## Timeline
 
@@ -770,4 +772,4 @@ Use `side: "from"` for a `from` tween's properties or a `fromTo` tween's startin
 
 `layer_text_list` takes `projectId`, the timed graphic's `clipId`, and its HTML `composition` path, defaulting to `index.html`. The response gives the canonical path, the exact source `version`, and each layer's authored `id`, `text`, and source-only `reason` when one applies. Nested timed elements and scene mounts belong to their own editing scope.
 
-`layer_text_update` takes the same fields plus `layerId`, `expectedVersion`, and replacement `text`. It edits the words of one identified child on an unlocked track and returns a fresh snapshot. The update is one shared Undo step. List again after a conflict.
+`layer_text_update` takes the same fields plus `layerId`, `expectedVersion`, and replacement `text`. It edits the words of one identified child on an unlocked track and returns a fresh snapshot. The update is one undo step for the editor who applied it. List again after a conflict.

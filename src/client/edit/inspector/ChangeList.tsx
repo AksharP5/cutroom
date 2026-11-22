@@ -7,7 +7,7 @@ import { api, json } from "../../api";
 import { clickSelection } from "../../timeline/selection";
 import { showToast } from "../../workspace";
 import { showSource } from "../source";
-import { loadTimeline, useTimeline } from "../timeline";
+import { loadTimeline, stepHistory, useTimeline } from "../timeline";
 import { transport } from "../transport";
 import {
   pendingEdit,
@@ -114,6 +114,7 @@ export function ChangeList({
           const [verb, ...rest] = edit.label.split(" ");
           const title = [
             edit.details,
+            edit.by === "agent" && (edit.agentName ?? "Agent"),
             edit.at &&
               new Date(edit.at).toLocaleString(undefined, {
                 dateStyle: "medium",
@@ -170,6 +171,24 @@ export function ChangeList({
                 <span className="inspector-change" title={title}>
                   {text}
                 </span>
+              )}
+              {edit.by === "agent" && edit.historyId && (
+                <button
+                  className="inspector-accept"
+                  aria-label={`Undo ${edit.label}`}
+                  onClick={() =>
+                    void stepHistory(projectId, "undo", edit.historyId).catch(
+                      (error: unknown) =>
+                        showToast(
+                          error instanceof Error
+                            ? error.message
+                            : String(error),
+                        ),
+                    )
+                  }
+                >
+                  Undo
+                </button>
               )}
               {/* Accepted agent work reads like your own: settled, nothing to say. */}
               {edit.by === "human" || edit.accepted ? null : !pendingEdit(

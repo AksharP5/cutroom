@@ -180,32 +180,39 @@ export async function importMedia(
       staged.length === 1
         ? `Import ${staged[0]!.name}`
         : `Import ${staged.length} media files`;
+    const paths = new Set<string>();
     return await reviews.editAssets(project, options.agentToken, () =>
-      store.mutate(
-        project,
-        label,
-        async () => {
-          signal.throwIfAborted();
-          if (
-            (await projectStatePath(project, "assets")) !==
-            (await realpath(pinned))
-          )
-            throw new HttpError(403, "The project's assets folder changed.");
-          const files: string[] = [];
-          try {
-            // From here all copies are complete. Publish the batch as one history operation.
-            for (const { temp, name } of staged) {
-              files.push(await publishMedia(pinned, temp, name));
-              await discard(temp);
+      store
+        .mutateWithEntry(
+          project,
+          label,
+          async () => {
+            signal.throwIfAborted();
+            if (
+              (await projectStatePath(project, "assets")) !==
+              (await realpath(pinned))
+            )
+              throw new HttpError(403, "The project's assets folder changed.");
+            const files: string[] = [];
+            try {
+              // From here all copies are complete. Publish the batch as one history operation.
+              for (const { temp, name } of staged) {
+                files.push(await publishMedia(pinned, temp, name));
+                await discard(temp);
+              }
+            } catch (error) {
+              await Promise.all(
+                files.map((file) => discard(join(pinned, file))),
+              );
+              throw error;
             }
-          } catch (error) {
-            await Promise.all(files.map((file) => discard(join(pinned, file))));
-            throw error;
-          }
-          return { files: files.map((file) => `assets/${file}`) };
-        },
-        options.who,
-      ),
+            for (const file of files) paths.add(`assets/${file}`);
+            return { files: [...paths] };
+          },
+          options.who,
+          { moves: paths, category: "import" },
+        )
+        .then(({ value }) => value),
     );
   } catch (error) {
     if (hasCode(error, "ENOSPC", "EDQUOT"))

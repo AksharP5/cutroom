@@ -89,7 +89,8 @@ export function createCaptionRoutes(
         allowMissing: true,
       });
       await mkdir(dirname(absolute), { recursive: true });
-      const written = await writeFile(absolute, html(id), { flag: "wx" }).then(
+      const content = html(id);
+      const written = await writeFile(absolute, content, { flag: "wx" }).then(
         () => true,
         (error: unknown) => {
           if (
@@ -101,7 +102,10 @@ export function createCaptionRoutes(
           throw error;
         },
       );
-      if (written) return { id, file };
+      if (written) {
+        store.captureHistoryCreation(absolute, content);
+        return { id, file };
+      }
     }
     throw new HttpError(
       409,
@@ -326,7 +330,7 @@ export function createCaptionRoutes(
       transcript.sourceFile,
       token,
       () =>
-        store.mutate(
+        store.mutateWithEntry(
           project,
           label,
           () => edit(project, input, token !== undefined),
@@ -366,6 +370,7 @@ export function createCaptionRoutes(
       await transcripts.importTranscript(
         project,
         parseInput(TranscriptImportSchema, { ...clip, words }),
+        { who: historyWho(reviews, c, project) },
       ),
       201,
     );

@@ -326,7 +326,9 @@ export function EditPage({
   };
 
   const step = (direction: "undo" | "redo") => {
-    void stepHistory(projectId, direction).catch(report);
+    void stepHistory(projectId, direction).catch((error: unknown) =>
+      showToast(error instanceof Error ? error.message : String(error)),
+    );
   };
   const playing = player.use.getState;
   /** A source keeps its own marks; the timeline's are an edit, so undo takes them back. */
@@ -664,7 +666,11 @@ export function EditPage({
         <button
           className="edit-icon"
           aria-label="Undo"
-          title={hint("editUndo")}
+          aria-description={history.nextUndo?.label}
+          title={hint(
+            "editUndo",
+            history.nextUndo ? `Undo ${history.nextUndo.label}` : undefined,
+          )}
           disabled={!history.canUndo}
           onClick={() => step("undo")}
         >
@@ -673,7 +679,11 @@ export function EditPage({
         <button
           className="edit-icon"
           aria-label="Redo"
-          title={hint("editRedo")}
+          aria-description={history.nextRedo?.label}
+          title={hint(
+            "editRedo",
+            history.nextRedo ? `Redo ${history.nextRedo.label}` : undefined,
+          )}
           disabled={!history.canRedo}
           onClick={() => step("redo")}
         >

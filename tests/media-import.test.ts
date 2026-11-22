@@ -85,7 +85,7 @@ async function otherFilesystem() {
   return tmpfs;
 }
 
-test("same-device imports keep their inode, use free names, and undo or redo in one step", async () => {
+test("same-device imports keep their inode, use free names, and stay outside Undo", async () => {
   const first = join(root, "recording.mp4");
   const second = join(root, "track.wav");
   await writeFile(first, "new recording");
@@ -116,10 +116,9 @@ test("same-device imports keep their inode, use free names, and undo or redo in 
     history.list().filter((entry) => entry.label.startsWith("Import ")),
   ).toHaveLength(1);
 
-  expect((await step("undo")).status).toBe(200);
-  expect(await mediaNames()).toEqual(["fonts", "recording.mp4", "vendor"]);
+  expect(await (await step("undo")).json()).toMatchObject({ entry: null });
+  expect(await (await step("redo")).json()).toMatchObject({ entry: null });
   expect(await readFile(first, "utf8")).toBe("new recording");
-  expect((await step("redo")).status).toBe(200);
   expect(await mediaNames()).toEqual([
     "fonts",
     "recording 2.mp4",
@@ -452,9 +451,9 @@ test("editing, removing, undoing and redoing imported media preserve the origina
   expect(await readFile(assets("logo.svg"), "utf8")).toBe(edited);
   await step("undo");
   expect(await readFile(assets("logo.svg"), "utf8")).toBe(original);
-  await step("undo");
-  expect(await mediaNames()).toEqual(["fonts", "vendor"]);
-  await step("redo");
+  expect(await (await request("/history/undo", "POST")).json()).toMatchObject({
+    entry: null,
+  });
   expect(await readFile(assets("logo.svg"), "utf8")).toBe(original);
   await step("redo");
   expect(await readFile(assets("logo.svg"), "utf8")).toBe(edited);
@@ -481,7 +480,7 @@ test("the stdio MCP bridge imports media while public HTTP callers cannot name s
 
   const publicHttp = Bun.serve({
     hostname: "127.0.0.1",
-    port: 0,
+    port: Number(new URL(baseUrl).port),
     fetch: runtime.app.fetch,
   });
   const http = new Client({ name: "HTTP-only import test", version: "1" });
@@ -512,7 +511,21 @@ test("the stdio MCP bridge imports media while public HTTP callers cannot name s
       "agent recording",
     );
     const entry = (await runtime.projects.history(project)).list().at(-1);
-    expect(entry?.who).toEqual({ kind: "agent", name: "Media import test" });
+    expect(entry?.who).toMatchObject({
+      kind: "agent",
+      name: "Media import test",
+    });
+    expect(entry?.who.key).toMatch(/^session:/);
+    const listed = await client.callTool({
+      name: "history_list",
+      arguments: { projectId: project.id },
+    });
+    expect(listed.isError ?? false).toBe(false);
+    expect(listed.structuredContent).toMatchObject({
+      result: {
+        entries: [{ id: entry?.id, mine: true, step: false }],
+      },
+    });
   } finally {
     await client.close();
     await http.close();

@@ -426,20 +426,24 @@ test("MCP title edits and history update both tabs through the same revisioned l
       expect(await live(tab)).toBe(originals[i]);
       await parity(tab, fresh, project.id, [32, 90, 148], "MCP", info);
     }
-    for (const name of ["Undo", "Redo"]) {
+    for (const direction of ["undo", "redo"] as const) {
       const old = await second
         .locator(".edit-stage")
         .getAttribute("data-preview-ready");
-      await afterPaint(page, () =>
-        page.getByRole("button", { name, exact: true }).click(),
-      );
+      await afterPaint(page, async () => {
+        const result = await client.callTool({
+          name: `history_${direction}`,
+          arguments: { projectId: project.id },
+        });
+        expect(result.isError).not.toBe(true);
+      });
       await expect(
         second.locator(".edit-stage[data-preview-ready]"),
       ).not.toHaveAttribute("data-preview-ready", old!);
       for (const [i, tab] of [page, second].entries()) {
         await ready(tab);
         expect(await live(tab)).toBe(originals[i]);
-        await parity(tab, fresh, project.id, [32, 90, 148], name, info);
+        await parity(tab, fresh, project.id, [32, 90, 148], direction, info);
       }
     }
   } finally {

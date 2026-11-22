@@ -285,10 +285,14 @@ test("moving then fully cutting and restoring a clip preserves its lane, positio
       original.replace('data-start="0"', 'data-start="5"'),
     );
     expect((await service.list(project))[0]?.words[1]?.timelineStart).toBe(7);
-    const partiallyCut = await service.cutWords(project, transcript.id, {
-      wordIds: ["first"],
-      action: "cut",
-    });
+    const { value: partiallyCut } = await service.cutWords(
+      project,
+      transcript.id,
+      {
+        wordIds: ["first"],
+        action: "cut",
+      },
+    );
     expect(partiallyCut.words[1]?.timelineStart).toBe(5);
     expect(
       (await fixture.store.document(project)).transcripts[0]?.original.start,
@@ -307,7 +311,7 @@ test("moving then fully cutting and restoring a clip preserves its lane, positio
     expect(empty.querySelector("#other")?.getAttribute("data-start")).toBe(
       "10",
     );
-    const restored = await service.cutWords(project, transcript.id, {
+    const { value: restored } = await service.cutWords(project, transcript.id, {
       wordIds: ["first", "second"],
       action: "restore",
     });
@@ -504,7 +508,7 @@ test("a cancelled transcript import waiting for a history transaction makes no e
         language: "en",
         words,
       },
-      controller.signal,
+      { signal: controller.signal },
     );
     controller.abort();
     blocker.release();
@@ -598,7 +602,7 @@ test("transcript views share a current source snapshot and refresh after outside
     expect(
       (await service.list(project)).map((item) => item.words[0]?.timelineStart),
     ).toEqual([3, 12]);
-    const unchanged = await service.cutWords(project, first.id, {
+    const { value: unchanged } = await service.cutWords(project, first.id, {
       wordIds: ["one"],
       action: "restore",
     });
@@ -796,7 +800,7 @@ test("word seeking follows outside trims and playback-rate changes without chang
     ]);
     expect(current.duration).toBe(3);
     expect(current.words.every((word) => !word.cut)).toBe(true);
-    const noOp = await service.cutWords(project, transcript.id, {
+    const { value: noOp } = await service.cutWords(project, transcript.id, {
       wordIds: ["one"],
       action: "restore",
     });

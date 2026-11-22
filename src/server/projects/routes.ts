@@ -1,14 +1,14 @@
+import { EDIT_HISTORY_HEADER } from "../../shared/timeline/schema";
 import { projectMutationGuard } from "./authorization";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { z } from "zod";
-import {
-  applyFileMutations,
-  fileContentVersion,
-} from "@hyperframes/studio-server";
-import type { HistoryWho } from "../history/historyLog";
+import { fileContentVersion } from "@hyperframes/studio-server";
+import { historyActor } from "./historyActor";
+import type { createTimelineRoutes } from "../timeline/routes";
+import { HistoryRequestSchema, historySummary, replayHistory } from "./history";
 import {
   AnnotationInputSchema,
   AnnotationPatchSchema,
@@ -21,8 +21,6 @@ import {
 } from "../../shared/project";
 import {
   AGENT_HEADER,
-  AGENT_NAME_HEADER,
-  AgentNameSchema,
   AgentReviewActionSchema,
   HumanReviewActionSchema,
   ReviewAddSchema,
@@ -67,23 +65,12 @@ export function parseInput<T extends z.ZodType>(
   return parsed.data;
 }
 
-/** Whose history entry an edit is: the calling agent's, or the owner's when undefined. */
 export function historyWho(
   reviews: ReviewService,
   c: Context,
   project: Project,
-): HistoryWho | undefined {
-  const token = c.req.header(AGENT_HEADER);
-  if (token === undefined) return undefined;
-  return {
-    kind: "agent",
-    name:
-      reviews.agent(project, token).turn.name ??
-      parseInput(
-        AgentNameSchema,
-        decodeURIComponent(c.req.header(AGENT_NAME_HEADER) ?? "Agent"),
-      ),
-  };
+) {
+  return historyActor(reviews, c, project).who;
 }
 
 /** `reviews` must be the server's one review service, so every route shares its per-project queue. */
@@ -96,6 +83,9 @@ export function createProjectRoutes(
     project: Project,
     path: string,
   ) => Promise<Readonly<JobState> | null> = async () => null,
+  timelineSnapshot?: ReturnType<
+    typeof createTimelineRoutes
+  >["timelineSnapshot"],
 ) {
   const api = new Hono();
   const agentWho = (c: Context, project: Project) =>
@@ -202,7 +192,10 @@ export function createProjectRoutes(
         project,
         c.req.header(AGENT_HEADER),
         () => renameMedia(store, project, input, agentWho(c, project)),
-        { sources: true },
+        {
+          sources: true,
+          historyId: (result) => result.historyId,
+        },
       ),
     );
   });
@@ -222,13 +215,16 @@ export function createProjectRoutes(
       c.req.header(AGENT_HEADER),
       async () => {
         const uses = await mediaUses(project, input.path);
-        if (uses && !input.confirmUsed) return { uses };
+        if (uses && !input.confirmUsed) return { uses, historyId: undefined };
         return {
           ...(await removeMedia(store, project, input, agentWho(c, project))),
           uses,
         };
       },
-      { sources: true },
+      {
+        sources: true,
+        historyId: (result) => result.historyId,
+      },
     );
     if (!("trash" in result))
       return c.json(
@@ -257,7 +253,7 @@ export function createProjectRoutes(
       body.path,
       token,
       () =>
-        store.mutate(
+        store.mutateWithEntry(
           project,
           `Edit ${body.path}`,
           async () => {
@@ -266,24 +262,24 @@ export function createProjectRoutes(
             });
             if (body.expectedVersion === null) {
               await mkdir(dirname(absolute), { recursive: true });
-              await writeFile(
-                await projectWritePath(project, body.path, {
-                  allowMissing: true,
-                }),
-                body.content,
-                { flag: "wx" },
-              ).catch((error: unknown) => {
-                if (
-                  error instanceof Error &&
-                  "code" in error &&
-                  error.code === "EEXIST"
-                )
-                  throw new HttpError(
-                    409,
-                    "The file already exists. Read it before saving.",
-                  );
-                throw error;
+              const destination = await projectWritePath(project, body.path, {
+                allowMissing: true,
               });
+              await writeFile(destination, body.content, { flag: "wx" }).catch(
+                (error: unknown) => {
+                  if (
+                    error instanceof Error &&
+                    "code" in error &&
+                    error.code === "EEXIST"
+                  )
+                    throw new HttpError(
+                      409,
+                      "The file already exists. Read it before saving.",
+                    );
+                  throw error;
+                },
+              );
+              store.captureHistoryCreation(destination, body.content);
               return readSource(project, body.path);
             }
             const source = await readSource(project, body.path);
@@ -292,7 +288,7 @@ export function createProjectRoutes(
                 409,
                 "The file changed outside this editor. Refresh before saving.",
               );
-            applyFileMutations(project.path, [
+            store.writeFiles(project, [
               {
                 sourceFile: body.path,
                 absPath: absolute,
@@ -313,18 +309,34 @@ export function createProjectRoutes(
   api.post("/projects/:id/annotations", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(AnnotationInputSchema, await c.req.json());
-    return c.json(await addAnnotation(store, project, input), 201);
+    const { value, entry } = await addAnnotation(
+      store,
+      project,
+      input,
+      agentWho(c, project),
+    );
+    if (entry) c.header(EDIT_HISTORY_HEADER, entry.id);
+    return c.json(value, 201);
   });
   api.patch("/projects/:id/annotations/:annotationId", async (c) => {
     const project = await store.get(c.req.param("id"));
     const patch = parseInput(AnnotationPatchSchema, await c.req.json());
     return c.json(
-      await reviews.edit(project, c.req.param("annotationId"), patch),
+      await reviews.edit(
+        project,
+        c.req.param("annotationId"),
+        patch,
+        agentWho(c, project),
+      ),
     );
   });
   api.delete("/projects/:id/annotations/:annotationId", async (c) => {
     const project = await store.get(c.req.param("id"));
-    await reviews.remove(project, c.req.param("annotationId"));
+    await reviews.remove(
+      project,
+      c.req.param("annotationId"),
+      agentWho(c, project),
+    );
     return c.json({ ok: true });
   });
   api.get("/projects/:id/review", async (c) => {
@@ -346,7 +358,12 @@ export function createProjectRoutes(
     const project = await store.get(c.req.param("id"));
     const input = parseInput(ReviewAddSchema, await c.req.json());
     return c.json(
-      await reviews.add(project, input, c.req.header(AGENT_HEADER)),
+      await reviews.add(
+        project,
+        input,
+        c.req.header(AGENT_HEADER),
+        agentWho(c, project),
+      ),
       201,
     );
   });
@@ -368,14 +385,17 @@ export function createProjectRoutes(
     });
   });
   api.post("/projects/:id/review/changes/accept-all", async (c) => {
+    const project = await store.get(c.req.param("id"));
     const token = c.req.header(AGENT_HEADER);
-    if (token !== undefined && token !== "external")
+    if (
+      token !== undefined &&
+      reviews.agent(project, token).turn.kind !== "external"
+    )
       throw new HttpError(
         409,
         "Only the owner or an outside client can accept agent changes.",
       );
     const scope = parseInput(ReviewAcceptAllSchema, await c.req.json());
-    const project = await store.get(c.req.param("id"));
     const composition =
       scope.scope === "composition"
         ? canonicalProjectPath(scope.composition)
@@ -448,24 +468,28 @@ export function createProjectRoutes(
       transcripts: await transcripts.list(await store.get(c.req.param("id"))),
     }),
   );
-  api.post("/projects/:id/transcripts/import", async (c) =>
-    c.json(
+  api.post("/projects/:id/transcripts/import", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    return c.json(
       await transcripts.importTranscript(
-        await store.get(c.req.param("id")),
+        project,
         parseInput(TranscriptImportSchema, await c.req.json()),
+        { who: agentWho(c, project) },
       ),
       201,
-    ),
-  );
-  api.post("/projects/:id/transcribe", async (c) =>
-    c.json(
+    );
+  });
+  api.post("/projects/:id/transcribe", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    return c.json(
       await transcripts.start(
-        await store.get(c.req.param("id")),
+        project,
         parseInput(TranscribeInputSchema, await c.req.json()),
+        agentWho(c, project),
       ),
       202,
-    ),
-  );
+    );
+  });
   api.get("/transcription-jobs/:jobId", (c) =>
     c.json(transcripts.getJob(c.req.param("jobId"))),
   );
@@ -499,39 +523,52 @@ export function createProjectRoutes(
     );
   });
   api.get("/projects/:id/history", async (c) => {
-    const history = await store.history(await store.get(c.req.param("id")));
-    return c.json({
-      entries: history.list(),
-      canUndo: !!history.next("back", { kind: "person", name: "You" }),
-      canRedo: !!history.next("forward", { kind: "person", name: "You" }),
-    });
+    const project = await store.get(c.req.param("id"));
+    const { who } = historyActor(reviews, c, project);
+    const history = await store.history(project);
+    return c.json(await historySummary(project, history.list(), who));
   });
-  for (const [route, direction] of [
-    ["undo", "back"],
-    ["redo", "forward"],
-  ] as const) {
-    api.post(`/projects/:id/history/${route}`, async (c) => {
+  for (const direction of ["undo", "redo"] as const) {
+    api.post(`/projects/:id/history/${direction}`, async (c) => {
       const project = await store.get(c.req.param("id"));
-      const agent = c.req.header(AGENT_HEADER);
-      const actor: ReviewActor =
-        agent === undefined ? { kind: "human" } : reviews.agent(project, agent);
-      const history = reviews.history(
+      const body = await c.req.text();
+      const input = parseInput(
+        HistoryRequestSchema,
+        body ? JSON.parse(body) : {},
+      );
+      const actor = historyActor(reviews, c, project);
+      const composition =
+        input.composition && canonicalProjectPath(input.composition);
+      const result = await replayHistory(
+        reviews,
         project,
-        await store.history(project),
         actor,
-      );
-      // A write token leaves a receipt, so the preview watcher can announce these writes at once.
-      const result = await history.step(
         direction,
-        { kind: "person", name: "You" },
-        { writeToken: crypto.randomUUID() },
+        input,
       );
-      if (!result.ok)
-        throw new HttpError(
-          409,
-          `History conflicts with newer edits in ${result.conflict.files.join(", ")}.`,
-        );
-      return c.json(result);
+      if (!result.ok) return c.json(result, 409);
+      if (result.skipped) {
+        const history = await store.history(project);
+        return c.json({
+          ...result,
+          history: await historySummary(project, history.list(), actor.who),
+        });
+      }
+      if (!composition || !timelineSnapshot || !result.entry)
+        return c.json(result);
+      const view = await timelineSnapshot(project, composition).catch(
+        (error: unknown) => {
+          // The inverse already landed. A missing or unreadable composition is shown by the normal refresh.
+          if (error instanceof HttpError) return null;
+          throw error;
+        },
+      );
+      const history = await store.history(project);
+      return c.json({
+        ...result,
+        view: view && !view.error ? view : null,
+        history: await historySummary(project, history.list(), actor.who),
+      });
     });
   }
   return api;

@@ -18,11 +18,7 @@ import type { ClipSourcesSchema } from "../../shared/code";
 import { destinationTracks, shownTracks } from "../../shared/timeline/tracks";
 import { projectViews } from "../projects/view";
 import { projectMutationGuard } from "../projects/authorization";
-import {
-  AGENT_HEADER,
-  AGENT_NAME_HEADER,
-  AgentNameSchema,
-} from "../../shared/review";
+import { AGENT_HEADER } from "../../shared/review";
 import type { ReviewService } from "../projects/review";
 import type { z } from "zod";
 import { Hono } from "hono";
@@ -64,7 +60,7 @@ import type {
   Track,
 } from "../../shared/timeline/schema";
 import { recordClipIds, usedClipIds } from "../projects/ids";
-import { parseInput } from "../projects/routes";
+import { historyWho, parseInput } from "../projects/routes";
 import { isMissing, readSource } from "../projects/store";
 import {
   STILL_SECONDS,
@@ -609,8 +605,36 @@ export function createTimelineRoutes(
     const summary = joinEditLabels(summaries, "Edited timeline") + agentLabel;
     // Encode before any project write or history window. A label failure cannot follow a saved edit.
     const encodedSummary = encodeURIComponent(summary);
+    const markers =
+      html === current.source.content &&
+      batch.commands.every(
+        ({ type }) => type === "setMarker" || type === "removeMarker",
+      );
+    const text =
+      Bun.deepEquals(
+        settings,
+        current.document.timelines[composition] ?? emptyTimelineSettings(),
+      ) &&
+      (composition === "index.html" ||
+        !html.includes("<style data-cutroom-track-stacking=")) &&
+      batch.commands.every(
+        (command) =>
+          command.type === "setClip" &&
+          Object.keys(command).every((field) =>
+            ["type", "clipId", "label", "text", "title"].includes(field),
+          ) &&
+          (!command.title ||
+            Object.keys(command.title).every((field) => field === "text")),
+      );
     return {
       label,
+      history: {
+        category: markers
+          ? ("marker" as const)
+          : text
+            ? ("text" as const)
+            : undefined,
+      },
       summary,
       encodedSummary,
       formatPreview: plan?.preview,
@@ -668,19 +692,24 @@ export function createTimelineRoutes(
             });
         }
         // Persist inferred tracks too, before their last source clip can disappear on the next read.
-        await saveFrozenFrames(project, frozen, async () => {
-          if (
-            !Bun.deepEquals(
-              settings,
-              timelines[composition] ?? emptyTimelineSettings(),
-            )
-          ) {
-            if (Bun.deepEquals(settings, emptyTimelineSettings()))
-              delete timelines[composition];
-            else timelines[composition] = settings;
-            await store.writeDocument(project, document, files, origin);
-          } else if (files.length) store.writeFiles(project, files, origin);
-        });
+        await saveFrozenFrames(
+          project,
+          frozen,
+          async () => {
+            if (
+              !Bun.deepEquals(
+                settings,
+                timelines[composition] ?? emptyTimelineSettings(),
+              )
+            ) {
+              if (Bun.deepEquals(settings, emptyTimelineSettings()))
+                delete timelines[composition];
+              else timelines[composition] = settings;
+              await store.writeDocument(project, document, files, origin);
+            } else if (files.length) store.writeFiles(project, files, origin);
+          },
+          store.captureHistoryCreation,
+        );
         return {
           composition,
           revision: revisionOf(
@@ -723,12 +752,12 @@ export function createTimelineRoutes(
 
   const api = new Hono();
   api.use("/projects/:id/*", projectMutationGuard(reviews));
-  api.get("/projects/:id/timeline", async (c) => {
-    const project = await store.get(c.req.param("id"));
-    const composition = canonicalProjectPath(
-      c.req.query("composition") ?? "index.html",
-    );
-    const snapshot = await reviews.readComposition(
+  const timelineSnapshot = (
+    project: Project,
+    composition: string,
+    details = false,
+  ) =>
+    reviews.readComposition(
       project,
       composition,
       async () => {
@@ -750,6 +779,16 @@ export function createTimelineRoutes(
           };
         }
       },
+      details,
+    );
+  api.get("/projects/:id/timeline", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
+    const snapshot = await timelineSnapshot(
+      project,
+      composition,
       c.req.query("clipEdits") === "1",
     );
     return c.json(snapshot, snapshot.error === undefined ? 200 : 422);
@@ -1132,34 +1171,22 @@ export function createTimelineRoutes(
             !!c.req.header(AGENT_HEADER),
             echoOrigin,
           );
-          const history = await store.history(project);
-          const previous = history.list().at(-1)?.id;
-          const result = await store.mutate(
+          const { value, entry } = await store.mutateWithEntry(
             project,
             prepared.label,
             prepared.save,
-            c.req.header(AGENT_HEADER)
-              ? {
-                  kind: "agent",
-                  name:
-                    reviews.agent(project, c.req.header(AGENT_HEADER)).turn
-                      .name ??
-                    parseInput(
-                      AgentNameSchema,
-                      decodeURIComponent(
-                        c.req.header(AGENT_NAME_HEADER) ?? "Agent",
-                      ),
-                    ),
-                }
-              : undefined,
+            historyWho(reviews, c, project),
+            prepared.history,
           );
-          const committed = history.list().at(-1)?.id;
           return {
-            view: result,
-            historyId: committed !== previous ? committed : undefined,
-            summary: prepared.summary,
-            encodedSummary: prepared.encodedSummary,
-            batchLabels: prepared.batchLabels,
+            entry,
+            value: {
+              view: value,
+              historyId: entry?.id,
+              summary: prepared.summary,
+              encodedSummary: prepared.encodedSummary,
+              batchLabels: prepared.batchLabels,
+            },
           };
         },
         batch.noteId,
@@ -1213,6 +1240,7 @@ export function createTimelineRoutes(
   });
   return Object.assign(api, {
     editInWindow,
+    timelineSnapshot,
     subscribeAnimationFeedback(
       projectId: string,
       listener: (feedback: z.infer<typeof AnimationFeedbackSchema>) => void,

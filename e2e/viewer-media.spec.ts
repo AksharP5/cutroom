@@ -931,12 +931,14 @@ test("MCP split, undo, redo, ripple deletion and a media drop keep the picture",
       });
       expect(result.isError).not.toBe(true);
     });
-    await keepPicture(page, capture, "undo", () =>
-      page.keyboard.press("Control+z"),
-    );
-    await keepPicture(page, capture, "redo", () =>
-      page.keyboard.press("Control+Shift+z"),
-    );
+    for (const direction of ["undo", "redo"] as const)
+      await keepPicture(page, capture, direction, async () => {
+        const result = await client.callTool({
+          name: `history_${direction}`,
+          arguments: { projectId: project.id },
+        });
+        expect(result.isError).not.toBe(true);
+      });
     await page.locator('[data-clip="picture"]').click();
     await keepPicture(page, capture, "ripple delete", () =>
       page.keyboard.press("Shift+X"),
