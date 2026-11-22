@@ -527,6 +527,11 @@ export const keymap = {
     keys: ["Alt+]"],
   },
   editSnapping: { area: "Tools", label: "Snapping", keys: ["Alt+C"] },
+  editScrubAudio: {
+    area: "Tools",
+    label: "Audio scrubbing",
+    keys: ["Shift+S"],
+  },
   viewSafeAreaToggle: {
     area: "View",
     label: "Safe zones",

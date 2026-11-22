@@ -8,6 +8,7 @@ import {
   GridNine,
   Magnet,
   LinkSimple,
+  Waveform,
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import type { EditorContext } from "../../shared/editor";
@@ -133,6 +134,7 @@ export function EditPage({
   const voiceover = useVoiceover(projectId);
   const codeOpen = useWorkspace((state) => state.code);
   const safeZones = useWorkspace((state) => state.safeZones);
+  const audioScrubbing = useWorkspace((state) => state.audioScrubbing);
   const grid = useWorkspace((state) => state.grid);
   // Leaving the project keeps neither a voiceover take nor code edits unsaved.
   useEffect(() => {
@@ -558,6 +560,8 @@ export function EditPage({
     workspaceViewerModeCinemaViewer: toggleFullscreen,
     cutroomToggleCode: () => useWorkspace.setState({ code: !codeOpen }),
     viewSafeAreaToggle: () => useWorkspace.setState({ safeZones: !safeZones }),
+    editScrubAudio: () =>
+      useWorkspace.setState({ audioScrubbing: !audioScrubbing }),
     cutroomToggleGrid: () => useWorkspace.setState({ grid: !grid }),
     viewBypassColorGrades: () => {
       const bypass = !useGradeBypass.getState().bypass;
@@ -624,6 +628,17 @@ export function EditPage({
           onClick={() => runAction("editLinkedSelection")}
         >
           <LinkSimple size={16} weight={linkedSelection ? "fill" : "regular"} />
+        </button>
+        <button
+          className="edit-icon"
+          aria-label="Audio scrubbing"
+          aria-pressed={audioScrubbing}
+          title={hint("editScrubAudio")}
+          onClick={() =>
+            useWorkspace.setState({ audioScrubbing: !audioScrubbing })
+          }
+        >
+          <Waveform size={16} weight={audioScrubbing ? "fill" : "regular"} />
         </button>
         <button
           className="edit-icon"

@@ -41,6 +41,8 @@ export const useWorkspace = create(() => ({
   /** The viewer's safe-zone boxes and thirds grid, drawn over the picture only. */
   safeZones: localStorage.getItem("cutroom.safeZones") === "true",
   grid: localStorage.getItem("cutroom.grid") === "true",
+  /** Sound while dragging the playhead and stepping frames. Shuttle always sounds. */
+  audioScrubbing: localStorage.getItem("cutroom.audioScrubbing") !== "false",
   /** Export progress and finished renders. */
   exports: false,
   exporting: false,
@@ -191,7 +193,13 @@ export const reportEditorError = (side: EditorErrorSide, error: unknown) =>
   }));
 
 useWorkspace.subscribe((state, previous) => {
-  for (const key of ["inspector", "code", "safeZones", "grid"] as const)
+  for (const key of [
+    "inspector",
+    "code",
+    "safeZones",
+    "grid",
+    "audioScrubbing",
+  ] as const)
     if (state[key] !== previous[key])
       localStorage.setItem(`cutroom.${key}`, String(state[key]));
   if (state.newEditor !== previous.newEditor)

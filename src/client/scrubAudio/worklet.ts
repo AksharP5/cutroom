@@ -1,7 +1,7 @@
 // Runs on the audio thread. Holds the segments near the playhead and their PCM chunks, and
 // renders whatever motion the engine last sent. Idle, it returns at once.
 import { Player } from "./render";
-import type { Motion } from "./render";
+import type { Chase, Motion } from "./render";
 import { sourceId } from "./segment";
 import type { Segment } from "./segment";
 
@@ -21,18 +21,23 @@ export type ToWorklet =
   | { type: "chunk"; source: string; index: number; samples: Int16Array }
   | { type: "drop"; source: string; index: number }
   | ({ type: "run" } & Motion)
+  | ({ type: "chase" } & Chase)
+  /** One frame's samples: output samples `[position, position + length)`. */
+  | { type: "frame"; position: number; length: number }
   | { type: "stop" }
   | { type: "probe" };
 
 /**
- * Rendered frames and motions received since the worklet started, the peak since the last probe,
- * and the last source sample read.
+ * Rendered frames and shuttle motions received since the worklet started; since the last probe,
+ * the peak and the lowest and highest source sample read (null when none); and the last read.
  */
 export type Probe = {
   frames: number;
   runs: number;
   peak: number;
   source: number | null;
+  low: number | null;
+  high: number | null;
 };
 
 export type FromWorklet =
@@ -44,7 +49,14 @@ class ScrubAudio extends AudioWorkletProcessor {
   sources = new Map<string, Map<number, Int16Array>>();
   player = new Player();
   listening = false;
-  probe: Probe = { frames: 0, runs: 0, peak: 0, source: null };
+  probe: Probe = {
+    frames: 0,
+    runs: 0,
+    peak: 0,
+    source: null,
+    low: null,
+    high: null,
+  };
 
   constructor() {
     super();
@@ -73,12 +85,37 @@ class ScrubAudio extends AudioWorkletProcessor {
           this.listening = true;
           this.probe.runs++;
           return;
+        case "chase":
+          // The first sound of a drag, for the latency probe.
+          if (!this.player.sounding) this.listening = true;
+          this.player.chase(
+            {
+              frame: data.frame,
+              position: data.position,
+              velocity: data.velocity,
+              rest: data.rest,
+            },
+            currentFrame,
+          );
+          return;
+        case "frame":
+          this.player.blip(data.position, data.length, currentFrame);
+          this.listening = true;
+          return;
         case "stop":
           this.player.stop();
           return;
         case "probe":
-          this.port.postMessage({ type: "probe", ...this.probe });
+          const { low, high } = this.player.reading;
+          this.port.postMessage({
+            type: "probe",
+            ...this.probe,
+            low: Number.isFinite(low) ? low : null,
+            high: Number.isFinite(high) ? high : null,
+          });
           this.probe.peak = 0;
+          this.player.reading.low = Infinity;
+          this.player.reading.high = -Infinity;
       }
     };
   }
