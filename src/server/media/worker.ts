@@ -25,7 +25,13 @@ import { proxyFilter, scaleFilter, scrubFilter, tileWidth } from "./settings";
 import { chromeColourGuess } from "../hyperframes/videoColour";
 import { localMediaInputOptions } from "./input";
 import { mediaClock, mediaStreamsArgs, sourcePictures } from "./pictureIndex";
-import { AUDIO_SAMPLE_RATE, secondsOf } from "../../shared/timeline/piece";
+import {
+  AUDIO_SAMPLE_RATE,
+  fraction,
+  sampleOf,
+  secondsOf,
+  subtract,
+} from "../../shared/timeline/piece";
 
 const task = MediaTaskSchema.parse(await Bun.stdin.json());
 const abort = new AbortController();
@@ -273,45 +279,79 @@ try {
     );
   } else if (task.kind === "pcm") {
     if (!task.info?.channels) throw new Error("The media has no audio stream.");
-    // Sample k is media time k / 48000: timestamps keep their place on the media clock, and
-    // the time before the first decoded sound is silence.
-    const { zero } = mediaClock(
-      z
-        .string()
-        .parse(
-          await run([
-            task.ffprobe,
-            "-v",
-            "error",
-            ...mediaStreamsArgs,
-            task.source,
+    const probe = (args: string[]) =>
+      run([task.ffprobe, "-v", "error", ...args, task.source]).then((raw) =>
+        z.string().parse(raw),
+      );
+    const { zero } = mediaClock(await probe(mediaStreamsArgs));
+    // The first decoded sound, after any priming the container trims.
+    const first = z
+      .object({
+        streams: z.tuple([z.object({ time_base: z.string() })]),
+        frames: z.array(
+          z.object({ best_effort_timestamp: z.coerce.bigint().optional() }),
+        ),
+      })
+      .parse(
+        JSON.parse(
+          await probe([
+            ...localMediaInputOptions,
+            "-select_streams",
+            "a:0",
+            "-read_intervals",
+            "%+#8",
+            "-show_entries",
+            "stream=time_base:frame=best_effort_timestamp",
+            "-of",
+            "json",
           ]),
         ),
-    );
-    await run([
-      ...ffmpeg,
-      ...localMediaInputOptions,
-      "-copyts",
-      "-i",
-      task.source,
-      "-map",
-      "0:a:0",
-      "-vn",
-      "-af",
+      );
+    const [num, den] = first.streams[0].time_base.split("/").map(BigInt);
+    const pts = first.frames.find(
+      (frame) => frame.best_effort_timestamp !== undefined,
+    )?.best_effort_timestamp;
+    if (pts === undefined || !num || !den)
+      throw new Error("The audio stream has no timestamps.");
+    // Sample k is media time k / 48000, so the time before the first sound is silence.
+    const lead = sampleOf(subtract(fraction(pts * num, den), zero));
+    const file = Bun.file(join(task.directory, "audio.pcm")).writer();
+    const silence = new Uint8Array(1 << 20);
+    for (let bytes = lead > 0n ? Number(lead) * 2 : 0; bytes > 0;) {
+      const size = Math.min(bytes, silence.length);
+      file.write(silence.subarray(0, size));
+      await file.flush();
+      bytes -= size;
+    }
+    await run(
       [
-        ...(zero.n === 0n ? [] : [`asetpts=PTS-(${secondsOf(zero)})/TB`]),
-        "aresample=async=1:first_pts=0",
-      ].join(","),
-      "-ar",
-      String(AUDIO_SAMPLE_RATE),
-      "-ac",
-      "1",
-      "-c:a",
-      "pcm_s16le",
-      "-f",
-      "s16le",
-      "audio.pcm",
-    ]);
+        ...ffmpeg,
+        ...localMediaInputOptions,
+        "-i",
+        task.source,
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-ar",
+        String(AUDIO_SAMPLE_RATE),
+        "-ac",
+        "1",
+        "-c:a",
+        "pcm_s16le",
+        "-f",
+        "s16le",
+        "pipe:1",
+      ],
+      {
+        consume: async (stream) => {
+          for await (const chunk of stream) {
+            file.write(chunk);
+            await file.flush();
+          }
+          await file.end();
+        },
+      },
+    );
   } else {
     const video = task.info?.video;
     if (!video) throw new Error("The media has no video stream.");
