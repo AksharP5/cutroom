@@ -11,11 +11,13 @@ import {
 import type { LibraryCategory, LibraryItem } from "../../shared/library";
 import { frameTimecode, subscribeProjectEvents } from "../api";
 import {
+  librarySource,
   loadLibrary,
   loadUsedLibrary,
   placeLibraryAtPlayhead,
   useLibrary,
 } from "../edit/library";
+import { openSource as showSource, useSource } from "../edit/source";
 import { useTimeline } from "../edit/timeline";
 import { gridStep } from "../home";
 import { focusByKeyboard, reachedByKeyboard } from "../keymap";
@@ -118,6 +120,14 @@ const LibraryRow = memo(function LibraryRow({
       ? `${title} · ${item.dimensions.width} x ${item.dimensions.height}`
       : title;
   const placeable = !disabled && !adding;
+  const open = useSource((state) => state.file?.library?.name === item.name);
+  // The source viewer needs a timeline: its playhead counts the timeline's frames.
+  const openSource = () => {
+    if (disabled || !useTimeline.getState().view) return;
+    showSource(librarySource(item));
+    // The transport keys go to the source now, not to moving through the list.
+    row.current?.blur();
+  };
   return (
     <li
       ref={row}
@@ -128,6 +138,7 @@ const LibraryRow = memo(function LibraryRow({
       data-kind="composition"
       data-name={item.name}
       data-used={used || undefined}
+      aria-current={open || undefined}
       tabIndex={tabbable ? 0 : -1}
       draggable={placeable}
       onFocus={(event) => {
@@ -146,12 +157,23 @@ const LibraryRow = memo(function LibraryRow({
         });
       }}
       onDragEnd={() => setMediaDrag(null)}
+      onClick={openSource}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && event.target === event.currentTarget)
+          openSource();
+      }}
       onContextMenu={(event) => {
         const unplaceable = !placeable || !useTimeline.getState().view;
         openContextMenu(
           event,
           title,
           [
+            {
+              label: "Open in source viewer",
+              disabled: !!disabled || !useTimeline.getState().view,
+              run: openSource,
+            },
+            "separator",
             {
               label: "Insert at playhead",
               disabled: unplaceable,

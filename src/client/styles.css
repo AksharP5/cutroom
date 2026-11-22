@@ -932,6 +932,26 @@ option {
   font-size: var(--type-xs);
   font-weight: var(--weight-regular);
 }
+.library-meta {
+  color: var(--text-tertiary);
+  font: var(--weight-regular) var(--type-xs) / 1 var(--font-sans);
+}
+/* The source viewer's head for a Library item: one line of its description after its length. */
+.edit-source-head .library-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A Library item draws at the project's size and scales to the stage; its box takes the drag. */
+.library-source > iframe {
+  position: absolute;
+  inset: 0 auto auto 0;
+  border: 0;
+  transform: scale(var(--library-scale, 1));
+  transform-origin: 0 0;
+  pointer-events: none;
+}
 .library-message {
   display: grid;
   justify-items: start;

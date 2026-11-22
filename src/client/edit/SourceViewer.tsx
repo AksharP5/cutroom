@@ -1,7 +1,11 @@
 import { canAddVersion } from "../../shared/timeline/versions";
 import { useEffect, useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
+import { z } from "zod";
+import { libraryTitle } from "../../shared/library";
+import type { LibraryItem } from "../../shared/library";
 import { mediaSettings, peakLevels } from "../../shared/media";
+import { RuntimeStateSchema } from "../../shared/preview";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { TimecodeText } from "../components/TimecodeText";
 import { mediaUrl } from "../api";
@@ -318,6 +322,175 @@ function SourceMedia({
   );
 }
 
+/** The runtime's bridge is up: it says so once, then reports its state as it runs. */
+const RuntimeReadySchema = z.object({
+  source: z.literal("hf-preview"),
+  type: z.enum(["ready", "state"]),
+});
+
+/**
+ * A library item's preview frame as the transport plays it, through the HyperFrames runtime's
+ * own control messages. Between the runtime's reports the time runs on the page clock.
+ */
+function libraryPlayer(
+  frame: HTMLIFrameElement,
+): RuntimePlayer & { dispose(): void } {
+  let at = 0;
+  let since: number | null = null;
+  const post = (action: string, payload: object = {}) =>
+    frame.contentWindow?.postMessage(
+      { source: "hf-parent", type: "control", action, ...payload },
+      "*",
+    );
+  // A frame's timestamp can precede the instant playback started, which is no time at all.
+  const time = (now = performance.now()) =>
+    since === null ? at : at + Math.max(0, now - since) / 1000;
+  const receive = (event: MessageEvent<unknown>) => {
+    if (event.source !== frame.contentWindow) return;
+    const state = RuntimeStateSchema.safeParse(event.data);
+    if (!state.success) return;
+    at = state.data.currentTime;
+    since = state.data.isPlaying ? performance.now() : null;
+  };
+  window.addEventListener("message", receive);
+  return {
+    play() {
+      since ??= performance.now();
+      post("play");
+    },
+    pause() {
+      at = time();
+      since = null;
+      post("pause");
+    },
+    seek(seconds) {
+      at = seconds;
+      if (since !== null) since = performance.now();
+      post("seek", { timeSeconds: seconds + INSIDE_FRAME, seekMode: "commit" });
+    },
+    time: (now) => time(now),
+    clock: () => null,
+    playing: () => since !== null,
+    setMuted: (muted) => post("set-muted", { muted }),
+    dispose: () => window.removeEventListener("message", receive),
+  };
+}
+
+/**
+ * A library item playing live from Cutroom's cache, at the project's size, in the same sandbox
+ * as project previews. Its picture drags onto the timeline like footage.
+ */
+function LibrarySource({ item }: { item: LibraryItem }) {
+  const size = useTimeline((state) => state.view?.size) ?? {
+    width: 1920,
+    height: 1080,
+  };
+  const [src, setSrc] = useState<string | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const title = libraryTitle(item.title);
+  // Building the preview can download the item; a failure closes the source with its reason.
+  useEffect(() => {
+    const closing = new AbortController();
+    fetch(
+      `/api/cutroom/library/${encodeURIComponent(item.name)}/preview?width=${size.width}&height=${size.height}`,
+      { signal: closing.signal },
+    )
+      .then(async (response) => {
+        if (!response.ok)
+          throw new Error(
+            z.object({ error: z.string() }).safeParse(await response.json())
+              .data?.error ?? `The preview failed (${response.status}).`,
+          );
+        await response.body?.cancel();
+        setSrc(response.url);
+      })
+      .catch((error: unknown) => {
+        if (closing.signal.aborted) return;
+        closeSource();
+        showToast(
+          `${title} could not be opened. ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    return () => closing.abort();
+  }, [item.name, size.width, size.height, title]);
+  // The frame draws at the project's size and scales to the stage.
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() =>
+      element.style.setProperty(
+        "--library-scale",
+        String(element.clientWidth / size.width),
+      ),
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [size.width]);
+  // The runtime takes control messages once its bridge is up.
+  useEffect(() => {
+    const element = frame.current;
+    if (!src || !element) return;
+    const player = libraryPlayer(element);
+    let attached = false;
+    const ready = (event: MessageEvent<unknown>) => {
+      if (
+        attached ||
+        event.source !== element.contentWindow ||
+        !RuntimeReadySchema.safeParse(event.data).success
+      )
+        return;
+      attached = true;
+      sourcePlayer.attach(player);
+    };
+    window.addEventListener("message", ready);
+    return () => {
+      window.removeEventListener("message", ready);
+      sourcePlayer.attach(null);
+      player.dispose();
+    };
+  }, [src]);
+  const shape = size.width / size.height;
+  return (
+    <>
+      <div
+        ref={box}
+        className="edit-source-media library-source"
+        data-kind="composition"
+        style={{
+          aspectRatio: shape,
+          width: `min(100cqw, calc(100cqh * ${shape}))`,
+        }}
+        draggable
+        onDragStart={(event) => {
+          const range = sourceRange();
+          const chip = event.currentTarget.nextElementSibling;
+          if (!range || !chip) return;
+          event.dataTransfer.setData(MEDIA_DRAG_TYPE, range.path);
+          event.dataTransfer.effectAllowed = "copy";
+          event.dataTransfer.setDragImage(chip, 0, 0);
+          setMediaDrag(range);
+        }}
+        onDragEnd={() => setMediaDrag(null)}
+      >
+        {src && (
+          <iframe
+            ref={frame}
+            src={src}
+            title={title}
+            sandbox="allow-scripts"
+            tabIndex={-1}
+            style={{ width: size.width, height: size.height }}
+          />
+        )}
+      </div>
+      <span className="edit-source-chip" aria-hidden="true">
+        {title}
+      </span>
+    </>
+  );
+}
+
 /** How much Insert, Overwrite and a drag would place: in to out, or the whole file. */
 function PlacedLength() {
   const fps = sourcePlayer.use((state) => state.fps);
@@ -358,9 +531,16 @@ export function SourceViewer({ projectId }: { projectId: string }) {
     >
       <header className="edit-source-head" onClick={blurPointerButton}>
         <span className="edit-source-name" title={file.path}>
-          {file.path.split("/").at(-1)}
+          {file.library
+            ? libraryTitle(file.library.title)
+            : file.path.split("/").at(-1)}
         </span>
         <PlacedLength />
+        {file.library && (
+          <span className="library-meta" title={file.library.description}>
+            {file.library.description}
+          </span>
+        )}
         <span className="edit-grow" />
         {edits.map(({ mode, label, action }) => (
           <button
@@ -375,6 +555,7 @@ export function SourceViewer({ projectId }: { projectId: string }) {
         ))}
         <button
           className="edit-tool"
+          hidden={!!file.library}
           disabled={!versionClip || version === null}
           onClick={() => {
             const range = sourceRange();
@@ -395,13 +576,17 @@ export function SourceViewer({ projectId }: { projectId: string }) {
       <div className="edit-source-stage">
         {/* Gone from this name: a rename gives the file its new path, and a listing without it closes
         the source. Asking for it until then would only fail and close the source. */}
-        {version !== null && (
-          <SourceMedia
-            key={`${file.path}:${version}`}
-            projectId={projectId}
-            file={file}
-            version={version ?? null}
-          />
+        {file.library ? (
+          <LibrarySource key={file.library.name} item={file.library} />
+        ) : (
+          version !== null && (
+            <SourceMedia
+              key={`${file.path}:${version}`}
+              projectId={projectId}
+              file={file}
+              version={version ?? null}
+            />
+          )
         )}
       </div>
       <ScrubTrack player={sourcePlayer} />

@@ -64,7 +64,9 @@ test("the Library tab browses, filters and adds items as clips, and Undo takes t
   await expect(rows.first()).toHaveAttribute("title", "Lower Third, Fixture");
   await expect(rows.first().locator(".media-duration")).toContainText("02:00");
   // A component has no length of its own.
-  await expect(rows.nth(1).locator(".media-duration")).toHaveCount(0);
+  await expect(
+    rows.filter({ hasText: "Fixture Word" }).locator(".media-duration"),
+  ).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("browse.png") });
 
   const search = page.getByRole("searchbox", { name: "Search library" });

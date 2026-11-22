@@ -11,6 +11,7 @@ import { ProjectDocumentSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { claudeToolPermissions } from "../src/server/agents/tool-permissions";
 import { componentHost } from "../src/server/library/add";
+import { createLibraryPreviews } from "../src/server/library/preview";
 import { LIBRARY_RELEASE, createLibrary } from "../src/server/library/registry";
 import { createLibraryRoutes } from "../src/server/library/routes";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
@@ -613,6 +614,55 @@ test("a saved list goes offline when a download fails, and back once the registr
     ).toBe(false);
     registry.state.offline = false;
     expect((await list()).offline).toBe(false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a preview serves only its own files, under a sandboxing policy", async () => {
+  const fixture = await projectFixture();
+  try {
+    const registry = registryFetch();
+    const previews = createLibraryPreviews(
+      createLibrary({
+        dataDir: join(fixture.directory, "data"),
+        fetchImpl: registry.fetchImpl,
+        ref: REF,
+      }),
+    );
+    const open = await previews.request(
+      "/cutroom/library/lt-clean-bar/preview?width=640&height=360",
+    );
+    expect(open.status).toBe(302);
+    const page = open.headers.get("location")!;
+    expect(page).toMatch(
+      /^\/api\/isolated\/[0-9a-f-]{36}\/lt-clean-bar\/640x360\/$/,
+    );
+    const request = (path: string) =>
+      previews.request(`http://127.0.0.1${path.replace(/^\/api/, "")}`);
+    const document = await request(page);
+    expect(document.status).toBe(200);
+    expect(document.headers.get("content-security-policy")).toStartWith(
+      "sandbox allow-scripts; default-src 'none'",
+    );
+    const html = await document.text();
+    expect(html).toContain(
+      'data-hyperframes-preview-runtime="1" src="../../runtime.js"',
+    );
+    // The scene goes in at its own length, with its asset beside it.
+    expect(html).toContain('data-duration="4.8"');
+    expect((await request(`${page}assets/lt/bar.png`)).status).toBe(200);
+    expect(
+      (await request(`${page.replace(/\/[^/]+\/\d+x\d+\/$/, "/")}runtime.js`))
+        .status,
+    ).toBe(200);
+    // Nothing outside the built folder, no hidden file, and no folder that was never built.
+    for (const path of [
+      `${page}..%2F..%2F..%2Fcatalog.json`,
+      `${page}.preview.html`,
+      page.replace("640x360", "1920x1080"),
+    ])
+      expect((await request(path)).status, path).toBe(404);
   } finally {
     await fixture.close();
   }

@@ -571,6 +571,8 @@ export function createLibrary({
     describe,
     /** Where an item's cached files live, for preview and copying. */
     itemDir,
+    /** Where an item's preview at one size is built. */
+    previewDir: (folder: string) => join(root, "previews", folder),
   };
 }
 export type Library = ReturnType<typeof createLibrary>;
