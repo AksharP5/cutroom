@@ -136,12 +136,18 @@ export function createThumbnailRenderer() {
             height: options.height,
             deviceScaleFactor: thumbnailDeviceScaleFactor(options),
           });
-          await page.goto(options.previewUrl, {
+          const response = await page.goto(options.previewUrl, {
             // Seek, fonts, and paint below own visual readiness. Background requests
             // must not hold this capture and every note behind it in the shared queue.
             waitUntil: "load",
             timeout: 20_000,
           });
+          // A timeline renamed or removed as the capture started never becomes ready; waiting
+          // for it would hold every capture behind it.
+          if (response && response.status() >= 400)
+            throw new Error(
+              `${options.compPath} could not be previewed (${response.status()}).`,
+            );
         }
         const signature = await page.evaluate(
           async (time: number, composition: string) => {

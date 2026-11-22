@@ -154,6 +154,7 @@ export async function createApp(
         if (working)
           return `An agent is working in "${project.name}" (${working.title}). Stop it or wait for it to finish, then remove the project.`;
       },
+      (project) => editor.runningExport(project.id)?.composition,
     ),
   );
   app.route("/api/cutroom", timeline);

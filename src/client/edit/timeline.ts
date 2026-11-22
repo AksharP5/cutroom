@@ -42,6 +42,7 @@ import {
 } from "./feedback";
 import { editLabel } from "../../shared/timeline/labels";
 import { isMediaItem, inMediaTrash } from "../../shared/media";
+import { isTimelinePath } from "../../shared/sourcePaths";
 import { ReviewItemSchema } from "../../shared/review";
 import {
   dismissAnimationFeedback,
@@ -408,10 +409,37 @@ function noticeOutside(
   );
 }
 
+/** The timeline a history step moved: its file gone from one name and the same file at another. */
+function renamedTimeline(
+  files: readonly {
+    path: string;
+    before: string | null;
+    after: string | null;
+  }[],
+) {
+  for (const removed of files) {
+    if (!isTimelinePath(removed.path) || !removed.before || removed.after)
+      continue;
+    const added = files.find(
+      ({ path, before, after }) =>
+        isTimelinePath(path) && before === null && after === removed.before,
+    );
+    if (added) return { from: removed.path, to: added.path };
+  }
+  return undefined;
+}
+
 let compositionGone: ((projectId: string) => void) | undefined;
 /** What the editor does when the open timeline's file is gone; navigation sets it. */
 export function onCompositionGone(listener: (projectId: string) => void) {
   compositionGone = listener;
+}
+
+type Renamed = (projectId: string, from: string, to: string) => void;
+let timelineRenamed: Renamed | undefined;
+/** What the editor does when undo or redo renames a timeline; navigation sets it. */
+export function onTimelineRenamed(listener: Renamed) {
+  timelineRenamed = listener;
 }
 
 /** Opens a project at `composition`, dropping what was shown for the last one. */
@@ -1473,6 +1501,9 @@ export function stepHistory(
             );
           return;
         }
+        // A timeline renamed back or again stays open under its name now.
+        const moved = renamedTimeline(entry.files);
+        if (moved) timelineRenamed?.(projectId, moved.from, moved.to);
         if (view && history && isOpen(projectId, view.composition)) {
           answers.set(view.composition, view);
           confirmed = { projectId, view };
@@ -1498,6 +1529,16 @@ export function stepHistory(
         const elsewhere =
           landed.length && !landed.includes(showing)
             ? `${entry.label.replace(/^(Undid|Redid): /, "$1 ")} in ${compositionName(landed[0]!)}.`
+            : null;
+        // A step that adds, removes or renames a timeline names it, since the editor may move.
+        const made = entry.files.find(
+          ({ path, before, after }) =>
+            isTimelinePath(path) && (before === null) !== (after === null),
+        );
+        const timelineNotice = moved
+          ? `Renamed ${compositionName(moved.from)}${step === "undo" ? " back" : ""} to ${compositionName(moved.to)}.`
+          : made
+            ? `${entry.label.replace(/^(Undid|Redid): /, "$1 ")}.`
             : null;
         const first = replay.removedNotes?.[0];
         if (first && replay.notesBefore) {
@@ -1537,8 +1578,10 @@ export function stepHistory(
               redo,
               { tone: "info" },
             );
-          } else if (elsewhere) showToast(elsewhere, redo, { tone: "info" });
-        } else if (elsewhere) showToast(elsewhere, null, { tone: "info" });
+          } else if (timelineNotice ?? elsewhere)
+            showToast(timelineNotice ?? elsewhere!, redo, { tone: "info" });
+        } else if (timelineNotice ?? elsewhere)
+          showToast(timelineNotice ?? elsewhere!, null, { tone: "info" });
       }),
     ),
   );

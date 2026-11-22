@@ -6,6 +6,7 @@ import { relative, sep } from "node:path";
 import { HttpError } from "../../shared/errors";
 import type { Project } from "../../shared/project";
 import { compositionSources } from "./media";
+import { isMissing } from "./path";
 
 export async function guardSceneRemoval(
   project: Pick<Project, "path">,
@@ -29,9 +30,12 @@ export async function guardSceneRemoval(
     for (const src of collectSubCompositionSrcs(content)) {
       const scene = resolvePreviewCompositionSrc(project.path, path, src);
       if (!scene) continue;
-      const canonical = relative(root, await realpath(scene.file))
-        .split(sep)
-        .join("/");
+      // A scene the same step brings back, as an undone rename does, is not there yet.
+      const file = await realpath(scene.file).catch((error: unknown) => {
+        if (isMissing(error)) return scene.file;
+        throw error;
+      });
+      const canonical = relative(root, file).split(sep).join("/");
       if (sources.get(canonical) === null)
         throw new HttpError(
           409,

@@ -54,6 +54,8 @@ export type ExportRequest = Omit<ExportOptions, "gpu"> & {
 };
 type RenderState = ReturnType<StudioApiAdapter["startRender"]> & {
   projectId: string;
+  /** The timeline or scene being rendered. */
+  composition: string;
   name: string;
   fps: RenderOptions["fps"];
   quality: "draft" | "standard" | "high";
@@ -338,6 +340,7 @@ export function createRenderWorkers(configuration: {
       const state: RenderState = {
         id: options.jobId,
         projectId: options.project.id,
+        composition: options.composition ?? "index.html",
         name: compositionExportName(
           options.project.title ?? options.project.id,
           options.composition ?? "index.html",

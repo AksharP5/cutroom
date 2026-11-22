@@ -137,7 +137,16 @@ const PROJECT_FONTS = [
   },
 ] as const;
 
-function starter(input: z.infer<typeof CreateProjectSchema>): string {
+type PageFormat = Pick<
+  z.infer<typeof CreateProjectSchema>,
+  "name" | "width" | "height" | "fps" | "duration"
+>;
+
+/**
+ * A timeline page with the project's fonts and styles, holding `clips`: empty for a new timeline,
+ * or the starter clips of a new project.
+ */
+export function timelinePage(input: PageFormat, clips = ""): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><title>${escapeHtml(input.name)}</title>
 <script src="assets/vendor/gsap.min.js"></script>
@@ -169,10 +178,17 @@ body { color: #ededed; background: #111111; font-family: "Instrument Sans", syst
 }
 </style></head>
 <body><main id="main" data-composition-id="main" data-no-timeline data-width="${input.width}" data-height="${input.height}" data-fps="${fpsToFfmpegArg(input.fps)}" data-duration="${input.duration}" class="stage">
-<div id="rule" class="clip background" data-start="0" data-duration="${input.duration}" data-track-index="0" data-label="Background"></div>
+${clips}</main></body></html>\n`;
+}
+
+function starter(input: z.infer<typeof CreateProjectSchema>): string {
+  return timelinePage(
+    input,
+    `<div id="rule" class="clip background" data-start="0" data-duration="${input.duration}" data-track-index="0" data-label="Background"></div>
 <div id="headline" class="clip title" data-start="0" data-duration="${input.duration}" data-track-index="1" data-label="Project title">${escapeHtml(input.name)}</div>
 <div id="caption" class="clip caption" data-start="0" data-duration="${input.duration}" data-track-index="2" data-label="Getting started">Drop media in, or ask your agent to start.</div>
-</main></body></html>\n`;
+`,
+  );
 }
 
 const committedEntries = new AsyncLocalStorage<{ id?: string }>();

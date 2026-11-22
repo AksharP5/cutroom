@@ -306,6 +306,16 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => target ?? "the timeline",
   },
+  timeline_rename: {
+    verb: ["Renamed", "Renaming", "Rename"],
+    kind: "edit",
+    object: (target) => target ?? "the timeline",
+  },
+  timeline_create: {
+    verb: ["Created", "Creating", "Create"],
+    kind: "edit",
+    object: (target) => target ?? "a timeline",
+  },
   timeline_destinations: {
     verb: ["Checked", "Checking", "Check"],
     kind: "project",

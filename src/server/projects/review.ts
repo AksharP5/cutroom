@@ -47,7 +47,7 @@ import type { ClipVersions } from "./changes";
 import { projectStatePath, projectWritePath } from "./path";
 import { posix } from "node:path";
 import { inMediaTrash, isMediaItem } from "../../shared/media";
-import { moveSourceMarks } from "./view";
+import { moveSourceMarks, projectViews } from "./view";
 import { isExternalHistoryCredential } from "./historyActor";
 import {
   LedgerSchema,
@@ -824,6 +824,40 @@ export function createReviewService(store: ProjectStore) {
     }
   };
 
+  /**
+   * Moves what review keeps outside history for a timeline whose file moved: the copy of each sent
+   * note, so the note does not read as changed, and the clips agents edited there. The timeline's
+   * view settings follow too. Only call inside `serialize`.
+   */
+  const moveTimelineState = async (
+    project: Project,
+    from: string,
+    to: string,
+  ) => {
+    await projectViews.moveTimeline(project, from, to);
+    const state = await readState(project);
+    const items = state.items.map((item) =>
+      item.content?.compositionPath === from
+        ? { ...item, content: { ...item.content, compositionPath: to } }
+        : item,
+    );
+    const ledger = state.ledger.targets.some(
+      ({ composition }) => composition === from,
+    )
+      ? {
+          targets: state.ledger.targets.map((target) => ({
+            ...target,
+            composition: target.composition === from ? to : target.composition,
+            baselines: [...target.baselines],
+          })),
+          // New entries, since what each one touched is cached by entry.
+          edits: state.ledger.edits.map((edit) => ({ ...edit })),
+        }
+      : state.ledger;
+    if (ledger !== state.ledger || !sameContent(items, state.items))
+      await writeState(project, { items, ledger });
+  };
+
   return {
     agent,
     authorize,
@@ -861,6 +895,24 @@ export function createReviewService(store: ProjectStore) {
           options.historyId && { id: options.historyId(result) },
         );
         assetSnapshots.set(project.id, after);
+        return result;
+      }),
+    /**
+     * Renames a timeline with `work` and moves its review state and view settings to the new path.
+     * Unreadable review state refuses first, since the rename could not carry it.
+     */
+    renameTimeline: <T extends { composition: string }>(
+      project: Project,
+      token: string | undefined,
+      from: string,
+      work: () => Promise<T>,
+    ) =>
+      serialize(project, async () => {
+        authorize(token, project.id);
+        await readState(project);
+        const result = await work();
+        if (result.composition !== from)
+          await moveTimelineState(project, from, result.composition);
         return result;
       }),
     /** Source and timeline edits share the review queue, so accepting cannot race attribution. */
@@ -1251,6 +1303,27 @@ export function createReviewService(store: ProjectStore) {
                   isMediaItem(next.path),
               );
               if (moved) await moveSourceMarks(project, file.path, moved.path);
+            }
+            // A timeline renamed back or again takes its review state and view settings along.
+            for (const file of files) {
+              if (
+                !isTimelinePath(file.path) ||
+                file.before === null ||
+                file.after !== null
+              )
+                continue;
+              const moved = files.find(
+                (next) =>
+                  next.before === null &&
+                  next.after === file.before &&
+                  isTimelinePath(next.path),
+              );
+              if (moved)
+                await moveTimelineState(project, file.path, moved.path).catch(
+                  (error: unknown) => {
+                    if (!(error instanceof ReviewFileError)) throw error;
+                  },
+                );
             }
           }
           const after = await reconcile(project, {

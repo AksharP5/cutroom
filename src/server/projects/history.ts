@@ -265,15 +265,21 @@ async function validatePaths(project: Project, entry: Entry) {
   }
 }
 
-/** The files a duplicated timeline made: the copy and its captions files. */
+/**
+ * The files a timeline step made, moved or rewrote: a duplicate's copy and captions files, a new
+ * timeline, or a renamed one at both names and the timelines that play it. cutroom.json is left
+ * out, since its changes merge with later ones.
+ */
 const madeFiles = (entry: Entry) =>
   new Set(
-    entry.files.filter(({ before }) => before === null).map(({ path }) => path),
+    entry.files
+      .filter(({ path }) => path !== PROJECT_DOCUMENT_PATH)
+      .map(({ path }) => path),
   );
 
 /**
  * Later entries that mount a file `original` made, by an HTML file they wrote naming it. Only a
- * duplicated timeline asks: anything else that mounts a new scene is caught by the files it shares.
+ * timeline step asks: anything else that mounts a new scene is caught by the files it shares.
  */
 async function mountingEntries(
   entries: readonly Entry[],
@@ -341,7 +347,7 @@ function relatedEdits(
       )
         return [];
     }
-    // A duplicate relates only to edits of the files it made and to edits that mount them.
+    // A timeline step relates only to edits of the files it made and to edits that mount them.
     if (original.category === "timeline") {
       const made = madeFiles(original);
       const files = entry.files.filter(

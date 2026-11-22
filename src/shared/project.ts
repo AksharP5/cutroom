@@ -136,13 +136,20 @@ export const TimelineNameSchema = z
     (name) => new TextEncoder().encode(name).length <= TIMELINE_NAME_BYTES,
     `Keep the timeline name to ${TIMELINE_NAME_BYTES} bytes, so its file name fits.`,
   );
+/** How long a new project, and a new timeline in one, lasts until it is changed, in seconds. */
+export const NEW_PROJECT_SECONDS = 12;
 export const CreateProjectSchema = z
   .object({
     name: ProjectNameSchema,
     width: ProjectFormatSchema.shape.width.default(defaultFormat.width),
     height: ProjectFormatSchema.shape.height.default(defaultFormat.height),
     fps: ProjectFormatSchema.shape.fps.default(defaultFormat.fps),
-    duration: z.number().finite().min(1).max(86_400).default(12),
+    duration: z
+      .number()
+      .finite()
+      .min(1)
+      .max(86_400)
+      .default(NEW_PROJECT_SECONDS),
   })
   .refine(withinPictureArea, pictureSizeRule);
 export const DuplicateTimelineSchema = z.object({
@@ -153,6 +160,20 @@ export const DuplicateTimelineSchema = z.object({
     .describe("The timeline to copy, a root-level .html file"),
   name: TimelineNameSchema.optional().describe(
     'Name of the copy, without .html. Defaults to "<name> copy"; a taken name gets a number',
+  ),
+});
+export const RenameTimelineSchema = z.object({
+  composition: z
+    .string()
+    .min(1)
+    .describe(
+      "The timeline to rename, a root-level .html file other than index.html",
+    ),
+  name: TimelineNameSchema.describe("The timeline's new name, without .html"),
+});
+export const NewTimelineSchema = z.object({
+  name: TimelineNameSchema.optional().describe(
+    'Name of the new timeline, without .html. Defaults to "Timeline 2", "Timeline 3" and so on; a taken name gets a number',
   ),
 });
 export const ImportProjectSchema = z.object({

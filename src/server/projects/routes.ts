@@ -16,7 +16,9 @@ import {
   CutWordsSchema,
   DuplicateTimelineSchema,
   ImportProjectSchema,
+  NewTimelineSchema,
   RenameProjectSchema,
+  RenameTimelineSchema,
   SourceWriteSchema,
   TranscribeInputSchema,
   TranscriptImportSchema,
@@ -45,7 +47,13 @@ import { mediaUses, removeMedia, renameMedia } from "./mediaFiles";
 import { ReviewFileError, addAnnotation } from "./review";
 import type { ReviewService } from "./review";
 import { readSource } from "./store";
-import { changedTimelines, duplicateTimeline } from "./timelines";
+import {
+  changedTimelines,
+  createTimeline,
+  duplicateTimeline,
+  renameTimeline,
+  timelineName,
+} from "./timelines";
 import { projectViews } from "./view";
 import { isTimelinePath } from "../../shared/sourcePaths";
 import {
@@ -94,6 +102,8 @@ export function createProjectRoutes(
   >["timelineSnapshot"],
   /** Why a project cannot leave the list yet, such as a running export; undefined when it can. */
   removalBlocker: (project: Project) => string | undefined = () => undefined,
+  /** The composition the project is exporting now, if any. */
+  exporting: (project: Project) => string | undefined = () => undefined,
 ) {
   const api = new Hono();
   const agentWho = (c: Context, project: Project) =>
@@ -232,6 +242,37 @@ export function createProjectRoutes(
     );
     if (result.historyId) c.header(EDIT_HISTORY_HEADER, result.historyId);
     return c.json(result, 201);
+  });
+  api.post("/projects/:id/timelines", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(NewTimelineSchema, await c.req.json());
+    const result = await createTimeline(
+      store,
+      project,
+      input,
+      agentWho(c, project),
+    );
+    if (result.historyId) c.header(EDIT_HISTORY_HEADER, result.historyId);
+    return c.json(result, 201);
+  });
+  api.post("/projects/:id/timelines/rename", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(RenameTimelineSchema, await c.req.json());
+    const from = canonicalProjectPath(input.composition);
+    // The export reads the file as it goes.
+    if (exporting(project) === from)
+      throw new HttpError(
+        409,
+        `${timelineName(project, from)} is exporting. Wait for the export to finish or cancel it, then rename it.`,
+      );
+    const result = await reviews.renameTimeline(
+      project,
+      c.req.header(AGENT_HEADER),
+      from,
+      () => renameTimeline(store, project, input, agentWho(c, project)),
+    );
+    if (result.historyId) c.header(EDIT_HISTORY_HEADER, result.historyId);
+    return c.json(result);
   });
   /** The editor asks this before it removes, so its question is not a refused request. */
   api.get("/projects/:id/media/uses", async (c) => {

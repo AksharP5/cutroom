@@ -10,6 +10,7 @@ import { showToast } from "../workspace";
 import {
   ROOT_COMPOSITION,
   onCompositionGone,
+  onTimelineRenamed,
   showComposition,
   useTimeline,
 } from "./timeline";
@@ -94,8 +95,68 @@ export const duplicateTimeline = (projectId: string, composition: string) =>
     showToast(error instanceof Error ? error.message : String(error)),
   );
 
+/** Adds an empty timeline in one undo step and opens it. */
+export const newTimeline = (projectId: string) =>
+  void api(
+    `/projects/${encodeURIComponent(projectId)}/timelines`,
+    TimelinePathSchema,
+    json("POST", {}),
+  ).then(
+    ({ composition }) => openComposition(projectId, composition),
+    (error: unknown) =>
+      showToast(error instanceof Error ? error.message : String(error)),
+  );
+
+/** Timelines on their way to a new name, by level key: the editor waits for it instead of leaving. */
+const renaming = new Set<string>();
+
+/** Renames a timeline in one undo step. The editor keeps showing it under its new name. */
+export async function renameTimeline(
+  projectId: string,
+  composition: string,
+  name: string,
+) {
+  const key = level(projectId, composition);
+  renaming.add(key);
+  try {
+    const renamed = await api(
+      `/projects/${encodeURIComponent(projectId)}/timelines/rename`,
+      TimelinePathSchema,
+      json("POST", { composition, name }),
+    );
+    followTimeline(projectId, composition, renamed.composition);
+    return renamed.composition;
+  } finally {
+    renaming.delete(key);
+  }
+}
+
+/** Keeps editing a timeline whose file moved, at the same frame and selection. */
+function followTimeline(projectId: string, from: string, to: string) {
+  const state = useTimeline.getState();
+  if (state.projectId !== projectId || from === to) return;
+  const left = levels.get(level(projectId, from));
+  if (left) levels.set(level(projectId, to), left);
+  if (state.parents.includes(from)) {
+    useTimeline.setState({
+      parents: state.parents.map((path) => (path === from ? to : path)),
+    });
+    return;
+  }
+  if (state.composition !== from) return;
+  levels.set(level(projectId, to), {
+    frame: useTransport.getState().frame,
+    selection: state.selection,
+  });
+  go(projectId, to, []);
+}
+onTimelineRenamed(followTimeline);
+
 // A timeline whose file went away, as when its duplication is undone, leaves for the main one.
-onCompositionGone((projectId) => go(projectId, ROOT_COMPOSITION, []));
+onCompositionGone((projectId) => {
+  if (!renaming.has(level(projectId, useTimeline.getState().composition)))
+    go(projectId, ROOT_COMPOSITION, []);
+});
 
 /** The project file a sub-composition host plays, or null for any other clip. */
 export function hostedComposition(clip: Clip, composition: string) {

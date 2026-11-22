@@ -8,6 +8,7 @@ Projects → New project focuses Project name, so typing and Enter create the pr
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | Export                                       | `Shift+8`                                                                                                      | `workspacePrimaryWorkspaceDeliver`                     |
 | Projects                                     | `Shift+1`                                                                                                      | `fileProjectManager`                                   |
+| New timeline                                 | `Ctrl+N`                                                                                                       | `fileNewTimeline`                                      |
 | Select                                       | `A`                                                                                                            | `editPointer`                                          |
 | Trim                                         | `T`                                                                                                            | `editTrim`                                             |
 | Blade                                        | `B`                                                                                                            | `editBlade`                                            |
@@ -180,7 +181,7 @@ Each press is one undo step. During a burst, pending saves and undo or redo requ
 
 In the timeline, Ctrl+wheel, Alt+wheel, and a trackpad pinch zoom at the cursor, Shift+wheel scrolls through time, and the wheel scrolls tracks. Ctrl-click adds or removes a clip, Shift-click selects through to it, Alt-click leaves linked clips out, and dragging from an empty lane draws a marquee.
 
-On home, the arrow keys, Home, and End move between projects, and Enter opens the selected one. The most recently edited project is selected when home opens. F2 renames the selected project in place: Enter or clicking away saves, Esc keeps the old name. In the editor, Shift+1 opens the project list, matching `fileProjectManager` in the owner's Resolve preset.
+On home, the arrow keys, Home, and End move between projects, and Enter opens the selected one. The most recently edited project is selected when home opens. F2 renames the selected project in place: Enter or clicking away saves, Esc keeps the old name. In the editor, Shift+1 opens the project list, matching `fileProjectManager` in the owner's Resolve preset. Ctrl+N adds an empty timeline and opens it, matching `fileNewTimeline`. A browser tab keeps Ctrl+N for a new window, so there use the + button in Compositions; the desktop app passes the key to Cutroom.
 
 ## Panels
 
