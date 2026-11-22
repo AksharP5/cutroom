@@ -1,0 +1,595 @@
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  extractMediaMetadata,
+  videoStartOnMediaTimeline,
+} from "@hyperframes/engine";
+import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
+import type { Project } from "../../shared/project.ts";
+import { HttpError } from "../../shared/errors.ts";
+import { mediaKind } from "../../shared/media.ts";
+import {
+  MATTE_MODEL,
+  MATTES_FOLDER,
+  MatteManifestSchema,
+  matteFrameAt,
+} from "../../shared/matte.ts";
+import type {
+  MatteEntry,
+  MatteJob,
+  MatteManifest,
+  MatteModelState,
+  MatteStatus,
+} from "../../shared/matte.ts";
+import { frameGrid } from "../media/frames.ts";
+import { projectPath, resolveProjectPath } from "../projects/path.ts";
+import { MatteEventSchema } from "./protocol.ts";
+import type { MatteTask } from "./protocol.ts";
+import {
+  downloadWeights,
+  hasRuntime,
+  hasWeights,
+  matteModelPaths,
+} from "./model.ts";
+import type { MatteModelPaths } from "./model.ts";
+
+type MatteProject = Pick<Project, "id" | "path">;
+const MANIFEST = `${MATTES_FOLDER}/mattes.json`;
+/** Status events are coalesced to at most four a second. */
+const EVENT_INTERVAL_MS = 250;
+const STOP_TIMEOUT_MS = 5000;
+const OUT_OF_MEMORY = /out of memory|bad_alloc|ENOMEM|Cannot allocate/i;
+
+export interface MatteServiceOptions {
+  model?: MatteModelPaths;
+  /** The module that exports `createSegmenter`; tests give a stub. */
+  segmenter?: URL;
+  /** Threads the model may use, capped so the editor keeps its pace. */
+  threads?: number;
+  /** Where the weights download from; tests point it at a local server. */
+  modelUrl?: string;
+  modelBytes?: number;
+}
+
+/** A source's frame grid: frame k at `start + k / rate`. */
+interface SourceFrames {
+  absolute: string;
+  path: string;
+  size: number;
+  mtimeMs: number;
+  still: boolean;
+  start: number;
+  rate: number;
+  variable: boolean;
+  /** Frames in the file. */
+  count: number;
+}
+
+interface Job extends MatteJob {
+  project: MatteProject;
+  source: SourceFrames;
+  startedAt?: number;
+  endedAt?: number;
+  stop?: () => void;
+}
+
+/** `00-01-02` for 62 seconds: a time a file name can carry. */
+const stamp = (seconds: number) =>
+  [3600, 60, 1]
+    .map((unit, index) =>
+      String(
+        index === 0
+          ? Math.floor(seconds / unit)
+          : Math.floor(seconds / unit) % 60,
+      ).padStart(2, "0"),
+    )
+    .join("-");
+
+/**
+ * Makes background mattes, one job at a time across every project, in the order asked. A matte
+ * is the model's 8-bit mask of a source frame range, kept as an H.264 MP4 in the project's
+ * `mattes` folder and listed in `mattes/mattes.json` with the source's size and modification time,
+ * so replacing the source makes it stale. Jobs never touch the composition.
+ */
+export function createMatteService(options: MatteServiceOptions = {}) {
+  const paths = options.model ?? matteModelPaths();
+  const segmenter = options.segmenter ?? new URL("./u2net.ts", import.meta.url);
+  const threads = options.threads ?? 4;
+  const jobs: Job[] = [];
+  const listeners = new Map<string, Set<(status: MatteStatus) => void>>();
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const writes = new Map<string, Promise<unknown>>();
+  let model: MatteModelState | null = null;
+  let download: AbortController | null = null;
+  let running: Job | null = null;
+  let closed = false;
+
+  const modelState = async (): Promise<MatteModelState> => {
+    if (model?.status === "downloading" || model?.status === "failed")
+      return model;
+    if (!hasRuntime(paths))
+      return {
+        status: "no-runtime",
+        error:
+          "Remove background needs the ONNX runtime HyperFrames uses. Run `npx hyperframes remove-background` on any picture once to install it.",
+      };
+    return (await hasWeights(paths))
+      ? { status: "ready" }
+      : {
+          status: "missing",
+          bytes: options.modelBytes ?? MATTE_MODEL.bytes,
+        };
+  };
+
+  const status = async (projectId: string): Promise<MatteStatus> => ({
+    model: await modelState(),
+    jobs: jobs
+      .filter((job) => job.project.id === projectId)
+      .map(
+        ({
+          project: _p,
+          source: _s,
+          startedAt,
+          endedAt,
+          stop: _s2,
+          ...job
+        }) => ({
+          ...job,
+          elapsed: startedAt ? ((endedAt ?? Date.now()) - startedAt) / 1000 : 0,
+        }),
+      ),
+  });
+
+  const flush = async (projectId: string) => {
+    timers.delete(projectId);
+    const subscribed = listeners.get(projectId);
+    if (!subscribed?.size) return;
+    const snapshot = await status(projectId);
+    for (const listener of subscribed) listener(snapshot);
+  };
+  /** Tells subscribers, at most four times a second, with the latest state. */
+  const changed = (projectId?: string) => {
+    for (const id of projectId ? [projectId] : listeners.keys())
+      if (!timers.has(id))
+        timers.set(
+          id,
+          setTimeout(() => void flush(id), EVENT_INTERVAL_MS),
+        );
+  };
+
+  const readManifest = async (
+    project: MatteProject,
+  ): Promise<MatteManifest> => {
+    const path = join(project.path, MANIFEST);
+    const text = await readFile(path, "utf8").catch(() => null);
+    if (text === null) return { version: 1, mattes: [] };
+    const parsed = MatteManifestSchema.safeParse(
+      (() => {
+        try {
+          return JSON.parse(text);
+        } catch {
+          return null;
+        }
+      })(),
+    );
+    // A damaged list only costs remaking mattes; the files stay for anyone who wants them.
+    return parsed.success ? parsed.data : { version: 1, mattes: [] };
+  };
+  /** Serialised per project, written whole and renamed into place. */
+  const updateManifest = (
+    project: MatteProject,
+    change: (manifest: MatteManifest) => MatteManifest,
+  ) => {
+    const write = (writes.get(project.id) ?? Promise.resolve())
+      .catch(() => {})
+      .then(async () => {
+        const next = change(await readManifest(project));
+        const path = await projectPath(project, MANIFEST, true);
+        const partial = `${path}.${randomUUID()}.part`;
+        await writeFile(partial, `${JSON.stringify(next, null, 2)}\n`);
+        await rename(partial, path);
+      });
+    writes.set(project.id, write);
+    return write;
+  };
+
+  const sourceFrames = async (
+    project: MatteProject,
+    src: string,
+  ): Promise<SourceFrames> => {
+    const kind = mediaKind(src)?.kind;
+    if (kind !== "video" && kind !== "image")
+      throw new HttpError(400, "Only video and image clips have a background.");
+    const { absolute, path } = await resolveProjectPath(project, src);
+    const info = await stat(absolute);
+    if (kind === "image")
+      return {
+        absolute,
+        path,
+        size: info.size,
+        mtimeMs: info.mtimeMs,
+        still: true,
+        start: 0,
+        rate: 1,
+        variable: false,
+        count: 1,
+      };
+    const [metadata, grid] = await Promise.all([
+      extractMediaMetadata(absolute),
+      frameGrid(absolute),
+    ]);
+    const rate = grid?.rate ?? metadata.fps;
+    if (!(rate > 0)) throw new HttpError(422, "The video has no frame rate.");
+    const start = grid?.start ?? videoStartOnMediaTimeline(metadata);
+    return {
+      absolute,
+      path,
+      size: info.size,
+      mtimeMs: info.mtimeMs,
+      still: false,
+      start,
+      rate,
+      variable: !grid,
+      count: Math.max(
+        1,
+        Math.floor(
+          (metadata.videoStreamDurationSeconds || metadata.durationSeconds) *
+            rate +
+            1e-6,
+        ),
+      ),
+    };
+  };
+
+  /** Mattes made from this version of the source. */
+  const fresh = (manifest: MatteManifest, source: SourceFrames) =>
+    manifest.mattes.filter(
+      (entry) =>
+        entry.src === source.path &&
+        entry.size === source.size &&
+        entry.mtimeMs === source.mtimeMs &&
+        entry.rate === source.rate &&
+        entry.start === source.start,
+    );
+
+  /** Source frames in `[first, end)` that no fresh matte, job or failure accounts for. */
+  const missing = (
+    covered: { first: number; frames: number }[],
+    first: number,
+    end: number,
+  ) => {
+    const gaps: [number, number][] = [];
+    let at = first;
+    for (const piece of [...covered].sort((a, b) => a.first - b.first)) {
+      if (piece.first + piece.frames <= at) continue;
+      if (piece.first >= end) break;
+      if (piece.first > at) gaps.push([at, piece.first]);
+      at = Math.max(at, piece.first + piece.frames);
+    }
+    if (at < end) gaps.push([at, end]);
+    return gaps;
+  };
+
+  const pump = async () => {
+    if (running || closed) return;
+    const next = jobs.find(
+      (job) => job.status === "waiting" || job.status === "needs-model",
+    );
+    if (!next) return;
+    const state = await modelState();
+    if (state.status !== "ready") {
+      for (const job of jobs)
+        if (job.status === "waiting") {
+          job.status = "needs-model";
+          changed(job.project.id);
+        }
+      return;
+    }
+    if (running) return;
+    running = next;
+    void run(next).finally(() => {
+      running = null;
+      void pump();
+    });
+  };
+
+  const run = async (job: Job) => {
+    const ffmpeg = findFfBinary("ffmpeg", { configuredMustExist: true });
+    if (!ffmpeg) return fail(job, "FFmpeg is not installed.");
+    const { source, project } = job;
+    const from = source.start + job.first / source.rate;
+    const to = source.start + (job.first + job.frames) / source.rate;
+    const name = basename(source.path, extname(source.path));
+    await mkdir(await projectPath(project, MATTES_FOLDER, true), {
+      recursive: true,
+    });
+    let file = `${MATTES_FOLDER}/${name} ${stamp(from)} to ${stamp(Math.ceil(to))}.mp4`;
+    for (let copy = 2; existsSync(join(project.path, file)); copy++)
+      file = `${MATTES_FOLDER}/${name} ${stamp(from)} to ${stamp(Math.ceil(to))} ${copy}.mp4`;
+    const output = await projectPath(project, file, true);
+    const task: MatteTask = {
+      ffmpeg,
+      source: source.absolute,
+      output,
+      range: source.still
+        ? null
+        : {
+            seek: Math.max(0, (job.first - 0.5) / source.rate),
+            frames: job.frames,
+            rate: String(source.rate),
+            variable: source.variable,
+          },
+      segmenter: segmenter.href,
+      model: { ...paths, threads },
+    };
+    job.status = "running";
+    job.startedAt = Date.now();
+    changed(project.id);
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        fileURLToPath(new URL("./worker.ts", import.meta.url)),
+      ],
+      { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: process.env },
+    );
+    let stopped = false;
+    let killer: ReturnType<typeof setTimeout> | undefined;
+    job.stop = () => {
+      stopped = true;
+      child.kill("SIGTERM");
+      killer ??= setTimeout(() => child.kill("SIGKILL"), STOP_TIMEOUT_MS);
+    };
+    child.stdin.write(JSON.stringify(task));
+    await child.stdin.end();
+    const errors = new Response(child.stderr).text();
+    let outcome:
+      | { type: "done"; done: number; subject: boolean }
+      | { type: "error"; message: string }
+      | undefined;
+    let line = "";
+    const decoder = new TextDecoder();
+    const read = (text: string) => {
+      if (!text.trim()) return;
+      const event = MatteEventSchema.parse(JSON.parse(text));
+      if (event.type === "progress") {
+        job.done = event.done;
+        changed(project.id);
+      } else outcome = event;
+    };
+    for await (const chunk of child.stdout) {
+      const lines = (line + decoder.decode(chunk, { stream: true })).split(
+        "\n",
+      );
+      line = lines.pop()!;
+      for (const complete of lines) read(complete);
+    }
+    read(line);
+    const code = await child.exited;
+    clearTimeout(killer);
+    job.endedAt = Date.now();
+    job.stop = undefined;
+    if (outcome?.type === "done") {
+      if (outcome.done > 0)
+        await record(
+          project,
+          source,
+          file,
+          job.first,
+          outcome.done,
+          outcome.subject,
+        );
+      job.done = outcome.done;
+      job.status = stopped
+        ? "stopped"
+        : outcome.subject
+          ? "done"
+          : "no-subject";
+      changed(project.id);
+      return;
+    }
+    await rm(output, { force: true });
+    if (stopped) {
+      job.status = "stopped";
+      changed(project.id);
+      return;
+    }
+    const message =
+      outcome?.message ??
+      `The worker stopped (exit ${code}). ${(await errors).slice(-2000)}`;
+    // A worker the system killed outright ran out of memory.
+    fail(
+      job,
+      message,
+      OUT_OF_MEMORY.test(message) || child.signalCode === "SIGKILL",
+    );
+  };
+
+  const fail = (job: Job, error: string, memory = false) => {
+    job.status = "failed";
+    job.error = error;
+    if (memory) job.memory = true;
+    changed(job.project.id);
+  };
+
+  const record = (
+    project: MatteProject,
+    source: SourceFrames,
+    file: string,
+    first: number,
+    frames: number,
+    subject: boolean,
+  ) =>
+    updateManifest(project, (manifest) => ({
+      ...manifest,
+      mattes: [
+        // Mattes of an older version of the source are stale.
+        ...manifest.mattes.filter(
+          (entry) =>
+            entry.src !== source.path ||
+            (entry.size === source.size && entry.mtimeMs === source.mtimeMs),
+        ),
+        {
+          file: subject ? file : "",
+          src: source.path,
+          size: source.size,
+          mtimeMs: source.mtimeMs,
+          first,
+          frames,
+          start: source.start,
+          rate: source.rate,
+          model: MATTE_MODEL.name,
+          subject,
+        } satisfies MatteEntry,
+      ],
+    }));
+
+  return {
+    status,
+
+    /**
+     * Queues the source frames between media times `from` and `to` that have no fresh matte and
+     * no job. A range that failed is asked again only with `retry`.
+     */
+    async request(
+      project: MatteProject,
+      request: { src: string; from: number; to: number; retry?: boolean },
+    ) {
+      const source = await sourceFrames(project, request.src);
+      const first = source.still
+        ? 0
+        : Math.min(source.count - 1, matteFrameAt(source, request.from));
+      const end = source.still
+        ? 1
+        : Math.min(
+            source.count,
+            Math.max(
+              first + 1,
+              Math.ceil((request.to - source.start) * source.rate - 1e-6),
+            ),
+          );
+      const mine = (job: Job) =>
+        job.project.id === project.id && job.src === source.path;
+      const current = (job: Job) =>
+        job.source.size === source.size &&
+        job.source.mtimeMs === source.mtimeMs;
+      // Results for an older version of the file, and failures being retried, are forgotten.
+      for (const job of jobs.filter(mine))
+        if (
+          (!current(job) && job !== running) ||
+          (request.retry && job.status === "failed")
+        )
+          jobs.splice(jobs.indexOf(job), 1);
+      const busy = jobs.filter(
+        (job) =>
+          mine(job) &&
+          !["done", "stopped"].includes(job.status) &&
+          current(job),
+      );
+      const covered = [...fresh(await readManifest(project), source), ...busy];
+      for (const [gapFirst, gapEnd] of missing(covered, first, end))
+        jobs.push({
+          id: randomUUID(),
+          project,
+          source,
+          src: source.path,
+          first: gapFirst,
+          frames: gapEnd - gapFirst,
+          done: 0,
+          status: "waiting",
+          elapsed: 0,
+        });
+      // Finished jobs leave the list once asked about again; the manifest remembers them.
+      for (const job of jobs.filter(
+        (job) =>
+          mine(job) && (job.status === "done" || job.status === "stopped"),
+      ))
+        jobs.splice(jobs.indexOf(job), 1);
+      changed(project.id);
+      void pump();
+      return status(project.id);
+    },
+
+    /** Stops a job; the frames already made are kept. */
+    stop(projectId: string, id: string) {
+      const job = jobs.find(
+        (job) => job.project.id === projectId && job.id === id,
+      );
+      if (!job) throw new HttpError(404, "That matte job is not running.");
+      if (job.stop) job.stop();
+      else {
+        jobs.splice(jobs.indexOf(job), 1);
+        changed(projectId);
+      }
+    },
+
+    /** The fresh mattes of a source, for the viewer and export. */
+    async mattes(project: MatteProject, src: string) {
+      const source = await sourceFrames(project, src);
+      return fresh(await readManifest(project), source);
+    },
+
+    /** Downloads the weights when the person asks; jobs waiting on them start after. */
+    async downloadModel() {
+      if (download) return;
+      const state = await modelState();
+      if (state.status !== "missing" && state.status !== "failed") return;
+      download = new AbortController();
+      model = { status: "downloading", progress: 0 };
+      changed();
+      try {
+        await downloadWeights(
+          paths,
+          (progress) => {
+            model = { status: "downloading", progress };
+            changed();
+          },
+          download.signal,
+          options.modelUrl,
+          options.modelBytes,
+        );
+        model = null;
+      } catch (error) {
+        model = download.signal.aborted
+          ? null
+          : {
+              status: "failed",
+              error: error instanceof Error ? error.message : String(error),
+            };
+      } finally {
+        download = null;
+        changed();
+        void pump();
+      }
+    },
+
+    cancelDownload() {
+      download?.abort();
+    },
+
+    subscribe(projectId: string, listener: (status: MatteStatus) => void) {
+      let set = listeners.get(projectId);
+      if (!set) listeners.set(projectId, (set = new Set()));
+      set.add(listener);
+      return () => {
+        set.delete(listener);
+        if (!set.size) listeners.delete(projectId);
+      };
+    },
+
+    /** Stops the running job and waits for it; queued jobs are dropped. */
+    async close() {
+      closed = true;
+      download?.abort();
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+      const current = running;
+      jobs.length = 0;
+      current?.stop?.();
+      while (running) await new Promise((done) => setTimeout(done, 20));
+    },
+  };
+}
+export type MatteService = ReturnType<typeof createMatteService>;

@@ -33,6 +33,7 @@ import type { createTimelineRoutes } from "./timeline/routes";
 import { TabOriginSchema } from "../shared/timeline/schema";
 import { VIEW_PATH } from "./projects/view";
 import type { FileChange } from "./hyperframes/api";
+import type { MatteService } from "./matte/service";
 import type { createHyperframesApi } from "./hyperframes/api";
 import type { createVariableRoutes } from "./projects/variables";
 import { isTimelineWriteEcho } from "./timeline/watch";
@@ -54,6 +55,7 @@ export function createWorkspaceRoutes(options: {
     typeof createHyperframesApi
   >["subscribeExports"];
   subscribeVariables?: ReturnType<typeof createVariableRoutes>["subscribe"];
+  subscribeMattes?: MatteService["subscribe"];
 }) {
   const app = new Hono();
   app.use("/projects/:id/*", projectMutationGuard(options.review));
@@ -213,6 +215,11 @@ export function createWorkspaceRoutes(options: {
             .catch(() => {});
         },
       );
+      const stopMattes = options.subscribeMattes?.(project.id, (status) => {
+        void stream
+          .writeSSE({ event: "matte", data: JSON.stringify(status) })
+          .catch(() => {});
+      });
       const stopExports = options.subscribeExports?.(project.id, (job) => {
         void stream
           .writeSSE({ event: "export", data: JSON.stringify(job) })
@@ -320,6 +327,7 @@ export function createWorkspaceRoutes(options: {
       } finally {
         stopPreview?.();
         stopExports?.();
+        stopMattes?.();
         stopVariables?.();
         stopAnimationFeedback?.();
         watcher.close();

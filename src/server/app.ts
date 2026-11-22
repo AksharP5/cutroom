@@ -25,6 +25,7 @@ import { createMotionRoutes } from "./projects/motion";
 import { createLayerTextRoutes } from "./projects/layerText";
 import { createTranscriptService } from "./transcript/service";
 import { createMediaRoutes } from "./media/routes";
+import { createMatteRoutes } from "./matte/routes";
 import { createFontRoutes } from "./fonts/routes";
 import { createGradeRoutes } from "./grade/routes";
 import { createLibrary } from "./library/registry";
@@ -70,6 +71,7 @@ export async function createApp(
     studioUrl: baseUrl,
   });
   const media = createMediaRoutes(projects);
+  const mattes = createMatteRoutes(projects);
   const editor = createHyperframesApi(projects, review, media.media);
   const transcripts = createTranscriptService(projects);
   const app = new Hono();
@@ -162,6 +164,7 @@ export async function createApp(
       subscribeAnimationFeedback: timeline.subscribeAnimationFeedback,
       subscribeExports: editor.subscribeExports,
       subscribeVariables: variables.subscribe,
+      subscribeMattes: mattes.mattes.subscribe,
     }),
   );
   app.route(
@@ -193,6 +196,7 @@ export async function createApp(
   );
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api/cutroom", media);
+  app.route("/api/cutroom", mattes);
   app.route("/api", editor);
   const mcp = createMcpHttpHandler({ baseUrl });
   app.all("/mcp", (c) => mcp(c.req.raw));
@@ -223,6 +227,7 @@ export async function createApp(
           () => mcp.dispose(),
           () => editor.dispose(),
           () => media.dispose(),
+          () => mattes.mattes.close(),
           () => projects.close(),
         ]) {
           try {
