@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -333,7 +334,12 @@ test("a project tile's menu opens it, and a browser has no file manager to offer
   await expect(
     tiles.getByRole("menuitem", { name: "Open", exact: true }),
   ).toBeFocused();
-  await expect(tiles.getByRole("menuitem")).toHaveCount(1);
+  // Reveal in folder is the desktop app's; a browser cannot open a file manager.
+  await expect(tiles.getByRole("menuitem")).toHaveText([
+    "Open",
+    "RenameF2",
+    "Remove from list",
+  ]);
   await page.keyboard.press("Escape");
   await expect(tiles).toBeHidden();
   await expect(tile).toBeFocused();
@@ -342,6 +348,51 @@ test("a project tile's menu opens it, and a browser has no file manager to offer
   await tile.click({ button: "right" });
   await tiles.getByRole("menuitem", { name: "Open", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${project.id}`));
+});
+
+test("F2 renames a project tile in place, and Remove from list keeps its folder", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: `Rename me ${Date.now()}` },
+      })
+    ).json(),
+  );
+  await page.goto("/");
+  const tileNamed = (name: string) =>
+    page.locator(".home-project").filter({
+      has: page.locator(".home-name").getByText(name, { exact: true }),
+    });
+  await tileNamed(project.name).focus();
+  await page.keyboard.press("F2");
+  const field = page.getByRole("textbox", { name: "Project name" });
+  await expect(field).toBeFocused();
+  await field.fill("Discarded");
+  await field.press("Escape");
+  await expect(tileNamed(project.name)).toBeFocused();
+
+  const renamed = `${project.name} v2`;
+  await page.keyboard.press("F2");
+  await field.fill(renamed);
+  await field.press("Enter");
+  await expect(tileNamed(renamed)).toBeFocused();
+  const saved = ProjectSchema.parse(
+    await (await request.get(`/api/cutroom/projects/${project.id}`)).json(),
+  );
+  expect(saved).toMatchObject({ name: renamed, path: project.path });
+
+  await tileNamed(renamed).click({ button: "right" });
+  await menu(page, renamed)
+    .getByRole("menuitem", { name: "Remove from list" })
+    .click();
+  await expect(page.getByRole("status")).toContainText(
+    `Removed ${renamed}. Files stay in ${project.path}.`,
+  );
+  await expect(tileNamed(renamed)).toHaveCount(0);
+  expect(existsSync(join(project.path, "index.html"))).toBe(true);
 });
 
 test("a right-click on the picture picks the clip drawn there and opens its menu", async ({
