@@ -673,7 +673,8 @@ async function pcmOf(
     const result = await media.request(project, path, "pcm");
     if (result.artifact)
       return { key: result.key, bytes: await readFile(result.artifact) };
-    if (result.state.status === "failed") throw new Error(result.state.error);
+    if (result.state.status === "failed")
+      throw new Error(`${path}: ${result.state.error}`);
     if (performance.now() > deadline)
       throw new Error("The PCM job did not finish.");
     await Bun.sleep(10);
@@ -704,7 +705,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         "-f",
         "lavfi",
         "-i",
-        `color=gray:size=64x36:rate=25:duration=${seconds + 1}`,
+        `testsrc2=size=320x180:rate=25:duration=${seconds + 1}`,
       ];
       const video = [
         "-c:v",
