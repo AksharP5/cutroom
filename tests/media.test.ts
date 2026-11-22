@@ -3,6 +3,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  stat,
   symlink,
   utimes,
   writeFile,
@@ -14,6 +15,7 @@ import { createMediaService } from "../src/server/media/service";
 import { encodePeaks } from "../src/server/media/peaks";
 import { FilmstripSchema } from "../src/server/media/protocol";
 import { JobStateSchema } from "../src/shared/jobs";
+import { fileFingerprint } from "../src/shared/media";
 import { projectFixture } from "./project-fixture";
 
 async function ffmpeg(args: string[]) {
@@ -808,8 +810,13 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         join(fixture.directory, "outside.wav"),
         join(project.path, "link.wav"),
       );
+      // The listing's file version, as a scrub plan segment carries it.
+      const version = fileFingerprint(
+        "voice.wav",
+        await stat(join(project.path, "voice.wav")),
+      );
       const url = (path: string) =>
-        `http://127.0.0.1:${server.port}/api/cutroom/projects/${project.id}/media/pcm?path=${encodeURIComponent(path)}`;
+        `http://127.0.0.1:${server.port}/api/cutroom/projects/${project.id}/media/pcm?path=${encodeURIComponent(path)}&v=${encodeURIComponent(version)}`;
       const read = (range: string) =>
         fetch(url("voice.wav"), { headers: { range } });
 
