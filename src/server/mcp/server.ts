@@ -281,7 +281,7 @@ export function createMcpServer(options: McpOptions = {}) {
     "project_read",
     {
       description:
-        "Read annotations, transcripts and timelines for a local project. timelines lists the project's timelines: the .html files at its root, index.html (the main one) first. Every timeline tool takes one as composition.",
+        "Read annotations, transcripts and timelines for a local project. timelineFiles lists the project's timelines: the compositions at its root, index.html (the main one) first. Every timeline tool takes one as composition. timelines holds each timeline's saved track and marker settings.",
       inputSchema: project,
       annotations: readOnly,
     },
@@ -289,7 +289,7 @@ export function createMcpServer(options: McpOptions = {}) {
       request(`/projects/${id(input.projectId)}/document`, "GET", undefined, {
         reply: async (document) => ({
           ...z.looseObject({}).parse(document),
-          timelines: z
+          timelineFiles: z
             .object({ timelines: z.array(z.string()) })
             .parse(
               await (

@@ -4,7 +4,7 @@ import { leaveComposition } from "./compositions";
 import { ROOT_COMPOSITION, useTimeline } from "./timeline";
 
 /** `compositions/intro.html` reads as `intro`; the root reads as the project. */
-const compositionName = (path: string, projectName: string) =>
+const stepName = (path: string, projectName: string) =>
   path === ROOT_COMPOSITION
     ? projectName
     : (path.split("/").at(-1) ?? path).replace(/\.html?$/i, "");
@@ -37,13 +37,13 @@ export function CompositionPath({
             }
             onClick={() => leaveComposition(projectId, path)}
           >
-            {compositionName(path, projectName)}
+            {stepName(path, projectName)}
           </button>
           <CaretRight className="edit-path-caret" size={10} aria-hidden />
         </Fragment>
       ))}
       <span className="edit-path-open" aria-current="page" title={composition}>
-        {compositionName(composition, projectName)}
+        {stepName(composition, projectName)}
       </span>
     </nav>
   );

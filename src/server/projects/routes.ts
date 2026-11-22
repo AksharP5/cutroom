@@ -45,7 +45,9 @@ import { mediaUses, removeMedia, renameMedia } from "./mediaFiles";
 import { ReviewFileError, addAnnotation } from "./review";
 import type { ReviewService } from "./review";
 import { readSource } from "./store";
-import { duplicateTimeline } from "./timelines";
+import { changedTimelines, duplicateTimeline } from "./timelines";
+import { projectViews } from "./view";
+import { isTimelinePath } from "../../shared/sourcePaths";
 import {
   canonicalProjectPath,
   listTimelines,
@@ -579,6 +581,16 @@ export function createProjectRoutes(
         input,
       );
       if (!result.ok) return c.json(result, 409);
+      // A timeline the step removed, such as an undone duplicate, takes its view settings along.
+      for (const { path, after } of result.entry?.files ?? [])
+        if (isTimelinePath(path) && after === null)
+          await projectViews.forgetTimeline(project, path);
+      const timelines =
+        result.entry &&
+        (await changedTimelines(
+          await store.history(project),
+          result.entry.files,
+        ));
       if (result.skipped) {
         const history = await store.history(project);
         return c.json({
@@ -587,7 +599,7 @@ export function createProjectRoutes(
         });
       }
       if (!composition || !timelineSnapshot || !result.entry)
-        return c.json(result);
+        return c.json({ ...result, ...(timelines && { timelines }) });
       const view = await timelineSnapshot(project, composition).catch(
         (error: unknown) => {
           // The inverse already landed. A missing or unreadable composition is shown by the normal refresh.
@@ -598,6 +610,7 @@ export function createProjectRoutes(
       const history = await store.history(project);
       return c.json({
         ...result,
+        ...(timelines && { timelines }),
         view: view && !view.error ? view : null,
         history: await historySummary(project, history.list(), actor.who),
       });

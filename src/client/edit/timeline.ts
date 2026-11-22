@@ -42,7 +42,6 @@ import {
 } from "./feedback";
 import { editLabel } from "../../shared/timeline/labels";
 import { isMediaItem, inMediaTrash } from "../../shared/media";
-import { isTimelinePath } from "../../shared/sourcePaths";
 import { ReviewItemSchema } from "../../shared/review";
 import {
   dismissAnimationFeedback,
@@ -137,6 +136,8 @@ const HistoryReplaySchema = z.object({
     .optional(),
   removedNotes: z.array(z.string()).optional(),
   notesBefore: z.array(ReviewItemSchema).optional(),
+  /** The timelines the step changed, by file or by their settings. */
+  timelines: z.array(z.string()).optional(),
 });
 const UndoTogetherSchema = z.object({
   entryId: z.string(),
@@ -1493,12 +1494,10 @@ export function stepHistory(
         };
         // History is project-wide; a step in another timeline says which one.
         const showing = useTimeline.getState().composition;
-        const touched = entry.files.filter(({ path }) => isTimelinePath(path));
+        const landed = replay.timelines ?? [];
         const elsewhere =
-          touched.length &&
-          !touched.some(({ path }) => path === showing) &&
-          touched.every(({ before, after }) => before && after)
-            ? `${entry.label.replace(/^(Undid|Redid): /, "$1 ")} in ${compositionName(touched[0]!.path)}.`
+          landed.length && !landed.includes(showing)
+            ? `${entry.label.replace(/^(Undid|Redid): /, "$1 ")} in ${compositionName(landed[0]!)}.`
             : null;
         const first = replay.removedNotes?.[0];
         if (first && replay.notesBefore) {

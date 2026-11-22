@@ -32,14 +32,16 @@ import {
 } from "../projects/history";
 import { parseInput } from "../projects/routes";
 import { sourceWriteGuard } from "./source-guard";
-import { isTimelinePath } from "../../shared/sourcePaths";
 import {
   listTimelines,
   projectStatePath,
   unavailableProjectFile,
 } from "../projects/path";
 import { checkProjectVariableValues } from "../projects/variables";
-import { rebasePreviewSceneSources } from "../projects/sceneSources";
+import {
+  affectedCompositions,
+  rebasePreviewSceneSources,
+} from "../projects/sceneSources";
 import { watch } from "node:fs";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import {
@@ -939,10 +941,11 @@ export function createHyperframesApi(
             content,
             affectsPreview: affects,
             affectedCompositions: affects
-              ? // HyperFrames follows mounts from index.html only. Another timeline it does not
-                // reach is one nothing mounts, so a change to it affects only itself.
-                (compositionsAffectedBy(project.dir, path) ??
-                (isTimelinePath(path) ? [path] : null))
+              ? await affectedCompositions(
+                  project.dir,
+                  path,
+                  compositionsAffectedBy(project.dir, path),
+                )
               : [],
             ...(receipt ? { writeToken: receipt.writeToken } : {}),
           };

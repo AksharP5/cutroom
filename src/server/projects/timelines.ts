@@ -1,16 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
 import type { z } from "zod";
 import { HttpError } from "../../shared/errors";
 import { sourceUrl } from "../../shared/media";
 import { isTimelinePath } from "../../shared/sourcePaths";
+import {
+  PROJECT_DOCUMENT_PATH,
+  ProjectDocumentSchema,
+  TIMELINE_NAME_BYTES,
+} from "../../shared/project";
 import type { DuplicateTimelineSchema, Project } from "../../shared/project";
-import type { HistoryWho } from "../history/historyLog";
+import type { HistoryFileChange, HistoryWho } from "../history/historyLog";
+import type { ProjectHistory } from "../history/projectHistory";
 import { copyCaptions } from "../captions/captions";
 import { createCaptionsFile, placedCaptions } from "../captions/project";
 import { rewriteElements } from "../timeline/composition";
 import type { AttributeChange } from "../timeline/composition";
-import { canonicalProjectPath, projectWritePath } from "./path";
+import { canonicalProjectPath } from "./path";
 import { readSource } from "./store";
 import type { ProjectStore } from "./store";
 import { projectViews } from "./view";
@@ -20,12 +25,23 @@ const TRANSCRIPT_ATTRIBUTES = [
   "data-cutroom-anchor",
 ] as const;
 
-/** A file name any desktop file system accepts, without its extension. */
-const fileName = (name: string) =>
-  name
-    .replace(/\.html?$/i, "")
-    .replace(/[\u0000-\u001f<>:"/\\|?*]/g, "-")
-    .replace(/^[.\s]+|[.\s]+$/g, "") || "Timeline";
+/**
+ * A file name any desktop file system accepts, without its extension, short enough in bytes that
+ * a copy number and `.html` still fit in 255.
+ */
+const fileName = (name: string) => {
+  const safe =
+    name
+      .replace(/\.html?$/i, "")
+      .replace(/[<>:"/\\|?*]/g, "-")
+      .replace(/^[.\s]+|[.\s]+$/g, "") || "Timeline";
+  let fitted = "";
+  for (const character of safe) {
+    if (Buffer.byteLength(fitted + character) > TIMELINE_NAME_BYTES) break;
+    fitted += character;
+  }
+  return fitted.trimEnd();
+};
 
 export const timelineName = (project: Project, path: string) =>
   path === "index.html" ? project.name : path.replace(/\.html?$/i, "");
@@ -91,28 +107,14 @@ export async function duplicateTimeline(
             })
           : html;
       const html = rewrite(content);
-      let path: string | undefined;
-      for (let copy = 1; !path && copy < 1000; copy++) {
-        const candidate = `${copy === 1 ? name : `${name} ${copy}`}.html`;
-        const absolute = await projectWritePath(project, candidate, {
-          allowMissing: true,
-        });
-        const created = await writeFile(absolute, html, { flag: "wx" }).then(
-          () => true,
-          (error: unknown) => {
-            if (
-              error instanceof Error &&
-              "code" in error &&
-              error.code === "EEXIST"
-            )
-              return false;
-            throw error;
-          },
-        );
-        if (!created) continue;
-        store.captureHistoryCreation(absolute, html);
-        path = candidate;
-      }
+      const path = await store.createFile(
+        project,
+        Array.from(
+          { length: 999 },
+          (_, copy) => `${copy ? `${name} ${copy + 1}` : name}.html`,
+        ),
+        () => html,
+      );
       if (!path)
         throw new HttpError(409, `Too many timelines are named ${name}.`);
       const settings = document.timelines[source];
@@ -138,4 +140,45 @@ export async function duplicateTimeline(
   );
   await projectViews.copyTimeline(project, source, composition);
   return { composition, ...(entry && { historyId: entry.id }) };
+}
+
+/**
+ * The timelines a history step changed, through their file or their settings in cutroom.json.
+ * A timeline the step creates or removes is left out: it is that step's subject, not where it lands.
+ */
+export async function changedTimelines(
+  history: Pick<ProjectHistory, "readBlob">,
+  files: readonly HistoryFileChange[],
+) {
+  const appeared = new Set(
+    files
+      .filter(
+        ({ path, before, after }) => isTimelinePath(path) && !(before && after),
+      )
+      .map(({ path }) => path),
+  );
+  const changed = new Set(
+    files
+      .filter(
+        ({ path, before, after }) => isTimelinePath(path) && before && after,
+      )
+      .map(({ path }) => path),
+  );
+  const settings = async (hash: string | null) =>
+    hash === null
+      ? {}
+      : (ProjectDocumentSchema.safeParse(
+          await history
+            .readBlob(hash)
+            .then((blob) => JSON.parse(blob.toString("utf8")) as unknown)
+            .catch(() => null),
+        ).data?.timelines ?? {});
+  for (const { path, before, after } of files) {
+    if (path !== PROJECT_DOCUMENT_PATH) continue;
+    const [was, now] = await Promise.all([settings(before), settings(after)]);
+    for (const key of new Set([...Object.keys(was), ...Object.keys(now)]))
+      if (!appeared.has(key) && !Bun.deepEquals(was[key], now[key]))
+        changed.add(key);
+  }
+  return [...changed];
 }

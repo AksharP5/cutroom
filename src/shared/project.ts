@@ -116,15 +116,25 @@ export const ProjectSummarySchema = z.object({
   duration: z.number().nonnegative(),
 });
 /** A project's display name: one line of text, shown on Home, in the header and in export names. */
+/** Control characters and bidirectional overrides would hide or reorder what a name shows. */
+const showsAsWritten = (name: string) =>
+  !/[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069]/u.test(name);
 export const ProjectNameSchema = z
   .string()
   .trim()
   .min(1, "Enter a project name.")
   .max(120, "Keep the project name to 120 characters.")
+  .refine(showsAsWritten, "A project name cannot contain control characters.");
+/** A timeline's file name, before a copy number and `.html`, stays within 255 bytes. */
+export const TIMELINE_NAME_BYTES = 200;
+export const TimelineNameSchema = z
+  .string()
+  .trim()
+  .min(1, "Enter a timeline name.")
+  .refine(showsAsWritten, "A timeline name cannot contain control characters.")
   .refine(
-    // Control characters and bidirectional overrides would hide or reorder what the name shows.
-    (name) => !/[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069]/u.test(name),
-    "A project name cannot contain control characters.",
+    (name) => new TextEncoder().encode(name).length <= TIMELINE_NAME_BYTES,
+    `Keep the timeline name to ${TIMELINE_NAME_BYTES} bytes, so its file name fits.`,
   );
 export const CreateProjectSchema = z
   .object({
@@ -141,15 +151,9 @@ export const DuplicateTimelineSchema = z.object({
     .min(1)
     .default("index.html")
     .describe("The timeline to copy, a root-level .html file"),
-  name: z
-    .string()
-    .trim()
-    .min(1)
-    .max(120)
-    .optional()
-    .describe(
-      'Name of the copy, without .html. Defaults to "<name> copy"; a taken name gets a number',
-    ),
+  name: TimelineNameSchema.optional().describe(
+    'Name of the copy, without .html. Defaults to "<name> copy"; a taken name gets a number',
+  ),
 });
 export const ImportProjectSchema = z.object({
   path: z.string().min(1),

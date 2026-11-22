@@ -15,6 +15,8 @@ import {
   scanHtmlOpeningTags,
 } from "@hyperframes/parsers";
 import { parseDeclarations } from "../../shared/variables.ts";
+import { isTimelinePath } from "../../shared/sourcePaths.ts";
+import { listTimelines } from "./path.ts";
 
 /** Both compilers read the document defaults, then the root selected by the mount. */
 export function mountedSceneVariables(html: string, compositionId: string) {
@@ -131,4 +133,28 @@ export async function playedCompositions(
   };
   await visit(composition);
   return played;
+}
+
+/**
+ * The compositions a change to `path` shows in, from what HyperFrames reports, which follows
+ * mounts from index.html only: every other timeline that plays it is added. A timeline it does
+ * not reach is one nothing mounts, so a change to it affects only itself. Null means any.
+ */
+export async function affectedCompositions(
+  projectDir: string,
+  path: string,
+  fromIndex: readonly string[] | null,
+) {
+  if (fromIndex === null) return isTimelinePath(path) ? [path] : null;
+  const others = (await listTimelines({ path: projectDir })).filter(
+    (timeline) => timeline !== "index.html" && !fromIndex.includes(timeline),
+  );
+  const playing = await Promise.all(
+    others.map(async (timeline) =>
+      (await playedCompositions(projectDir, timeline)).has(path)
+        ? [timeline]
+        : [],
+    ),
+  );
+  return [...fromIndex, ...playing.flat()];
 }

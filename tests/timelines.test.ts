@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -13,6 +13,8 @@ import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { createTranscriptService } from "../src/server/transcript/service";
+import { affectedCompositions } from "../src/server/projects/sceneSources";
+import { compositionsAffectedBy } from "@hyperframes/studio-server";
 import { projectFixture } from "./project-fixture";
 
 const source = `<!doctype html><html><head></head><body><main data-composition-id="main" data-width="1920" data-height="1080" data-duration="12"><video id="talk" class="clip" src="talk.mp4" data-start="0" data-duration="12" data-track-index="0"></video></main></body></html>`;
@@ -156,6 +158,10 @@ test("a duplicate is one undo step that copies the timeline's settings, and give
   expect(await exists(copy.composition)).toBe(false);
   expect(await exists("compositions/captions-2.html")).toBe(false);
   expect(await document()).toEqual(before);
+  // Its view settings go with it.
+  expect(
+    Object.keys(JSON.parse(await text(".cutroom/view.json")).timelines),
+  ).toEqual(["index.html"]);
   expect(await text("index.html")).toBe(original);
 
   await json("/history/redo", "POST");
@@ -188,6 +194,17 @@ test("a taken name gets the next number, and only a root-level timeline can be d
       "Cut.html",
     ],
   });
+  // Names keep to what a file system takes and the screen shows as written.
+  for (const name of ["影".repeat(120), "Cut\u202Ebackwards"])
+    expect(
+      (
+        await fixture.request(
+          `/projects/${project.id}/timelines/duplicate`,
+          "POST",
+          { name },
+        )
+      ).status,
+    ).toBe(400);
   const scene = await fixture.request(
     `/projects/${project.id}/timelines/duplicate`,
     "POST",
@@ -273,7 +290,7 @@ test("agents duplicate a timeline and edit the copy through MCP", async () => {
           arguments: { projectId: project.id },
         }),
       ),
-    ).toMatchObject({ timelines: ["index.html", "Agent cut.html"] });
+    ).toMatchObject({ timelineFiles: ["index.html", "Agent cut.html"] });
   } finally {
     await client.close();
     await server.stop(true);
@@ -337,4 +354,68 @@ test("a timeline's Changes leave out edits made in another timeline", async () =
     );
   expect(await edited("index.html")).toContain("index.html");
   expect(await edited(composition)).toEqual([]);
+});
+
+test("a long project name still gives its main timeline's duplicate a name that fits", async () => {
+  const long = await fixture.store.create({ name: "影".repeat(120) });
+  const response = await fixture.request(
+    `/projects/${long.id}/timelines/duplicate`,
+    "POST",
+    {},
+  );
+  expect(response.status).toBe(201);
+  const { composition } = DuplicateSchema.parse(await response.json());
+  expect(Buffer.byteLength(composition)).toBeLessThanOrEqual(205);
+});
+
+test("a change to a scene two timelines play shows in both of them", async () => {
+  await mkdir(at("compositions"));
+  await writeFile(
+    at("compositions/a.html"),
+    `<template><div data-composition-id="a" data-duration="2"></div></template>`,
+  );
+  await writeFile(
+    at("index.html"),
+    source.replace(
+      "</main>",
+      `<div id="scene" class="clip" data-composition-id="a" data-composition-src="compositions/a.html" data-start="0" data-duration="2" data-track-index="1"></div></main>`,
+    ),
+  );
+  const { composition } = await duplicate({ name: "Cut" });
+  const affected = (path: string) =>
+    affectedCompositions(
+      project.path,
+      path,
+      compositionsAffectedBy(project.path, path),
+    );
+  expect(await affected("compositions/a.html")).toEqual(
+    expect.arrayContaining(["index.html", composition]),
+  );
+  expect(await affected(composition)).toEqual([composition]);
+});
+
+test("undo names the timeline it changed, even when only its settings in cutroom.json changed", async () => {
+  const { composition } = await duplicate({ name: "Cut" });
+  const edit = async (path: string, command: unknown) => {
+    const view = TimelineViewSchema.parse(
+      await json(`/timeline?composition=${encodeURIComponent(path)}`),
+    );
+    await json("/commands", "POST", {
+      composition: path,
+      expectedRevision: view.revision,
+      commands: [command],
+    });
+  };
+  const step = async (direction: "undo" | "redo") =>
+    z
+      .object({ timelines: z.array(z.string()) })
+      .parse(await json(`/history/${direction}`, "POST")).timelines;
+  // Undoing or redoing the duplicate itself creates or removes the copy, which is not where it lands.
+  expect(await step("undo")).toEqual([]);
+  expect(await step("redo")).toEqual([]);
+  await edit("index.html", { type: "setMarker", frame: 30, name: "Beat" });
+  expect(await step("undo")).toEqual(["index.html"]);
+  expect(await step("redo")).toEqual(["index.html"]);
+  await edit(composition, { type: "remove", clipIds: ["talk"] });
+  expect(await step("undo")).toEqual([composition]);
 });

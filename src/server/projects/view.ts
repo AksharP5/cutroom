@@ -200,6 +200,16 @@ export function createProjectViewStore() {
           : current;
       });
     },
+    /** Drops the view settings of a timeline whose file is gone, as when its duplicate is undone. */
+    forgetTimeline(project: Project, path: string) {
+      flush(project);
+      return write(project, (current) => {
+        if (!preferenceAt(current.timelines, path)) return current;
+        const timelines = { ...current.timelines };
+        delete timelines[path];
+        return { ...current, timelines };
+      });
+    },
     async readOpen(project: Project) {
       await writes.get(project.id);
       return (await readViews(project)).open;

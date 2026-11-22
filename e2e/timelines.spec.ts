@@ -103,3 +103,35 @@ test("a duplicated timeline edits apart from the original, opens as its equal, a
   await media.getByRole("button", { name: /^Compositions/ }).click();
   await expect(list.getByRole("listitem")).toHaveCount(1);
 });
+
+test("Undo says which timeline it changed when that is not the open one, even for a marker", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Markers", duration: 4 },
+      })
+    ).json(),
+  );
+  const duplicated = await request.post(
+    `/api/cutroom/projects/${project.id}/timelines/duplicate`,
+    { data: { name: "Cut" } },
+  );
+  expect(duplicated.ok()).toBe(true);
+  await page.goto(`/#project/${project.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  const media = page.getByRole("region", { name: "Media", exact: true });
+  await expect(timeline.locator("[data-clip]").first()).toBeVisible();
+  // A marker on index.html is saved in cutroom.json alone.
+  await page.keyboard.press("m");
+  await expect(timeline.locator(".tl-marker")).toHaveCount(1);
+  await media.getByRole("button", { name: /^Compositions/ }).click();
+  await media.locator('[data-path="Cut.html"]').dblclick();
+  await expect(
+    page.getByRole("navigation", { name: "Composition" }),
+  ).toHaveText("Cut");
+  await page.keyboard.press("Control+z");
+  await expect(page.getByText(/in index\.html\.$/)).toBeVisible();
+});
