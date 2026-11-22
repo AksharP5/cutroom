@@ -1231,15 +1231,19 @@ test("paused holds match native object-fit, transforms, opacity and stacking, th
   await pacing.dispose();
   const gaps = times.slice(1).map((time, i) => time - times[i]!);
   const averageGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  const span = times.at(-1)! - times[0]!;
   console.log(
     "CUT PLAYBACK",
     JSON.stringify({
       frames: times.length,
+      span,
       maxGap: Math.max(...gaps),
       averageGap,
     }),
   );
-  expect(times.length).toBeGreaterThan(55);
+  // The frame count also depends on when the clock check happens to poll, so judge
+  // how long the video played and how evenly, not how many frames landed before Pause.
+  expect(span, "released playback, ms").toBeGreaterThan(1800);
   expect(averageGap).toBeLessThan(40);
   expect(Math.max(...gaps)).toBeLessThan(150);
   await expect(fresh.locator("[data-cutroom-video-hold]")).toHaveCount(1);
