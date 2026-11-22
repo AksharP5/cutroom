@@ -461,7 +461,9 @@ for (const mode of playbackModes)
           version: "Short cue",
         });
         expect(refused.isError).toBe(true);
-        expect(JSON.stringify(refused.content)).toContain("00:00:02:00 shorter");
+        expect(JSON.stringify(refused.content)).toContain(
+          "00:00:02:00 shorter",
+        );
       }
       const count = measure && !longProject ? "5" : "4";
       if (longProject) {
@@ -674,8 +676,13 @@ for (const mode of playbackModes)
             (await pair()).find(({ id }) => id === "interview")?.versions,
         )
         .toBeUndefined();
-      // The person switched and kept the takes, so their own Undo reverses them.
+      // The person switched and kept the takes, so their own Undo reverses them. An agent's
+      // undo reaches only the agent's own edit, which the person's later edits build on.
       const file = () => readFile(saved, "utf8");
+      const kept = await file();
+      const agentUndo = await call("history_undo", { projectId });
+      expect(agentUndo.isError).toBe(true);
+      expect(await file()).toBe(kept);
       await page.keyboard.press("Control+z");
       await expect(badge).toHaveText(count);
       await finishRecording?.();
@@ -745,6 +752,24 @@ for (const mode of playbackModes)
       expect(crossings / (sound.stdout.length / 4 / 48000)).toBeGreaterThan(
         820,
       );
+      // The person's Undo passes over a take the agent showed since.
+      await result(z.unknown(), "clip_version_show", {
+        projectId,
+        clipId: "interview",
+        version: "Wide",
+      });
+      await expect
+        .poll(async () => (await pair()).map(({ src }) => src))
+        .toEqual(["wide.mp4", "wide.mp4"]);
+      const undone = page.waitForResponse((response) =>
+        response.url().endsWith("/history/undo"),
+      );
+      await page.keyboard.press("Control+z");
+      await undone;
+      expect((await pair()).map(({ src }) => src)).toEqual([
+        "wide.mp4",
+        "wide.mp4",
+      ]);
       if (evidence)
         await testInfo.attach("comparison", {
           path: join(evidence, "footage.png"),

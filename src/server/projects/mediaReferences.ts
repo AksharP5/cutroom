@@ -267,7 +267,8 @@ function mapReferences(
       }
       const next =
         attr.name === VERSIONS_ATTRIBUTE
-          ? rebaseVersions(value, (url) => path(url, true))
+          ? // A take's src is compared with the clip's quoted src, so it is written the same way.
+            rebaseVersions(value, (src) => path(src, false))
           : attr.name === "style"
             ? css(value)
             : attr.name === "data-composition-variables"

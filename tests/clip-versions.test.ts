@@ -475,3 +475,70 @@ test("an offline take stays unavailable after a rename or a cross-folder paste",
     await fixture.close();
   }
 });
+
+test("renaming a take's file in Media renames it in the clip's versions", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Renamed take" });
+  const base = `/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await fixture.request(`${base}/timeline`)).json(),
+    );
+  try {
+    const live = join(project.path, "live.wav");
+    const ffmpeg = Bun.spawnSync([
+      "ffmpeg",
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=duration=2",
+      live,
+    ]);
+    expect(ffmpeg.exitCode, ffmpeg.stderr.toString()).toBe(0);
+    await Bun.write(join(project.path, "alternate.wav"), Bun.file(live));
+    await Bun.write(
+      join(project.path, "index.html"),
+      '<main data-composition-id="main" data-fps="30"><audio id="voice" src="live.wav" data-start="0" data-duration="2" data-track-index="0"></audio></main>',
+    );
+    const seeded = await fixture.request(`${base}/commands`, "POST", {
+      expectedRevision: (await read()).revision,
+      commands: [
+        {
+          type: "setVersions",
+          clipId: "voice",
+          versions: [
+            { name: "Live", src: "live.wav" },
+            { name: "Alternate", src: "alternate.wav", sourceIn: 0.5 },
+          ],
+        },
+      ],
+    });
+    expect(seeded.status, await seeded.text()).toBe(200);
+    const renamed = await fixture.request(`${base}/media/rename`, "POST", {
+      path: "alternate.wav",
+      name: "second read.wav",
+    });
+    expect(renamed.status, await renamed.text()).toBe(200);
+    const [voice] = (await read()).timeline.clips;
+    expect(
+      voice!.versions!.map(({ name, src, offline }) => ({
+        name,
+        src,
+        offline,
+      })),
+    ).toEqual([
+      { name: "Live", src: "live.wav", offline: undefined },
+      { name: "Alternate", src: "second read.wav", offline: undefined },
+    ]);
+    // The take keeps its In through the rename.
+    expect(voice!.versions![1]!.sourceIn).toBeCloseTo(15, 6);
+  } finally {
+    await fixture.close();
+  }
+});
