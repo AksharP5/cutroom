@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   LibraryAddedSchema,
   LibraryCatalogSchema,
+  librarySearch,
 } from "../src/shared/library";
 import { ProjectDocumentSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
@@ -563,4 +564,56 @@ test("the Library reads the release Cutroom's HyperFrames packages pin", async (
   ) as { version: string };
   expect<string>(LIBRARY_RELEASE.version).toBe(pinned.version);
   expect(LIBRARY_RELEASE.commit).toBe(COMMIT);
+});
+
+test("search matches the title as the panel shows it, commas included", () => {
+  const matches = librarySearch("Lower Third, Clean");
+  expect(
+    matches({
+      title: "Lower Third — Clean Bar",
+      name: "lt-clean-bar",
+      tags: [],
+      description: "Minimal",
+    }),
+  ).toBe(true);
+});
+
+test("a saved list goes offline when a download fails, and back once the registry answers", async () => {
+  const fixture = await projectFixture();
+  try {
+    const registry = registryFetch();
+    const library = createLibrary({
+      dataDir: join(fixture.directory, "data"),
+      fetchImpl: registry.fetchImpl,
+      ref: REF,
+      retryMs: 0,
+    });
+    const routes = createLibraryRoutes(
+      fixture.store,
+      fixture.review,
+      library,
+      createTimelineRoutes(fixture.store, fixture.review),
+    );
+    const list = async () =>
+      LibraryCatalogSchema.parse(
+        await (await routes.request("/library")).json(),
+      );
+    expect((await list()).offline).toBe(false);
+    // The list is saved; the network drops before any item was downloaded.
+    registry.state.offline = true;
+    const item = await library.item("lt-clean-bar");
+    await expect(library.files(item)).rejects.toThrow(
+      "Can't reach the HyperFrames library.",
+    );
+    const offline = await list();
+    expect(offline.offline).toBe(true);
+    // The panel disables what it has not downloaded.
+    expect(
+      offline.items.find(({ name }) => name === "lt-clean-bar")?.cached,
+    ).toBe(false);
+    registry.state.offline = false;
+    expect((await list()).offline).toBe(false);
+  } finally {
+    await fixture.close();
+  }
 });

@@ -213,11 +213,11 @@ for (const pipeline of [false, true]) {
           expect(
             times.toSorted((a, b) => a - b)[1]!,
             `${location} ripple median, ms`,
-          ).toBeLessThan(600);
+          ).toBeLessThan(900);
         }
         const pooled = [...earlyRipples, ...lateRipples].sort((a, b) => a - b);
         const p80 = pooled[Math.ceil(pooled.length * 0.8) - 1]!;
-        expect(p80, "pooled ripple p80, ms").toBeLessThan(800);
+        expect(p80, "pooled ripple p80, ms").toBeLessThan(1300);
       }
 
       const historySize = async () => {

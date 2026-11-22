@@ -42,6 +42,7 @@ import {
 import type { Drag, Gesture, Hit, Outcome, Preview, Tool } from "./gesture";
 import { LENGTH_MIN_WIDTH, clipsByTrack, rowsBetween } from "./math";
 import type { Row, RowLayout, TrackClips } from "./math";
+import { addFromLibrary } from "../edit/library";
 import { MEDIA_DRAG_TYPE, mediaDrag } from "./mediaDrag";
 import { slideClips } from "./motion";
 import type { Offset } from "./motion";
@@ -1238,7 +1239,18 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const drop = dropAt(event)?.preview;
     if (!drop) return;
     event.preventDefault();
-    settle(drop, undefined, mediaDrag()?.format);
+    const library = mediaDrag()?.library;
+    if (!library) return settle(drop, undefined, mediaDrag()?.format);
+    // A Library item is not in the project yet: the server copies its files and places it where
+    // the preview showed, in one undo step.
+    const insert = drop.commands.find((command) => command.type === "insert");
+    clear();
+    if (insert?.type === "insert")
+      void addFromLibrary(library, {
+        track: insert.track,
+        at: insert.at,
+        mode: insert.mode === "insert" ? "insert" : "overwrite",
+      });
   }
 
   return {

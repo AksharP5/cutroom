@@ -157,8 +157,15 @@ function ProjectTile({
   const name = useId();
   const meta = useId();
   const [renaming, setRenaming] = useState(false);
-  // Compositions are read and frames rendered only for tiles that have been on screen.
   const tile = useRef<HTMLElement>(null);
+  // Focus returns to the tile once it is a button again; the field it replaces took focus with it.
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (renaming || !refocus.current) return;
+    refocus.current = false;
+    tile.current?.focus();
+  }, [renaming]);
+  // Compositions are read and frames rendered only for tiles that have been on screen.
   const [seen, setSeen] = useState(false);
   useEffect(() => {
     const element = tile.current;
@@ -241,8 +248,8 @@ function ProjectTile({
           project={project}
           onRename={onRename}
           onDone={() => {
+            refocus.current = true;
             setRenaming(false);
-            requestAnimationFrame(() => tile.current?.focus());
           }}
         />
       ) : (

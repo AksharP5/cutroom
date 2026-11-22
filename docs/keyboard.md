@@ -67,6 +67,7 @@ Projects → New project focuses Project name, so typing and Enter create the pr
 | Undo                                         | `Ctrl+Z`, `` ` ``                                                                                              | `editUndo`                                             |
 | Redo                                         | `Ctrl+Shift+Z`                                                                                                 | `editRedo`                                             |
 | Focus Media                                  | `Ctrl+2`                                                                                                       | `viewActiveWindowSelectionMediaPoolClips`              |
+| Focus the Library                            | `Ctrl+6`                                                                                                       | `viewActiveWindowSelectionEffects`                     |
 | Focus the viewer on the source               | `Ctrl+3`                                                                                                       | `viewActiveWindowSelectionSourceViewer`                |
 | Focus the timeline                           | `Ctrl+4`                                                                                                       | `viewActiveWindowSelectionTimeline`                    |
 | Focus the viewer on the timeline             | `Ctrl+5`                                                                                                       | `viewActiveWindowSelectionTimelineViewer`              |
@@ -185,7 +186,7 @@ On home, the arrow keys, Home, and End move between projects, and Enter opens th
 
 ## Panels
 
-Resolve's Active Panel Selection keys move the keyboard between panels in one press, from anywhere in the editor: Ctrl+2 Media, Ctrl+3 the viewer on the source, Ctrl+4 the timeline, Ctrl+5 the viewer on the timeline, and Ctrl+9 the inspector. They are `viewActiveWindowSelectionMediaPoolClips`, `SourceViewer`, `Timeline`, `TimelineViewer` and `Inspector` in the owner's preset. The preset's Ctrl+1, Ctrl+6 and Ctrl+7 show the unsupported shortcut notice for bins, effects and the edit index.
+Resolve's Active Panel Selection keys move the keyboard between panels in one press, from anywhere in the editor: Ctrl+2 Media, Ctrl+3 the viewer on the source, Ctrl+4 the timeline, Ctrl+5 the viewer on the timeline, Ctrl+6 the Library (Resolve's Effects Library) and Ctrl+9 the inspector. They are `viewActiveWindowSelectionMediaPoolClips`, `SourceViewer`, `Timeline`, `TimelineViewer`, `Effects` and `Inspector` in the owner's preset. The preset's Ctrl+1 and Ctrl+7 show the unsupported shortcut notice for bins and the edit index.
 
 In the main timeline, press Shift+A to deselect clips and Ctrl+9 to focus the Inspector. Tab to **Edit project format**. Enter applies the reviewed change in the dialog when **Apply format** is available. Undo and redo include format changes.
 

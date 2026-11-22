@@ -54,6 +54,8 @@ export const LibraryItemSchema = z.object({
   cached: z.boolean(),
   /** Why it cannot be added, such as a newer HyperFrames; absent when it can. */
   disabled: z.string().optional(),
+  /** Deprecated or too new: listed only to a search for its exact name. */
+  hidden: z.boolean().optional(),
 });
 export type LibraryItem = z.infer<typeof LibraryItemSchema>;
 
@@ -117,6 +119,8 @@ export const LibraryAddedSchema = z.object({
   added: z.array(z.string()),
   /** Files the project had edited, kept as they are. */
   kept: z.array(z.string()),
+  /** Every file the clip plays from, by its version as the project listing gives it. */
+  versions: z.record(z.string(), z.string()),
   historyId: z.string().optional(),
 });
 export type LibraryAdded = z.infer<typeof LibraryAddedSchema>;
@@ -124,3 +128,15 @@ export type LibraryAdded = z.infer<typeof LibraryAddedSchema>;
 /** Registry titles are written with em dashes; the editor's copy uses commas. */
 export const libraryTitle = (title: string) =>
   title.replace(/\s*[—–]\s*/g, ", ");
+
+/** Every word of the query appears in the item's title, name, tags or description. */
+export function librarySearch(query: string) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return (
+    item: Pick<LibraryItem, "title" | "name" | "tags" | "description">,
+  ) => {
+    const text =
+      `${item.title} ${libraryTitle(item.title)} ${item.name} ${item.tags.join(" ")} ${item.description}`.toLowerCase();
+    return words.every((word) => text.includes(word));
+  };
+}

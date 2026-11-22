@@ -262,6 +262,12 @@ export const keymap = {
     keys: ["Ctrl+2"],
     fields: true,
   },
+  viewActiveWindowSelectionEffects: {
+    area: "Panels",
+    label: "Focus the Library",
+    keys: ["Ctrl+6"],
+    fields: true,
+  },
   viewActiveWindowSelectionSourceViewer: {
     area: "Panels",
     label: "Focus the viewer on the source",

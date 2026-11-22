@@ -1,7 +1,4 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -10,99 +7,8 @@ import { ExportJobSchema } from "../src/shared/export";
 import { LibraryAddedSchema } from "../src/shared/library";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
-import { LIBRARY_REF } from "../src/server/library/registry";
 import { expect, test } from "./fixtures";
-
-/**
- * The library this spec uses, saved where the server keeps its cache. A complete list and items
- * with cached files never reach the network, so the spec runs offline and the same every time.
- */
-const libraryDir = join(
-  resolve(process.env.CUTROOM_E2E_DIR ?? ".cutroom-dev/e2e", "data"),
-  "library",
-  LIBRARY_REF,
-);
-const bar = `<!doctype html>
-<html><head><meta charset="UTF-8" /><script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script></head>
-<body><div id="root" data-composition-id="lt-fixture" data-start="0" data-duration="2" data-width="640" data-height="360">
-<style>[data-composition-id="lt-fixture"] { position: relative; width: 640px; height: 360px; overflow: hidden; }
-.lt-card { position: absolute; left: 40px; top: 240px; width: 300px; height: 60px; background: #ffffff; }</style>
-<div class="lt-card"></div>
-<script>window.__timelines = window.__timelines || {}; const tl = gsap.timeline({ paused: true }); tl.from(".lt-card", { opacity: 0, duration: 0.2 }, 0); window.__timelines["lt-fixture"] = tl;</script>
-</div></body></html>
-`;
-const fragment = `<div class="fx-word">Library</div>
-<style>.fx-word { color: #ff3040; font: 700 64px/1 sans-serif; }</style>
-<!--
-  Timeline integration:
-  tl.fromTo('.fx-word', { opacity: 0 }, { opacity: 1, duration: 0.2 }, startTime);
--->
-`;
-const items = [
-  {
-    name: "lt-fixture",
-    type: "hyperframes:block",
-    title: "Lower Third — Fixture",
-    description: "A white card in the lower left",
-    tags: ["lower-third"],
-    license: "MIT",
-    dimensions: { width: 640, height: 360 },
-    duration: 2,
-    variables: [],
-    online: false,
-    files: [
-      {
-        path: "lt-fixture.html",
-        target: "compositions/lt-fixture.html",
-        type: "hyperframes:composition",
-      },
-    ],
-  },
-  {
-    name: "fx-fixture",
-    type: "hyperframes:component",
-    title: "Fixture Word",
-    description: "A red word that fades in",
-    tags: ["text-effect"],
-    variables: [],
-    online: false,
-    files: [
-      {
-        path: "fx-fixture.html",
-        target: "compositions/components/fx-fixture.html",
-        type: "hyperframes:snippet",
-      },
-    ],
-  },
-];
-const sha256 = (text: string) =>
-  createHash("sha256").update(text).digest("hex");
-
-async function seedLibrary() {
-  const write = async (path: string, content: string) => {
-    await mkdir(dirname(join(libraryDir, path)), { recursive: true });
-    await writeFile(join(libraryDir, path), content);
-  };
-  await write(
-    "catalog.json",
-    JSON.stringify({
-      version: 2,
-      savedAt: new Date().toISOString(),
-      complete: true,
-      items,
-    }),
-  );
-  for (const [name, target, content] of [
-    ["lt-fixture", "compositions/lt-fixture.html", bar],
-    ["fx-fixture", "compositions/components/fx-fixture.html", fragment],
-  ] as const) {
-    await write(`items/${name}/${target}`, content);
-    await write(
-      `items/${name}/.files.json`,
-      JSON.stringify({ files: [{ target, sha256: sha256(content) }] }),
-    );
-  }
-}
+import { seedLibrary } from "./library-fixture";
 
 const result = <T>(schema: z.ZodType<T>, value: unknown) => {
   expect(
