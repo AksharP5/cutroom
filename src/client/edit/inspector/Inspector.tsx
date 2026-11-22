@@ -815,6 +815,28 @@ export function Inspector({
                 <CaretRight size={10} aria-hidden />
                 Composite
               </summary>
+              <button
+                type="button"
+                className="inspector-section-reset"
+                aria-label="Reset composite"
+                title="Reset composite. Opacity goes back to Auto unless it has keyframes; Background goes back to Keep."
+                disabled={
+                  (clip.opacity === null && !clip.background) ||
+                  track?.track.locked
+                }
+                onClick={() =>
+                  void editTimeline(projectId, "Reset composite", () => [
+                    {
+                      type: "setClip",
+                      clipId: clip.id,
+                      ...(clip.opacity !== null && { opacity: null }),
+                      ...(clip.background && { background: null }),
+                    },
+                  ])
+                }
+              >
+                <ArrowCounterClockwise size={12} aria-hidden />
+              </button>
               <OpacityField
                 key={clip.id}
                 projectId={projectId}

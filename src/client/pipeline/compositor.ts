@@ -30,6 +30,8 @@ export interface Matte {
   frame: VideoFrame;
   shrink: number;
   soften: number;
+  /** Draws the refined matte itself, white where the clip shows. */
+  show: boolean;
 }
 
 interface MattePlane {
@@ -77,6 +79,7 @@ uniform highp sampler3D grade;
 uniform vec2 gradeGrid;
 uniform sampler2D matte;
 uniform bool matted;
+uniform bool showMatte;
 out vec4 colour;
 vec3 rgbAt(ivec2 texel) {
   texel = clamp(texel, ivec2(0), textureSize(luma, 0) - 1);
@@ -107,6 +110,10 @@ void main() {
     );
   }
   if (gradeGrid.x > 0.0) rgb = texture(grade, rgb * gradeGrid.x + gradeGrid.y).rgb;
+  if (showMatte) {
+    colour = vec4(vec3(alpha), 1.0);
+    return;
+  }
   colour = vec4(rgb * brightness * opacity * alpha, opacity * alpha);
 }`;
 
@@ -291,6 +298,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   const matteUnit = textures.length + 1;
   gl.uniform1i(uniform("matte"), matteUnit);
   const matted = uniform("matted");
+  const showMatte = uniform("showMatte");
   const grades = new Map<number, WebGLTexture>();
   const ungraded = gl.createTexture();
   gl.activeTexture(gradeUnit);
@@ -655,7 +663,11 @@ export function createCompositor(canvas: HTMLCanvasElement) {
         layer.intrinsic.height,
       );
       gl.uniform1i(matted, 1);
-    } else gl.uniform1i(matted, 0);
+      gl.uniform1i(showMatte, layer.matte.show ? 1 : 0);
+    } else {
+      gl.uniform1i(matted, 0);
+      gl.uniform1i(showMatte, 0);
+    }
     const { width: iw, height: ih } = layer.intrinsic;
     // object-fit, centred as object-position's default.
     const scale =
