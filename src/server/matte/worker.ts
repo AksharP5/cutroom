@@ -96,14 +96,23 @@ async function run(task: MatteTask) {
   const empty = new Uint8Array(size * size);
   let done = 0;
   let subject = false;
-  for await (const rgb of frames(decode.stdout, size * size * 3)) {
-    if (stopping) break;
-    const mask = await segmenter.segment(rgb);
-    if (stopping) break;
-    subject ||= mask !== null;
-    encode.stdin.write(mask ?? empty);
-    await encode.stdin.flush();
-    send({ type: "progress", done: ++done });
+  try {
+    for await (const rgb of frames(decode.stdout, size * size * 3)) {
+      if (stopping) break;
+      const mask = await segmenter.segment(rgb);
+      if (stopping) break;
+      subject ||= mask !== null;
+      encode.stdin.write(mask ?? empty);
+      await encode.stdin.flush();
+      send({ type: "progress", done: ++done });
+    }
+  } catch (error) {
+    // A model that fails mid-run leaves no file, and no FFmpeg holding the worker open.
+    decode.kill("SIGKILL");
+    encode.kill("SIGKILL");
+    await Promise.all([decode.exited, encode.exited]);
+    await rm(task.output, { force: true });
+    throw error;
   }
   await encode.stdin.end();
   const [decoded, encoded] = await Promise.all([decode.exited, encode.exited]);

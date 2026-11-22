@@ -48,6 +48,13 @@ import {
 import type { MatteModelPaths, WeightsFile } from "./model.ts";
 
 type MatteProject = Pick<Project, "id" | "path">;
+export interface MatteRequest {
+  src: string;
+  from: number;
+  to: number;
+  retry?: boolean;
+  composition?: string;
+}
 const MANIFEST = `${MATTES_FOLDER}/mattes.json`;
 /** Status events are coalesced to at most four a second. */
 const EVENT_INTERVAL_MS = 250;
@@ -82,6 +89,8 @@ interface SourceFrames {
 
 interface Job extends MatteJob {
   project: MatteProject;
+  /** The composition whose clips asked for it, so a later read of that timeline can let it go. */
+  composition?: string;
   source: SourceFrames;
   startedAt?: number;
   endedAt?: number;
@@ -182,7 +191,13 @@ async function probeVideo(absolute: string) {
  */
 export function createMatteService(options: MatteServiceOptions = {}) {
   const paths = options.model ?? matteModelPaths();
-  const segmenter = options.segmenter ?? new URL("./u2net.ts", import.meta.url);
+  // Browser tests run jobs on a stub model, as unit tests pass one in.
+  const segmenter =
+    options.segmenter ??
+    new URL(
+      process.env.CUTROOM_MATTE_SEGMENTER ?? "./u2net.ts",
+      import.meta.url,
+    );
   const threads = options.threads ?? 4;
   const weightsFile = options.modelFile ?? MODEL_FILE;
   const jobs: Job[] = [];
@@ -197,6 +212,8 @@ export function createMatteService(options: MatteServiceOptions = {}) {
   const modelState = async (): Promise<MatteModelState> => {
     if (model?.status === "downloading" || model?.status === "failed")
       return model;
+    // A stub model for browser tests needs no weights.
+    if (process.env.CUTROOM_MATTE_SEGMENTER) return { status: "ready" };
     if (!hasRuntime(paths))
       return {
         status: "no-runtime",
@@ -211,14 +228,35 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         };
   };
 
-  const status = async (projectId: string): Promise<MatteStatus> => ({
+  /** Mattes whose source is unchanged since they were made, so the viewer and export can use them. */
+  const freshMattes = async (project: MatteProject) => {
+    const { mattes } = await readManifest(project);
+    const sources = new Map(
+      await Promise.all(
+        [...new Set(mattes.map(({ src }) => src))].map(
+          async (src) =>
+            [
+              src,
+              await stat(join(project.path, src)).catch(() => null),
+            ] as const,
+        ),
+      ),
+    );
+    return mattes.filter((entry) => {
+      const info = sources.get(entry.src);
+      return info?.size === entry.size && info.mtimeMs === entry.mtimeMs;
+    });
+  };
+
+  const status = async (project: MatteProject): Promise<MatteStatus> => ({
     model: await modelState(),
     jobs: jobs
-      .filter((job) => job.project.id === projectId)
+      .filter((job) => job.project.id === project.id)
       .map(
         ({
           project: _p,
           source: _s,
+          composition: _c,
           startedAt,
           endedAt,
           stop: _s2,
@@ -228,13 +266,16 @@ export function createMatteService(options: MatteServiceOptions = {}) {
           elapsed: startedAt ? ((endedAt ?? Date.now()) - startedAt) / 1000 : 0,
         }),
       ),
+    mattes: await freshMattes(project),
   });
 
+  const projects = new Map<string, MatteProject>();
   const flush = async (projectId: string) => {
     timers.delete(projectId);
     const subscribed = listeners.get(projectId);
-    if (!subscribed?.size) return;
-    const snapshot = await status(projectId);
+    const project = projects.get(projectId);
+    if (!subscribed?.size || !project) return;
+    const snapshot = await status(project);
     for (const listener of subscribed) listener(snapshot);
   };
   /** Tells subscribers, at most four times a second, with the latest state. */
@@ -555,6 +596,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
             start: source.start,
             rate: source.rate,
             count: source.count,
+            variable: source.variable,
             model: MATTE_MODEL.name,
             subject,
           } satisfies MatteEntry,
@@ -575,10 +617,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
      * Queues the source frames between media times `from` and `to` that have no fresh matte and
      * no job. A range that failed is asked again only with `retry`.
      */
-    async queue(
-      project: MatteProject,
-      request: { src: string; from: number; to: number; retry?: boolean },
-    ) {
+    async queue(project: MatteProject, request: MatteRequest) {
       const source = await sourceFrames(project, request.src);
       const first = source.still
         ? 0
@@ -615,8 +654,11 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         jobs.push({
           id: randomUUID(),
           project,
+          composition: request.composition,
           source,
           src: source.path,
+          start: source.start,
+          rate: source.rate,
           first: gapFirst,
           frames: gapEnd - gapFirst,
           count: source.count,
@@ -632,7 +674,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         jobs.splice(jobs.indexOf(job), 1);
       changed(project.id);
       void pump();
-      return status(project.id);
+      return status(project);
     },
 
     /** Stops a job; the frames already made are kept. */
@@ -645,6 +687,50 @@ export function createMatteService(options: MatteServiceOptions = {}) {
       else {
         jobs.splice(jobs.indexOf(job), 1);
         changed(projectId);
+      }
+    },
+
+    /**
+     * Stops the jobs a composition's clips asked for that none of `needed` covers any more: the
+     * clip went back to Keep, was deleted, or an undo took its Remove away. Frames already made
+     * are kept.
+     */
+    async release(
+      project: MatteProject,
+      composition: string,
+      needed: readonly { src: string; from: number; to: number }[],
+    ) {
+      const sources = new Map(
+        await Promise.all(
+          needed.map(
+            async ({ src }) =>
+              [
+                src,
+                (await resolveProjectPath(project, src).catch(() => null))
+                  ?.path,
+              ] as const,
+          ),
+        ),
+      );
+      for (const job of jobs.filter(
+        (job) =>
+          job.project.id === project.id &&
+          job.composition === composition &&
+          (job.status === "waiting" ||
+            job.status === "needs-model" ||
+            job.status === "running"),
+      )) {
+        const used = needed.some(
+          (need) =>
+            sources.get(need.src) === job.src &&
+            job.first < Math.ceil((need.to - job.start) * job.rate - 1e-6) &&
+            job.first + job.frames >
+              Math.floor((need.from - job.start) * job.rate + 1e-6),
+        );
+        if (used) continue;
+        if (job.stop) job.stop();
+        else jobs.splice(jobs.indexOf(job), 1);
+        changed(project.id);
       }
     },
 
@@ -691,13 +777,18 @@ export function createMatteService(options: MatteServiceOptions = {}) {
       download?.abort();
     },
 
-    subscribe(projectId: string, listener: (status: MatteStatus) => void) {
+    subscribe(project: MatteProject, listener: (status: MatteStatus) => void) {
+      const projectId = project.id;
+      projects.set(projectId, project);
       let set = listeners.get(projectId);
       if (!set) listeners.set(projectId, (set = new Set()));
       set.add(listener);
       return () => {
         set.delete(listener);
-        if (!set.size) listeners.delete(projectId);
+        if (!set.size) {
+          listeners.delete(projectId);
+          projects.delete(projectId);
+        }
       };
     },
 
@@ -721,10 +812,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
      * Requests for one project run one after another, so two at once never queue the same
      * frames twice.
      */
-    request(
-      project: MatteProject,
-      request: { src: string; from: number; to: number; retry?: boolean },
-    ) {
+    request(project: MatteProject, request: MatteRequest) {
       const queued = (requests.get(project.id) ?? Promise.resolve())
         .catch(() => {})
         .then(() => queue(project, request));

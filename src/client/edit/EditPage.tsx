@@ -1,3 +1,4 @@
+import { watchMattes } from "./mattes";
 import { useContext, useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import {
@@ -234,6 +235,7 @@ export function EditPage({
       openTimeline(projectId, closing.signal, composition);
       return loadTimeline(projectId, closing.signal);
     });
+    watchMattes(projectId, closing.signal);
     // Any project change can move the timeline or the undo history.
     const stopProject = subscribeProjectEvents(
       projectId,

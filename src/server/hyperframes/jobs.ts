@@ -207,6 +207,17 @@ export function createRenderWorkers(configuration: {
    */
   gpu?: () => Promise<boolean>;
   sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
+  /**
+   * Points clips whose background is removed at cutouts made for this export, after waiting for
+   * their mattes. Null when the entry has none.
+   */
+  prepareMattes?: (input: {
+    projectId: string;
+    composition: string;
+    html: string;
+    signal: AbortSignal;
+    onWait: (progress: number) => void;
+  }) => Promise<{ html: string; cleanup: () => Promise<void> } | null>;
   /** Told about each export once its file is in place. */
   published?: (projectId: string, path: string) => Promise<void>;
   /** Sizes the export's capture browsers to the memory free when it starts. */
@@ -301,6 +312,9 @@ export function createRenderWorkers(configuration: {
         : options.outputPath;
       let scratch: string | undefined;
       let staging: string | undefined;
+      /** Stops a wait for mattes or a cutout render when the export is cancelled. */
+      const mattes = new AbortController();
+      let matteCleanup: (() => Promise<void>) | undefined;
       /** From the moment the file is linked into place the export has happened; a late cancel can't undo it. */
       let publishing = false;
       const isCancelling = () => job.state.status === "cancelling";
@@ -332,6 +346,7 @@ export function createRenderWorkers(configuration: {
             progress: job.state.progress,
           });
           stopWorker();
+          mattes.abort();
         }
         return task.then(() => {
           if (cleanupFailure) throw new Error(cleanupFailure);
@@ -398,9 +413,33 @@ export function createRenderWorkers(configuration: {
           throw new Error(
             `A file named "${basename(outputPath)}" is already there. Choose another name.`,
           );
-        const sources = await configuration.sourceOverrides?.(
-          options.project.id,
-        );
+        let sources = await configuration.sourceOverrides?.(options.project.id);
+        if (isCancelling()) return;
+        {
+          const path = join(
+            options.project.dir,
+            options.composition ?? "index.html",
+          );
+          const html =
+            sources?.[path] ??
+            (await readFile(path, "utf8").catch(() => undefined));
+          const matted =
+            html === undefined
+              ? null
+              : await configuration.prepareMattes?.({
+                  projectId: options.project.id,
+                  composition: options.composition ?? "index.html",
+                  html,
+                  signal: mattes.signal,
+                  onWait: (progress) => {
+                    state.stage = `Waiting for background mattes ${Math.floor(progress * 100)}%`;
+                  },
+                });
+          if (matted) {
+            sources = { ...sources, [path]: matted.html };
+            matteCleanup = matted.cleanup;
+          }
+        }
         if (isCancelling()) return;
         const direct = useDirect
           ? await directPlan(options, sources, output)
@@ -701,6 +740,7 @@ export function createRenderWorkers(configuration: {
                 ),
               );
             if (scratch) cleanup.push(remove(scratch));
+            if (matteCleanup) cleanup.push(matteCleanup());
             if (worker) cleanup.push(pruneFrames());
             // A folder moved mid-export takes staging with it; say so rather than claim it was removed.
             if (staging)

@@ -21,6 +21,22 @@ export interface Layer {
   /** A dip's `brightness()` filter. */
   brightness: number;
   grade: GradeTexture | null;
+  /** A removed background: the matte frame and its edge refine, in source pixels. */
+  matte: Matte | null;
+}
+
+export interface Matte {
+  /** The model's mask, limited-range luma, stored upright at its own size. */
+  frame: VideoFrame;
+  shrink: number;
+  soften: number;
+}
+
+interface MattePlane {
+  width: number;
+  height: number;
+  stride: number;
+  bytes: Uint8Array;
 }
 
 export interface Adjustment {
@@ -59,6 +75,8 @@ uniform float opacity;
 uniform float brightness;
 uniform highp sampler3D grade;
 uniform vec2 gradeGrid;
+uniform sampler2D matte;
+uniform bool matted;
 out vec4 colour;
 vec3 rgbAt(ivec2 texel) {
   texel = clamp(texel, ivec2(0), textureSize(luma, 0) - 1);
@@ -73,6 +91,8 @@ void main() {
   if (at.x < shown.x || at.y < shown.y || at.x > shown.z || at.y > shown.w) discard;
   vec2 uv = (at - content.xy) / content.zw;
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
+  // The refined matte is upright at the shown picture's size.
+  float alpha = matted ? texture(matte, uv).r : 1.0;
   uv = (orient * vec3(uv, 1.0)).xy;
   vec3 rgb;
   if (!planes) rgb = texture(luma, uv).rgb;
@@ -87,7 +107,44 @@ void main() {
     );
   }
   if (gradeGrid.x > 0.0) rgb = texture(grade, rgb * gradeGrid.x + gradeGrid.y).rgb;
-  colour = vec4(rgb * brightness * opacity, opacity);
+  colour = vec4(rgb * brightness * opacity * alpha, opacity * alpha);
+}`;
+
+const REFINE_VERTEX = `#version 300 es
+void main() {
+  float x = (gl_VertexID & 1) == 0 ? -1.0 : 1.0;
+  float y = (gl_VertexID & 2) == 0 ? -1.0 : 1.0;
+  gl_Position = vec4(x, y, 0.0, 1.0);
+}`;
+
+// One pass of the matte's refine at the shown picture's size, as export's FFmpeg runs it: the
+// mask scaled up bilinearly with its limited range expanded, eroded by a square of 2r + 1 pixels
+// (3x3 erosion, r times), then a box blur of the same width, each split into across and down.
+// Texel row r holds picture row r, as an uploaded picture does.
+const REFINE_FRAGMENT = `#version 300 es
+precision highp float;
+uniform sampler2D source;
+uniform bool fromMask;
+uniform bool erode;
+uniform ivec2 step;
+uniform int radius;
+uniform vec2 size;
+out vec4 colour;
+float at(ivec2 pixel) {
+  pixel = clamp(pixel, ivec2(0), ivec2(size) - 1);
+  if (!fromMask) return texelFetch(source, pixel, 0).r;
+  vec2 uv = (vec2(pixel) + 0.5) / size;
+  return clamp((texture(source, uv).r * 255.0 - 16.0) / 219.0, 0.0, 1.0);
+}
+void main() {
+  ivec2 here = ivec2(gl_FragCoord.xy);
+  float value = erode ? 1.0 : 0.0;
+  for (int offset = -radius; offset <= radius; offset++) {
+    float taken = at(here + step * offset);
+    value = erode ? min(value, taken) : value + taken;
+  }
+  if (!erode) value /= float(2 * radius + 1);
+  colour = vec4(value, 0.0, 0.0, 1.0);
 }`;
 
 const COMPOSITE_VERTEX = `#version 300 es
@@ -231,6 +288,9 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   const gradeUnit = gl.TEXTURE0 + textures.length;
   gl.uniform1i(uniform("grade"), textures.length);
   const gradeGrid = uniform("gradeGrid");
+  const matteUnit = textures.length + 1;
+  gl.uniform1i(uniform("matte"), matteUnit);
+  const matted = uniform("matted");
   const grades = new Map<number, WebGLTexture>();
   const ungraded = gl.createTexture();
   gl.activeTexture(gradeUnit);
@@ -345,6 +405,133 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   };
   let composite: ReturnType<typeof makeComposite> | undefined;
 
+  /** The matte's refine passes, made on first use: the mask, then two pictures it alternates. */
+  const makeRefiner = () => {
+    const stage = link(REFINE_VERTEX, REFINE_FRAGMENT);
+    const at = (name: string) => gl.getUniformLocation(stage, name);
+    const fromMask = at("fromMask");
+    const erode = at("erode");
+    const step = at("step");
+    const radius = at("radius");
+    const size = at("size");
+    gl.useProgram(stage);
+    gl.uniform1i(at("source"), matteUnit);
+    gl.useProgram(program);
+    const texture = (filter: number) => {
+      const made = gl.createTexture()!;
+      gl.activeTexture(gl.TEXTURE0 + matteUnit);
+      gl.bindTexture(gl.TEXTURE_2D, made);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return made;
+    };
+    const mask = texture(gl.LINEAR);
+    let maskShape = "";
+    const targets = [0, 1].map(() => ({
+      texture: texture(gl.LINEAR),
+      buffer: gl.createFramebuffer()!,
+    }));
+    let targetShape = "";
+    return {
+      /** The refined matte at the picture's size, on the matte unit. */
+      run(matte: Matte, plane: MattePlane, width: number, height: number) {
+        gl.activeTexture(gl.TEXTURE0 + matteUnit);
+        gl.bindTexture(gl.TEXTURE_2D, mask);
+        const shape = `${plane.width}x${plane.height}`;
+        if (shape !== maskShape) {
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.R8,
+            plane.width,
+            plane.height,
+            0,
+            gl.RED,
+            gl.UNSIGNED_BYTE,
+            null,
+          );
+          maskShape = shape;
+        }
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, plane.stride);
+        gl.texSubImage2D(
+          gl.TEXTURE_2D,
+          0,
+          0,
+          0,
+          plane.width,
+          plane.height,
+          gl.RED,
+          gl.UNSIGNED_BYTE,
+          plane.bytes,
+        );
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+        if (`${width}x${height}` !== targetShape) {
+          for (const target of targets) {
+            gl.bindTexture(gl.TEXTURE_2D, target.texture);
+            gl.texImage2D(
+              gl.TEXTURE_2D,
+              0,
+              gl.R8,
+              width,
+              height,
+              0,
+              gl.RED,
+              gl.UNSIGNED_BYTE,
+              null,
+            );
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.buffer);
+            gl.framebufferTexture2D(
+              gl.FRAMEBUFFER,
+              gl.COLOR_ATTACHMENT0,
+              gl.TEXTURE_2D,
+              target.texture,
+              0,
+            );
+          }
+          targetShape = `${width}x${height}`;
+        }
+        gl.useProgram(stage);
+        gl.disable(gl.BLEND);
+        gl.viewport(0, 0, width, height);
+        gl.uniform2f(size, width, height);
+        const passes = [
+          { erode: true, across: true, radius: matte.shrink, mask: true },
+          { erode: true, across: false, radius: matte.shrink, mask: false },
+          { erode: false, across: true, radius: matte.soften, mask: false },
+          { erode: false, across: false, radius: matte.soften, mask: false },
+        ].filter((pass) => pass.mask || pass.radius > 0);
+        let input = mask;
+        for (const [index, pass] of passes.entries()) {
+          const target = targets[index % 2]!;
+          gl.bindFramebuffer(gl.FRAMEBUFFER, target.buffer);
+          gl.bindTexture(gl.TEXTURE_2D, input);
+          gl.uniform1i(fromMask, pass.mask ? 1 : 0);
+          gl.uniform1i(erode, pass.erode ? 1 : 0);
+          gl.uniform2i(step, pass.across ? 1 : 0, pass.across ? 0 : 1);
+          gl.uniform1i(radius, pass.radius);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          input = target.texture;
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.bindTexture(gl.TEXTURE_2D, input);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.enable(gl.BLEND);
+        gl.useProgram(program);
+      },
+      dispose() {
+        gl.deleteTexture(mask);
+        for (const { texture, buffer } of targets) {
+          gl.deleteTexture(texture);
+          gl.deleteFramebuffer(buffer);
+        }
+        gl.deleteProgram(stage);
+      },
+    };
+  };
+  let refiner: ReturnType<typeof makeRefiner> | undefined;
+
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   /** Each layer's plane bytes, reused from draw to draw. */
@@ -432,13 +619,43 @@ export function createCompositor(canvas: HTMLCanvasElement) {
     };
   };
 
+  /** Each matte's mask bytes, reused from draw to draw. */
+  const matteBuffers: Uint8Array[] = [];
+  const copyMatte = async (
+    frame: VideoFrame,
+    slot: number,
+  ): Promise<MattePlane> => {
+    const length = frame.allocationSize();
+    if ((matteBuffers[slot]?.byteLength ?? 0) < length)
+      matteBuffers[slot] = new Uint8Array(length);
+    const bytes = matteBuffers[slot]!;
+    const [luma] = await frame.copyTo(bytes);
+    const { width, height } = frame.visibleRect!;
+    return {
+      width,
+      height,
+      stride: luma!.stride,
+      bytes: bytes.subarray(luma!.offset),
+    };
+  };
+
   const drawPicture = (
     layer: Layer,
     width: number,
     height: number,
     copied: Awaited<ReturnType<typeof copy>>,
+    plane: MattePlane | null,
   ) => {
     if (layer.opacity <= 0) return;
+    if (layer.matte && plane) {
+      (refiner ??= makeRefiner()).run(
+        layer.matte,
+        plane,
+        layer.intrinsic.width,
+        layer.intrinsic.height,
+      );
+      gl.uniform1i(matted, 1);
+    } else gl.uniform1i(matted, 0);
     const { width: iw, height: ih } = layer.intrinsic;
     // object-fit, centred as object-position's default.
     const scale =
@@ -504,9 +721,14 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       height: number,
       adjustments?: readonly Adjustment[],
     ) {
-      const copies = await Promise.all(
-        layers.map((layer, slot) => copy(layer.frame, slot)),
-      );
+      const [copies, planes] = await Promise.all([
+        Promise.all(layers.map((layer, slot) => copy(layer.frame, slot))),
+        Promise.all(
+          layers.map((layer, slot) =>
+            layer.matte ? copyMatte(layer.matte.frame, slot) : null,
+          ),
+        ),
+      ]);
       if (!isAvailable()) return;
       // Sized after the copies, since resizing clears the picture still on screen.
       const backing = [size.width, size.height].map((side) =>
@@ -531,7 +753,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       );
       if (!adjustments?.length) {
         for (const [index, layer] of layers.entries())
-          drawPicture(layer, width, height, copies[index]);
+          drawPicture(layer, width, height, copies[index], planes[index]!);
         return;
       }
       const stage = (composite ??= makeComposite());
@@ -539,7 +761,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       for (const [index, layer] of layers.entries()) {
         while (adjustments[adjustment]?.after === index)
           stage.grade(adjustments[adjustment++]!.grade);
-        drawPicture(layer, width, height, copies[index]);
+        drawPicture(layer, width, height, copies[index], planes[index]!);
       }
       while (adjustment < adjustments.length)
         stage.grade(adjustments[adjustment++]!.grade);
@@ -555,6 +777,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       grades.clear();
       gl.deleteTexture(ungraded);
       composite?.dispose();
+      refiner?.dispose();
       gl.deleteBuffer(corners);
       gl.deleteProgram(program);
       buffers.length = 0;

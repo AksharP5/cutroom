@@ -9,6 +9,7 @@ import { MagnifyingGlass, Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
 import {
   MEDIA_TRASH,
+  isMediaItem,
   mediaKind,
   mediaKinds,
   mediaSearch,
@@ -534,7 +535,7 @@ export function MediaPanel({
     setListedMedia(
       files
         .flatMap((path) => {
-          const type = mediaKind(path);
+          const type = isMediaItem(path) && mediaKind(path);
           return type && typeof fileVersions[path] === "string"
             ? [{ path, kind: type.kind }]
             : [];

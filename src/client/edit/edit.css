@@ -162,8 +162,17 @@
   width: 100%;
   height: 100%;
 }
-.edit-pipeline[hidden] {
+.edit-pipeline[hidden],
+.edit-pipeline-above[hidden] {
   display: none;
+}
+/* Cutouts drawn over the preview take no input: the preview below keeps picture selection. */
+.edit-pipeline-above {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 .edit-frame {
   position: absolute;

@@ -83,6 +83,7 @@ import { editStyle, takesStyleField } from "./elementStyle";
 import { FREEZE_DIR, localMediaPath, sourceUrl } from "../media";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import { canHaveGrade, editGrade } from "./grade";
+import { canRemoveBackground, editBackground } from "./background";
 import {
   moveKeyframe,
   holdKeyframes,
@@ -857,6 +858,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         fx: [],
         // The still is the source's frame, so the same grade draws it as the clip showed it.
         grade: video.grade,
+        background: null,
         enabled: video.enabled,
         startRef: replace ? video.startRef : null,
       };
@@ -1120,6 +1122,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         automation: null,
         fx: [],
         grade: null,
+        background: null,
         enabled: true,
         startRef: null,
         ...fields,
@@ -1719,6 +1722,22 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const graded = command.grade && editGrade(target.grade, command.grade);
       if (graded && "refusal" in graded)
         throw new TimelineError("unsupported", graded.refusal);
+      if (command.background !== undefined) {
+        if (!canRemoveBackground(target))
+          throw new TimelineError(
+            "unsupported",
+            `${clipName(target)} has no background to remove. Only video clips do.`,
+          );
+        if (
+          command.background &&
+          !command.background.mode &&
+          !target.background
+        )
+          throw new TimelineError(
+            "unsupported",
+            `${clipName(target)} keeps its background. Set background.mode to "remove" first.`,
+          );
+      }
       if (command.fx !== undefined && !target.hasAudio)
         throw new TimelineError(
           "unsupported",
@@ -1783,6 +1802,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             }),
             ...(command.grade !== undefined && {
               grade: graded ? graded.grade : null,
+            }),
+            ...(command.background !== undefined && {
+              background: editBackground(clip.background, command.background),
             }),
             ...(command.enabled !== undefined && {
               enabled: command.enabled,

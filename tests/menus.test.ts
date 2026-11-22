@@ -58,6 +58,7 @@ const timeline = normalizeTimeline({
       automation: null,
       fx: [],
       grade: null,
+      background: null,
       enabled: true,
       hasAudio: false,
       startRef: null,
@@ -88,6 +89,7 @@ const rows = (
     onNormalize() {},
     onFreeze() {},
     onAddVersion() {},
+    onBackground() {},
     ...state,
   }).filter((item): item is MenuEntry => item !== "separator");
 
@@ -194,6 +196,29 @@ test("the clip menu offers an edit only when its key would act on the selection"
       }),
     ),
   ).toEqual([keymap.editLink.label]);
+});
+
+test("the clip menu removes a video's background, keeps it once removed, and offers neither for sound", () => {
+  const labels = (state: Parameters<typeof rows>[0]) =>
+    rows(state).map((item) => itemText(item).label);
+  expect(labels({ selected: ["a"] })).toContain("Remove background");
+  const removed = {
+    ...timeline,
+    clips: timeline.clips.map((clip) => ({
+      ...clip,
+      background: { shrink: 1, soften: 1 },
+    })),
+  };
+  expect(labels({ timeline: removed, selected: ["a"] })).toContain(
+    "Keep background",
+  );
+  const sound = {
+    ...timeline,
+    clips: timeline.clips.map((clip) => ({ ...clip, kind: "audio" as const })),
+  };
+  const offered = labels({ timeline: sound, selected: ["a"] });
+  expect(offered).not.toContain("Remove background");
+  expect(offered).not.toContain("Keep background");
 });
 
 test("the shortcut sheet lists every keymap action once", () => {

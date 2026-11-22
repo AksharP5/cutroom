@@ -70,6 +70,8 @@ const LEFT_BEHIND = new Set([
   ".cutroom/review-ledger.json",
   ".cutroom/review.v1.json",
   ".cutroom/history-skips.json",
+  // An export's cutouts, removed when it ends.
+  "mattes/.export",
 ]);
 /** Replaced atomically outside the project lock, so they are copied as they are when copied. */
 const UNPINNED = new Set([VIEW_PATH, REVIEW_STATE_PATH]);

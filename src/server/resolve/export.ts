@@ -347,7 +347,16 @@ async function writePackage(
   ].sort((a, b) => a - b);
   const trackName = (index: number) => `V${videoTracks.indexOf(index) + 1}`;
   const layers = options.render
-    ? layerTracks(source.timeline, new Set([...media.keys(), ...unreachable]))
+    ? layerTracks(
+        source.timeline,
+        // A clip whose background is removed renders as its cutout, which Resolve can't make.
+        new Set(
+          [...media.keys(), ...unreachable].filter(
+            (id) =>
+              !source.timeline.clips.find((clip) => clip.id === id)?.background,
+          ),
+        ),
+      )
     : [];
   const replaced = new Map<string, Clip>();
   const layerNotes: string[] = [];

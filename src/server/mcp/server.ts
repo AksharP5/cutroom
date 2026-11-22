@@ -29,6 +29,7 @@ import {
   MediaImportSchema,
   MediaRemoveSchema,
   MediaRenameSchema,
+  isMediaItem,
   mediaKind,
   mediaSearch,
   sourceUrl,
@@ -443,7 +444,7 @@ export function createMcpServer(options: McpOptions = {}) {
           const matches = mediaSearch(query);
           const assets = files
             .flatMap((path) => {
-              const media = mediaKind(path);
+              const media = isMediaItem(path) && mediaKind(path);
               return media &&
                 typeof fileVersions[path] === "string" &&
                 matches(path)

@@ -1,3 +1,4 @@
+import { keepBackground, removeBackground } from "./inspector/BackgroundRow";
 import type { Clip } from "../../shared/timeline/schema";
 import { openContextMenu } from "../components/ContextMenu";
 import { showToast, useWorkspace } from "../workspace";
@@ -94,6 +95,8 @@ export function openClipMenu(
         ),
       clicked,
       onAddVersion: addClipVersion,
+      onBackground: (clips, remove) =>
+        void (remove ? removeBackground : keepBackground)(projectId, clips),
       onFreeze: (clip, at) =>
         void editTimeline(projectId, "Freeze frame", () => [
           freezeAt(clip, at),

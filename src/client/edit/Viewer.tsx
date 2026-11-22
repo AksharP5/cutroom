@@ -96,6 +96,8 @@ export function Viewer({
   );
   // The footage pipeline draws the videos beneath the preview while it is active.
   const pipelineCanvas = useRef<HTMLCanvasElement>(null);
+  // Over the preview: cutouts above a title or graphic, such as a presenter over words.
+  const pipelineAbove = useRef<HTMLCanvasElement>(null);
   const pipeline = useRef<ReturnType<typeof attachPipeline>>(null);
   const pipelineEnabled = usePipeline((state) => state.enabled);
   const copies = usePreparing((state) => state.copies);
@@ -104,12 +106,13 @@ export function Viewer({
   const pipelineNative = usePipeline((state) => state.native);
   useEffect(() => {
     const canvas = pipelineCanvas.current;
-    if (!pipelineEnabled || !canvas) return;
+    const above = pipelineAbove.current;
+    if (!pipelineEnabled || !canvas || !above) return;
     // Loaded only once the setting is on.
     let gone = false;
     void import("../pipeline/pipeline")
       .then(({ attachPipeline }) => {
-        if (!gone) pipeline.current = attachPipeline(projectId, canvas);
+        if (!gone) pipeline.current = attachPipeline(projectId, canvas, above);
       })
       .catch((error: unknown) => {
         if (!gone) console.warn("GPU footage playback is unavailable:", error);
@@ -966,6 +969,7 @@ export function Viewer({
             />
           );
         })}
+        <canvas ref={pipelineAbove} className="edit-pipeline-above" hidden />
         {live?.adjustment &&
           !pipelineActive &&
           (typeof Reflect.get(

@@ -215,7 +215,7 @@ export function createWorkspaceRoutes(options: {
             .catch(() => {});
         },
       );
-      const stopMattes = options.subscribeMattes?.(project.id, (status) => {
+      const stopMattes = options.subscribeMattes?.(project, (status) => {
         void stream
           .writeSSE({ event: "matte", data: JSON.stringify(status) })
           .catch(() => {});

@@ -7,6 +7,7 @@ import { transport } from "../edit/transport";
 import { NO_COMPOSITION_ROOT, useWorkspace } from "../workspace";
 import { toReviewStatuses } from "../review";
 import { LintStatus } from "./LintStatus";
+import { MatteStatus } from "./MatteStatus";
 
 /** Only what the app knows: values it cannot read yet are left out, never guessed. */
 export function StatusBar({
@@ -81,6 +82,7 @@ export function StatusBar({
         </button>
       )}
       <span className="status-space" />
+      <MatteStatus projectId={project.id} />
       {composition && (
         <span className="mono">{Number(composition.fps.toFixed(3))} fps</span>
       )}

@@ -1117,3 +1117,60 @@
 .inspector-format-edit {
   margin-left: auto;
 }
+
+/* Remove background. */
+.matte-row .inspector-value {
+  gap: var(--space-1);
+}
+.matte-row .inspector-segments {
+  margin-left: 0;
+}
+.matte-row .inspector-segments button {
+  width: auto;
+  padding: 0 var(--space-2);
+  font-size: var(--type-xs);
+}
+.matte-row .icon-button {
+  margin-left: auto;
+}
+
+/* Status line under the row: progress, elapsed, Stop. Static, no motion. */
+.matte-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--size-inspector-row);
+  padding-left: var(--size-inspector-label);
+  color: var(--text-secondary);
+  font: var(--weight-medium) var(--type-2xs) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+}
+.matte-status .text-button {
+  margin-left: auto;
+  font-family: var(--font-sans);
+  font-size: var(--type-xs);
+}
+.matte-note {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 0 var(--space-2) var(--size-inspector-label);
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+  line-height: var(--leading-tight);
+}
+.matte-note[data-error] {
+  color: var(--danger);
+}
+.matte-note > div {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.matte-details {
+  max-height: calc(var(--size-inspector-row) * 4);
+  overflow: auto;
+  margin: 0;
+  color: var(--text-secondary);
+  font: var(--type-2xs) / var(--leading-tight) var(--font-mono);
+  white-space: pre-wrap;
+}
