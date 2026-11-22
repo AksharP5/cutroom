@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, posix } from "node:path";
 import { z } from "zod";
 import { HttpError } from "../../shared/errors";
 import { COMPONENT_SECONDS, libraryTitle } from "../../shared/library";
 import type { LibraryAdd, LibraryAdded } from "../../shared/library";
-import { sourceUrl } from "../../shared/media";
+import { fileFingerprint, sourceUrl } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { applyAll, toFrames } from "../../shared/timeline/apply";
 import { TimelineError } from "../../shared/timeline/errors";
@@ -272,6 +272,7 @@ export async function addLibraryItem({
         async () => {
           const added: string[] = [];
           const kept: string[] = [];
+          const placedFiles = new Set<string>();
           /**
            * Puts `bytes` at `path` unless the project has them there already. A different file
            * at `path` is the project's own edit: kept, or, with `rename`, left beside a new copy.
@@ -284,6 +285,7 @@ export async function addLibraryItem({
             const hash = sha256(bytes);
             for (let copy = 1; copy < 100; copy++) {
               const target = numbered(path, copy);
+              placedFiles.add(target);
               const absolute = await projectWritePath(project, target, {
                 allowMissing: true,
                 sourceOnly: false,
@@ -304,7 +306,10 @@ export async function addLibraryItem({
                 kept.push(target);
                 return target;
               }
-              if (existing) continue;
+              if (existing) {
+                placedFiles.delete(target);
+                continue;
+              }
               await mkdir(dirname(absolute), { recursive: true });
               await writeFile(absolute, bytes, { flag: "wx" });
               store.captureHistoryCreation(absolute, bytes);
@@ -402,7 +407,28 @@ export async function addLibraryItem({
               : record,
           ];
           await store.writeDocument(project, document);
-          return { clipId: clip.id, composition: scenePath, added, kept };
+          const versions = Object.fromEntries(
+            await Promise.all(
+              [...placedFiles].map(async (path) => [
+                path,
+                fileFingerprint(
+                  path,
+                  await stat(
+                    await projectWritePath(project, path, {
+                      sourceOnly: false,
+                    }),
+                  ),
+                ),
+              ]),
+            ),
+          );
+          return {
+            clipId: clip.id,
+            composition: scenePath,
+            added,
+            kept,
+            versions,
+          };
         },
         who,
         { category: "library" },

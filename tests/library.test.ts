@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   LibraryAddedSchema,
   LibraryCatalogSchema,
+  librarySearch,
 } from "../src/shared/library";
 import { ProjectDocumentSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
@@ -563,4 +564,16 @@ test("the Library reads the release Cutroom's HyperFrames packages pin", async (
   ) as { version: string };
   expect<string>(LIBRARY_RELEASE.version).toBe(pinned.version);
   expect(LIBRARY_RELEASE.commit).toBe(COMMIT);
+});
+
+test("search matches the title as the panel shows it, commas included", () => {
+  const matches = librarySearch("Lower Third, Clean");
+  expect(
+    matches({
+      title: "Lower Third — Clean Bar",
+      name: "lt-clean-bar",
+      tags: [],
+      description: "Minimal",
+    }),
+  ).toBe(true);
 });
