@@ -15,6 +15,7 @@ import {
 const unscoped = [
   "project_create",
   "project_import",
+  "project_duplicate",
   "export_start",
   "export_cancel",
   "lut_import",
@@ -22,6 +23,7 @@ const unscoped = [
 ];
 const reads = [
   "projects_list",
+  "project_duplicate_status",
   "project_read",
   "project_lint",
   "media_list",
@@ -99,7 +101,12 @@ test("claiming, finishing, blocking, and releasing a note and choosing destinati
     ])["mcp_servers.cutroom_studio.tools.review_claim.approval_mode"],
   ).toBe("prompt");
   // Export and project creation reach beyond the project, so not even Always allow covers them.
-  for (const name of ["export_start", "export_cancel", "project_create"])
+  for (const name of [
+    "export_start",
+    "export_cancel",
+    "project_create",
+    "project_duplicate",
+  ])
     expect(asks(name, true)).toEqual({ claude: true, codex: true });
 });
 
@@ -154,6 +161,7 @@ test("native permission rules match every tool advertised over MCP", async () =>
     expect(claudeToolPermissions(true).settings.permissions.ask).toEqual([
       "mcp__cutroom_studio__project_create",
       "mcp__cutroom_studio__project_import",
+      "mcp__cutroom_studio__project_duplicate",
       "mcp__cutroom_studio__media_import",
       "mcp__cutroom_studio__lut_import",
       "mcp__cutroom_studio__export_start",

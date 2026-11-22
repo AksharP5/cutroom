@@ -13,6 +13,8 @@ import { createReviewService } from "./projects/review";
 import { createProjectRoutes } from "./projects/routes";
 import { createMediaImportRoutes } from "./projects/mediaImportRoutes";
 import { sweepMediaImports } from "./projects/mediaImport";
+import { createDuplicateRoutes, sweepDuplicates } from "./projects/duplicate";
+import type { Project } from "../shared/project";
 import { createProjectStore, trackCommittedEntry } from "./projects/store";
 import { EDIT_HISTORY_HEADER } from "../shared/timeline/schema";
 import { createTimelineRoutes } from "./timeline/routes";
@@ -51,7 +53,12 @@ export async function createApp(
   const port = options.port ?? Number(process.env.CUTROOM_PORT || 4317);
   const baseUrl = `http://127.0.0.1:${port}`;
   const projects = await createProjectStore({ dataDir, projectsDir });
-  await Promise.all((await projects.list()).map(sweepMediaImports));
+  const listed = await projects.list();
+  await Promise.all(listed.map(sweepMediaImports));
+  await sweepDuplicates([
+    projects.projectsDir,
+    ...listed.map(({ path }) => dirname(path)),
+  ]);
   const review = createReviewService(projects);
   const mediaImport = createMediaImportRoutes(projects, review);
   const agents = await createAgentService({
@@ -118,6 +125,27 @@ export async function createApp(
   ]
     .map((argument) => `'${argument.replaceAll("'", "'\\''")}'`)
     .join(" ");
+  /** Work in a project that must finish before it can leave the list or be copied. */
+  const busy = (project: Project, then: string, caller?: "agent") => {
+    if (editor.runningExport(project.id))
+      return `"${project.name}" is exporting. Wait for the export to finish or cancel it, then ${then}.`;
+    // The agent asking is waiting on this request, so it is not writing.
+    if (caller === "agent") return;
+    const working = agents
+      .list(project.id)
+      .find(
+        (session) =>
+          session.status === "running" || session.status === "waiting",
+      );
+    if (working)
+      return `An agent is working in "${project.name}" (${working.title}). Stop it or wait for it to finish, then ${then}.`;
+  };
+  const duplicates = createDuplicateRoutes(
+    projects,
+    review,
+    (project, native) =>
+      busy(project, "duplicate it", native ? "agent" : undefined),
+  );
   const timeline = createTimelineRoutes(projects, review);
   const variables = createVariableRoutes(projects, review);
   app.route(
@@ -142,21 +170,11 @@ export async function createApp(
       transcripts,
       media.media.proxyState,
       timeline.timelineSnapshot,
-      (project) => {
-        if (editor.runningExport(project.id))
-          return `"${project.name}" is exporting. Wait for the export to finish or cancel it, then remove the project.`;
-        const working = agents
-          .list(project.id)
-          .find(
-            (session) =>
-              session.status === "running" || session.status === "waiting",
-          );
-        if (working)
-          return `An agent is working in "${project.name}" (${working.title}). Stop it or wait for it to finish, then remove the project.`;
-      },
+      (project) => busy(project, "remove the project"),
       (project) => editor.runningExport(project.id)?.composition,
     ),
   );
+  app.route("/api/cutroom", duplicates.api);
   app.route("/api/cutroom", timeline);
   app.route("/api/cutroom", variables);
   app.route("/api/cutroom", createMotionRoutes(projects, review));
@@ -184,6 +202,7 @@ export async function createApp(
     dataDir,
     projects,
     agents,
+    review,
     editor,
     mediaImport,
     dispose() {
@@ -192,6 +211,7 @@ export async function createApp(
         const failures: unknown[] = [];
         for (const cleanup of [
           () => mediaImport.dispose(),
+          () => duplicates.dispose(),
           () => agents.dispose(),
           () => transcripts.dispose(),
           () => mcp.dispose(),

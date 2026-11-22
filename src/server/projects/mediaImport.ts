@@ -59,7 +59,7 @@ type StagedMedia = {
 
 const directoryFlags =
   constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
-const stagedName =
+export const stagedName =
   /^\.import-(?:([1-9]\d*)-)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.hf[0-9a-f]{6}\.tmp$/;
 
 export async function sweepMediaImports(project: Pick<Project, "path">) {
@@ -98,6 +98,16 @@ export async function sweepMediaImports(project: Pick<Project, "path">) {
 
 // Copies across all projects share a disk-space check. Hard links can still land immediately.
 let copyQueue = Promise.resolve();
+
+/** Runs one batch of byte copies after every batch queued before it, across imports and duplicates. */
+export function onCopyQueue<T>(run: () => Promise<T>): Promise<T> {
+  const pending = copyQueue.then(run);
+  copyQueue = pending.then(
+    () => {},
+    () => {},
+  );
+  return pending;
+}
 
 export async function importMedia(
   store: ProjectStore,
@@ -163,7 +173,7 @@ export async function importMedia(
 
     const copies = staged.filter((entry) => !entry.linked);
     if (copies.length) {
-      const pending = copyQueue.then(async () => {
+      await onCopyQueue(async () => {
         signal.throwIfAborted();
         try {
           await copyMedia(pinned, copies, signal, options.progress);
@@ -172,8 +182,6 @@ export async function importMedia(
           throw error;
         }
       });
-      copyQueue = pending.catch(() => {});
-      await pending;
     }
 
     const label =

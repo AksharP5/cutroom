@@ -19,6 +19,7 @@ const tools = Array.from(cutroomToolRegistry, ([name, tool]) => {
     // These tools can read or write files outside the project.
     projectScoped:
       name !== "export_start" &&
+      name !== "project_duplicate" &&
       name !== "lut_import" &&
       name !== "media_import" &&
       projectId !== undefined &&

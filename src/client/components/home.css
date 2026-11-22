@@ -37,7 +37,8 @@
   padding: var(--space-1) 32px 48px;
   list-style: none;
 }
-.home-project {
+.home-project,
+.home-duplicate {
   display: flex;
   flex-direction: column;
   width: 100%;

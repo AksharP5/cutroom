@@ -614,6 +614,7 @@ export function App() {
               );
               await loadProjects();
             }}
+            onDuplicated={loadProjects}
             onRemove={(item) =>
               api(
                 `/projects/${encodeURIComponent(item.id)}`,
