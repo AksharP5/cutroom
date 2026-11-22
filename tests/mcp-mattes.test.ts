@@ -28,6 +28,11 @@ test.skipIf(!tools)(
     const mattes = createMatteService({
       model: { weights: join(cache, "weights.onnx"), runtime: cache },
       segmenter: new URL("./fixtures/stub-segmenter.ts", import.meta.url),
+      modelFile: {
+        url: "http://127.0.0.1:9/never",
+        bytes: 4,
+        sha256: new Bun.CryptoHasher("sha256").update("stub").digest("hex"),
+      },
     });
     fixture.app.route("/api/cutroom", timeline);
     fixture.app.route(
@@ -184,3 +189,113 @@ test("in the whole app, an agent's matte writes reach the matte routes rather th
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test.skipIf(!tools)(
+  "an agent's Remove on a clip whose matte failed runs it again",
+  async () => {
+    const fixture = await projectFixture();
+    const timeline = createTimelineRoutes(fixture.store, fixture.review);
+    const cache = join(fixture.store.dataDir, "cache");
+    await mkdir(join(cache, "node_modules", "onnxruntime-node"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(cache, "node_modules", "onnxruntime-node", "package.json"),
+      "{}",
+    );
+    await writeFile(join(cache, "weights.onnx"), "stub");
+    const mattes = createMatteService({
+      model: { weights: join(cache, "weights.onnx"), runtime: cache },
+      segmenter: new URL("./fixtures/stub-segmenter.ts", import.meta.url),
+      modelFile: {
+        url: "http://127.0.0.1:9/never",
+        bytes: 4,
+        sha256: new Bun.CryptoHasher("sha256").update("stub").digest("hex"),
+      },
+    });
+    fixture.app.route("/api/cutroom", timeline);
+    fixture.app.route(
+      "/api/cutroom",
+      createMatteRoutes(fixture.store, timeline.timelineSnapshot, mattes),
+    );
+    const project = await fixture.store.create({ name: "Retry" });
+    expect(
+      await Bun.spawn(
+        [
+          ...["ffmpeg", "-v", "error", "-y", "-f", "lavfi"],
+          ...["-i", "color=red:s=64x64:r=30:d=3"],
+          ...["-c:v", "libx264", "-pix_fmt", "yuv420p"],
+          join(project.path, "talk.mp4"),
+        ],
+        { stderr: "pipe" },
+      ).exited,
+    ).toBe(0);
+    await writeFile(
+      join(project.path, "index.html"),
+      '<main data-composition-id="main" data-duration="2" data-fps="30"><video id="talk" muted src="talk.mp4" data-start="0" data-duration="1" data-media-start="1" data-track-index="0" data-cutroom-matte="shrink:1;soften:1"></video></main>',
+    );
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: createMcpHttpHandler({
+        fetch: (url, init) => fixture.app.request(url, init),
+      }),
+    });
+    const client = new Client({ name: "matte-retry-test", version: "1" });
+    try {
+      await client.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${server.port}/mcp`),
+        ),
+      );
+      const call = async (name: string, args: Record<string, unknown> = {}) => {
+        const answer = await client.callTool({
+          name,
+          arguments: { projectId: project.id, ...args },
+        });
+        expect(answer.isError, JSON.stringify(answer.content)).not.toBe(true);
+        return z
+          .object({ structuredContent: z.object({ result: z.unknown() }) })
+          .parse(answer).structuredContent.result;
+      };
+      const state = async () =>
+        z
+          .object({
+            clips: z.record(z.string(), z.object({ state: z.string() })),
+          })
+          .parse(await call("matte_status")).clips.talk!.state;
+      const settle = async (wanted: string) => {
+        for (let tries = 0; tries < 150 && (await state()) !== wanted; tries++)
+          await Bun.sleep(100);
+        return state();
+      };
+      process.env.STUB_SEGMENTER_FAIL = "1";
+      try {
+        await fixture.request(
+          `/projects/${project.id}/mattes/sync?composition=index.html`,
+          "POST",
+        );
+        expect(await settle("failed")).toBe("failed");
+      } finally {
+        delete process.env.STUB_SEGMENTER_FAIL;
+      }
+      const view = TimelineViewSchema.parse(await call("timeline_read"));
+      await call("timeline_edit", {
+        expectedRevision: view.revision,
+        commands: [
+          {
+            type: "setClip",
+            clipId: "talk",
+            background: { mode: "remove" },
+          },
+        ],
+      });
+      expect(await settle("ready")).toBe("ready");
+    } finally {
+      await client.close();
+      server.stop(true);
+      await mattes.close();
+      await fixture.close();
+    }
+  },
+);

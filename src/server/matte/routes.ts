@@ -49,22 +49,33 @@ export function createMatteRoutes(
    */
   api.post("/projects/:id/mattes/sync", async (c) => {
     const project = await projects.get(c.req.param("id"));
+    // `retry` names clips whose failed matte should run again, as Remove on a failed clip asks.
+    const retry = new Set(
+      (c.req.query("retry") ?? "").split(",").filter(Boolean),
+    );
     return c.json(
-      await syncMattes(project, c.req.query("composition") ?? "index.html"),
+      await syncMattes(
+        project,
+        c.req.query("composition") ?? "index.html",
+        retry,
+      ),
     );
   });
   const syncMattes = async (
     project: Awaited<ReturnType<ProjectStore["get"]>>,
     path: string,
+    retry: ReadonlySet<string> = new Set(),
   ) => {
     const composition = canonicalProjectPath(path);
     const view = await timelineSnapshot(project, composition);
     if (!view.timeline) return mattes.status(project);
     const needs = matteNeeds(view.timeline, composition);
     await mattes.release(project, composition, needs);
-    for (const { clip: _clip, ...need } of needs)
+    for (const { clip, ...need } of needs)
       // A source that is offline or unreadable shows its original picture.
-      await mattes.request(project, { ...need, composition }).catch(() => {});
+      await mattes
+        .request(project, { ...need, composition, retry: retry.has(clip) })
+        .catch(() => {});
     return mattes.status(project);
   };
   api.post("/projects/:id/mattes", async (c) => {

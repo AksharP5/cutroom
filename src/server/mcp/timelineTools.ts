@@ -150,9 +150,13 @@ export function registerTimelineTools(
     );
   };
   /** Queues the mattes Remove clips lack, as the open editor does after an edit. */
-  const syncMattes = (projectId: string, composition: string) =>
+  const syncMattes = (
+    projectId: string,
+    composition: string,
+    retry: readonly string[] = [],
+  ) =>
     fetchLocal(
-      `/api/cutroom/projects/${id(projectId)}/mattes/sync?composition=${id(composition)}`,
+      `/api/cutroom/projects/${id(projectId)}/mattes/sync?composition=${id(composition)}&retry=${retry.map(id).join(",")}`,
       { method: "POST" },
     );
   server.registerTool(
@@ -314,7 +318,16 @@ export function registerTimelineTools(
       );
       if (result.isError || !backgrounds.length) return result;
       // The edit has landed; the matte jobs run after it, without an editor open.
-      await syncMattes(projectId, batch.composition);
+      // Remove on a clip whose matte failed runs it again.
+      await syncMattes(
+        projectId,
+        batch.composition,
+        batch.commands.flatMap((command) =>
+          command.type === "setClip" && command.background?.mode === "remove"
+            ? [command.clipId]
+            : [],
+        ),
+      );
       const states = await readBackgrounds(projectId, batch.composition);
       const background = Object.fromEntries(
         backgrounds.flatMap((clipId) => {

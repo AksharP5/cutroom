@@ -380,7 +380,7 @@ A video clip's `background` is null while it keeps its background. When it is re
 { "type": "setClip", "clipId": "interview", "background": null }
 ```
 
-The edit lands at once, as one undo step, and the matte job runs after it. The `timeline_edit` reply carries each changed clip's background under `background`. Shrink and soften need a removed background and take whole source pixels, 0 to 8. Audio, titles, scenes, images and adjustment layers have no background.
+The edit lands at once, as one undo step, and the matte job runs after it. The `timeline_edit` reply carries each changed clip's background under `background`. Setting `{"mode": "remove"}` again on a clip whose matte failed runs it again. Shrink and soften need a removed background and take whole source pixels, 0 to 8. Audio, titles, scenes, images and adjustment layers have no background.
 
 `matte_status` reports the model (`ready`, `missing` with `bytes`, `downloading`, `failed`), every job of the project (its source, frames, frames done, status and elapsed seconds), and each video clip's `background`. An agent that needs the cutout before rendering polls it, as it polls `export_status`, although an export also waits for missing mattes by itself. `matte_cancel` stops a job and keeps the frames already made. The clip keeps `mode: "remove"` until it is set to keep. `matte_download` fetches the 168 MB model. It reaches the internet, so it asks every time, even with Always allow on.
 
