@@ -7,12 +7,9 @@ import {
   parseMasterFxChain,
   processCompositionAudio,
 } from "@hyperframes/engine";
-import {
-  gainAt,
-  scrubPlan,
-  sourcePosition,
-} from "../src/client/scrubAudio/plan";
-import type { Segment } from "../src/client/scrubAudio/plan";
+import { scrubPlan } from "../src/client/scrubAudio/plan";
+import { gainAt, sourcePosition } from "../src/client/scrubAudio/segment";
+import type { Segment } from "../src/client/scrubAudio/segment";
 import { applyAll } from "../src/shared/timeline/apply";
 import type { ClipOrigin } from "../src/shared/timeline/apply";
 import { frames, sampleOf } from "../src/shared/timeline/piece";
