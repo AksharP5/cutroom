@@ -23,6 +23,7 @@ import {
   reportCommittedEntry,
 } from "../api";
 import { useOfflineMedia } from "../edit/offlineMedia";
+import { newTimeline } from "../edit/compositions";
 import { placeAtPlayhead } from "../edit/placeMedia";
 import { addMediaVersion, versionMediaTarget } from "../edit/versions";
 import { clipName } from "../../shared/timeline/labels";
@@ -32,6 +33,7 @@ import { gridStep } from "../home";
 import {
   actionFor,
   focusByKeyboard,
+  hint,
   reachedByKeyboard,
   useKeymap,
 } from "../keymap";
@@ -46,6 +48,7 @@ import { TimecodeText } from "./TimecodeText";
 import { openContextMenu, revealRows } from "./ContextMenu";
 import { Modal } from "./Modal";
 import { CompositionList, useCompositions } from "./CompositionList";
+import { RenameField } from "./RenameField";
 
 const acceptedFiles = mediaKinds
   .flatMap(({ extensions }) => extensions.map((extension) => `.${extension}`))
@@ -73,56 +76,6 @@ const fileName = (path: string) => path.split("/").at(-1) ?? path;
 function focusMediaRow(element: HTMLElement | null | undefined) {
   focusByKeyboard(element);
   element?.scrollIntoView({ block: "nearest", inline: "nearest" });
-}
-
-/** The name in place of the row's label. The extension stays: a rename never converts a file. */
-function RenameField({
-  name,
-  onCommit,
-  onCancel,
-}: {
-  name: string;
-  /** Resolves false when the name was refused and the field stays open to correct it. */
-  onCommit(stem: string, by: "key" | "blur"): Promise<boolean>;
-  onCancel(): void;
-}) {
-  const extension = name.slice(name.lastIndexOf("."));
-  const stem = name.slice(0, -extension.length);
-  const input = useRef<HTMLInputElement>(null);
-  /** Enter or Escape answered; the blur that follows is not a second answer. */
-  const settled = useRef(false);
-  useEffect(() => {
-    input.current?.focus({ preventScroll: true });
-    input.current?.select();
-  }, []);
-  const settle = (value: string, by: "key" | "blur") => {
-    settled.current = true;
-    const next = value.trim();
-    if (!next || next === stem) return onCancel();
-    void onCommit(next, by).then((done) => (settled.current = done));
-  };
-  return (
-    <span className="media-name media-rename">
-      <input
-        ref={input}
-        aria-label={`Rename ${name}`}
-        defaultValue={stem}
-        spellCheck={false}
-        autoComplete="off"
-        onKeyDown={(event) => {
-          // Typing a name never opens, removes, or moves through the rows.
-          event.stopPropagation();
-          if (event.key === "Enter") settle(event.currentTarget.value, "key");
-          if (event.key === "Escape") settle(stem, "key");
-        }}
-        onBlur={(event) => {
-          if (!settled.current) settle(event.currentTarget.value, "blur");
-        }}
-        onDoubleClick={(event) => event.stopPropagation()}
-      />
-      <span>{extension}</span>
-    </span>
-  );
 }
 
 // Every row selects one number, so a timeline edit only renders the rows whose counts changed.
@@ -854,6 +807,15 @@ export function MediaPanel({
           disabled={importing}
           hidden={showing !== "media"}
           onClick={() => picker.current?.click()}
+        >
+          <Plus />
+        </button>
+        <button
+          className="icon-button"
+          aria-label="New timeline"
+          title={hint("fileNewTimeline")}
+          hidden={showing !== "compositions"}
+          onClick={() => newTimeline(projectId)}
         >
           <Plus />
         </button>

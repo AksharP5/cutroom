@@ -5,7 +5,11 @@ import { frameTime } from "../../shared/timeline/apply";
 import { TimelineViewSchema } from "../../shared/timeline/schema";
 import { api, frameTimecode, subscribeProjectEvents } from "../api";
 import { isTimelinePath } from "../../shared/sourcePaths";
-import { duplicateTimeline, openComposition } from "../edit/compositions";
+import {
+  duplicateTimeline,
+  openComposition,
+  renameTimeline,
+} from "../edit/compositions";
 import { placeAtPlayhead } from "../edit/placeMedia";
 import {
   ROOT_COMPOSITION,
@@ -15,8 +19,9 @@ import {
 import { useLint } from "../lint";
 import { MEDIA_DRAG_TYPE, setMediaDrag } from "../timeline/mediaDrag";
 import type { MediaDrag } from "../timeline/mediaDrag";
-import { useFps } from "../workspace";
+import { showToast, useFps } from "../workspace";
 import { openContextMenu } from "./ContextMenu";
+import { RenameField } from "./RenameField";
 import { TimecodeText } from "./TimecodeText";
 
 const ListingSchema = z.object({ compositions: z.array(z.string()) });
@@ -198,8 +203,36 @@ export function CompositionList({
   const open = useTimeline((state) => state.composition);
   const { lint } = useLint(projectId);
   const [focused, setFocused] = useState<string>();
+  const [renaming, setRenaming] = useState<string>();
   const list = useRef<HTMLUListElement>(null);
+  /** A timeline renamed by keyboard, focused once the list shows its new name. */
+  const focusNext = useRef<string>(undefined);
   const tabbable = paths.includes(focused ?? "") ? focused : paths[0];
+  useEffect(() => {
+    const path = focusNext.current;
+    if (!path || !paths.includes(path)) return;
+    focusNext.current = undefined;
+    list.current
+      ?.querySelector<HTMLElement>(
+        `.media-row[data-path="${CSS.escape(path)}"]`,
+      )
+      ?.focus();
+  }, [paths]);
+  /** False when the name was refused after Enter, which leaves the field open to correct. */
+  const rename = (path: string, name: string, by: "key" | "blur") =>
+    renameTimeline(projectId, path, name).then(
+      (renamed) => {
+        if (by === "key") focusNext.current = renamed;
+        setRenaming(undefined);
+        return true;
+      },
+      (error: unknown) => {
+        showToast(error instanceof Error ? error.message : String(error));
+        // A name left by clicking away is dropped with its refusal shown.
+        if (by === "blur") setRenaming(undefined);
+        return by === "blur";
+      },
+    );
   return (
     <ul
       className="media-list"
@@ -256,7 +289,7 @@ export function CompositionList({
             onFocus={(event) => {
               if (event.target === event.currentTarget) setFocused(path);
             }}
-            draggable={placeable}
+            draggable={placeable && renaming !== path}
             onDragStart={(event) => {
               event.dataTransfer.setData(MEDIA_DRAG_TYPE, path);
               event.dataTransfer.effectAllowed = "copy";
@@ -286,6 +319,10 @@ export function CompositionList({
                         },
                       ]
                     : []),
+                  // index.html is named after the project.
+                  ...(isTimelinePath(path) && path !== ROOT_COMPOSITION
+                    ? [{ label: "Rename", run: () => setRenaming(path) }]
+                    : []),
                   "separator",
                   {
                     label: "Insert at playhead",
@@ -311,7 +348,16 @@ export function CompositionList({
                 />
               )}
             </span>
-            <span className="media-name">{compositionName(path)}</span>
+            {renaming === path ? (
+              <RenameField
+                name={compositionName(path)}
+                extension=""
+                onCommit={(name, by) => rename(path, name, by)}
+                onCancel={() => setRenaming(undefined)}
+              />
+            ) : (
+              <span className="media-name">{compositionName(path)}</span>
+            )}
             {findings.length > 0 && (
               <span
                 className="composition-lint"

@@ -200,6 +200,22 @@ export function createProjectViewStore() {
           : current;
       });
     },
+    /** Moves a renamed timeline's view settings, and the project's reopening on it, to its new path. */
+    moveTimeline(project: Project, from: string, to: string) {
+      flush(project);
+      return write(project, (current) => {
+        const settings = preferenceAt(current.timelines, from);
+        if (!settings && current.open !== from) return current;
+        const timelines = { ...current.timelines };
+        delete timelines[from];
+        if (settings) timelines[to] = settings;
+        return {
+          ...current,
+          timelines,
+          ...(current.open === from && { open: to }),
+        };
+      });
+    },
     /** Drops the view settings of a timeline whose file is gone, as when its duplicate is undone. */
     forgetTimeline(project: Project, path: string) {
       flush(project);

@@ -127,7 +127,7 @@ export async function mediaUses(project: Project, raw: string) {
 }
 
 /** Read only editable sources, resolving references against each source's directory. */
-async function referenceEdits(
+export async function referenceEdits(
   project: Project,
   names: Map<string, string>,
   freeze: boolean,
@@ -232,7 +232,8 @@ async function referenceEdits(
   return edits;
 }
 
-function moveFiles(
+/** Renames files, then runs `writeSources`; a failure puts every file back. */
+export function moveFiles(
   moves: { absolute: string; destination: string }[],
   writeSources?: () => void,
 ) {

@@ -135,3 +135,56 @@ test("Undo says which timeline it changed when that is not the open one, even fo
   await page.keyboard.press("Control+z");
   await expect(page.getByText(/in index\.html\.$/)).toBeVisible();
 });
+
+test("Ctrl+N adds an empty timeline and opens it, Rename keeps it open under its new name, and undo takes both back", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Reel", duration: 4 },
+      })
+    ).json(),
+  );
+  await page.goto(`/#project/${project.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  const media = page.getByRole("region", { name: "Media", exact: true });
+  const path = page.getByRole("navigation", { name: "Composition" });
+  await expect(timeline.locator("[data-clip]")).toHaveCount(3);
+
+  await timeline.locator("[data-clip]").first().click();
+  await page.keyboard.press("Control+n");
+  await expect(path).toHaveText("Timeline 2");
+  await expect(timeline.locator("[data-clip]")).toHaveCount(0);
+  await media.getByRole("button", { name: /^Compositions/ }).click();
+  const list = media.getByRole("list", { name: "Compositions" });
+  const row = (file: string) => list.locator(`[data-path="${file}"]`);
+  await expect(row("Timeline 2.html")).toHaveAttribute("aria-current", "true");
+  // The main timeline is named after the project, so it has no Rename.
+  await row("index.html").click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Rename" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await row("Timeline 2.html").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  const field = list.getByRole("textbox", { name: "Rename Timeline 2" });
+  await field.fill("B-roll");
+  await field.press("Enter");
+  await expect(row("B-roll.html")).toHaveAttribute("aria-current", "true");
+  await expect(path).toHaveText("B-roll");
+  await expect(row("Timeline 2.html")).toHaveCount(0);
+
+  await timeline.click({ position: { x: 400, y: 10 } });
+  await page.keyboard.press("Control+z");
+  await expect(
+    page.getByText("Renamed B-roll back to Timeline 2."),
+  ).toBeVisible();
+  await expect(path).toHaveText("Timeline 2");
+  await expect(row("Timeline 2.html")).toHaveAttribute("aria-current", "true");
+  await page.keyboard.press("Control+z");
+  await expect(page.getByText("Undid Create Timeline 2.")).toBeVisible();
+  await expect(path).toHaveCount(0);
+  await expect(timeline.locator("[data-clip]")).toHaveCount(3);
+  await expect(list.getByRole("listitem")).toHaveCount(1);
+});

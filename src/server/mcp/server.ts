@@ -17,7 +17,9 @@ import {
   CutWordsSchema,
   DuplicateTimelineSchema,
   ImportProjectSchema,
+  NewTimelineSchema,
   RenameProjectSchema,
+  RenameTimelineSchema,
   SourceWriteSchema,
   TranscribeInputSchema,
   TranscriptImportSchema,
@@ -494,6 +496,28 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     ({ projectId, ...input }) =>
       request(`/projects/${id(projectId)}/timelines/duplicate`, "POST", input),
+  );
+  registry.registerTool(
+    "timeline_rename",
+    {
+      description:
+        "Rename a timeline, as one undo step. Its tracks, markers, in/out, view settings, transcripts, captions, review notes and edit attribution follow it, and a timeline that plays it as a scene is pointed at the new name. index.html is the main timeline and is named after the project, so it cannot be renamed. Refused while the timeline is exporting. Returns the new composition path; use it as composition from then on.",
+      inputSchema: RenameTimelineSchema.extend(project),
+      annotations: edit,
+    },
+    ({ projectId, ...input }) =>
+      request(`/projects/${id(projectId)}/timelines/rename`, "POST", input),
+  );
+  registry.registerTool(
+    "timeline_create",
+    {
+      description:
+        "Add a new empty timeline to the project, as one undo step, like New Timeline in an editor: the main timeline's picture size and frame rate, no clips. Returns its composition path; pass it as composition to timeline_edit and every other timeline tool to build it.",
+      inputSchema: NewTimelineSchema.extend(project),
+      annotations: edit,
+    },
+    ({ projectId, ...input }) =>
+      request(`/projects/${id(projectId)}/timelines`, "POST", input),
   );
   registry.registerTool(
     "media_remove",

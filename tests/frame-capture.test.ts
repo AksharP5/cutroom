@@ -553,3 +553,26 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   },
   60_000,
 );
+
+test.skipIf(!browserExecutable())(
+  "a thumbnail of a timeline renamed away fails at once instead of holding the capture queue",
+  async () => {
+    const fixture = await captureFixture();
+    const thumbnail = (file: string, time: number) =>
+      fetch(
+        `${fixture.baseUrl}/api/projects/${fixture.project.id}/thumbnail/${file}?t=${time}&format=png&output=source`,
+      );
+    try {
+      const started = performance.now();
+      const missing = await thumbnail("Cut.html", 0);
+      expect(missing.ok).toBe(false);
+      // Not the 20 s readiness wait, which held every capture queued behind it.
+      expect(performance.now() - started).toBeLessThan(10_000);
+      // The failed capture leaves the renderer working.
+      expect((await thumbnail("index.html", 0)).status).toBe(200);
+    } finally {
+      await fixture.close();
+    }
+  },
+  60_000,
+);

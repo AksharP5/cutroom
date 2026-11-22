@@ -190,7 +190,10 @@ export async function toolSubject(
       return undefined;
     }
     case "timeline_duplicate":
+    case "timeline_rename":
       return fileName(text("composition") ?? "index.html");
+    case "timeline_create":
+      return text("name");
     case "media_rename":
     case "media_remove": {
       const media = text("path");

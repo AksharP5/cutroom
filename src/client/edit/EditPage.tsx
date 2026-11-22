@@ -71,7 +71,7 @@ import {
 } from "./source";
 import { SourceViewer } from "./SourceViewer";
 import { CompositionPath } from "./CompositionPath";
-import { lastTimeline } from "./compositions";
+import { lastTimeline, newTimeline } from "./compositions";
 import { ToolButtons } from "./ToolButtons";
 import { createJog, jogKeyOf } from "./jog";
 import { CodePanel } from "./code/CodePanel";
@@ -585,6 +585,7 @@ export function EditPage({
     },
     clipChangeClipDuration: () => timingField("Duration"),
     clipChangeClipSpeed: () => timingField("Speed"),
+    fileNewTimeline: () => newTimeline(projectId),
     editUndo: () => step("undo"),
     editRedo: () => step("redo"),
     workspaceViewerModeCinemaViewer: toggleFullscreen,
