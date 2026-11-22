@@ -67,25 +67,35 @@ export function chunksNear(
  * The PCM the audio thread holds, least recently wanted out first. Samples go to `send` and are
  * not kept here; `drop` tells the audio thread to let a chunk go. Nothing waits on a fetch: a
  * chunk that has not arrived plays as silence.
+ *
+ * A source is read one chunk at a time until a chunk arrives: while its file is being made it is
+ * asked again every `retryMs`, and after a failed read again after a doubling wait, up to 30
+ * times that. A source with no sound is not asked again.
  */
 export function createChunkCache({
   load,
   send,
   drop,
   capBytes = CACHE_BYTES,
+  retryMs = 1000,
 }: {
   load(chunk: Chunk, signal: AbortSignal): Promise<Loaded>;
   send(chunk: Chunk, samples: Int16Array): void;
   drop(chunk: Chunk): void;
   capBytes?: number;
+  retryMs?: number;
 }) {
   const held = new Map<string, { chunk: Chunk; bytes: number }>();
-  const loading = new Set<string>();
+  const loading = new Map<string, AbortController>();
   const silent = new Set<string>();
-  const closing = new AbortController();
+  /** Sources a chunk has arrived from since their last failure. */
+  const ready = new Set<string>();
+  const probing = new Set<string>();
+  const waiting = new Map<string, { until: number; delay: number }>();
   let wanted = new Set<string>();
   let latest: readonly Chunk[] = [];
-  let retry: ReturnType<typeof setTimeout> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
   const bytes = () => [...held.values()].reduce((sum, c) => sum + c.bytes, 0);
 
   function evict() {
@@ -99,29 +109,61 @@ export function createChunkCache({
     }
   }
 
-  function fetchChunk(chunk: Chunk, id: string) {
-    loading.add(id);
-    load(chunk, closing.signal)
+  function wait(source: string, delay: number) {
+    ready.delete(source);
+    waiting.set(source, { until: performance.now() + delay, delay });
+    schedule();
+  }
+
+  function schedule() {
+    if (timer !== undefined || closed || !waiting.size) return;
+    const next = Math.min(...[...waiting.values()].map(({ until }) => until));
+    timer = setTimeout(
+      () => {
+        timer = undefined;
+        cache.want(latest);
+      },
+      Math.max(0, next - performance.now()),
+    );
+  }
+
+  function fetchChunk(chunk: Chunk, id: string, source: string) {
+    const controller = new AbortController();
+    loading.set(id, controller);
+    load(chunk, controller.signal)
       .then((loaded) => {
-        if (closing.signal.aborted) return;
-        if (loaded.kind === "silent") silent.add(sourceId(chunk.source));
-        if (loaded.kind === "pending")
-          retry ??= setTimeout(() => {
-            retry = undefined;
-            cache.want(latest);
-          }, 1000);
-        if (loaded.kind !== "samples") return;
+        if (controller.signal.aborted) return;
+        if (loaded.kind === "silent") {
+          silent.add(source);
+          waiting.delete(source);
+          return;
+        }
+        if (loaded.kind === "pending") return wait(source, retryMs);
         held.set(id, { chunk, bytes: loaded.samples.byteLength });
         send(chunk, loaded.samples);
         evict();
+        waiting.delete(source);
+        if (ready.has(source)) return;
+        ready.add(source);
+        probing.delete(source);
+        cache.want(latest);
       })
       .catch((error: unknown) => {
-        if (closing.signal.aborted) return;
-        // A source that fails to read stays silent until its version changes.
-        silent.add(sourceId(chunk.source));
-        console.warn(`Scrub audio could not read ${chunk.source.path}`, error);
+        if (controller.signal.aborted) return;
+        const delay = Math.min(
+          30 * retryMs,
+          (waiting.get(source)?.delay ?? retryMs / 2) * 2,
+        );
+        console.warn(
+          `Scrub audio could not read ${chunk.source.path}; trying again in ${delay} ms`,
+          error,
+        );
+        wait(source, delay);
       })
-      .finally(() => loading.delete(id));
+      .finally(() => {
+        if (loading.get(id) === controller) loading.delete(id);
+        if (!ready.has(source)) probing.delete(source);
+      });
   }
 
   const cache = {
@@ -132,21 +174,38 @@ export function createChunkCache({
         .filter(({ source }) => !silent.has(sourceId(source)))
         .slice(0, Math.floor(capBytes / CHUNK_BYTES));
       wanted = new Set(fits.map(chunkId));
+      for (const [id, controller] of loading)
+        if (!wanted.has(id)) {
+          controller.abort();
+          loading.delete(id);
+        }
+      const now = performance.now();
       for (const chunk of fits) {
         const id = chunkId(chunk);
         const entry = held.get(id);
         if (entry) {
           held.delete(id);
           held.set(id, entry);
-        } else if (!loading.has(id)) fetchChunk(chunk, id);
+          continue;
+        }
+        if (loading.has(id)) continue;
+        const source = sourceId(chunk.source);
+        if (!ready.has(source)) {
+          if (probing.has(source) || (waiting.get(source)?.until ?? 0) > now)
+            continue;
+          probing.add(source);
+        }
+        fetchChunk(chunk, id, source);
       }
       evict();
+      schedule();
     },
     /** Chunk ids held, least recently wanted first. */
     held: () => [...held.keys()],
     close() {
-      closing.abort();
-      clearTimeout(retry);
+      closed = true;
+      for (const controller of loading.values()) controller.abort();
+      clearTimeout(timer);
     },
   };
   return cache;
@@ -167,14 +226,15 @@ export async function loadChunk(
     await response.body?.cancel();
     return { kind: "pending" };
   }
-  if (response.status === 422) {
-    await response.body?.cancel();
-    return { kind: "silent" };
-  }
   // The chunk starts past the end of the file: held as empty, so it is not asked for again.
   if (response.status === 416) {
     await response.body?.cancel();
     return { kind: "samples", samples: new Int16Array(0) };
+  }
+  // 422: the file has no sound. Any other refusal will not change by asking again.
+  if (response.status >= 400 && response.status < 500) {
+    await response.body?.cancel();
+    return { kind: "silent" };
   }
   if (!response.ok)
     throw new Error(`${response.status} ${await response.text()}`);

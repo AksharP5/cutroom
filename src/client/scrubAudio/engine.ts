@@ -54,6 +54,7 @@ export function startScrubAudio(transport: Transport) {
   let anchor: { frame: number; position: number; velocity: number } | null =
     null;
   let suspend = 0;
+  let resuming: Promise<void> | null = null;
   let parked = 0;
   const probes: ((probe: Probe) => void)[] = [];
   const hook: ScrubAudioProbe = {
@@ -73,15 +74,19 @@ export function startScrubAudio(transport: Transport) {
     audio?.node?.port.postMessage(message, transfer);
   }
 
-  /** The audio frame heard at page time `at`, on the output clock where the device reports one. */
+  /**
+   * The audio frame the device plays at page time `at`, or null until the output clock runs.
+   * Just after the context starts or resumes, the clock still reports where it stopped.
+   */
   function frameAt(context: AudioContext, at: number) {
     const { contextTime, performanceTime } = context.getOutputTimestamp();
     if (
       context.state !== "running" ||
+      !contextTime ||
       !performanceTime ||
-      contextTime === undefined
+      at - performanceTime > 100
     )
-      return Math.round(context.currentTime * SAMPLE_RATE);
+      return null;
     return Math.round(
       (contextTime + (at - performanceTime) / 1000) * SAMPLE_RATE,
     );
@@ -130,9 +135,10 @@ export function startScrubAudio(transport: Transport) {
         anchor = null;
         sync();
       })
-      .catch((error: unknown) =>
-        console.warn("Scrub audio could not start", error),
-      );
+      .catch((error: unknown) => {
+        console.warn("Scrub audio could not start", error);
+        sync();
+      });
   }
 
   /** The segments that can sound, rebuilt only when the timeline or the file listing changed. */
@@ -166,21 +172,25 @@ export function startScrubAudio(transport: Transport) {
     audio?.cache.want(chunksNear(near, at - REACH, at + REACH, at));
   }
 
-  function stop() {
-    if (!anchor) return;
+  /** Stops any sound, and lets the context sleep once nothing has sounded for a while. */
+  function quiet() {
+    if (anchor) post({ type: "stop" });
     anchor = null;
-    post({ type: "stop" });
-    clearTimeout(suspend);
-    const { context } = audio!;
-    suspend = window.setTimeout(() => void context.suspend(), SUSPEND_MS);
+    if (!audio || suspend || audio.context.state !== "running") return;
+    const { context } = audio;
+    suspend = window.setTimeout(() => {
+      suspend = 0;
+      void context.suspend();
+    }, SUSPEND_MS);
   }
 
   function sync() {
     const { state, frame, fps, muted } = transport.use.getState();
     const speed = velocity(state);
-    const position = (frame * SAMPLE_RATE * fps.den) / fps.num;
+    const samplesPerFrame = (SAMPLE_RATE * fps.den) / fps.num;
+    const position = frame * samplesPerFrame;
     if (state.kind !== "shuttle" || muted) {
-      stop();
+      quiet();
       // A parked playhead fetches what is under it, once the engine has been used.
       if (audio?.node && state.kind === "stopped") {
         clearTimeout(parked);
@@ -192,21 +202,32 @@ export function startScrubAudio(transport: Transport) {
     const { context, node } = audio;
     if (!node) return;
     clearTimeout(suspend);
-    if (context.state !== "running") void context.resume();
+    suspend = 0;
     hold(position);
+    if (context.state !== "running") {
+      resuming ??= context.resume().finally(() => {
+        resuming = null;
+        sync();
+      });
+      return;
+    }
     const now = performance.now();
     const heard = frameAt(context, now);
+    // The next frame of the shuttle asks again.
+    if (heard === null) return;
+    const at = (transport.shuttlePosition(now) ?? frame) * samplesPerFrame;
     if (anchor?.velocity === speed) {
-      // The transport floors its frame, so the playhead is up to a frame past `position`. It
-      // moves once per display refresh, which at speed spans several frames: closer than a
-      // frame or a refresh, whichever is longer, the sound is in step with the picture.
-      const frame = (SAMPLE_RATE * fps.den) / fps.num;
-      const tolerance = Math.max(frame, (Math.abs(speed) * SAMPLE_RATE) / 60);
+      // The output clock jitters by a few milliseconds, and the picture moves once per display
+      // refresh, which at 8x spans several frames: within a frame or a refresh of motion,
+      // whichever is longer, the sound is in step with the picture.
+      const tolerance = Math.max(
+        samplesPerFrame,
+        (Math.abs(speed) * SAMPLE_RATE) / 60,
+      );
       const sound = anchor.position + (heard - anchor.frame) * speed;
-      if (Math.abs(sound - (position + frame / 2)) <= tolerance + frame / 2)
-        return;
+      if (Math.abs(sound - at) <= tolerance) return;
     }
-    anchor = { frame: heard, position, velocity: speed };
+    anchor = { frame: heard, position: at, velocity: speed };
     post({ type: "run", ...anchor });
   }
 

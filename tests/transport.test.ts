@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { transition, velocity } from "../src/client/edit/transport";
+import {
+  createTransport,
+  transition,
+  velocity,
+} from "../src/client/edit/transport";
 import type {
   TransportEvent,
   TransportState,
@@ -72,4 +76,36 @@ test("scrubbing holds until release, which stops", () => {
   expect(transition({ kind: "playing" }, { type: "release" })).toEqual({
     kind: "playing",
   });
+});
+
+test("a shuttle's position runs between frames at its speed, from where it started", () => {
+  const globals = globalThis as Record<string, unknown>;
+  const stubbed = !globals.requestAnimationFrame;
+  if (stubbed) {
+    globals.requestAnimationFrame = () => 0;
+    globals.cancelAnimationFrame = () => {};
+  }
+  try {
+    const transport = createTransport();
+    transport.setTimeline({
+      fps: { num: 30, den: 1 },
+      duration: 900,
+      range: { in: null, out: null },
+    });
+    transport.seek(300);
+    expect(transport.shuttlePosition(performance.now())).toBeNull();
+    transport.dispatch(reverse);
+    transport.dispatch(reverse);
+    const at = performance.now();
+    // Half a second at -2x on 30 fps is 30 frames back.
+    expect(
+      transport.shuttlePosition(at + 500)! - transport.shuttlePosition(at)!,
+    ).toBeCloseTo(-30, 6);
+    expect(transport.shuttlePosition(at)).toBeCloseTo(300, 0);
+  } finally {
+    if (stubbed) {
+      delete globals.requestAnimationFrame;
+      delete globals.cancelAnimationFrame;
+    }
+  }
 });

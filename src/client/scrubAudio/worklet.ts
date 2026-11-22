@@ -1,7 +1,7 @@
 // Runs on the audio thread. Holds the segments near the playhead and their PCM chunks, and
 // renders whatever motion the engine last sent. Idle, it returns at once.
-import { renderBlock } from "./render";
-import type { Motion, Reading, Voice } from "./render";
+import { Player } from "./render";
+import type { Motion } from "./render";
 import { sourceId } from "./segment";
 import type { Segment } from "./segment";
 
@@ -40,17 +40,10 @@ export type FromWorklet =
   /** The first audible block after a `run`, by the audio frame it starts at. */
   | { type: "sounded"; frame: number };
 
-/** Fades in and out over 5 ms, so starting and stopping never click. */
-const FADE_STEP = 1 / 240;
-
 class ScrubAudio extends AudioWorkletProcessor {
   sources = new Map<string, Map<number, Int16Array>>();
-  voices: Voice[] = [];
-  motion: Motion | null = null;
-  level = 0;
-  target = 0;
+  player = new Player();
   listening = false;
-  reading: Reading = { peak: 0, source: null };
   probe: Probe = { frames: 0, runs: 0, peak: 0, source: null };
 
   constructor() {
@@ -58,10 +51,12 @@ class ScrubAudio extends AudioWorkletProcessor {
     this.port.onmessage = ({ data }: MessageEvent<ToWorklet>) => {
       switch (data.type) {
         case "segments":
-          this.voices = data.segments.map((segment) => ({
-            segment,
-            chunks: this.chunksOf(sourceId(segment.source)),
-          }));
+          this.player.setVoices(
+            data.segments.map((segment) => ({
+              segment,
+              chunks: this.chunksOf(sourceId(segment.source)),
+            })),
+          );
           return;
         case "chunk":
           this.chunksOf(data.source).set(data.index, data.samples);
@@ -70,17 +65,16 @@ class ScrubAudio extends AudioWorkletProcessor {
           this.sources.get(data.source)?.delete(data.index);
           return;
         case "run":
-          this.motion = {
+          this.player.run({
             frame: data.frame,
             position: data.position,
             velocity: data.velocity,
-          };
-          this.target = 1;
+          });
           this.listening = true;
           this.probe.runs++;
           return;
         case "stop":
-          this.target = 0;
+          this.player.stop();
           return;
         case "probe":
           this.port.postMessage({ type: "probe", ...this.probe });
@@ -96,23 +90,12 @@ class ScrubAudio extends AudioWorkletProcessor {
   }
 
   process(_: Float32Array[][], outputs: Float32Array[][]) {
-    if (!this.motion) return true;
     const out = outputs[0]![0]!;
-    renderBlock(out, currentFrame, this.motion, this.voices, this.reading);
-    let peak = 0;
-    for (let i = 0; i < out.length; i++) {
-      if (this.level !== this.target)
-        this.level =
-          this.target > this.level
-            ? Math.min(this.target, this.level + FADE_STEP)
-            : Math.max(this.target, this.level - FADE_STEP);
-      out[i]! *= this.level;
-      peak = Math.max(peak, Math.abs(out[i]!));
-    }
-    if (!this.level && !this.target) this.motion = null;
+    if (!this.player.process(out, currentFrame)) return true;
+    const { peak, source } = this.player.reading;
     this.probe.frames += out.length;
     this.probe.peak = Math.max(this.probe.peak, peak);
-    this.probe.source = this.reading.source;
+    this.probe.source = source;
     if (this.listening && peak > 0) {
       this.listening = false;
       this.port.postMessage({ type: "sounded", frame: currentFrame });
