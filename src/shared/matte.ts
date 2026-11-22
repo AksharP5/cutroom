@@ -11,6 +11,8 @@ export const MATTE_MODEL = {
   name: "u2net_human_seg",
   url: "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx",
   bytes: 175_997_641,
+  /** The weights are trusted only with these bytes; a truncated or altered file is fetched again. */
+  sha256: "01eb6a29a5c4d8edb30b56adad9bb3a2a0535338e480724a213e0acfd2d1c73c",
 } as const;
 
 /** The download question's size, as "168 MB". */
@@ -28,6 +30,8 @@ export const MatteJobSchema = z.object({
   src: z.string(),
   first: frame,
   frames: z.number().int().positive(),
+  /** Frames in the source: a clip that plays to its end needs no frame past it. */
+  count: z.number().int().positive(),
   /** Frames already made. */
   done: frame,
   status: z.enum([
@@ -67,8 +71,11 @@ export type MatteStatus = z.infer<typeof MatteStatusSchema>;
 
 /** A matte file's source frames, as the manifest records them. */
 export const MatteEntrySchema = z.object({
-  /** The matte, relative to the project. */
-  file: z.string(),
+  /** The matte, relative to the project: a file directly in `mattes/`, or empty with no subject. */
+  file: z
+    .string()
+    .regex(/^(mattes\/[^/\\]+\.mp4)?$/)
+    .refine((file) => !file.includes(".."), "A matte stays in mattes/."),
   src: z.string(),
   /** The source's size and modification time when the matte was made; any change makes it stale. */
   size: z.number().int().nonnegative(),
@@ -78,6 +85,8 @@ export const MatteEntrySchema = z.object({
   /** Source media time of frame 0 and frames per second: frame k is at `start + k / rate`. */
   start: z.number().finite(),
   rate: z.number().positive(),
+  /** Frames in the source when the matte was made. */
+  count: z.number().int().positive(),
   model: z.string(),
   /** False when the model found nothing to keep; no file is written. */
   subject: z.boolean(),

@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -25,16 +33,19 @@ import type {
   MatteStatus,
 } from "../../shared/matte.ts";
 import { frameGrid } from "../media/frames.ts";
+import { localMediaInputOptions } from "../media/input.ts";
+import { z } from "zod";
 import { projectPath, resolveProjectPath } from "../projects/path.ts";
 import { MatteEventSchema } from "./protocol.ts";
 import type { MatteTask } from "./protocol.ts";
 import {
   downloadWeights,
   hasRuntime,
+  MODEL_FILE,
   hasWeights,
   matteModelPaths,
 } from "./model.ts";
-import type { MatteModelPaths } from "./model.ts";
+import type { MatteModelPaths, WeightsFile } from "./model.ts";
 
 type MatteProject = Pick<Project, "id" | "path">;
 const MANIFEST = `${MATTES_FOLDER}/mattes.json`;
@@ -49,9 +60,8 @@ export interface MatteServiceOptions {
   segmenter?: URL;
   /** Threads the model may use, capped so the editor keeps its pace. */
   threads?: number;
-  /** Where the weights download from; tests point it at a local server. */
-  modelUrl?: string;
-  modelBytes?: number;
+  /** The weights to download and trust; tests point it at a local server and a small file. */
+  modelFile?: WeightsFile;
 }
 
 /** A source's frame grid: frame k at `start + k / rate`. */
@@ -63,6 +73,8 @@ interface SourceFrames {
   still: boolean;
   start: number;
   rate: number;
+  /** The rate as FFmpeg reads it, such as `30000/1001`. */
+  rateText: string;
   variable: boolean;
   /** Frames in the file. */
   count: number;
@@ -88,6 +100,80 @@ const stamp = (seconds: number) =>
     )
     .join("-");
 
+const RatesSchema = z.object({
+  streams: z.array(
+    z.object({
+      r_frame_rate: z.string().optional(),
+      avg_frame_rate: z.string().optional(),
+      nb_frames: z.string().optional(),
+      duration: z.string().optional(),
+    }),
+  ),
+});
+/** `num/den` as FFmpeg writes it, or null for `0/0` and anything else. */
+const fraction = (text: string | undefined) => {
+  const match = /^(\d+)\/(\d+)$/.exec(text ?? "");
+  const [num, den] = match ? [Number(match[1]), Number(match[2])] : [0, 0];
+  return num > 0 && den > 0
+    ? { text: `${num}/${den}`, value: num / den }
+    : null;
+};
+
+/**
+ * A video's frame grid and frame count. The rate stays a fraction, as FFmpeg reads it, so 29.97
+ * fps footage is 30000/1001 everywhere and never a rounded decimal. A constant-rate file counts
+ * its frames from the container where it records them; a file that plays to its last frame is
+ * then matted to its last frame.
+ */
+async function probeVideo(absolute: string) {
+  const ffprobe = findFfBinary("ffprobe", { configuredMustExist: true });
+  if (!ffprobe) throw new HttpError(503, "FFmpeg is not installed.");
+  const child = Bun.spawn(
+    [
+      ffprobe,
+      ...["-v", "error", ...localMediaInputOptions, "-select_streams", "v:0"],
+      ...[
+        "-show_entries",
+        "stream=r_frame_rate,avg_frame_rate,nb_frames,duration",
+      ],
+      ...["-of", "json", absolute],
+    ],
+    { stdout: "pipe", stderr: "ignore" },
+  );
+  const [text, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    child.exited,
+  ]);
+  const stream =
+    code === 0 ? RatesSchema.parse(JSON.parse(text)).streams[0] : undefined;
+  if (!stream) throw new HttpError(422, "FFmpeg could not read the video.");
+  const [metadata, grid] = await Promise.all([
+    extractMediaMetadata(absolute),
+    frameGrid(absolute),
+  ]);
+  // A variable-rate file is read at the slots of its average rate.
+  const rate = grid
+    ? fraction(stream.r_frame_rate)
+    : (fraction(stream.avg_frame_rate) ?? fraction(stream.r_frame_rate));
+  if (!rate) throw new HttpError(422, "The video has no frame rate.");
+  const seconds =
+    Number(stream.duration) ||
+    metadata.videoStreamDurationSeconds ||
+    metadata.durationSeconds;
+  const listed = Number(stream.nb_frames);
+  return {
+    still: false,
+    start: grid?.start ?? videoStartOnMediaTimeline(metadata),
+    rate: rate.value,
+    rateText: rate.text,
+    variable: !grid,
+    count:
+      grid && listed > 0
+        ? listed
+        : Math.max(1, Math.round(seconds * rate.value)),
+  };
+}
+
 /**
  * Makes background mattes, one job at a time across every project, in the order asked. A matte
  * is the model's 8-bit mask of a source frame range, kept as an H.264 MP4 in the project's
@@ -98,6 +184,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
   const paths = options.model ?? matteModelPaths();
   const segmenter = options.segmenter ?? new URL("./u2net.ts", import.meta.url);
   const threads = options.threads ?? 4;
+  const weightsFile = options.modelFile ?? MODEL_FILE;
   const jobs: Job[] = [];
   const listeners = new Map<string, Set<(status: MatteStatus) => void>>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -116,11 +203,11 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         error:
           "Remove background needs the ONNX runtime HyperFrames uses. Run `npx hyperframes remove-background` on any picture once to install it.",
       };
-    return (await hasWeights(paths))
+    return (await hasWeights(paths, weightsFile))
       ? { status: "ready" }
       : {
           status: "missing",
-          bytes: options.modelBytes ?? MATTE_MODEL.bytes,
+          bytes: weightsFile.bytes,
         };
   };
 
@@ -214,37 +301,31 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         still: true,
         start: 0,
         rate: 1,
+        rateText: "1",
         variable: false,
         count: 1,
       };
-    const [metadata, grid] = await Promise.all([
-      extractMediaMetadata(absolute),
-      frameGrid(absolute),
-    ]);
-    const rate = grid?.rate ?? metadata.fps;
-    if (!(rate > 0)) throw new HttpError(422, "The video has no frame rate.");
-    const start = grid?.start ?? videoStartOnMediaTimeline(metadata);
+    const version = `${path}:${info.size}:${info.mtimeMs}`;
+    let probed = probes.get(version);
+    if (!probed) {
+      probed = probeVideo(absolute);
+      probes.set(version, probed);
+      if (probes.size > 256) probes.delete(probes.keys().next().value!);
+      probed.catch(() => probes.delete(version));
+    }
     return {
       absolute,
       path,
       size: info.size,
       mtimeMs: info.mtimeMs,
-      still: false,
-      start,
-      rate,
-      variable: !grid,
-      count: Math.max(
-        1,
-        Math.floor(
-          (metadata.videoStreamDurationSeconds || metadata.durationSeconds) *
-            rate +
-            1e-6,
-        ),
-      ),
+      ...(await probed),
     };
   };
 
-  /** Mattes made from this version of the source. */
+  /** Probe results by source version, so edits never re-run ffprobe on an unchanged file. */
+  const probes = new Map<string, ReturnType<typeof probeVideo>>();
+
+  /** Mattes made from this version of the source. */ /** Mattes made from this version of the source. */
   const fresh = (manifest: MatteManifest, source: SourceFrames) =>
     manifest.mattes.filter(
       (entry) =>
@@ -290,10 +371,15 @@ export function createMatteService(options: MatteServiceOptions = {}) {
     }
     if (running) return;
     running = next;
-    void run(next).finally(() => {
-      running = null;
-      void pump();
-    });
+    // Any failure, such as the project folder disappearing, ends as this job's error.
+    void run(next)
+      .catch((error: unknown) =>
+        fail(next, error instanceof Error ? error.message : String(error)),
+      )
+      .finally(() => {
+        running = null;
+        void pump();
+      });
   };
 
   const run = async (job: Job) => {
@@ -303,13 +389,12 @@ export function createMatteService(options: MatteServiceOptions = {}) {
     const from = source.start + job.first / source.rate;
     const to = source.start + (job.first + job.frames) / source.rate;
     const name = basename(source.path, extname(source.path));
-    await mkdir(await projectPath(project, MATTES_FOLDER, true), {
-      recursive: true,
-    });
-    let file = `${MATTES_FOLDER}/${name} ${stamp(from)} to ${stamp(Math.ceil(to))}.mp4`;
-    for (let copy = 2; existsSync(join(project.path, file)); copy++)
-      file = `${MATTES_FOLDER}/${name} ${stamp(from)} to ${stamp(Math.ceil(to))} ${copy}.mp4`;
-    const output = await projectPath(project, file, true);
+    const folder = await projectPath(project, MATTES_FOLDER, true);
+    await mkdir(folder, { recursive: true });
+    // FFmpeg writes into a file this service just created, never through a name that may already
+    // be a link; the finished matte is renamed to a free name.
+    const output = join(folder, `.${randomUUID()}.part.mp4`);
+    await (await open(output, "wx")).close();
     const task: MatteTask = {
       ffmpeg,
       source: source.absolute,
@@ -319,7 +404,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         : {
             seek: Math.max(0, (job.first - 0.5) / source.rate),
             frames: job.frames,
-            rate: String(source.rate),
+            rate: source.rateText,
             variable: source.variable,
           },
       segmenter: segmenter.href,
@@ -352,8 +437,15 @@ export function createMatteService(options: MatteServiceOptions = {}) {
     let line = "";
     const decoder = new TextDecoder();
     const read = (text: string) => {
-      if (!text.trim()) return;
-      const event = MatteEventSchema.parse(JSON.parse(text));
+      // A model or library that prints to stdout leaves lines that are not events.
+      const event = (() => {
+        try {
+          return MatteEventSchema.safeParse(JSON.parse(text)).data;
+        } catch {
+          return undefined;
+        }
+      })();
+      if (!event) return;
       if (event.type === "progress") {
         job.done = event.done;
         changed(project.id);
@@ -372,6 +464,15 @@ export function createMatteService(options: MatteServiceOptions = {}) {
     job.endedAt = Date.now();
     job.stop = undefined;
     if (outcome?.type === "done") {
+      let file = "";
+      if (outcome.done > 0 && outcome.subject) {
+        const stem = `${name} ${stamp(from)} to ${stamp(Math.ceil(to))}`;
+        file = `${MATTES_FOLDER}/${stem}.mp4`;
+        for (let copy = 2; await taken(join(folder, basename(file))); copy++)
+          file = `${MATTES_FOLDER}/${stem} ${copy}.mp4`;
+        await rename(output, join(folder, basename(file)));
+      }
+      await rm(output, { force: true });
       if (outcome.done > 0)
         await record(
           project,
@@ -407,6 +508,13 @@ export function createMatteService(options: MatteServiceOptions = {}) {
     );
   };
 
+  /** Whether anything, a dangling link included, has the name. */
+  const taken = (path: string) =>
+    lstat(path).then(
+      () => true,
+      () => false,
+    );
+
   const fail = (job: Job, error: string, memory = false) => {
     job.status = "failed";
     job.error = error;
@@ -414,46 +522,60 @@ export function createMatteService(options: MatteServiceOptions = {}) {
     changed(job.project.id);
   };
 
-  const record = (
+  const record = async (
     project: MatteProject,
     source: SourceFrames,
     file: string,
     first: number,
     frames: number,
     subject: boolean,
-  ) =>
-    updateManifest(project, (manifest) => ({
-      ...manifest,
-      mattes: [
-        // Mattes of an older version of the source are stale.
-        ...manifest.mattes.filter(
-          (entry) =>
-            entry.src !== source.path ||
-            (entry.size === source.size && entry.mtimeMs === source.mtimeMs),
-        ),
-        {
-          file: subject ? file : "",
-          src: source.path,
-          size: source.size,
-          mtimeMs: source.mtimeMs,
-          first,
-          frames,
-          start: source.start,
-          rate: source.rate,
-          model: MATTE_MODEL.name,
-          subject,
-        } satisfies MatteEntry,
-      ],
-    }));
+  ) => {
+    const dropped: string[] = [];
+    await updateManifest(project, (manifest) => {
+      // Mattes of an older version of the source are stale.
+      const stale = (entry: MatteEntry) =>
+        entry.src === source.path &&
+        (entry.size !== source.size || entry.mtimeMs !== source.mtimeMs);
+      dropped.push(
+        ...manifest.mattes
+          .filter(stale)
+          .flatMap(({ file }) => (file ? [file] : [])),
+      );
+      return {
+        ...manifest,
+        mattes: [
+          ...manifest.mattes.filter((entry) => !stale(entry)),
+          {
+            file: subject ? file : "",
+            src: source.path,
+            size: source.size,
+            mtimeMs: source.mtimeMs,
+            first,
+            frames,
+            start: source.start,
+            rate: source.rate,
+            count: source.count,
+            model: MATTE_MODEL.name,
+            subject,
+          } satisfies MatteEntry,
+        ],
+      };
+    });
+    // A file no entry names any more is only disk space; the schema keeps it inside mattes/.
+    for (const stale of dropped)
+      await rm(await projectPath(project, stale, true), { force: true }).catch(
+        () => {},
+      );
+  };
 
-  return {
+  const service = {
     status,
 
     /**
      * Queues the source frames between media times `from` and `to` that have no fresh matte and
      * no job. A range that failed is asked again only with `retry`.
      */
-    async request(
+    async queue(
       project: MatteProject,
       request: { src: string; from: number; to: number; retry?: boolean },
     ) {
@@ -497,6 +619,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
           src: source.path,
           first: gapFirst,
           frames: gapEnd - gapFirst,
+          count: source.count,
           done: 0,
           status: "waiting",
           elapsed: 0,
@@ -547,8 +670,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
             changed();
           },
           download.signal,
-          options.modelUrl,
-          options.modelBytes,
+          weightsFile,
         );
         model = null;
       } catch (error) {
@@ -591,5 +713,25 @@ export function createMatteService(options: MatteServiceOptions = {}) {
       while (running) await new Promise((done) => setTimeout(done, 20));
     },
   };
+  const requests = new Map<string, Promise<unknown>>();
+  const { queue, ...exposed } = service;
+  return {
+    ...exposed,
+    /**
+     * Requests for one project run one after another, so two at once never queue the same
+     * frames twice.
+     */
+    request(
+      project: MatteProject,
+      request: { src: string; from: number; to: number; retry?: boolean },
+    ) {
+      const queued = (requests.get(project.id) ?? Promise.resolve())
+        .catch(() => {})
+        .then(() => queue(project, request));
+      requests.set(project.id, queued);
+      return queued;
+    },
+  };
 }
+
 export type MatteService = ReturnType<typeof createMatteService>;
