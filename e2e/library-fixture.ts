@@ -30,6 +30,15 @@ const fragment = `<div class="fx-word">Library</div>
   tl.fromTo('.fx-word', { opacity: 0 }, { opacity: 1, duration: 0.2 }, startTime);
 -->
 `;
+/** A transition: a full-frame wipe, 1 second, for dropping on a cut. */
+const wipe = `<!doctype html>
+<html><head><meta charset="UTF-8" /></head>
+<body><div id="root" data-composition-id="tr-fixture" data-start="0" data-duration="1" data-width="640" data-height="360">
+<style>[data-composition-id="tr-fixture"] { position: relative; width: 640px; height: 360px; } .wipe { position: absolute; inset: 0; background: #20c0ff; }</style>
+<div class="wipe"></div>
+<script>window.__timelines = window.__timelines || {}; window.__timelines["tr-fixture"] = { pause() {}, seek() {}, time: () => 0, duration: () => 1 };</script>
+</div></body></html>
+`;
 const fixtures = [
   {
     name: "lt-fixture",
@@ -47,6 +56,24 @@ const fixtures = [
       {
         path: "lt-fixture.html",
         target: "compositions/lt-fixture.html",
+        type: "hyperframes:composition",
+      },
+    ],
+  },
+  {
+    name: "tr-fixture",
+    type: "hyperframes:block",
+    title: "Fixture Wipe",
+    description: "A full-frame wipe",
+    tags: ["transition"],
+    dimensions: { width: 640, height: 360 },
+    duration: 1,
+    variables: [],
+    online: false,
+    files: [
+      {
+        path: "tr-fixture.html",
+        target: "compositions/tr-fixture.html",
         type: "hyperframes:composition",
       },
     ],
@@ -78,7 +105,7 @@ const poster = Buffer.from(
  * the panel opens and scrolls at the size owners see. None of them match the fixtures' words.
  */
 export const LIBRARY_SIZE = 448;
-const synthetic = Array.from({ length: LIBRARY_SIZE - 2 }, (_, index) => {
+const synthetic = Array.from({ length: LIBRARY_SIZE - 3 }, (_, index) => {
   const name = `synthetic-${index + 1}`;
   const category = LIBRARY_CATEGORIES[index % LIBRARY_CATEGORIES.length]!;
   return {
@@ -120,10 +147,12 @@ export async function seedLibrary() {
     }),
   );
   for (const { name } of items)
-    if (name !== "fx-fixture") await write(`posters/${name}.png`, poster);
+    if (name.startsWith("synthetic") || name === "lt-fixture")
+      await write(`posters/${name}.png`, poster);
   for (const [name, target, content] of [
     ["lt-fixture", "compositions/lt-fixture.html", bar],
     ["fx-fixture", "compositions/components/fx-fixture.html", fragment],
+    ["tr-fixture", "compositions/tr-fixture.html", wipe],
   ] as const) {
     await write(`items/${name}/${target}`, content);
     await write(

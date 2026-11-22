@@ -43,6 +43,7 @@ import type { Drag, Gesture, Hit, Outcome, Preview, Tool } from "./gesture";
 import { LENGTH_MIN_WIDTH, clipsByTrack, rowsBetween } from "./math";
 import type { Row, RowLayout, TrackClips } from "./math";
 import { addFromLibrary } from "../edit/library";
+import { showToast } from "../workspace";
 import { MEDIA_DRAG_TYPE, mediaDrag } from "./mediaDrag";
 import { slideClips } from "./motion";
 import type { Offset } from "./motion";
@@ -1145,14 +1146,51 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const media = mediaDrag();
     if (!media || !event.dataTransfer.types.includes(MEDIA_DRAG_TYPE))
       return null;
-    const { row, create } = destination(media.kind, event.clientY);
-    destinationRow.current = create.length ? row : null;
-    const { timeline, playhead } = latest.current;
+    const target = destination(media.kind, event.clientY);
+    const { timeline, playhead, rows, newRows } = latest.current;
     const dragged = placedMedia(
       media,
       timeline.fps,
       latest.current.composition,
     );
+    let { row, create } = target;
+    let frame = frameAt(event.clientX);
+    let snapping = reach(event.ctrlKey || event.metaKey);
+    // A library transition dropped within 8px of a cut plays over both clips: centred on the
+    // cut, on the track above.
+    const ppf = view()?.ppf;
+    const cut =
+      media.library?.category === "transitions" && ppf
+        ? timeline.clips
+            .filter((clip) => clip.track === row.track.index)
+            .flatMap((clip) =>
+              timeline.clips.some(
+                (next) =>
+                  next.track === clip.track &&
+                  next.start === clip.start + clip.duration,
+              )
+                ? [clip.start + clip.duration]
+                : [],
+            )
+            .find((edge) => Math.abs(edge - frame) * ppf <= 8)
+        : undefined;
+    if (cut !== undefined) {
+      const above = rows.find(
+        (item) =>
+          item.track.kind === "video" &&
+          item.track.index === row.track.index + 1,
+      );
+      row = above ?? newRows.video;
+      create = above
+        ? []
+        : [...rows.map((item) => item.track), row.track].filter(
+            (track) =>
+              !timeline.tracks.some((item) => item.index === track.index),
+          );
+      frame = Math.max(0, cut - Math.floor(dragged.frames / 2));
+      snapping = 0;
+    }
+    destinationRow.current = create.length ? row : null;
     const mode =
       event.shiftKey && (event.ctrlKey || event.metaKey)
         ? "insert"
@@ -1165,9 +1203,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
         timeline,
         dragged,
         row.track,
-        frameAt(event.clientX),
+        frame,
         playhead(),
-        reach(event.ctrlKey || event.metaKey),
+        snapping,
         create,
         mode,
       ),
@@ -1239,8 +1277,18 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const drop = dropAt(event)?.preview;
     if (!drop) return;
     event.preventDefault();
-    const library = mediaDrag()?.library;
-    if (!library) return settle(drop, undefined, mediaDrag()?.format);
+    const dragged = mediaDrag();
+    const library = dragged?.library;
+    if (!library) return settle(drop, undefined, dragged?.format);
+    if ((dragged.start ?? 0) > 0) {
+      clear();
+      showToast(
+        "Place a library item from its first frame. Clear the In mark.",
+        null,
+        { tone: "info", transient: true },
+      );
+      return;
+    }
     // A Library item is not in the project yet: the server copies its files and places it where
     // the preview showed, in one undo step.
     const insert = drop.commands.find((command) => command.type === "insert");
@@ -1250,6 +1298,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
         track: insert.track,
         at: insert.at,
         mode: insert.mode === "insert" ? "insert" : "overwrite",
+        // A part marked in the source viewer is shorter than the item.
+        ...(insert.clip.kind === "composition" && {
+          duration: insert.clip.duration,
+        }),
       });
   }
 

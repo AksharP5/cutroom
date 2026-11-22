@@ -10,6 +10,7 @@ import type { LibraryCatalog, LibraryItem } from "../../shared/library";
 import { toFrames } from "../../shared/timeline/apply";
 import { destinationTracks } from "../../shared/timeline/tracks";
 import { ApiError, api, json } from "../api";
+import type { MediaDrag } from "../timeline/mediaDrag";
 import { useViewSettings } from "../timeline/viewSettings";
 import { showToast, useWorkspace } from "../workspace";
 import { editCompositionSource, useTimeline } from "./timeline";
@@ -78,7 +79,12 @@ export function libraryFrames(item: LibraryItem) {
  */
 export async function addFromLibrary(
   item: LibraryItem,
-  placement: { track: number; at: number; mode: "insert" | "overwrite" },
+  placement: {
+    track: number;
+    at: number;
+    mode: "insert" | "overwrite";
+    duration?: number;
+  },
 ) {
   const { projectId, view } = useTimeline.getState();
   if (!projectId || !view) return false;
@@ -137,6 +143,8 @@ export async function addFromLibrary(
 export async function placeLibraryAtPlayhead(
   item: LibraryItem,
   mode: "insert" | "overwrite",
+  /** Frames to place, for a part marked in the source viewer; the item's own length otherwise. */
+  frames = libraryFrames(item),
 ) {
   const timeline = useTimeline.getState().view?.timeline;
   if (!timeline) return;
@@ -154,6 +162,22 @@ export async function placeLibraryAtPlayhead(
   const { frame, duration } = useTransport.getState();
   // The playhead stops on the last frame, so from there the clip goes after it, at the end.
   const at = duration > 0 && frame === duration - 1 ? duration : frame;
-  if (await addFromLibrary(item, { track: video.index, at, mode }))
-    transport.follow(at + libraryFrames(item))();
+  if (
+    await addFromLibrary(item, {
+      track: video.index,
+      at,
+      mode,
+      ...(frames !== libraryFrames(item) && { duration: frames }),
+    })
+  )
+    transport.follow(at + frames)();
 }
+
+/** The source viewer's entry for a library item: a scene at its own length, not a project file. */
+export const librarySource = (item: LibraryItem): MediaDrag => ({
+  kind: "composition",
+  path: `library:${item.name}`,
+  seconds: item.duration ?? COMPONENT_SECONDS,
+  hasAudio: false,
+  library: item,
+});

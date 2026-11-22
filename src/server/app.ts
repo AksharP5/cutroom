@@ -28,6 +28,7 @@ import { createMediaRoutes } from "./media/routes";
 import { createFontRoutes } from "./fonts/routes";
 import { createGradeRoutes } from "./grade/routes";
 import { createLibrary } from "./library/registry";
+import { createLibraryPreviews } from "./library/preview";
 import { createLibraryRoutes } from "./library/routes";
 import { allowsLocalRequest } from "./localAccess";
 
@@ -187,10 +188,13 @@ export async function createApp(
   );
   app.route("/api/cutroom", createFontRoutes(projects, review));
   app.route("/api/cutroom", createGradeRoutes(projects, review));
+  const library = createLibrary({ dataDir });
   app.route(
     "/api/cutroom",
-    createLibraryRoutes(projects, review, createLibrary({ dataDir }), timeline),
+    createLibraryRoutes(projects, review, library, timeline),
   );
+  // Before the project previews, which answer every other /api/isolated/ key.
+  app.route("/api", createLibraryPreviews(library));
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api/cutroom", media);
   app.route("/api", editor);

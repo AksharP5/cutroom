@@ -526,6 +526,7 @@ export function MediaPanel({
     const source = useSource.getState().file;
     if (
       source &&
+      !source.library &&
       source.path !== pendingRename.current &&
       !files.includes(source.path)
     )
