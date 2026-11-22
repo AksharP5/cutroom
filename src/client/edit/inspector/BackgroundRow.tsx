@@ -1,6 +1,10 @@
-import { useState } from "react";
 import { usePipeline } from "../../pipeline/setting";
 import { isRamped } from "../../../shared/matte";
+import { useEffect, useState } from "react";
+import { CircleHalf } from "@phosphor-icons/react";
+import { DEFAULT_BACKGROUND } from "../../../shared/timeline/background";
+import type { Background } from "../../../shared/timeline/background";
+import { GradeSlider } from "./ColorSection";
 import type { Clip } from "../../../shared/timeline/schema";
 import { matteModelSize } from "../../../shared/matte";
 import { TimecodeText } from "../../components/TimecodeText";
@@ -11,6 +15,7 @@ import {
   retryMatte,
   stopMatte,
   useClipMatte,
+  useMatteView,
   useMattes,
 } from "../mattes";
 
@@ -87,6 +92,16 @@ export function BackgroundRow({
   );
   const uncut =
     removed && (isRamped(clip) || (state === "ready" && !pipelined));
+  const ready = removed && state === "ready";
+  const showing = useMatteView((view) => view.shown === clip.id);
+  // Show matte turns off when the selection moves on.
+  useEffect(
+    () => () => {
+      if (useMatteView.getState().shown === clip.id)
+        useMatteView.setState({ shown: null });
+    },
+    [clip.id],
+  );
   const needsModel =
     removed &&
     state !== "ready" &&
@@ -120,8 +135,34 @@ export function BackgroundRow({
               </button>
             ))}
           </div>
+          {ready && (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Show matte"
+              aria-pressed={showing}
+              title="Show matte"
+              onClick={() =>
+                useMatteView.setState({ shown: showing ? null : clip.id })
+              }
+            >
+              <CircleHalf size={14} weight={showing ? "fill" : "regular"} />
+            </button>
+          )}
         </div>
       </div>
+      {ready &&
+        clip.background &&
+        (["shrink", "soften"] as const).map((edge) => (
+          <RefineRow
+            key={edge}
+            projectId={projectId}
+            clip={clip}
+            background={clip.background!}
+            edge={edge}
+            disabled={disabled}
+          />
+        ))}
       {uncut && (
         <div className="matte-note">
           <span>
@@ -229,5 +270,66 @@ export function BackgroundRow({
         </div>
       )}
     </>
+  );
+}
+
+const EDGE_LABELS = { shrink: "Shrink", soften: "Soften" } as const;
+
+/**
+ * Shrink or Soften: drawn live while dragged, saved once on release as one undo step. A
+ * double-click on the label puts it back to its default.
+ */
+function RefineRow({
+  projectId,
+  clip,
+  background,
+  edge,
+  disabled,
+}: {
+  projectId: string;
+  clip: Clip;
+  background: Background;
+  edge: keyof Background;
+  disabled: boolean;
+}) {
+  const draft = useMatteView((view) =>
+    view.draft?.clipId === clip.id ? view.draft[edge] : null,
+  );
+  const label = EDGE_LABELS[edge];
+  const save = (value: number) =>
+    void editTimeline(projectId, `Edit ${label.toLowerCase()}`, () => [
+      { type: "setClip", clipId: clip.id, background: { [edge]: value } },
+    ]).finally(() => {
+      if (useMatteView.getState().draft?.clipId === clip.id)
+        useMatteView.setState({ draft: null });
+    });
+  const reset = () => {
+    if (background[edge] !== DEFAULT_BACKGROUND[edge])
+      save(DEFAULT_BACKGROUND[edge]);
+  };
+  return (
+    <div className="inspector-field matte-slider">
+      <label title="Double-click to reset" onDoubleClick={reset}>
+        {label}
+      </label>
+      <div className="inspector-value">
+        <GradeSlider
+          label={label}
+          value={background[edge]}
+          min={0}
+          max={8}
+          step={1}
+          disabled={disabled}
+          onPreview={(value) =>
+            useMatteView.setState({
+              draft: { clipId: clip.id, ...background, [edge]: value },
+            })
+          }
+          onCommit={save}
+          onReset={reset}
+        />
+        <output>{draft ?? background[edge]} px</output>
+      </div>
+    </div>
   );
 }

@@ -117,3 +117,12 @@ export function useClipMatte(clip: Clip | null | undefined) {
   if (!clip || !view) return null;
   return clipMatteState(status, view.composition, clip, view.timeline.fps);
 }
+
+/**
+ * What the viewer draws ahead of a save: Shrink or Soften while dragged, and the clip whose matte
+ * Show matte draws in black and white.
+ */
+export const useMatteView = create<{
+  draft: { clipId: string; shrink: number; soften: number } | null;
+  shown: string | null;
+}>(() => ({ draft: null, shown: null }));

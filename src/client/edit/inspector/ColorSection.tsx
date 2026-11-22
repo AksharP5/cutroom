@@ -187,7 +187,7 @@ function useLuts(projectId: string, open: boolean) {
  * A slider beside a basic control's value. It follows the pointer and drafts each step into the
  * viewer, and saves once when it lets go; a double-click puts the control back to neutral.
  */
-function GradeSlider({
+export function GradeSlider({
   label,
   value,
   min,

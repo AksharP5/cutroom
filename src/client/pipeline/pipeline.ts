@@ -29,7 +29,7 @@ import { chromeColourGuess } from "../../shared/videoColour";
 import { FrameGridSchema, frameSeek } from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
 import { useWorkspace } from "../workspace";
-import { clipMatteState, useMattes } from "../edit/mattes";
+import { clipMatteState, useMatteView, useMattes } from "../edit/mattes";
 import { matteFrameAt } from "../../shared/matte";
 
 type Plan = Exclude<PipelinePlan, { reason: string }>;
@@ -582,6 +582,18 @@ export function attachPipeline(
     }
   };
 
+  /** The saved refine, or the one being dragged; Show matte draws it in black and white. */
+  const matteLayer = (clip: Clip, frame: VideoFrame) => {
+    const { draft, shown } = useMatteView.getState();
+    const refine = draft?.clipId === clip.id ? draft : clip.background!;
+    return {
+      frame,
+      shrink: refine.shrink,
+      soften: refine.soften,
+      show: shown === clip.id,
+    };
+  };
+
   const placed = (
     layer: Shown,
     frame: VideoFrame,
@@ -605,8 +617,7 @@ export function attachPipeline(
       opacity: layer.opacity,
       brightness: layer.brightness,
       grade,
-      matte:
-        matte && clip.background ? { frame: matte, ...clip.background } : null,
+      matte: matte && clip.background ? matteLayer(clip, matte) : null,
     };
   };
 
@@ -1035,6 +1046,7 @@ export function attachPipeline(
         queueMicrotask(() => void draw());
     }),
     usePreviewGrade.subscribe(() => void draw()),
+    useMatteView.subscribe(() => void draw()),
     // A matte that becomes ready, or goes, changes the picture; progress alone does not.
     useMattes.subscribe((state, previous) => {
       if (

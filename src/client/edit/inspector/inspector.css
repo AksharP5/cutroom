@@ -1174,3 +1174,18 @@
   font: var(--type-2xs) / var(--leading-tight) var(--font-mono);
   white-space: pre-wrap;
 }
+
+/* Refine rows: grade-style sliders with their value. */
+.matte-slider .inspector-value {
+  gap: var(--space-2);
+}
+.matte-slider input[type="range"] {
+  flex: 1;
+}
+.matte-slider output {
+  width: var(--size-inspector-value);
+  color: var(--text-primary);
+  font: var(--weight-medium) var(--type-2xs) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  text-align: right;
+}

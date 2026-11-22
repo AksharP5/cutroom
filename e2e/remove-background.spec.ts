@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { ExportJobSchema } from "../src/shared/export";
 import { ProjectSchema } from "../src/shared/project";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { test, expect } from "./fixtures";
 import { seekFrame } from "./position-helpers";
 import { waitForPreview } from "./preview-ready";
@@ -248,4 +249,84 @@ test("text behind a cutout: the title on V2 shows around the subject on V3, in t
   );
   console.log("Text behind subject RGB error", { viewer, exported });
   expect(Math.max(...errors)).toBeLessThanOrEqual(8);
+});
+
+test("Shrink and Soften draw while they move, save once, and match the MP4; Show matte shows the matte", async ({
+  page,
+  request,
+}) => {
+  const project = await projectWithSubject(request);
+  const saved = async () =>
+    TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    ).timeline.clips.find(({ id }) => id === "subject")!.background;
+  await page.goto("/#project/" + project.id);
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, at);
+  await page.locator('.tl-clip[data-clip="subject"]').click();
+  const background = page.getByRole("radiogroup", { name: "Background" });
+  await background.getByRole("radio", { name: "Remove" }).click();
+  await expect
+    .poll(async () => near((await viewerPixels(page))[1]!, lower), {
+      timeout: 30_000,
+    })
+    .toBe(true);
+
+  // Just inside the disc's edge, where the matte goes from clip to V1.
+  const edge = [
+    [0.648, 0.5],
+    [0.5, 0.236],
+  ] as const;
+  const resting = await viewerPixels(page, edge);
+  const shrink = page.getByRole("slider", { name: "Shrink" });
+  await expect(shrink).toHaveValue("1");
+  // A drag across the slider draws while the pointer is down and saves once, on release.
+  const track = (await shrink.boundingBox())!;
+  const toward = (value: number) => track.x + (track.width * value) / 8;
+  await page.mouse.move(toward(1), track.y + track.height / 2);
+  await page.mouse.down();
+  for (let value = 1.5; value <= 6; value += 0.5)
+    await page.mouse.move(toward(value), track.y + track.height / 2);
+  await expect
+    .poll(async () => JSON.stringify(await viewerPixels(page, edge)))
+    .not.toBe(JSON.stringify(resting));
+  expect(await saved()).toEqual({ shrink: 1, soften: 1 });
+  await page.mouse.up();
+  const dragged = Number(await shrink.inputValue());
+  expect(dragged).toBeGreaterThanOrEqual(5);
+  await expect(page.locator(".matte-slider output").first()).toHaveText(
+    `${dragged} px`,
+  );
+  await expect.poll(saved).toEqual({ shrink: dragged, soften: 1 });
+  const shrunk = await viewerPixels(page, edge);
+  const exported = await exportedPixels(request, project, edge);
+  const errors = shrunk.flatMap((pixel, i) =>
+    pixel.map((value, channel) => Math.abs(value - exported[i]![channel]!)),
+  );
+  console.log("Refined edge RGB error", { shrunk, exported });
+  expect(Math.max(...errors)).toBeLessThanOrEqual(16);
+
+  // One undo step takes the whole drag back.
+  await page.locator(".tl-scroll").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+z");
+  await expect.poll(saved).toEqual({ shrink: 1, soften: 1 });
+
+  // Show matte draws the clip's matte in black and white until the selection moves.
+  await page.locator('.tl-clip[data-clip="subject"]').click();
+  await page.getByRole("button", { name: "Show matte" }).click();
+  await expect(
+    page.getByRole("button", { name: "Show matte" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(async () => {
+      const [inside, outside] = await viewerPixels(page);
+      return near(inside!, [255, 255, 255]) && near(outside!, [0, 0, 0]);
+    })
+    .toBe(true);
+  await page.locator('.tl-clip[data-clip="lower"]').click();
+  await expect
+    .poll(async () => near((await viewerPixels(page))[1]!, lower))
+    .toBe(true);
 });
