@@ -5,9 +5,17 @@ import {
   velocity,
 } from "../src/client/edit/transport";
 import type {
+  Transport,
   TransportEvent,
   TransportState,
 } from "../src/client/edit/transport";
+import {
+  createJog,
+  idleJog,
+  jogHold,
+  jogPress,
+  jogRelease,
+} from "../src/client/edit/jog";
 
 const forward: TransportEvent = {
   type: "shuttle",
@@ -108,4 +116,120 @@ test("a shuttle's position runs between frames at its speed, from where it start
       delete globals.cancelAnimationFrame;
     }
   }
+});
+
+test("K held with J or L plays half speed that way", () => {
+  expect(
+    transition({ kind: "stopped" }, { type: "slow", dir: "forward" }),
+  ).toEqual({
+    kind: "shuttle",
+    dir: "forward",
+    speed: 0.5,
+  });
+  expect(
+    velocity(transition({ kind: "playing" }, { type: "slow", dir: "reverse" })),
+  ).toBe(-0.5);
+});
+
+/** Runs presses (`+K`), releases (`-L`) and the hold timer (`hold`) through the jog, collecting what each does. */
+function jogs(...inputs: string[]) {
+  let jog = idleJog;
+  const effects: unknown[] = [];
+  const key = (name: string) =>
+    name === "K" ? "stop" : name === "L" ? "forward" : "reverse";
+  for (const input of inputs) {
+    const [next, effect] =
+      input === "hold"
+        ? jogHold(jog)
+        : input[0] === "+"
+          ? jogPress(jog, key(input[1]!))
+          : jogRelease(jog, key(input[1]!));
+    jog = next;
+    if (effect) effects.push(effect);
+  }
+  return effects;
+}
+const stop = { type: "stop" };
+const slow = (dir: "forward" | "reverse") => ({ type: "slow", dir });
+const step = (frames: 1 | -1) => ({ type: "step", frames });
+
+test("K alone stops, and J or L alone shuttle as before", () => {
+  expect(jogs("+K", "-K")).toEqual([stop]);
+  expect(jogs("+L", "-L", "+L", "-L")).toEqual([
+    { type: "shuttle", dir: "forward", fast: false },
+    { type: "shuttle", dir: "forward", fast: false },
+  ]);
+});
+
+test("with K held, a tap of J or L steps one frame and each tap steps again", () => {
+  expect(jogs("+K", "+L", "-L", "+L", "-L", "+J", "-J", "-K")).toEqual([
+    stop,
+    step(1),
+    step(1),
+    step(-1),
+  ]);
+  // The hold timer from a released tap does nothing.
+  expect(jogs("+K", "+L", "-L", "hold", "-K")).toEqual([stop, step(1)]);
+});
+
+test("with K held, holding J or L steps and then plays half speed until either key is released", () => {
+  expect(jogs("+K", "+L", "hold", "-L", "-K")).toEqual([
+    stop,
+    step(1),
+    slow("forward"),
+    stop,
+  ]);
+  expect(jogs("+K", "+J", "hold", "-K", "-J")).toEqual([
+    stop,
+    step(-1),
+    slow("reverse"),
+    stop,
+  ]);
+  // Pressing K again with J still down picks half speed up again.
+  expect(jogs("+K", "+J", "hold", "-K", "+K", "-J")).toEqual([
+    stop,
+    step(-1),
+    slow("reverse"),
+    stop,
+    slow("reverse"),
+    stop,
+  ]);
+});
+
+test("L held first and then K plays half speed forward at once", () => {
+  expect(jogs("+L", "+K", "-K", "-L")).toEqual([
+    { type: "shuttle", dir: "forward", fast: false },
+    slow("forward"),
+    stop,
+  ]);
+  expect(jogs("+L", "+K", "-L", "-K")).toEqual([
+    { type: "shuttle", dir: "forward", fast: false },
+    slow("forward"),
+    stop,
+  ]);
+});
+
+test("the jog counts only keys that are down: a menu's Play then K just stops", () => {
+  const events: unknown[] = [];
+  const player = {
+    dispatch: (event: unknown) => events.push(event),
+    step: (frames: number) => events.push({ type: "step", frames }),
+  } as unknown as Transport;
+  const jog = createJog(() => player);
+  jog.press("forward");
+  jog.keyDown("stop");
+  jog.press("stop");
+  jog.release("stop");
+  expect(events).toEqual([
+    { type: "shuttle", dir: "forward", fast: false },
+    stop,
+  ]);
+  // Keys that are down do count: K held, then L tapped.
+  jog.keyDown("stop");
+  jog.press("stop");
+  jog.keyDown("forward");
+  jog.press("forward");
+  jog.release("forward");
+  jog.release("stop");
+  expect(events.slice(2)).toEqual([stop, step(1)]);
 });

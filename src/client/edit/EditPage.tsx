@@ -72,6 +72,7 @@ import {
 import { SourceViewer } from "./SourceViewer";
 import { CompositionPath } from "./CompositionPath";
 import { ToolButtons } from "./ToolButtons";
+import { createJog, jogKeyOf } from "./jog";
 import { CodePanel } from "./code/CodePanel";
 import { codeCanLeave, openFile, useCode } from "./code/code";
 import { TransportBar } from "./TransportBar";
@@ -190,6 +191,30 @@ export function EditPage({
   const sourceShown = useSource((state) => state.shown);
   /** The transport keys and bar drive what the viewer shows. */
   const player = sourceShown ? sourcePlayer : transport;
+  const shownPlayer = useRef(player);
+  shownPlayer.current = player;
+  const [jog] = useState(() => createJog(() => shownPlayer.current));
+  useEffect(() => {
+    // J, K and L drive playback while held, so their releases count wherever focus is.
+    const press = (event: KeyboardEvent) => {
+      const key = jogKeyOf(event);
+      if (key) jog.keyDown(key);
+    };
+    const release = (event: KeyboardEvent) => {
+      const key = jogKeyOf(event);
+      if (key) jog.release(key);
+    };
+    const reset = () => jog.reset();
+    window.addEventListener("keydown", press, true);
+    window.addEventListener("keyup", release);
+    window.addEventListener("blur", reset);
+    return () => {
+      window.removeEventListener("keydown", press, true);
+      window.removeEventListener("keyup", release);
+      window.removeEventListener("blur", reset);
+      jog.reset();
+    };
+  }, [jog]);
 
   useEffect(() => {
     const closing = new AbortController();
@@ -436,15 +461,13 @@ export function EditPage({
     cutroomDraw: () => setMode("draw"),
     cutroomComment: () => setMode("comment"),
     controlPlayToggle: () => player.dispatch({ type: "toggle" }),
-    controlPlayForward: () =>
-      player.dispatch({ type: "shuttle", dir: "forward", fast: false }),
-    controlPlayReverse: () =>
-      player.dispatch({ type: "shuttle", dir: "reverse", fast: false }),
+    controlPlayForward: () => jog.press("forward"),
+    controlPlayReverse: () => jog.press("reverse"),
     controlFastForward: () =>
       player.dispatch({ type: "shuttle", dir: "forward", fast: true }),
     controlFastReverse: () =>
       player.dispatch({ type: "shuttle", dir: "reverse", fast: true }),
-    controlStop: () => player.dispatch({ type: "stop" }),
+    controlStop: () => jog.press("stop"),
     controlStepReverse: () => player.step(-1),
     controlStepForward: () => player.step(1),
     controlLargeStepReverse: () => player.step(-second()),

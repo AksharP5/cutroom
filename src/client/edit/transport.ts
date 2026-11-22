@@ -6,7 +6,8 @@ import type { Fps, Timeline } from "../../shared/timeline/schema";
 import type { PlaybackClock } from "../../shared/preview";
 
 export type Direction = "forward" | "reverse";
-export type Speed = 1 | 2 | 4 | 8;
+/** Half speed is K held with J or L; the rest are J and L pressed again. */
+export type Speed = 0.5 | 1 | 2 | 4 | 8;
 export type TransportState =
   | { kind: "stopped" }
   | { kind: "playing" }
@@ -15,6 +16,8 @@ export type TransportState =
 export type TransportEvent =
   /** L or 4 forward, J or 3 reverse; `fast` is Shift. */
   | { type: "shuttle"; dir: Direction; fast: boolean }
+  /** K held with J or L held: half speed that way. */
+  | { type: "slow"; dir: Direction }
   | { type: "toggle" }
   | { type: "stop" }
   | { type: "scrub" }
@@ -22,7 +25,7 @@ export type TransportEvent =
 
 const stopped: TransportState = { kind: "stopped" };
 type Hold = false | "saving" | "saved";
-const doubled: Record<Speed, Speed> = { 1: 2, 2: 4, 4: 8, 8: 8 };
+const doubled: Record<Speed, Speed> = { 0.5: 1, 1: 2, 2: 4, 4: 8, 8: 8 };
 
 /**
  * Resolve's shuttle: each press in the playing direction doubles the speed up to 8x, the other
@@ -39,6 +42,8 @@ export function transition(
       return state.kind === "stopped" ? { kind: "playing" } : stopped;
     case "scrub":
       return { kind: "scrubbing" };
+    case "slow":
+      return { kind: "shuttle", dir: event.dir, speed: 0.5 };
     case "release":
       return state.kind === "scrubbing" ? stopped : state;
     case "shuttle": {
