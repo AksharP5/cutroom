@@ -11,6 +11,7 @@ export const MediaKindSchema = z.enum([
   "proxy",
   "pieces",
   "ramp",
+  "pcm",
 ]);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
 export const RampWindowSchema = z.object({

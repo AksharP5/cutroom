@@ -3,6 +3,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  stat,
   symlink,
   utimes,
   writeFile,
@@ -14,6 +15,7 @@ import { createMediaService } from "../src/server/media/service";
 import { encodePeaks } from "../src/server/media/peaks";
 import { FilmstripSchema } from "../src/server/media/protocol";
 import { JobStateSchema } from "../src/shared/jobs";
+import { fileFingerprint } from "../src/shared/media";
 import { projectFixture } from "./project-fixture";
 
 async function ffmpeg(args: string[]) {
@@ -651,3 +653,300 @@ test("the footage pipeline reads a project's videos in byte ranges, and nothing 
     await fixture.close();
   }
 });
+
+/** 48 kHz mono 16-bit samples whose values name their own index, wrapping at 32768. */
+function countingSamples(count: number) {
+  return Buffer.from(
+    Int16Array.from({ length: count }, (_, index) => index % 32768).buffer,
+  );
+}
+
+async function pcmOf(
+  media: ReturnType<typeof createMediaService>,
+  project: Awaited<
+    ReturnType<Awaited<ReturnType<typeof projectFixture>>["store"]["create"]>
+  >,
+  path: string,
+) {
+  const deadline = performance.now() + 10000;
+  while (true) {
+    const result = await media.request(project, path, "pcm");
+    if (result.artifact)
+      return { key: result.key, bytes: await readFile(result.artifact) };
+    if (result.state.status === "failed")
+      throw new Error(`${path}: ${result.state.error}`);
+    if (performance.now() > deadline)
+      throw new Error("The PCM job did not finish.");
+    await Bun.sleep(10);
+  }
+}
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "scrub audio puts source sample k at byte 2k, on the media clock with any late sound padded as silence",
+  async () => {
+    const fixture = await projectFixture();
+    const media = createMediaService();
+    try {
+      const project = await fixture.store.create({ name: "Scrub audio" });
+      const seconds = 2;
+      const counting = countingSamples(48000 * seconds);
+      await writeFile(join(fixture.directory, "counting.raw"), counting);
+      const raw = [
+        "-f",
+        "s16le",
+        "-ar",
+        "48000",
+        "-ac",
+        "1",
+        "-i",
+        join(fixture.directory, "counting.raw"),
+      ];
+      const picture = [
+        "-f",
+        "lavfi",
+        "-i",
+        `testsrc2=size=320x180:rate=25:duration=${seconds + 1}`,
+      ];
+      const video = [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-threads",
+        "1",
+      ];
+      await ffmpeg([
+        ...raw,
+        "-c:a",
+        "pcm_s16le",
+        join(project.path, "counting.wav"),
+      ]);
+      const wav = ["-i", join(project.path, "counting.wav")];
+      const late = ["-itsoffset", "0.25", ...wav];
+      const shifted = ["-itsoffset", "0.25", ...picture, ...late];
+      const pcm = [...video, "-c:a", "pcm_s16le"];
+      // An MPEG program stream starts its clock at 0.54 s and keeps DVD PCM's samples unchanged.
+      // (CI's static FFmpeg 7.0.2 crashes on any transport stream, so MPEG-TS cannot stand in.)
+      const ps = ["-c:v", "mpeg2video", "-c:a", "pcm_dvd", "-f", "vob"];
+      for (const [name, args] of [
+        // The sound a quarter second after the picture.
+        ["late.mkv", [...picture, ...late, ...pcm]],
+        ["late.mpg", [...picture, ...late, ...ps]],
+        // Both a quarter second after timestamp zero, which MP4 plays from.
+        ["shifted.mov", [...shifted, ...pcm, "-avoid_negative_ts", "disabled"]],
+        // Both at the program stream's start, which is media time zero.
+        ["together.mpg", [...picture, ...wav, ...ps]],
+      ] as const)
+        await ffmpeg([...args, join(project.path, name)]);
+
+      const whole = await pcmOf(media, project, "counting.wav");
+      expect(whole.bytes.length).toBe(counting.length);
+      for (const k of [0, 1, 255, 32767, 32768, 47999, 48000, 95999])
+        expect(whole.bytes.readInt16LE(2 * k)).toBe(k % 32768);
+      expect(whole.bytes.equals(counting)).toBe(true);
+
+      for (const [path, lead] of [
+        ["late.mkv", 12000],
+        ["late.mpg", 12000],
+        ["shifted.mov", 12000],
+        ["together.mpg", 0],
+      ] as const) {
+        const { bytes } = await pcmOf(media, project, path);
+        expect(bytes.length, path).toBe(2 * (lead + counting.length / 2));
+        // Source sample 0 is silent too; sample 1 is the first that sounds.
+        const first = Int16Array.from({ length: bytes.length / 2 }, (_, k) =>
+          bytes.readInt16LE(2 * k),
+        ).findIndex((sample) => sample !== 0);
+        expect(first, path).toBe(lead + 1);
+        expect(bytes.subarray(2 * lead).equals(counting), path).toBe(true);
+      }
+
+      await ffmpeg([...picture, ...video, join(project.path, "silent.mp4")]);
+      await media.request(project, "silent.mp4", "probe");
+      let refused: unknown;
+      const deadline = performance.now() + 5000;
+      while (!refused && performance.now() < deadline) {
+        refused = await media.request(project, "silent.mp4", "pcm").then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        await Bun.sleep(10);
+      }
+      expect(String(refused)).toContain("no audio stream");
+    } finally {
+      await media.dispose();
+      await fixture.close();
+    }
+  },
+  30000,
+);
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "the scrub audio route serves byte ranges in either direction from the project's own media",
+  async () => {
+    const fixture = await projectFixture();
+    const routes = createMediaRoutes(fixture.store);
+    fixture.app.route("/api/cutroom", routes);
+    const server = Bun.serve({ port: 0, fetch: fixture.app.fetch });
+    try {
+      const project = await fixture.store.create({ name: "Scrub ranges" });
+      const counting = countingSamples(48000);
+      await writeFile(join(fixture.directory, "counting.raw"), counting);
+      await ffmpeg([
+        "-f",
+        "s16le",
+        "-ar",
+        "48000",
+        "-ac",
+        "1",
+        "-i",
+        join(fixture.directory, "counting.raw"),
+        "-c:a",
+        "pcm_s16le",
+        join(project.path, "voice.wav"),
+      ]);
+      await writeFile(join(fixture.directory, "outside.wav"), "private");
+      await symlink(
+        join(fixture.directory, "outside.wav"),
+        join(project.path, "link.wav"),
+      );
+      // The listing's file version, as a scrub plan segment carries it.
+      const version = fileFingerprint(
+        "voice.wav",
+        await stat(join(project.path, "voice.wav")),
+      );
+      const url = (path: string) =>
+        `http://127.0.0.1:${server.port}/api/cutroom/projects/${project.id}/media/pcm?path=${encodeURIComponent(path)}&v=${encodeURIComponent(version)}`;
+      const read = (range: string) =>
+        fetch(url("voice.wav"), { headers: { range } });
+
+      expect((await fetch(url("voice.wav"))).status).toBe(202);
+      const whole = await ready(() => fetch(url("voice.wav")));
+      expect(whole.status).toBe(200);
+      expect(whole.headers.get("content-type")).toBe(
+        "application/octet-stream",
+      );
+      expect(Buffer.from(await whole.arrayBuffer()).equals(counting)).toBe(
+        true,
+      );
+
+      const size = counting.length;
+      const sample = (k: number) => `bytes=${2 * k}-${2 * k + 1}`;
+      for (const [range, first, end] of [
+        [sample(0), 0, 2],
+        [sample(1000), 2000, 2002],
+        [sample(47999), size - 2, size],
+        ["bytes=-2", size - 2, size],
+        [`bytes=${size - 4}-`, size - 4, size],
+        // A read past the end stops at it.
+        [`bytes=${size - 2}-${size + 1000}`, size - 2, size],
+      ] as const) {
+        const response = await read(range);
+        expect(response.status, range).toBe(206);
+        expect(response.headers.get("content-range"), range).toBe(
+          `bytes ${first}-${end - 1}/${size}`,
+        );
+        expect(
+          Buffer.from(await response.arrayBuffer()).equals(
+            counting.subarray(first, end),
+          ),
+          range,
+        ).toBe(true);
+      }
+      // Reverse playback reads chunks from the end towards the start.
+      const chunk = 2 * 4096;
+      const chunks: Buffer[] = [];
+      for (let end = size; end > 0; end -= chunk) {
+        const first = Math.max(0, end - chunk);
+        const response = await read(`bytes=${first}-${end - 1}`);
+        expect(response.status).toBe(206);
+        chunks.unshift(Buffer.from(await response.arrayBuffer()));
+      }
+      expect(Buffer.concat(chunks).equals(counting)).toBe(true);
+
+      for (const range of [
+        `bytes=${size}-`,
+        `bytes=${size + 100}-${size + 200}`,
+      ])
+        expect((await read(range)).status, range).toBe(416);
+
+      for (const path of [
+        "../../outside.wav",
+        "link.wav",
+        "/etc/passwd",
+        "missing.wav",
+      ]) {
+        const response = await fetch(url(path));
+        expect(response.ok, path).toBe(false);
+        expect(await response.text()).not.toContain("private");
+      }
+    } finally {
+      await server.stop(true);
+      await routes.dispose();
+      await fixture.close();
+    }
+  },
+  30000,
+);
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "scrub audio is cached by source fingerprint and evicted with the other media artifacts",
+  async () => {
+    const fixture = await projectFixture();
+    let media = createMediaService({ maxCacheEntries: 2 });
+    try {
+      const project = await fixture.store.create({ name: "Scrub cache" });
+      await writeFile(
+        join(fixture.directory, "counting.raw"),
+        countingSamples(4800),
+      );
+      for (const name of ["a.wav", "b.wav"])
+        await ffmpeg([
+          "-f",
+          "s16le",
+          "-ar",
+          "48000",
+          "-ac",
+          "1",
+          "-i",
+          join(fixture.directory, "counting.raw"),
+          "-c:a",
+          "pcm_s16le",
+          join(project.path, name),
+        ]);
+      const first = await pcmOf(media, project, "a.wav");
+      const entry = join(project.path, ".cutroom/cache", first.key);
+
+      // A hit is answered from disk, even by a service that cannot start a worker.
+      await media.dispose();
+      media = createMediaService({
+        maxCacheEntries: 2,
+        workerUrl: new URL("file:///missing-worker.ts"),
+      });
+      const hit = await media.request(project, "a.wav", "pcm");
+      expect(hit.key).toBe(first.key);
+      expect(hit.state.status).toBe("done");
+      expect(await readFile(hit.artifact!)).toEqual(first.bytes);
+
+      // Changing the source is a miss under a new key.
+      await utimes(
+        join(project.path, "a.wav"),
+        new Date(),
+        new Date(Date.now() + 1000),
+      );
+      const changed = await media.request(project, "a.wav", "pcm");
+      expect(changed.artifact).toBeUndefined();
+      expect(changed.key).not.toBe(first.key);
+      await media.dispose();
+
+      // Newer artifacts push the oldest entries out, the PCM file with them.
+      media = createMediaService({ maxCacheEntries: 2 });
+      await pcmOf(media, project, "b.wav");
+      expect(await readdir(entry).catch(() => null)).toBeNull();
+    } finally {
+      await media.dispose();
+      await fixture.close();
+    }
+  },
+  30000,
+);

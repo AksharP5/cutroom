@@ -78,6 +78,45 @@ const readStreamStart = (stream: Record<string, string | undefined>) => {
   return time && { time, exact: false };
 };
 
+/** Every picture and sound stream's start, and the container's name and length. */
+export const mediaStreamsArgs = [
+  ...localMediaInputOptions,
+  "-show_entries",
+  "stream=index,codec_type,codec_name,time_base,start_pts,start_time,duration_ts,duration,r_frame_rate,avg_frame_rate:stream_disposition=attached_pic:format=format_name,start_time,duration",
+  "-of",
+  "compact",
+];
+
+/**
+ * The media clock the preview plays and export seeks, from `mediaStreamsArgs`' output. Its zero is
+ * the earliest picture or sound, except that browsers play the MP4 and WebM families (MOV and
+ * Matroska among them) from timestamp zero, so there a later first stream keeps its own start. A
+ * stream's media time is its timestamp less `zero`.
+ */
+export function mediaClock(raw: string) {
+  const av = [...records(raw, "stream")].filter(
+    (stream) =>
+      (stream.codec_type === "video" || stream.codec_type === "audio") &&
+      stream["disposition:attached_pic"] !== "1",
+  );
+  const earliest = av
+    .map(readStreamStart)
+    .reduce<ReturnType<typeof readStreamStart>>(
+      (first, next) =>
+        next && (!first || subtract(next.time, first.time).n < 0n)
+          ? next
+          : first,
+      undefined,
+    );
+  const format = records(raw, "format").next().value;
+  const fromZero = /\b(mp4|webm)\b/.test(format?.format_name ?? "");
+  const zero =
+    !earliest || (fromZero && earliest.time.n > 0n)
+      ? fraction(0n)
+      : earliest.time;
+  return { av, format, earliest, zero };
+}
+
 function onGrid(packets: Packet[], tick: ExactTime, rate: Fps) {
   const first = packets[0]!.pts;
   // A millisecond Matroska clock rounds CFR starts. Keep the rational cadence
@@ -94,21 +133,8 @@ async function readPictures(
   signal: AbortSignal | undefined,
   probe: NonNullable<PictureOptions["probe"]>,
 ): Promise<Omit<SourcePictures, "path"> | null> {
-  const streams = await probe(
-    [
-      ...localMediaInputOptions,
-      "-show_entries",
-      "stream=index,codec_type,codec_name,time_base,start_pts,start_time,duration_ts,duration,r_frame_rate,avg_frame_rate:stream_disposition=attached_pic:format=format_name,start_time,duration",
-      "-of",
-      "compact",
-    ],
-    signal,
-  );
-  const av = [...records(streams, "stream")].filter(
-    (stream) =>
-      (stream.codec_type === "video" || stream.codec_type === "audio") &&
-      stream["disposition:attached_pic"] !== "1",
-  );
+  const streams = await probe(mediaStreamsArgs, signal);
+  const { av, format, earliest, zero } = mediaClock(streams);
   const video = av.find((stream) => stream.codec_type === "video");
   const tick = timeBase(video?.time_base);
   if (!video || !tick || video.index === undefined) return null;
@@ -149,25 +175,8 @@ async function readPictures(
     packet.key ? [ordinal] : [],
   );
   const videoStart = readStreamStart(video);
-  const earliest = av
-    .map(readStreamStart)
-    .reduce<ReturnType<typeof readStreamStart>>(
-      (first, next) =>
-        next && (!first || subtract(next.time, first.time).n < 0n)
-          ? next
-          : first,
-      undefined,
-    );
-  const lead =
-    earliest && videoStart
-      ? subtract(videoStart.time, earliest.time)
-      : fraction(0n);
-  const format = records(streams, "format").next().value;
-  const fromZero = /\b(mp4|webm)\b/.test(format?.format_name ?? "");
-  const offset =
-    fromZero && earliest && earliest.time.n > 0n ? earliest.time : fraction(0n);
   const streamStart = videoStart?.time ?? fraction(0n);
-  const origin = add(lead, offset);
+  const origin = subtract(videoStart?.time ?? earliest?.time ?? zero, zero);
   const packetOffset = subtract(origin, streamStart);
   const rate = timeBase(video.r_frame_rate);
   const fps = rate && { num: Number(rate.n), den: Number(rate.d) };
