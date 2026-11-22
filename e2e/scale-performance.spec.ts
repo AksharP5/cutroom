@@ -99,22 +99,40 @@ for (const pipeline of [false, true]) {
       await page.keyboard.press("Space");
       await expect.poll(() => playhead(page)).toBeGreaterThan(at + 8);
       const firstPicture = await picture();
-      const { first, last, seconds } = await page
+      // One 1.25 s window reads anywhere from 43 to 72 fps on CI as clock corrections
+      // land at its edges, so the budget takes the median of five windows in a row.
+      const reads = await page
         .getByRole("button", { name: /^Current time/ })
         .evaluate(async (clock) => {
-          const first = clock.textContent!;
-          const started = performance.now();
-          await new Promise((resolve) => setTimeout(resolve, 1250));
-          return {
-            first,
-            last: clock.textContent!,
-            seconds: (performance.now() - started) / 1000,
-          };
+          const reads = [{ text: clock.textContent!, at: performance.now() }];
+          while (reads.length < 6) {
+            await new Promise((resolve) => setTimeout(resolve, 1250));
+            reads.push({ text: clock.textContent!, at: performance.now() });
+          }
+          return reads;
         });
-      const playbackFramesPerSecond =
-        (timecodeFrame(last) - timecodeFrame(first)) / seconds;
-      expect(playbackFramesPerSecond).toBeGreaterThan(48);
-      expect(playbackFramesPerSecond).toBeLessThan(72);
+      const playbackRates = reads
+        .slice(1)
+        .map(
+          ({ text, at }, index) =>
+            ((timecodeFrame(text) - timecodeFrame(reads[index]!.text)) * 1000) /
+            (at - reads[index]!.at),
+        );
+      const playbackFramesPerSecond = playbackRates.toSorted(
+        (a, b) => a - b,
+      )[2]!;
+      expect(
+        playbackFramesPerSecond,
+        "median playback rate, fps",
+      ).toBeGreaterThan(48);
+      expect(playbackFramesPerSecond, "median playback rate, fps").toBeLessThan(
+        70,
+      );
+      // Losing half a second of a window is a stall, not noise at a window's edges.
+      expect(
+        Math.min(...playbackRates),
+        "slowest playback window, fps",
+      ).toBeGreaterThan(36);
       const lastPicture = await picture();
       expect(firstPicture).not.toBeNull();
       expect(lastPicture).not.toBeNull();
@@ -292,6 +310,7 @@ for (const pipeline of [false, true]) {
           pipeline,
           loaded,
           playbackFramesPerSecond,
+          playbackRates,
           trimKeysMs: keysMs,
           trimSavedMs: savedMs,
           undoMs: historyMs[0],
