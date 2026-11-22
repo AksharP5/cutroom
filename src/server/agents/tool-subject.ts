@@ -212,6 +212,8 @@ export async function toolSubject(
     }
     case "fonts_add":
       return text("family");
+    case "library_add":
+      return text("name");
     case "transcription_start":
     case "transcript_import":
     case "subtitles_import": {

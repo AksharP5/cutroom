@@ -27,6 +27,8 @@ import { createTranscriptService } from "./transcript/service";
 import { createMediaRoutes } from "./media/routes";
 import { createFontRoutes } from "./fonts/routes";
 import { createGradeRoutes } from "./grade/routes";
+import { createLibrary } from "./library/registry";
+import { createLibraryRoutes } from "./library/routes";
 import { allowsLocalRequest } from "./localAccess";
 
 export async function createApp(
@@ -185,6 +187,10 @@ export async function createApp(
   );
   app.route("/api/cutroom", createFontRoutes(projects, review));
   app.route("/api/cutroom", createGradeRoutes(projects, review));
+  app.route(
+    "/api/cutroom",
+    createLibraryRoutes(projects, review, createLibrary({ dataDir }), timeline),
+  );
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api/cutroom", media);
   app.route("/api", editor);

@@ -268,6 +268,17 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => (target ? `the font ${target}` : "a font"),
   },
+  library_search: {
+    verb: searched,
+    kind: "project",
+    object: () => "the HyperFrames library",
+  },
+  library_add: {
+    verb: ["Added", "Adding", "Add"],
+    kind: "edit",
+    object: (target) =>
+      target ? `${target} from the library` : "a library item",
+  },
   luts_list: {
     verb: ["Listed", "Listing", "List"],
     kind: "project",
