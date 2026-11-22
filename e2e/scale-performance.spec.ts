@@ -1,3 +1,5 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { makeScaleProject } from "../scripts/scale-performance-project";
@@ -299,3 +301,97 @@ for (const pipeline of [false, true]) {
     },
   );
 }
+
+test(
+  "Undo right after an agent's edit shows at once at 1,000 clips",
+  { tag: "@performance" },
+  async ({ page, request, baseURL }, info) => {
+    test.setTimeout(180_000);
+    const directory = info.outputPath("project");
+    const shots = await makeScaleProject(directory, 1000, {
+      cameraMedia: true,
+    });
+    const imported = await request.post("/api/cutroom/projects/import", {
+      data: { path: directory, name: "Undo after an agent" },
+    });
+    expect(imported.ok(), await imported.text()).toBe(true);
+    const project = ProjectSchema.parse(await imported.json());
+    const agent = new Client({ name: "Codex", version: "1" });
+    await agent.connect(
+      new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+        requestInit: { headers: { origin: baseURL! } },
+      }),
+    );
+    try {
+      await page.goto(`/#project/${project.id}`);
+      await expect(page.locator("[data-clip]")).toHaveCount(1000);
+      const shot = 300;
+      const offset = 24;
+      await seek(page, shots[shot]!.start + offset);
+      const picture = await pictureReader(page);
+      await expect.poll(picture).toBe(shots[shot]!.source + offset);
+      const undoMs: number[] = [];
+      for (const title of ["title-1", "title-2", "title-3"]) {
+        await page.locator(`[data-clip="shot-${shot}"]`).click({ force: true });
+        await page.keyboard.press("Delete");
+        await expect.poll(picture).toBe(shots[shot + 1]!.source + offset);
+        const saved = async () =>
+          TimelineViewSchema.parse(
+            await (
+              await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+            ).json(),
+          );
+        await expect
+          .poll(async () =>
+            (await saved()).timeline.clips.some(
+              ({ id }) => id === `shot-${shot}`,
+            ),
+          )
+          .toBe(false);
+        const { revision } = await saved();
+        // The agent retitles a chapter ahead of the cut while the owner looks on.
+        const edited = await agent.callTool({
+          name: "timeline_edit",
+          arguments: {
+            projectId: project.id,
+            expectedRevision: revision,
+            commands: [{ type: "setClip", clipId: title, text: "Agent" }],
+          },
+        });
+        expect(edited.isError, JSON.stringify(edited.content)).not.toBe(true);
+        await expect(
+          page.locator(`[data-agent-change="${title}"]`).first(),
+        ).toBeAttached();
+        await page.waitForTimeout(300);
+        const shown = page.evaluate(
+          (id) =>
+            new Promise<number>((resolve) => {
+              let pressed = 0;
+              addEventListener("keydown", () => (pressed = performance.now()), {
+                capture: true,
+                once: true,
+              });
+              const frame = () => {
+                if (pressed && document.querySelector(`[data-clip="${id}"]`))
+                  resolve(performance.now() - pressed);
+                else requestAnimationFrame(frame);
+              };
+              requestAnimationFrame(frame);
+            }),
+          `shot-${shot}`,
+        );
+        await page.keyboard.press("Control+z");
+        undoMs.push(await shown);
+        await expect.poll(picture).toBe(shots[shot]!.source + offset);
+        await expect(
+          page.locator(`[data-agent-change="${title}"]`).first(),
+        ).toBeAttached();
+      }
+      console.log(JSON.stringify({ undoAfterAgentMs: undoMs }));
+      // Main took 650 to 850 ms here: the press waited on the agent's lint and timeline reads.
+      expect(undoMs.toSorted((a, b) => a - b)[1]!).toBeLessThan(150);
+    } finally {
+      await agent.close();
+    }
+  },
+);

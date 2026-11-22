@@ -69,7 +69,8 @@ import {
   rebaseImageOverrides,
   rebaseSceneImageDeclarations,
 } from "./imageVariables";
-import { lintHyperframeHtml, lintProject } from "@hyperframes/core/lint";
+import type { lintHyperframeHtml } from "@hyperframes/core/lint";
+import { createLinter } from "./lint";
 import {
   DELETED_VERSION,
   PREVIEW_BUNDLE_OPTIONS,
@@ -431,6 +432,7 @@ export function createHyperframesApi(
   const exportRequest = new AsyncLocalStorage<ExportRequest>();
   /** The timeline the editor shows while it asks for lint; unset lints every timeline in full. */
   const lintScope = new AsyncLocalStorage<string>();
+  const linter = createLinter();
   const timelineLints = new Map<
     string,
     { hash: string; result: Awaited<ReturnType<typeof lintHyperframeHtml>> }
@@ -442,7 +444,7 @@ export function createHyperframesApi(
     const key = `${dir}\0${file}`;
     const known = timelineLints.get(key);
     if (known?.hash === hash) return known.result;
-    const result = await lintHyperframeHtml(html, {
+    const result = await linter.html(html, {
       filePath: join(dir, file),
       compSrcPath: file,
       host: "studio",
@@ -1156,8 +1158,7 @@ export function createHyperframesApi(
     invalidateProjectSignature: (dir) => {
       signatures.delete(dir);
     },
-    lint: (html, options) =>
-      lintHyperframeHtml(html, { ...options, host: "studio" }),
+    lint: (html, options) => linter.html(html, { ...options, host: "studio" }),
     // Every root timeline is an entry Cutroom renders on its own, never one HyperFrames discovers,
     // so several are not a fault. A timeline linted in full gets HyperFrames' project checks from
     // it as the entry, such as missing media and scenes; the editor asks that only for the open
@@ -1165,9 +1166,11 @@ export function createHyperframesApi(
     lintProject: async (dir) => {
       const open = lintScope.getStore();
       const full = (file: string) =>
-        lintProject(dir, file === "index.html" ? undefined : join(dir, file), {
-          host: "studio",
-        }).then(({ results }) => results);
+        linter
+          .project(dir, file === "index.html" ? undefined : join(dir, file), {
+            host: "studio",
+          })
+          .then(({ results }) => results);
       const results = await Promise.all(
         (await listTimelines({ path: dir })).map((file) =>
           open === undefined || open === file
@@ -2107,6 +2110,7 @@ export function createHyperframesApi(
       pendingSettles.clear();
       await renders.cancelAll();
       await thumbnails.close();
+      await linter.close();
     },
   });
 }
