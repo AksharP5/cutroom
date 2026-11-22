@@ -167,35 +167,55 @@ export function versionFit(
   return { ...take, fits: missing === 0, ...(missing && { shortBy: missing }) };
 }
 
+/** A clip's checked takes, valid while its own object, its sound and the frame rate are unchanged. */
+const checked = new WeakMap<
+  Clip,
+  { fps: Fps; partners: readonly Clip[]; clip: Clip }
+>();
+
+/**
+ * Mark which takes fit their clip. Edits replace the clip objects they change, so a clip whose
+ * object, linked sound and frame rate are the same as last time keeps its result.
+ */
 export function updateVersionFits(timeline: Timeline): Timeline {
   const { clips, fps } = timeline;
-  const pictures = new Map<string, Clip[]>();
+  const sounds = new Map<string, Clip[]>();
   for (const clip of clips) {
-    if (!clip.link) continue;
-    const group = pictures.get(clip.link) ?? [];
-    group.push(clip);
-    pictures.set(clip.link, group);
+    if (!clip.link || !isAudioKind(clip.kind)) continue;
+    const group = sounds.get(clip.link);
+    if (group) group.push(clip);
+    else sounds.set(clip.link, [clip]);
   }
-  return {
-    ...timeline,
-    clips: clips.map((clip) => {
-      if (!clip.versions || !mediaVersions(clip.kind)) return clip;
-      const partners = versionPartners(
-        pictures.get(clip.link ?? "") ?? [],
-        clip,
-      );
-      const versions = clip.versions.map((version) =>
-        versionFit(clip, partners, version, fps),
-      );
-      return versions.some(
-        (version, i) =>
-          version.fits !== clip.versions![i]!.fits ||
-          version.shortBy !== clip.versions![i]!.shortBy,
-      )
-        ? { ...clip, versions }
-        : clip;
-    }),
-  };
+  let changed = false;
+  const next = clips.map((clip) => {
+    if (!clip.versions || !mediaVersions(clip.kind)) return clip;
+    const partners = versionPartners(sounds.get(clip.link ?? "") ?? [], clip);
+    const cached = checked.get(clip);
+    if (
+      cached &&
+      cached.fps.num === fps.num &&
+      cached.fps.den === fps.den &&
+      cached.partners.length === partners.length &&
+      cached.partners.every((partner, i) => partner === partners[i])
+    )
+      return cached.clip;
+    const versions = clip.versions.map((version) =>
+      versionFit(clip, partners, version, fps),
+    );
+    const result = versions.some(
+      (version, i) =>
+        version.fits !== clip.versions![i]!.fits ||
+        version.shortBy !== clip.versions![i]!.shortBy,
+    )
+      ? { ...clip, versions }
+      : clip;
+    const entry = { fps, partners, clip: result };
+    checked.set(clip, entry);
+    checked.set(result, entry);
+    if (result !== clip) changed = true;
+    return result;
+  });
+  return changed ? { ...timeline, clips: next } : timeline;
 }
 
 export const versionShortReason = (version: Version, fps: Fps) => {

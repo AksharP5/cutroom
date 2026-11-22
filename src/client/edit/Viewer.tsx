@@ -556,7 +556,10 @@ export function Viewer({
   useEffect(() => {
     const check = () => {
       const requested = documentAuditions.current.get(latest.current);
-      if (requested === undefined || requested === auditionClip()) return;
+      const wanted = auditionClip();
+      // Takes no longer needed stay until the next reload that happens anyway.
+      if (requested === undefined || requested === wanted || wanted === null)
+        return;
       checking.current?.abort();
       reload(shownRevision.current);
     };

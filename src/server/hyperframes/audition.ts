@@ -75,6 +75,8 @@ function installAudition(
   let selected: number | undefined;
   /** The saved take, which the picture returns to when the pointer leaves the list. */
   let initial: number | undefined;
+  /** Whether the clip's list is open. Closed, the document keeps only the shown take loaded. */
+  let listed = false;
   let outgoing: number | undefined;
   const hostsOf = () =>
     Array.from(
@@ -98,11 +100,11 @@ function installAudition(
       ...new Set(hosts.map((host) => Number(host.dataset.cutroomVersion))),
     ].sort((a, b) => a - b);
     // Moving one row either way, or back to the saved take, finds its decoder already open.
-    const warm = new Set([
-      selected,
-      initial,
-      ...neighbours(available, selected),
-    ]);
+    const warm = new Set(
+      listed
+        ? [selected, initial, ...neighbours(available, selected)]
+        : [selected],
+    );
     for (const [media, src] of sources) {
       const index = Number(media.dataset.cutroomVersion);
       const needed =
@@ -134,6 +136,7 @@ function installAudition(
     const index = String(data.version);
     if (!hosts.some((host) => host.dataset.cutroomVersion === index)) return;
     selected = data.version;
+    listed = data.listed === true;
     refresh();
     const mine = ++request;
     const show = () => {

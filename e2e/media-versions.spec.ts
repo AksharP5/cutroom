@@ -557,7 +557,12 @@ for (const mode of playbackModes)
           .toBe(true);
         await page.keyboard.press("Escape");
         await expect(menu).toBeHidden();
-        await expect(preview.locator("[data-cutroom-version]")).toHaveCount(0);
+        // A closed list keeps its document but loads only the shown take.
+        await expect(
+          preview.locator(
+            "[data-cutroom-version]:not([data-cutroom-shown])[src]",
+          ),
+        ).toHaveCount(0);
         await expect(stage).toHaveAttribute("data-handoff", "showing");
         await expect.poll(picture).toBe("red");
         await page.waitForTimeout(300);
@@ -576,9 +581,11 @@ for (const mode of playbackModes)
             const open = await decoderCounts();
             await page.keyboard.press("Escape");
             await expect(menu).toBeHidden();
-            await expect(preview.locator("[data-cutroom-version]")).toHaveCount(
-              0,
-            );
+            await expect(
+              preview.locator(
+                "[data-cutroom-version]:not([data-cutroom-shown])[src]",
+              ),
+            ).toHaveCount(0);
             await expect(stage).toHaveAttribute("data-handoff", "showing");
             await expect.poll(picture).toBe("red");
             reopenedDecoders.push({ open, closed: await decoderCounts() });
@@ -1044,4 +1051,89 @@ test("audio versions can be added in the clip menu, Media and Source", async ({
     .toBe("Driving");
   if (comparison)
     await page.screenshot({ path: join(comparison, "audio.png") });
+});
+
+test("passing over a versions button loads nothing, and leaving it never reloads the preview", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Primed takes", duration: 6 },
+      })
+    ).json(),
+  );
+  const base = `/api/cutroom/projects/${project.id}`;
+  for (const [name, hz] of [
+    ["music", 440],
+    ["cue-b", 550],
+  ] as const)
+    await run("ffmpeg", [
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      `sine=frequency=${hz}:duration=4`,
+      join(project.path, `${name}.wav`),
+    ]);
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(base + "/timeline")).json(),
+    );
+  const edit = async (commands: unknown[]) => {
+    const response = await request.post(base + "/commands", {
+      data: { expectedRevision: (await read()).revision, commands },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  };
+  await edit([
+    {
+      type: "insert",
+      track: 3,
+      at: 0,
+      clip: { kind: "audio", id: "music", src: "music.wav", duration: 90 },
+    },
+    {
+      type: "setVersions",
+      clipId: "music",
+      versions: [
+        { name: "Music", src: "music.wav" },
+        { name: "Cue B", src: "cue-b.wav" },
+      ],
+      active: 0,
+    },
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  const badge = page.locator('[data-clip-label="music"] .tl-versions');
+  await expect(badge).toHaveText("2");
+  const live = page.locator("iframe[data-live]");
+  await expect(live).toHaveCount(1);
+  const plain = await live.getAttribute("src");
+
+  // A pointer crossing the button does not stay long enough to load the takes.
+  await badge.hover();
+  await page.mouse.move(4, 4);
+  await page.waitForTimeout(600);
+  expect(await live.getAttribute("src")).toBe(plain);
+
+  // Resting on it loads the takes once, ready for the list.
+  await badge.hover();
+  await expect(live).not.toHaveAttribute("src", plain!);
+  await expect(live).toHaveAttribute("src", /cutroom-audition=music/);
+  await expect(
+    live.contentFrame().locator("audio[data-cutroom-version]"),
+  ).toHaveCount(2);
+  const primed = await live.getAttribute("src");
+
+  // Leaving keeps that document instead of loading the plain one again.
+  await page.mouse.move(4, 4);
+  await page.waitForTimeout(800);
+  expect(await live.getAttribute("src")).toBe(primed);
+  await expect(
+    live
+      .contentFrame()
+      .locator("audio[data-cutroom-version]:not([data-cutroom-shown])[src]"),
+  ).toHaveCount(0);
 });

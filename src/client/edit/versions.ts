@@ -136,12 +136,12 @@ function showVersion() {
   const { loaded, open, hovered } = useVersions.getState();
   const clip = findClip(loaded?.clipId ?? null);
   if (!loaded || !clip?.versions) return;
-  const index =
-    open === clip.id && hovered !== null ? hovered : activeVersion(clip);
-  const key = `${loaded.gen}:${clip.id}:${index}`;
+  const listed = open === clip.id;
+  const index = listed && hovered !== null ? hovered : activeVersion(clip);
+  const key = `${loaded.gen}:${clip.id}:${index}:${listed}`;
   if (key === shown) return;
   shown = key;
-  auditionPicture(index);
+  auditionPicture(index, listed);
 }
 useVersions.subscribe(showVersion);
 useTimeline.subscribe(showVersion);
@@ -174,11 +174,23 @@ export function hoverVersion(clip: Clip, index: number | null) {
   if (!returnTo.playing) transport.dispatch({ type: "toggle" });
 }
 
-/** Start loading a clip's versions while the pointer is on its button, or stop with null. */
+let priming: ReturnType<typeof setTimeout> | undefined;
+/**
+ * Start loading a clip's versions once the pointer rests on its button, or stop with null. A
+ * pointer passing over the button loads nothing, and leaving it never reloads the preview: the
+ * loaded takes stay until the next reload that happens anyway.
+ */
 export function primeVersions(clipId: string | null) {
-  const { open, primed } = useVersions.getState();
-  if (clipId === null ? open === primed : primed === clipId) return;
-  useVersions.setState({ primed: clipId });
+  clearTimeout(priming);
+  if (clipId === null) {
+    if (useVersions.getState().primed !== null)
+      useVersions.setState({ primed: null });
+    return;
+  }
+  priming = setTimeout(() => {
+    if (useVersions.getState().primed !== clipId)
+      useVersions.setState({ primed: clipId });
+  }, 150);
 }
 
 export function openVersions(clipId: string) {
