@@ -1,3 +1,5 @@
+import { prepareMatteExport } from "../matte/export";
+import type { MatteService } from "../matte/service";
 import {
   fileFingerprint,
   inMediaTrash,
@@ -187,6 +189,8 @@ export function createHyperframesApi(
   /** Serves scrub proxies to the preview; without it the preview always seeks its sources. */
   media?: MediaService,
   scheduleSettle = scheduleFileSettle,
+  /** Makes the mattes of clips whose background is removed; without it they export as shot. */
+  mattes?: MatteService,
 ) {
   const api = new Hono();
   api.use("/projects/:id/thumbnail/*", async (c, next) => {
@@ -391,6 +395,14 @@ export function createHyperframesApi(
   const renderIndex = createRenderIndex();
   const renders = createRenderWorkers({
     ...renderCacheConfig(),
+    prepareMattes: async ({ projectId, ...input }) =>
+      mattes
+        ? prepareMatteExport({
+            ...input,
+            project: await store.get(projectId),
+            mattes,
+          })
+        : null,
     legacyScratchDir: join(store.dataDir, "scratch"),
     gpu:
       process.env.CUTROOM_EXPORT_GPU === "0"

@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { defineConfig } from "@playwright/test";
 
 const port = 4321;
@@ -48,6 +49,11 @@ export default defineConfig({
       CUTROOM_DATA_DIR: resolve(testRoot, "data"),
       CUTROOM_PROJECTS_DIR: resolve(testRoot, "projects"),
       HYPERFRAMES_NO_TELEMETRY: "1",
+      // Background removal runs on a stub model: no weights are needed or downloaded.
+      CUTROOM_MATTE_SEGMENTER: pathToFileURL(
+        resolve("tests/fixtures/stub-segmenter.ts"),
+      ).href,
+      STUB_SEGMENTER_DELAY_MS: "30",
     },
   },
 });

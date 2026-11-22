@@ -1,3 +1,4 @@
+import { BACKGROUND_ATTRIBUTE } from "../../shared/timeline/background.ts";
 import { transform } from "lightningcss";
 import type { Declaration } from "lightningcss";
 import { defaultTreeAdapter, parse } from "parse5";
@@ -259,6 +260,8 @@ export function planPreviewPipeline(
         attrs: element.attrs.filter(
           (entry) =>
             !TRANSITION_ATTRIBUTE.test(entry.name) &&
+            // The pipeline draws the cutout itself.
+            entry.name !== BACKGROUND_ATTRIBUTE &&
             !(entry.name === "class" && entry.value.trim() === "clip"),
         ),
       },

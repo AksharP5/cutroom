@@ -92,6 +92,11 @@ import {
   readGrade,
   writeGrade,
 } from "../../shared/timeline/grade";
+import {
+  BACKGROUND_ATTRIBUTE,
+  readBackground,
+  writeBackground,
+} from "../../shared/timeline/background";
 import { posix } from "node:path";
 import {
   mediaVersions,
@@ -1226,6 +1231,10 @@ export function projectTimeline(
       grade: canHaveGrade(kind, adjustment)
         ? readableGrade(element.attrs[GRADE_ATTRIBUTE])
         : null,
+      background:
+        kind === "video" && !adjustment
+          ? readBackground(element.attrs[BACKGROUND_ATTRIBUTE])
+          : null,
       enabled:
         element.attrs["data-hidden"] === undefined ||
         element.attrs["data-cutroom-track-hidden"] !== undefined,
@@ -1808,6 +1817,8 @@ function clipChanges(
   if (writeAutomation) changes.push(["data-automation", after.automation]);
   if (!Bun.deepEquals(before.grade, after.grade))
     changes.push([GRADE_ATTRIBUTE, writeGrade(after.grade)]);
+  if (!Bun.deepEquals(before.background, after.background))
+    changes.push([BACKGROUND_ATTRIBUTE, writeBackground(after.background)]);
   if (!Bun.deepEquals(before.fx, after.fx))
     changes.push([
       "data-fx-chain",

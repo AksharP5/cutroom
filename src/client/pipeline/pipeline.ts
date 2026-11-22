@@ -29,6 +29,8 @@ import { chromeColourGuess } from "../../shared/videoColour";
 import { FrameGridSchema, frameSeek } from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
 import { useWorkspace } from "../workspace";
+import { clipMatteState, useMattes } from "../edit/mattes";
+import { matteFrameAt } from "../../shared/matte";
 
 type Plan = Exclude<PipelinePlan, { reason: string }>;
 
@@ -256,6 +258,51 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     return found;
   });
   const source = sources.get;
+  /** One decoder per matte file; mattes are small, so one lane serves playback and seeks. */
+  const mattes = sourceCache(async (file) =>
+    (
+      await openSource(mediaUrl(projectId, file), closing.signal)
+    ).createDecoder(),
+  );
+  /**
+   * The matte frame for a picture whose background is removed, once its whole range is made; the
+   * original picture shows until then. Null keeps the background.
+   */
+  const matteFor = (
+    view: TimelineView,
+    layer: Shown,
+    playing: boolean,
+  ): Promise<VideoFrame | null> | null => {
+    const status = useMattes.getState().status;
+    const state = clipMatteState(
+      status,
+      view.composition,
+      layer.clip,
+      view.timeline.fps,
+    );
+    if (state?.state !== "ready") return null;
+    const entry = status!.mattes.find(
+      (entry) =>
+        entry.src === state.src &&
+        entry.subject &&
+        (() => {
+          const frame = matteFrameAt(entry, layer.time);
+          return frame >= entry.first && frame < entry.first + entry.frames;
+        })(),
+    );
+    // A frame the model found empty shows nothing of the clip.
+    if (!entry) return Promise.resolve(null);
+    const index = matteFrameAt(entry, layer.time) - entry.first;
+    return mattes.get(entry.file).then((decoder) => {
+      const at = decoder.indexAt(
+        decoder.firstTime + (index + 0.25) / entry.rate,
+      );
+      const frame = decoder.frame(at, playing);
+      // Playing reads on, as the source's lanes do, so no matte frame waits on the decoder.
+      if (playing) decoder.prefetch(at + 1, at + decoder.room(8));
+      return frame;
+    });
+  };
 
   type Prepared = {
     decoder: SourceDecoder;
@@ -521,6 +568,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     turn: Layer["turn"],
     intrinsic: Source["intrinsic"],
     grade: GradeTexture | null,
+    matte: VideoFrame | null,
   ): Layer => {
     const { clip } = layer;
     return {
@@ -537,6 +585,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       opacity: layer.opacity,
       brightness: layer.brightness,
       grade,
+      matte:
+        matte && clip.background ? { frame: matte, ...clip.background } : null,
     };
   };
 
@@ -598,6 +648,17 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       rotation: SourceDecoder["rotation"];
       intrinsic: Source["intrinsic"];
     };
+    // Mattes are asked for with the pictures. A clip whose matte is missing or failed to decode
+    // shows its original picture; a frame the model found empty shows nothing of the clip.
+    const empty = Symbol("empty");
+    const matteFrames = Promise.all(
+      shown.pictures.map(
+        (layer) =>
+          matteFor(view, layer, state.kind === "playing")
+            ?.then((frame) => frame ?? empty)
+            .catch(() => null) ?? null,
+      ),
+    );
     let arrived = false;
     let hasStandIn = false;
     const pictures = shown.pictures.map((layer) => {
@@ -703,6 +764,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       if (!canPaint()) return;
       if ("error" in baked) throw baked.error;
       if (effects && "error" in effects) throw effects.error;
+      const matteFrame = await matteFrames;
+      if (!canPaint()) return;
       const currentAudition = useVersions.getState();
       if (
         auditionAtDraw.open !== currentAudition.open ||
@@ -718,16 +781,21 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         !baked[0] &&
         coversFrame(shown.pictures[0]!);
       await target.draw(
-        frames.map(({ frame, rotation, intrinsic }, at) =>
+        frames.flatMap(({ frame, rotation, intrinsic }, at) => {
+          const matte = matteFrame[at];
+          if (matte === empty) return [];
           // The proxy is stored upright; a phone's file may be stored turned.
-          placed(
-            shown.pictures[at]!,
-            frame,
-            rotation,
-            intrinsic,
-            fused ? single.grade : baked[at]!,
-          ),
-        ),
+          return [
+            placed(
+              shown.pictures[at]!,
+              frame,
+              rotation,
+              intrinsic,
+              fused ? single.grade : baked[at]!,
+              matte ?? null,
+            ),
+          ];
+        }),
         drawingPlan.background ?? "#ffffff",
         drawingPlan.width,
         drawingPlan.height,
@@ -774,13 +842,21 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         () => {},
       );
     }
-    const frames = await exact;
+    const closeMattes = () =>
+      void matteFrames.then((all) => {
+        for (const matte of all) if (matte && matte !== empty) matte.close();
+      });
+    const frames = await exact.catch((error: unknown) => {
+      closeMattes();
+      throw error;
+    });
     try {
       if (provisional) await provisional;
       if (hasStandIn && !alternate && wanted) return;
       await paint(frames, false);
     } finally {
       for (const { frame } of frames) frame.close();
+      closeMattes();
     }
     if (plan !== drawingPlan || closing.signal.aborted) return;
     for (const { found, lane, index } of frames) {
@@ -922,6 +998,14 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         queueMicrotask(() => void draw());
     }),
     usePreviewGrade.subscribe(() => void draw()),
+    // A matte that becomes ready, or goes, changes the picture; progress alone does not.
+    useMattes.subscribe((state, previous) => {
+      if (
+        JSON.stringify(state.status?.mattes) !==
+        JSON.stringify(previous.status?.mattes)
+      )
+        void draw();
+    }),
     useGradeBypass.subscribe(() => void draw()),
     useTransport.subscribe((state, previous) => {
       if (state.frame !== previous.frame || state.state !== previous.state)
@@ -951,6 +1035,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       grades.dispose();
       for (const stop of unsubscribe) stop();
       usePipeline.setState({ active: false });
+      for (const decoder of mattes.values())
+        void decoder.then((lane) => lane.close()).catch(() => {});
       for (const found of sources.values())
         void found.then(({ lanes, proxy }) => {
           for (const lane of lanes) lane.close();

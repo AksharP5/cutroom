@@ -13,6 +13,7 @@ import {
   MAX_FX_NODES,
 } from "./fx.ts";
 import { GradeEditSchema, GradeSchema } from "./grade.ts";
+import { BackgroundEditSchema, BackgroundSchema } from "./background.ts";
 import {
   ElementStyleEditSchema,
   ElementStyleSchema,
@@ -452,6 +453,11 @@ export const ClipSchema = z.object({
     .default(null)
     .describe(
       "The colour grade on a video, image or adjustment layer, from HyperFrames' data-color-grading: adjust, wheels, curves, hueCurves, secondaries and a look lut, mixed by intensity. null is ungraded. Change it with setClip.grade; sourceRestrictions.grade says why it cannot be changed.",
+    ),
+  background: BackgroundSchema.nullable()
+    .default(null)
+    .describe(
+      "A video's background is removed: only the subject shows, over the tracks below, with its edge pulled in by shrink and feathered by soften, in source pixels. null keeps the background. Change it with setClip.background; the matte is made after the edit, and stock HyperFrames shows the original picture.",
     ),
   /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
   fadeIn: frame
@@ -1081,6 +1087,11 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .optional()
         .describe(
           "Change a video, image or adjustment layer's colour grade: fields left out keep their values; null removes the whole grade. Check the picture with timeline_view.",
+        ),
+      background: BackgroundEditSchema.nullable()
+        .optional()
+        .describe(
+          'Remove a video\'s background with {"mode":"remove"}, keep it with {"mode":"keep"} or null, or tighten the edge of a removed one with shrink and soften (0 to 8 source pixels). The matte is made after the edit lands.',
         ),
       enabled: z
         .boolean()

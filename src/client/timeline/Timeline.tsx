@@ -84,6 +84,7 @@ import type { TimelineViewport, ViewPlacement } from "./view";
 import { formatTimecode, quietTimecode } from "../../shared/timeline/timecode";
 import { TimecodeText } from "../components/TimecodeText";
 import { hint, keymap, useKeymap } from "../keymap";
+import { MatteBars } from "./MatteBars";
 import "./timeline.css";
 
 declare module "react" {
@@ -1592,6 +1593,15 @@ export function Timeline({
                             style={{ "--s": edge.frame }}
                           />
                         ))}
+                      {rowClips.some(({ clip }) => clip.background) && (
+                        <MatteBars
+                          clips={rowClips
+                            .filter(({ clip }) => clip.background)
+                            .map(({ clip }) => clip)}
+                          timeline={timeline}
+                          composition={source.composition}
+                        />
+                      )}
                       {/* Brackets sit above the transitions they may cross. */}
                       {rowClips.map(
                         ({ clip, row }) =>

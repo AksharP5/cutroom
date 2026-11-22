@@ -182,7 +182,13 @@ async function probeVideo(absolute: string) {
  */
 export function createMatteService(options: MatteServiceOptions = {}) {
   const paths = options.model ?? matteModelPaths();
-  const segmenter = options.segmenter ?? new URL("./u2net.ts", import.meta.url);
+  // Browser tests run jobs on a stub model, as unit tests pass one in.
+  const segmenter =
+    options.segmenter ??
+    new URL(
+      process.env.CUTROOM_MATTE_SEGMENTER ?? "./u2net.ts",
+      import.meta.url,
+    );
   const threads = options.threads ?? 4;
   const weightsFile = options.modelFile ?? MODEL_FILE;
   const jobs: Job[] = [];
@@ -197,6 +203,8 @@ export function createMatteService(options: MatteServiceOptions = {}) {
   const modelState = async (): Promise<MatteModelState> => {
     if (model?.status === "downloading" || model?.status === "failed")
       return model;
+    // A stub model for browser tests needs no weights.
+    if (process.env.CUTROOM_MATTE_SEGMENTER) return { status: "ready" };
     if (!hasRuntime(paths))
       return {
         status: "no-runtime",
@@ -211,10 +219,30 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         };
   };
 
-  const status = async (projectId: string): Promise<MatteStatus> => ({
+  /** Mattes whose source is unchanged since they were made, so the viewer and export can use them. */
+  const freshMattes = async (project: MatteProject) => {
+    const { mattes } = await readManifest(project);
+    const sources = new Map(
+      await Promise.all(
+        [...new Set(mattes.map(({ src }) => src))].map(
+          async (src) =>
+            [
+              src,
+              await stat(join(project.path, src)).catch(() => null),
+            ] as const,
+        ),
+      ),
+    );
+    return mattes.filter((entry) => {
+      const info = sources.get(entry.src);
+      return info?.size === entry.size && info.mtimeMs === entry.mtimeMs;
+    });
+  };
+
+  const status = async (project: MatteProject): Promise<MatteStatus> => ({
     model: await modelState(),
     jobs: jobs
-      .filter((job) => job.project.id === projectId)
+      .filter((job) => job.project.id === project.id)
       .map(
         ({
           project: _p,
@@ -228,13 +256,16 @@ export function createMatteService(options: MatteServiceOptions = {}) {
           elapsed: startedAt ? ((endedAt ?? Date.now()) - startedAt) / 1000 : 0,
         }),
       ),
+    mattes: await freshMattes(project),
   });
 
+  const projects = new Map<string, MatteProject>();
   const flush = async (projectId: string) => {
     timers.delete(projectId);
     const subscribed = listeners.get(projectId);
-    if (!subscribed?.size) return;
-    const snapshot = await status(projectId);
+    const project = projects.get(projectId);
+    if (!subscribed?.size || !project) return;
+    const snapshot = await status(project);
     for (const listener of subscribed) listener(snapshot);
   };
   /** Tells subscribers, at most four times a second, with the latest state. */
@@ -555,6 +586,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
             start: source.start,
             rate: source.rate,
             count: source.count,
+            variable: source.variable,
             model: MATTE_MODEL.name,
             subject,
           } satisfies MatteEntry,
@@ -617,6 +649,8 @@ export function createMatteService(options: MatteServiceOptions = {}) {
           project,
           source,
           src: source.path,
+          start: source.start,
+          rate: source.rate,
           first: gapFirst,
           frames: gapEnd - gapFirst,
           count: source.count,
@@ -632,7 +666,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         jobs.splice(jobs.indexOf(job), 1);
       changed(project.id);
       void pump();
-      return status(project.id);
+      return status(project);
     },
 
     /** Stops a job; the frames already made are kept. */
@@ -691,13 +725,18 @@ export function createMatteService(options: MatteServiceOptions = {}) {
       download?.abort();
     },
 
-    subscribe(projectId: string, listener: (status: MatteStatus) => void) {
+    subscribe(project: MatteProject, listener: (status: MatteStatus) => void) {
+      const projectId = project.id;
+      projects.set(projectId, project);
       let set = listeners.get(projectId);
       if (!set) listeners.set(projectId, (set = new Set()));
       set.add(listener);
       return () => {
         set.delete(listener);
-        if (!set.size) listeners.delete(projectId);
+        if (!set.size) {
+          listeners.delete(projectId);
+          projects.delete(projectId);
+        }
       };
     },
 

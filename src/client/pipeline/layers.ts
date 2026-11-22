@@ -225,11 +225,13 @@ export function shownAt(timeline: Timeline, plan: Plan, frame: number) {
   return layerQuery(timeline, plan, frame, frame)(frame)?.pictures ?? null;
 }
 
-/** An opaque picture with no exposed edges covers everything beneath it. */
+/** An opaque picture with no exposed edges or removed background covers everything beneath it. */
 export function coversFrame({ clip, fit, opacity, brightness }: Shown) {
   return (
     opacity === 1 &&
     brightness === 1 &&
+    // A cutout shows what lies beneath it.
+    !clip.background &&
     fit !== "contain" &&
     !clip.x &&
     !clip.y &&

@@ -67,6 +67,7 @@ const clip = (
   automation: null,
   fx: [],
   grade: null,
+  background: null,
   enabled: true,
   hasAudio: false,
   startRef: null,

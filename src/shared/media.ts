@@ -64,8 +64,15 @@ export const inFreezeAssets = (path: string) =>
 export const isFreezeExport = (path: string) =>
   path.startsWith(`${FREEZE_EXPORT_DIR}/`);
 
+/** The folder of background mattes: ordinary files, but not media to place. */
+export const MATTES_FOLDER = "mattes";
+export const inMattes = (path: string) => path.startsWith(`${MATTES_FOLDER}/`);
+
 export const isMediaItem = (path: string) =>
-  !!mediaKind(path) && !inMediaTrash(path) && !isFreezeExport(path);
+  !!mediaKind(path) &&
+  !inMediaTrash(path) &&
+  !isFreezeExport(path) &&
+  !inMattes(path);
 
 export function mediaSearch(query: string) {
   const needle = query.trim().toLowerCase();

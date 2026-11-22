@@ -9,6 +9,7 @@ import {
 } from "../../shared/timeline/versions";
 import { isTitle } from "../../shared/timeline/title";
 import { takesGrade } from "../../shared/timeline/grade";
+import { canRemoveBackground } from "../../shared/timeline/background";
 
 /**
  * The clip menu, shared by the timeline, the picture and the menu key. Its edits are keymap
@@ -32,6 +33,7 @@ export function clipMenuItems({
   onNormalize,
   onFreeze,
   onAddVersion,
+  onBackground,
   clicked,
 }: {
   timeline: Timeline;
@@ -58,6 +60,8 @@ export function clipMenuItems({
   onNormalize(clips: Clip[]): void;
   onFreeze(clip: Clip, frame: number): void;
   onAddVersion(clip: Clip): void;
+  /** Removes or keeps the background of every video clip among the selection. */
+  onBackground(clips: Clip[], remove: boolean): void;
   /** The clip a right-click landed on, which Duck under voice lowers. */
   clicked?: Clip;
 }): MenuItem[] {
@@ -81,6 +85,8 @@ export function clipMenuItems({
         : pictures.length === 1
           ? pictures[0]
           : undefined;
+  const matteable = clips.filter(canRemoveBackground);
+  const removing = matteable.some((clip) => !clip.background);
   const versioned = clicked ?? (clips.length === 1 ? clips[0] : undefined);
   const versionClip = versioned && versionOwner(timeline.clips, versioned);
   const bed = sound.find((clip) => clip.id === clicked?.id) ?? sound[0];
@@ -106,6 +112,18 @@ export function clipMenuItems({
             disabled:
               !freeze.src || frame <= freeze.start || frame >= clipEnd(freeze),
             run: () => onFreeze(freeze, frame),
+          },
+        ]
+      : []),
+    ...(matteable.length
+      ? [
+          {
+            label: removing ? "Remove background" : "Keep background",
+            run: () =>
+              onBackground(
+                matteable.filter((clip) => !clip.background === removing),
+                removing,
+              ),
           },
         ]
       : []),

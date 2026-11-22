@@ -26,6 +26,7 @@ import { createLayerTextRoutes } from "./projects/layerText";
 import { createTranscriptService } from "./transcript/service";
 import { createMediaRoutes } from "./media/routes";
 import { createMatteRoutes } from "./matte/routes";
+import { createMatteService } from "./matte/service";
 import { createFontRoutes } from "./fonts/routes";
 import { createGradeRoutes } from "./grade/routes";
 import { createLibrary } from "./library/registry";
@@ -72,8 +73,14 @@ export async function createApp(
     studioUrl: baseUrl,
   });
   const media = createMediaRoutes(projects);
-  const mattes = createMatteRoutes(projects);
-  const editor = createHyperframesApi(projects, review, media.media);
+  const matteService = createMatteService();
+  const editor = createHyperframesApi(
+    projects,
+    review,
+    media.media,
+    undefined,
+    matteService,
+  );
   const transcripts = createTranscriptService(projects);
   const app = new Hono();
   let closing = false;
@@ -152,6 +159,11 @@ export async function createApp(
       busy(project, "duplicate it", native ? "agent" : undefined),
   );
   const timeline = createTimelineRoutes(projects, review);
+  const mattes = createMatteRoutes(
+    projects,
+    timeline.timelineSnapshot,
+    matteService,
+  );
   const variables = createVariableRoutes(projects, review);
   app.route(
     "/api/cutroom",

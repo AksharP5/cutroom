@@ -218,6 +218,12 @@ The weights and runtime are HyperFrames': `background-removal/models/u2net_human
 - `DELETE /api/cutroom/projects/:id/mattes/:job` stops a job.
 - The project event stream sends the same status as a `matte` event, coalesced to at most four a second.
 
+A clip with its background removed carries `data-cutroom-matte="shrink:1;soften:1"` (`setClip.background`). The open editor asks `POST /api/cutroom/projects/:id/mattes/sync` after each timeline change that leaves such a clip, and the server queues what each one plays plus a one-second handle on each side (`matteNeeds`). `clipMatte` in `src/shared/matte.ts` turns the jobs and mattes into each clip's state: ready, waiting, running with its progress, needs-model, failed, or no subject. The Inspector, the timeline's progress bars, the status bar, the viewer and export all read it.
+
+The footage pipeline draws a ready clip's cutout. A matte file has one decoder. For each picture, the frame of the matte at the picture's source frame is refined on the GPU at the shown picture's size: scaled up bilinearly with its limited range expanded, eroded by a square of `2 × shrink + 1` pixels, then box-blurred `soften` pixels each side, each split into an across pass and a down pass. The picture is drawn with that as its alpha. A cutout never covers the frame, so the tracks below are decoded and drawn. A clip HyperFrames draws instead shows its original picture.
+
+Export renders each Remove clip's played frames as a ProRes 4444 cutout into `mattes/.export/<id>/`. The cutout is the source's own colour, with the matte refined by the same steps in FFmpeg (`scale=flags=bilinear`, a range `lut`, `erosion` repeated `shrink` times, `boxblur`) as alpha. The render points the clip's `src` and `data-media-start` at it. The marker stays on the element, which keeps the clip on frame capture, where it composites over the lower tracks as any transparent video does. The folder is removed when the export ends. Before rendering, export waits for missing mattes, and the export dialog shows the wait. On a synthetic subject the MP4 and the viewer differed by a mean of 0.9 levels in 255 over the whole frame. Resolve export leaves Remove clips out of the media it links, so their track renders into `Layers/V<n>.mov` with the cutout's transparency.
+
 On an i5-14400F without CUDA libraries, a 1080x1920 30 fps talking head mattes at about 3 frames a second, model load included, with a peak worker RSS of about 1.05 GB.
 
 ## Timeline engine

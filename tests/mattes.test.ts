@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMatteService } from "../src/server/matte/service";
+import { prepareMatteExport } from "../src/server/matte/export";
 import type { MatteStatus } from "../src/shared/matte";
 import { MatteManifestSchema } from "../src/shared/matte";
 
@@ -79,6 +80,7 @@ async function matteFrames(path: string) {
 
 function settled(
   service: ReturnType<typeof createMatteService>,
+  project: { id: string; path: string },
   done: (status: MatteStatus) => boolean,
 ) {
   return new Promise<MatteStatus>((resolve, reject) => {
@@ -86,7 +88,7 @@ function settled(
       () => reject(new Error("The matte job did not settle.")),
       20_000,
     );
-    const stop = service.subscribe("p", (status) => {
+    const stop = service.subscribe(project, (status) => {
       if (!done(status)) return;
       clearTimeout(timeout);
       stop();
@@ -111,7 +113,7 @@ test.skipIf(!tools)(
     await alternating(join(project.path, "talk.mp4"));
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    const finished = settled(service, idle);
+    const finished = settled(service, project, idle);
     // From frame 37, an odd frame in the middle of a GOP, to frame 57.
     await service.request(project, {
       src: "talk.mp4",
@@ -149,7 +151,7 @@ test.skipIf(!tools)(
     await alternating(join(project.path, "talk.mp4"));
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    let finished = settled(service, idle);
+    let finished = settled(service, project, idle);
     await service.request(project, { src: "talk.mp4", from: 0, to: 1 });
     await finished;
     const again = await service.request(project, {
@@ -158,7 +160,7 @@ test.skipIf(!tools)(
       to: 1,
     });
     expect(again.jobs).toEqual([]);
-    finished = settled(service, idle);
+    finished = settled(service, project, idle);
     const longer = await service.request(project, {
       src: "talk.mp4",
       from: 0.5,
@@ -186,7 +188,7 @@ test.skipIf(!tools)(
     await alternating(source, "0");
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    let finished = settled(service, idle);
+    let finished = settled(service, project, idle);
     await service.request(project, { src: "empty.mp4", from: 0, to: 1 });
     expect((await finished).jobs).toMatchObject([{ status: "no-subject" }]);
     expect((await manifest(project)).mattes).toMatchObject([
@@ -203,7 +205,7 @@ test.skipIf(!tools)(
 
     await alternating(source);
     await utimes(source, new Date(), new Date(Date.now() + 5000));
-    finished = settled(service, idle);
+    finished = settled(service, project, idle);
     const remade = await service.request(project, {
       src: "empty.mp4",
       from: 0,
@@ -239,7 +241,7 @@ test.skipIf(!tools)(
     });
     expect(waiting.model).toEqual({ status: "missing", bytes: 4096 });
     await Bun.sleep(50);
-    expect((await service.status("p")).jobs).toMatchObject([
+    expect((await service.status(project)).jobs).toMatchObject([
       { status: "needs-model" },
     ]);
 
@@ -250,7 +252,7 @@ test.skipIf(!tools)(
     ]) {
       reply = wrong;
       await service.downloadModel();
-      expect((await service.status("p")).model).toMatchObject({
+      expect((await service.status(project)).model).toMatchObject({
         status: "failed",
       });
       expect(existsSync(model.weights)).toBe(false);
@@ -258,8 +260,11 @@ test.skipIf(!tools)(
     // A file left on disk that is not the model counts as missing, so Download comes back.
     await writeFile(model.weights, new Uint8Array(4096).fill(9));
     expect(
-      (await createMatteService({ model, segmenter, modelFile }).status("p"))
-        .model,
+      (
+        await createMatteService({ model, segmenter, modelFile }).status(
+          project,
+        )
+      ).model,
     ).toEqual({
       status: "missing",
       bytes: 4096,
@@ -267,7 +272,7 @@ test.skipIf(!tools)(
     await rm(model.weights);
 
     reply = body;
-    const finished = settled(service, (status) =>
+    const finished = settled(service, project, (status) =>
       status.jobs.some((job) => job.status === "done"),
     );
     await service.downloadModel();
@@ -287,13 +292,14 @@ test.skipIf(!tools)(
     cleanup.push(() => service.close());
     const started = settled(
       service,
+      project,
       (status) => (status.jobs[0]?.done ?? 0) >= 5,
     );
     const [job] = (
       await service.request(project, { src: "talk.mp4", from: 0, to: 3 })
     ).jobs;
     await started;
-    const stopped = settled(service, idle);
+    const stopped = settled(service, project, idle);
     service.stop("p", job!.id);
     const [result] = (await stopped).jobs;
     expect(result).toMatchObject({ status: "stopped" });
@@ -353,7 +359,7 @@ test.skipIf(!tools)(
     ] as const) {
       await alternatingAt(join(project.path, name), rate, 90);
       const [num, den] = rate.split("/").map(Number) as [number, number];
-      const finished = settled(service, idle);
+      const finished = settled(service, project, idle);
       // From frame 31, an odd frame, for 20 frames.
       await service.request(project, {
         src: name,
@@ -409,7 +415,7 @@ test.skipIf(!tools)(
     expect(await child.exited).toBe(0);
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    const finished = settled(service, idle);
+    const finished = settled(service, project, idle);
     await service.request(project, { src: "vfr.mp4", from: 0, to: 1 });
     expect((await finished).jobs).toMatchObject([{ status: "done" }]);
     const [entry] = (await manifest(project)).mattes;
@@ -432,13 +438,64 @@ test.skipIf(!tools)(
 );
 
 test.skipIf(!tools)(
+  "an export's cutout carries each source frame's own matte as alpha, and the clip points at it",
+  async () => {
+    const { project, model, modelFile } = await setup();
+    await alternating(join(project.path, "talk.mp4"));
+    const service = createMatteService({ model, segmenter, modelFile });
+    cleanup.push(() => service.close());
+    const html =
+      '<main data-composition-id="main"><video id="v" muted src="talk.mp4" data-start="0" data-duration="0.5" data-media-start="1.2" data-track-index="0" data-cutroom-matte="shrink:0;soften:0"></video></main>';
+    const prepared = await prepareMatteExport({
+      project,
+      composition: "index.html",
+      html,
+      mattes: service,
+      signal: new AbortController().signal,
+      onWait: () => {},
+    });
+    cleanup.push(() => prepared!.cleanup());
+    const src = /src="([^"]+)"/.exec(prepared!.html)![1]!;
+    expect(src).toMatch(/^mattes\/\.export\/[^/]+\/0\.mov$/);
+    expect(prepared!.html).toContain('data-media-start="0.000000"');
+    // The marker stays, which keeps the clip off the direct FFmpeg path.
+    expect(prepared!.html).toContain("data-cutroom-matte");
+    const child = Bun.spawn(
+      [
+        ...["ffmpeg", "-v", "error", "-i", join(project.path, src)],
+        ...[
+          "-vf",
+          "alphaextract,scale=1:1:flags=area,format=gray",
+          "-f",
+          "rawvideo",
+          "-",
+        ],
+      ],
+      { stdout: "pipe" },
+    );
+    const alpha = [
+      ...new Uint8Array(await new Response(child.stdout).arrayBuffer()),
+    ];
+    // Frames 36 to 50: even frames are red, the stub's subject.
+    expect(alpha).toHaveLength(15);
+    expect(alpha.map((value) => (value > 128 ? 1 : 0))).toEqual(
+      Array.from({ length: 15 }, (_, index) =>
+        (36 + index) % 2 === 0 ? 1 : 0,
+      ),
+    );
+    await prepared!.cleanup();
+    expect(existsSync(join(project.path, src))).toBe(false);
+  },
+);
+
+test.skipIf(!tools)(
   "a clip that plays to its source's last frame gets a matte through that frame",
   async () => {
     const { project, model, modelFile } = await setup();
     await alternatingAt(join(project.path, "short.mp4"), "30", 73);
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    const finished = settled(service, idle);
+    const finished = settled(service, project, idle);
     await service.request(project, {
       src: "short.mp4",
       from: 1,
@@ -464,9 +521,9 @@ test.skipIf(!tools)(
     const noisy = new URL("./fixtures/noisy-segmenter.ts", import.meta.url);
     const service = createMatteService({ model, segmenter: noisy, modelFile });
     cleanup.push(() => service.close());
-    const done = settled(service, idle);
+    const done = settled(service, project, idle);
     const gone = new Promise<MatteStatus>((resolve) => {
-      const stop = service.subscribe("q", (status) => {
+      const stop = service.subscribe(other, (status) => {
         if (!status.jobs.some((job) => job.status === "failed")) return;
         stop();
         resolve(status);
@@ -493,7 +550,7 @@ test.skipIf(!tools)(
       service.request(project, request),
       service.request(project, request),
     ]);
-    const { jobs } = await service.status("p");
+    const { jobs } = await service.status(project);
     expect(jobs.map(({ first, frames }) => [first, frames])).toEqual([[0, 60]]);
   },
 );
@@ -511,7 +568,7 @@ test.skipIf(!tools)(
     );
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    const finished = settled(service, idle);
+    const finished = settled(service, project, idle);
     await service.request(project, { src: "talk.mp4", from: 0, to: 1 });
     expect((await finished).jobs).toMatchObject([{ status: "done" }]);
     expect(existsSync(outside)).toBe(false);
@@ -535,18 +592,40 @@ test.skipIf(!tools)(
     await alternating(source);
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    let finished = settled(service, idle);
+    let finished = settled(service, project, idle);
     await service.request(project, { src: "talk.mp4", from: 0, to: 1 });
     await finished;
     const [old] = (await manifest(project)).mattes;
     await alternating(source, "255");
     await utimes(source, new Date(), new Date(Date.now() + 5000));
-    finished = settled(service, idle);
+    finished = settled(service, project, idle);
     await service.request(project, { src: "talk.mp4", from: 0, to: 2 });
     await finished;
     const mattes = (await manifest(project)).mattes;
     expect(mattes).toHaveLength(1);
     expect(existsSync(join(project.path, old!.file))).toBe(false);
     expect(existsSync(join(project.path, mattes[0]!.file))).toBe(true);
+  },
+);
+
+test.skipIf(!tools)(
+  "a model that fails mid-job fails that job, leaves no file, and says when memory ran out",
+  async () => {
+    const { project, model, modelFile } = await setup();
+    await alternating(join(project.path, "talk.mp4"));
+    const failing = createMatteService({
+      model,
+      modelFile,
+      segmenter: new URL("./fixtures/failing-segmenter.ts", import.meta.url),
+    });
+    cleanup.push(() => failing.close());
+    const finished = settled(failing, project, idle);
+    await failing.request(project, { src: "talk.mp4", from: 0, to: 1 });
+    expect((await finished).jobs).toMatchObject([
+      { status: "failed", memory: true },
+    ]);
+    expect(
+      existsSync(join(project.path, "mattes/talk 00-00-00 to 00-00-01.mp4")),
+    ).toBe(false);
   },
 );

@@ -1631,3 +1631,23 @@ input.tl-track-gain {
   font-stretch: var(--stretch-mono);
   cursor: pointer;
 }
+/* Timeline: frames done, along the foot of the clip body. */
+.matte-progress {
+  position: absolute;
+  z-index: var(--z-clip-selected);
+  left: calc(var(--s) / var(--span) * 100%);
+  bottom: 2px;
+  width: calc(var(--d) / var(--span) * 100% * var(--done));
+  height: var(--stroke-rail);
+  background: var(--text-primary);
+  box-shadow: 0 calc(-1 * var(--stroke-hair)) 0 var(--scrim);
+  pointer-events: none;
+}
+
+/* Status bar job, as an export shows there. */
+.matte-job {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+}

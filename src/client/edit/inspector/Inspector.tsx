@@ -43,6 +43,9 @@ import { isTitle } from "../../../shared/timeline/title";
 import { StyleSection } from "./StyleSection";
 import { canHaveGrade } from "../../../shared/timeline/grade";
 import { ColorSection } from "./ColorSection";
+import { BackgroundRow } from "./BackgroundRow";
+import { canRemoveBackground } from "../../../shared/timeline/background";
+import { offlineMediaPath } from "../offlineMedia";
 import {
   BindImageVariable,
   BindVariable,
@@ -287,6 +290,7 @@ export function Inspector({
   const open = useWorkspace((state) => state.inspector);
   const view = useTimeline((state) => state.view);
   const selection = useTimeline((state) => state.selection);
+  const fileChanges = useWorkspace((state) => state.fileChanges);
   const root = useRef<HTMLElement>(null);
   // Keep Changes rows steady while the inspector is in use.
   // A scrub or drag anywhere holds the list until release.
@@ -818,6 +822,21 @@ export function Inspector({
                 fps={timeline.fps}
                 disabled={track?.track.locked}
               />
+              {canRemoveBackground(clip) && (
+                <BackgroundRow
+                  key={`${clip.id}:background`}
+                  projectId={projectId}
+                  clip={clip}
+                  disabled={track?.track.locked ?? false}
+                  offline={
+                    offlineMediaPath(
+                      fileChanges,
+                      view!.composition,
+                      clip.src,
+                    ) !== null
+                  }
+                />
+              )}
             </details>
           )}
           {canHaveGrade(clip.kind, clip.adjustment) && (
