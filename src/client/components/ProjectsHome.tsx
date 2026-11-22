@@ -1,8 +1,20 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { FolderOpen, Plus } from "@phosphor-icons/react";
-import { ProjectSummarySchema } from "../../shared/project";
-import type { Project, ProjectSummary } from "../../shared/project";
-import { api } from "../api";
+import { z } from "zod";
+import { DuplicateJobSchema, ProjectSummarySchema } from "../../shared/project";
+import type {
+  DuplicateJob,
+  Project,
+  ProjectSummary,
+} from "../../shared/project";
+import { api, json } from "../api";
 import {
   aspectLabel,
   durationLabel,
@@ -82,6 +94,46 @@ function RenameField({
   );
 }
 
+const DuplicatesSchema = z.object({ jobs: z.array(DuplicateJobSchema) });
+const failed = (error: unknown) =>
+  showToast(error instanceof Error ? error.message : String(error));
+const copying = (job: DuplicateJob) =>
+  ["queued", "running", "cancelling"].includes(job.state.status);
+
+/** A copy still being made: its name and how far the copy has got, with Cancel as import has. */
+function DuplicateTile({
+  job,
+  onCancel,
+}: {
+  job: DuplicateJob;
+  onCancel: () => void;
+}) {
+  const { status, progress } = job.state;
+  const percent = Math.floor(progress * 100);
+  return (
+    <div className="home-duplicate">
+      <span className="home-well">
+        <span className="home-frame" />
+      </span>
+      <span className="home-name">{job.name}</span>
+      <span className="home-meta">
+        <span role="status">
+          {status === "cancelling"
+            ? "Cancelling"
+            : percent > 0 && percent < 100
+              ? `Copying ${percent}%`
+              : "Duplicating"}
+        </span>
+        {status === "running" && (
+          <button className="text-button" onClick={onCancel}>
+            Cancel
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
 /** One project: its poster frame, name, length, shape, and when it was last edited. */
 function ProjectTile({
   project,
@@ -90,6 +142,7 @@ function ProjectTile({
   onFocus,
   onOpen,
   onRename,
+  onDuplicate,
   onRemove,
 }: {
   project: Project;
@@ -98,6 +151,7 @@ function ProjectTile({
   onFocus: () => void;
   onOpen: () => void;
   onRename: (name: string) => Promise<void>;
+  onDuplicate: () => void;
   onRemove: () => void;
 }) {
   const name = useId();
@@ -236,6 +290,7 @@ function ProjectTile({
         tile.current = element;
       }}
       className="home-project"
+      data-project={project.id}
       title={project.path}
       aria-labelledby={name}
       aria-describedby={meta}
@@ -256,6 +311,7 @@ function ProjectTile({
             { label: "Open", run: onOpen },
             "separator",
             { label: "Rename", keys: "F2", run: () => setRenaming(true) },
+            { label: "Duplicate", run: onDuplicate },
             ...revealRows(project.path),
             "separator",
             { label: "Remove from list", run: onRemove },
@@ -276,6 +332,7 @@ export function ProjectsHome({
   onCreate,
   onImport,
   onRename,
+  onDuplicated,
   onRemove,
 }: {
   projects: Project[];
@@ -283,6 +340,8 @@ export function ProjectsHome({
   onCreate: () => void;
   onImport: () => void;
   onRename: (project: Project, name: string) => Promise<void>;
+  /** A copy is on the list; resolves once the list shows it. */
+  onDuplicated: () => Promise<unknown>;
   /** Resolves true once the project has left the list. */
   onRemove: (project: Project) => Promise<boolean>;
 }) {
@@ -302,13 +361,69 @@ export function ProjectsHome({
   useEffect(() => grid.current?.querySelector("button")?.focus(), []);
   // A removed tile hands focus to the one that takes its place.
   const refocus = useRef<number | null>(null);
+  // A new copy takes the selection, as a duplicated clip does.
+  const select = useRef<string | null>(null);
   useEffect(() => {
+    const copy = select.current;
+    select.current = null;
+    if (copy)
+      grid.current
+        ?.querySelector<HTMLElement>(`[data-project="${copy}"]`)
+        ?.focus();
     const index = refocus.current;
     if (index === null) return;
     refocus.current = null;
     const tiles = grid.current?.querySelectorAll<HTMLElement>(".home-project");
     tiles?.[Math.min(index, tiles.length - 1)]?.focus();
   }, [projects]);
+
+  // Copies in progress, including ones an agent started. Polled only while one is running.
+  const [duplicates, setDuplicates] = useState<DuplicateJob[]>([]);
+  const watching = useRef(new Set<string>());
+  const poll = useCallback(async () => {
+    const { jobs } = await api("/duplicates", DuplicatesSchema);
+    for (const job of jobs) {
+      if (copying(job)) {
+        watching.current.add(job.id);
+        continue;
+      }
+      if (!watching.current.delete(job.id)) continue;
+      if (job.state.status === "failed") showToast(job.state.error);
+      if (job.state.status !== "done") continue;
+      select.current = job.projectId ?? null;
+      await onDuplicated();
+    }
+    setDuplicates(jobs.filter(copying));
+  }, [onDuplicated]);
+  useEffect(() => void poll().catch(failed), [poll]);
+  useEffect(() => {
+    if (!duplicates.length) return;
+    const timer = setTimeout(() => void poll().catch(failed), 200);
+    return () => clearTimeout(timer);
+  }, [duplicates, poll]);
+  const duplicate = (project: Project) =>
+    void api(
+      `/projects/${encodeURIComponent(project.id)}/duplicate`,
+      DuplicateJobSchema,
+      json("POST"),
+    )
+      .then((job) => {
+        watching.current.add(job.id);
+        setDuplicates((current) => [...current, job]);
+      })
+      .catch(failed);
+  const cancel = (job: DuplicateJob) =>
+    void api(
+      `/duplicates/${encodeURIComponent(job.id)}/cancel`,
+      DuplicateJobSchema,
+      json("POST"),
+    )
+      .then((next) =>
+        setDuplicates((current) =>
+          current.map((item) => (item.id === next.id ? next : item)),
+        ),
+      )
+      .catch(failed);
 
   return (
     <main className="home">
@@ -348,6 +463,11 @@ export function ProjectsHome({
           tiles[next]?.focus();
         }}
       >
+        {duplicates.map((job) => (
+          <li key={job.id}>
+            <DuplicateTile job={job} onCancel={() => cancel(job)} />
+          </li>
+        ))}
         {projects.map((project, index) => (
           <li key={project.id}>
             <ProjectTile
@@ -357,6 +477,7 @@ export function ProjectsHome({
               onFocus={() => setActive(project.id)}
               onOpen={() => onOpen(project)}
               onRename={(name) => onRename(project, name)}
+              onDuplicate={() => duplicate(project)}
               onRemove={() => {
                 refocus.current = index;
                 void onRemove(project).then((removed) => {

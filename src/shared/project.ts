@@ -181,6 +181,15 @@ export const ImportProjectSchema = z.object({
   name: ProjectNameSchema.optional(),
 });
 export const RenameProjectSchema = z.object({ name: ProjectNameSchema });
+/** A project being copied beside its original. `projectId` names the copy once it is on the list. */
+export const DuplicateJobSchema = z.object({
+  id: z.string(),
+  sourceId: z.string(),
+  name: z.string(),
+  state: JobStateSchema,
+  projectId: z.string().optional(),
+});
+export type DuplicateJob = z.infer<typeof DuplicateJobSchema>;
 export const TranscriptImportSchema = z.object({
   mediaPath: z.string().min(1),
   sourceFile: z.string().default("index.html"),

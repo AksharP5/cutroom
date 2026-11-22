@@ -32,7 +32,7 @@ import { projectStatePath, unavailableProjectFile } from "./path";
 import type { ReviewService } from "./review";
 import type { ProjectStore } from "./store";
 
-const cannotLink = (error: unknown) =>
+export const cannotLink = (error: unknown) =>
   hasCode(
     error,
     "EXDEV",
@@ -56,10 +56,15 @@ type StagedMedia = {
   copyBytes: bigint;
   linked: boolean;
 };
+/** A byte copy of one source into a new file at `temp`. */
+export type MediaCopy = Pick<
+  StagedMedia,
+  "source" | "name" | "temp" | "copyBytes"
+>;
 
 const directoryFlags =
   constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
-const stagedName =
+export const stagedName =
   /^\.import-(?:([1-9]\d*)-)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.hf[0-9a-f]{6}\.tmp$/;
 
 export async function sweepMediaImports(project: Pick<Project, "path">) {
@@ -98,6 +103,16 @@ export async function sweepMediaImports(project: Pick<Project, "path">) {
 
 // Copies across all projects share a disk-space check. Hard links can still land immediately.
 let copyQueue = Promise.resolve();
+
+/** Runs one batch of byte copies after every batch queued before it, across imports and duplicates. */
+export function onCopyQueue<T>(run: () => Promise<T>): Promise<T> {
+  const pending = copyQueue.then(run);
+  copyQueue = pending.then(
+    () => {},
+    () => {},
+  );
+  return pending;
+}
 
 export async function importMedia(
   store: ProjectStore,
@@ -163,7 +178,7 @@ export async function importMedia(
 
     const copies = staged.filter((entry) => !entry.linked);
     if (copies.length) {
-      const pending = copyQueue.then(async () => {
+      await onCopyQueue(async () => {
         signal.throwIfAborted();
         try {
           await copyMedia(pinned, copies, signal, options.progress);
@@ -172,8 +187,6 @@ export async function importMedia(
           throw error;
         }
       });
-      copyQueue = pending.catch(() => {});
-      await pending;
     }
 
     const label =
@@ -230,20 +243,18 @@ export async function importMedia(
   }
 }
 
-async function copyMedia(
+/** Byte-copies each source after checking there is room for all of them, refusing any that changes. */
+export async function copyMedia(
   pinned: string,
-  copies: StagedMedia[],
+  copies: MediaCopy[],
   signal: AbortSignal,
   progress?: (event: MediaImportProgress) => Promise<unknown> | void,
+  noSpace = "There is not enough free space to import these files.",
 ) {
   const totalBytes = copies.reduce((sum, entry) => sum + entry.copyBytes, 0n);
   if (totalBytes) {
     const { bavail, bsize } = await statfs(pinned, { bigint: true });
-    if (totalBytes > bavail * bsize)
-      throw new HttpError(
-        409,
-        "There is not enough free space to import these files.",
-      );
+    if (totalBytes > bavail * bsize) throw new HttpError(409, noSpace);
   }
   const total = Number(totalBytes);
   let copied = 0;

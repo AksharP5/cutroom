@@ -191,6 +191,13 @@ function starter(input: z.infer<typeof CreateProjectSchema>): string {
   );
 }
 
+/** A project folder's name stem, from its display name. */
+export const projectSlug = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "project";
+
 const committedEntries = new AsyncLocalStorage<{ id?: string }>();
 
 /** Runs a request and returns the newest history entry its writes committed, so the editor can address its next Undo. */
@@ -554,12 +561,10 @@ export async function createProjectStore(options: {
       return track(async () => {
         const input = CreateProjectSchema.parse(raw);
         const id = randomUUID();
-        const slug =
-          input.name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-|-$/g, "") || "project";
-        const path = join(projectsDir, `${slug}-${id.slice(0, 8)}`);
+        const path = join(
+          projectsDir,
+          `${projectSlug(input.name)}-${id.slice(0, 8)}`,
+        );
         await mkdir(path);
         const fonts = join(path, "assets", "fonts");
         await mkdir(fonts, { recursive: true });

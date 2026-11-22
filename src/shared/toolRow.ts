@@ -96,6 +96,16 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => (target ? `the project to ${target}` : "the project"),
   },
+  project_duplicate: {
+    verb: ["Duplicated", "Duplicating", "Duplicate"],
+    kind: "edit",
+    object: () => "the project",
+  },
+  project_duplicate_status: {
+    verb: ["Checked", "Checking", "Check"],
+    kind: "project",
+    object: () => "the duplicate",
+  },
   project_read: { verb: read, kind: "project", object: () => "the project" },
   media_list: {
     verb: ["Listed", "Listing", "List"],

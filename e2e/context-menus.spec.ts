@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { keymap } from "../src/client/keymap";
@@ -338,6 +338,7 @@ test("a project tile's menu opens it, and a browser has no file manager to offer
   await expect(tiles.getByRole("menuitem")).toHaveText([
     "Open",
     "RenameF2",
+    "Duplicate",
     "Remove from list",
   ]);
   await page.keyboard.press("Escape");
@@ -393,6 +394,34 @@ test("F2 renames a project tile in place, and Remove from list keeps its folder"
   );
   await expect(tileNamed(renamed)).toHaveCount(0);
   expect(existsSync(join(project.path, "index.html"))).toBe(true);
+});
+
+test("Duplicate puts a copy beside the project on Home and selects it", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: `Copy me ${Date.now()}` },
+      })
+    ).json(),
+  );
+  await page.goto("/");
+  const tileNamed = (name: string) =>
+    page.locator(".home-project").filter({
+      has: page.locator(".home-name").getByText(name, { exact: true }),
+    });
+  await tileNamed(project.name).click({ button: "right" });
+  await menu(page, project.name)
+    .getByRole("menuitem", { name: "Duplicate" })
+    .click();
+  const copy = tileNamed(`${project.name} copy`);
+  await expect(copy).toBeFocused();
+  await expect(tileNamed(project.name)).toHaveCount(1);
+  const path = await copy.getAttribute("title");
+  expect(dirname(path!)).toBe(dirname(project.path));
+  expect(existsSync(join(path!, "index.html"))).toBe(true);
 });
 
 test("a right-click on the picture picks the clip drawn there and opens its menu", async ({
