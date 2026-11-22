@@ -1997,6 +1997,9 @@ function installPreviewBridge(
   const unpark = (media: HTMLMediaElement, load: boolean) => {
     const entry = parked.get(media);
     if (!entry) return;
+    // Where the runtime put it while parked.
+    const time = media.currentTime;
+    const paused = media.paused;
     parked.delete(media);
     for (const name of PARKED) Reflect.deleteProperty(media, name);
     if (entry.released) media.srcObject = null;
@@ -2006,7 +2009,11 @@ function installPreviewBridge(
       media.preload = "auto";
       const time = expectedMediaTime(media);
       if (time !== null) mediaTime.set.call(media, time);
-    }
+    } else if (media instanceof HTMLVideoElement && media.isConnected && paused)
+      // A video given back rests where the runtime put it, placed by its frame grid like any
+      // paused seek. The runtime takes it as already there: within its tolerance it would not
+      // seek again, and a grid that came while it was parked never placed it.
+      mediaTime.set.call(media, time);
     if (rampFiles.size) watchRamp(media);
   };
   // Inert alternates still have timing attributes. Park them so the runtime neither opens
@@ -2414,6 +2421,14 @@ function installPreviewBridge(
             // Frames are placed by each source's grid, which a new source reads first.
             await Promise.all(videos.map(loadGrid));
             if (!current()) return;
+            // The footage pipeline can take a video while its grid loads; it no longer shows
+            // natively, so look again at which videos do before checking where they rest.
+            const showing = visibleVideos();
+            if (
+              showing.length !== videos.length ||
+              showing.some((video, index) => video !== videos[index])
+            )
+              continue;
             // A grid that just came moved its videos; their frames are on the way.
             if (videos.some((video) => video.seeking)) continue;
             // A video the runtime has not moved to this time would be held at its old frame,

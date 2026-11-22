@@ -803,6 +803,107 @@ test("the edit after a burst of W, undo, D and lift at 7 keys a second keeps the
   await matchesFresh(page, project.id, [89, 90, 240], "after the burst");
 });
 
+test("a video the footage pipeline takes while its frame grid loads, and gives back, needs no correction", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Parked early", width: 640, height: 360, duration: 4 },
+      })
+    ).json(),
+  );
+  await promisify(execFile)("ffmpeg", [
+    ...["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30:d=4"],
+    ...["-c:v", "libx264", "-preset", "ultrafast", "-g", "30"],
+    join(project.path, "talk.mp4"),
+  ]);
+  await replaceIndex(
+    project.path,
+    `<!doctype html><html><head><style>html,body{margin:0;background:#111}main{position:relative;width:640px;height:360px}video{position:absolute;inset:0;width:100%;height:100%}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30" data-duration="4"><video id="v1" src="talk.mp4" muted data-start="0" data-duration="4" data-media-start="0" data-track-index="0"></video></main></body></html>`,
+  );
+  // The editor's own footage pipeline stays off: the test says which videos it draws.
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  // Hold the video's frame grid until the pipeline has taken the video.
+  const { promise: parkedFirst, resolve: release } =
+    Promise.withResolvers<void>();
+  let gridAsked = false;
+  await page.route(/\/frames\?path=talk\.mp4/, async (route) => {
+    gridAsked = true;
+    await parkedFirst;
+    await route.continue();
+  });
+  await page.goto(`/#project/${project.id}`);
+  /** Says which videos the footage pipeline draws; settles once the bridge has painted. */
+  const pipeline = (active: boolean, drawn: string[]) =>
+    page.evaluate(
+      ([active, drawn]) => {
+        // The first document is not marked live until it paints.
+        const frame = [
+          ...document.querySelectorAll<HTMLIFrameElement>(
+            'iframe[title="Composition preview"]',
+          ),
+        ].at(-1)!;
+        const id = crypto.randomUUID();
+        return new Promise<void>((resolve, reject) => {
+          const receive = (event: MessageEvent) => {
+            if (event.source !== frame.contentWindow || event.data?.id !== id)
+              return;
+            removeEventListener("message", receive);
+            event.data.error ? reject(Error(event.data.error)) : resolve();
+          };
+          addEventListener("message", receive);
+          frame.contentWindow!.postMessage(
+            {
+              source: "cutroom-viewer",
+              id,
+              action: "pipeline",
+              active,
+              drawn,
+              native: [],
+            },
+            "*",
+          );
+        });
+      },
+      [active, drawn] as const,
+    );
+  const picture = page
+    .locator('iframe[title="Composition preview"]')
+    .last()
+    .contentFrame();
+  const parked = () =>
+    picture
+      .locator("main")
+      .evaluate(
+        () =>
+          (window as unknown as { __cutroomParkedMedia: Map<unknown, unknown> })
+            .__cutroomParkedMedia.size,
+      );
+
+  // The first picture asks for the grid; the pipeline takes the video before it comes.
+  await expect.poll(() => gridAsked).toBe(true);
+  // Taking it waits for the first picture, which waits for the grid.
+  const taken = pipeline(true, ["v1"]);
+  await expect.poll(parked).toBe(1);
+  // The first picture finishes once the grid comes, and leaves the parked video alone.
+  release();
+  await taken;
+  await waitForPreview(page);
+  expect(await corrections(page), "while parked").toBe(0);
+  // Given back, it rests on its grid where the runtime put it, so showing it moves nothing.
+  await pipeline(false, []);
+  expect(await parked()).toBe(0);
+  await seek(page, 15);
+  await seek(page, 0);
+  expect(await corrections(page), "given back").toBe(0);
+  await matchesFresh(page, project.id, [0, 15], "given back");
+});
+
 test("lifting a clip matches fresh pictures through a dissolve, a transform and track gain", async ({
   page,
   request,
