@@ -19,7 +19,12 @@ async function peakOver(page: Page, ms: number) {
 }
 
 /** A 20 s, 30 fps timeline of one 440 Hz tone from 0, so output sample `n` is source sample `n`. */
-async function openTone(page: Page, request: APIRequestContext, name: string) {
+async function openTone(
+  page: Page,
+  request: APIRequestContext,
+  name: string,
+  more?: (directory: string) => Promise<void>,
+) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -36,6 +41,7 @@ async function openTone(page: Page, request: APIRequestContext, name: string) {
     ...["-i", "sine=frequency=440:sample_rate=48000:duration=20"],
     join(project.path, "tone.wav"),
   ]);
+  await more?.(project.path);
   await page.goto(`/#project/${project.id}`);
   await expect(page.locator(".edit-stage")).toHaveAttribute(
     "data-preview-ready",
@@ -393,4 +399,170 @@ test("K held with J or L steps a frame on a tap and plays half speed with sound 
   await page.keyboard.up("k");
   await expect(speed).toHaveText("");
   await page.keyboard.up("j");
+});
+
+test("the source viewer sounds its own file: shuttle, drags, steps and K with L, handed over cleanly to the timeline", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const exec = promisify(execFile);
+  await openTone(page, request, "Source sound", async (directory) => {
+    await exec("ffmpeg", [
+      ...["-v", "error", "-f", "lavfi"],
+      ...["-i", "sine=frequency=1000:sample_rate=48000:duration=20"],
+      join(directory, "voice.wav"),
+    ]);
+    await exec("ffmpeg", [
+      ...["-v", "error", "-f", "lavfi"],
+      ...["-i", "testsrc=size=160x120:rate=30:duration=4", "-an"],
+      ...["-c:v", "libx264", "-pix_fmt", "yuv420p"],
+      join(directory, "mute.mp4"),
+    ]);
+  });
+  const source = page.getByRole("group", { name: "Source" });
+  const viewer = page.getByRole("region", { name: "Viewer" });
+  const speed = page.getByLabel("Shuttle speed");
+  const row = (name: string) => page.locator(`.media-row[data-path="${name}"]`);
+  /** The probe's lowest and highest sample read over a gesture. */
+  const reads = async (gesture: () => Promise<void>) => {
+    await probe(page);
+    await gesture();
+    await page.waitForTimeout(150);
+    const { low, high, peak } = (await probe(page))!;
+    return { low: low!, high: high!, peak };
+  };
+  const frame = async () => {
+    const text = await page
+      .getByRole("button", { name: /^Current time/ })
+      .textContent();
+    const [h, m, s, f] = text!.split(":").map(Number);
+    return ((h! * 60 + m!) * 60 + s!) * 30 + f!;
+  };
+
+  // The timeline plays its tone far into it: samples past 700,000.
+  await seekFrame(page, 450);
+  await expect(row("voice.wav")).toHaveAttribute("draggable", "true");
+  await row("voice.wav").dblclick();
+  await expect(source).toBeVisible();
+
+  // Shuttle in the source reads the source file from its own start.
+  await viewer.click();
+  await page.keyboard.press("l");
+  await page.keyboard.press("l");
+  await expect(speed).toHaveText("2x");
+  await expect
+    .poll(() => peakOver(page, 100), { timeout: 20_000 })
+    .toBeGreaterThan(0.05);
+  const ahead = await reads(() => page.waitForTimeout(300));
+  expect(ahead.peak).toBeGreaterThan(0.05);
+  expect(ahead.high).toBeLessThan(400_000);
+  expect(ahead.high).toBeGreaterThan(ahead.low);
+  await page.keyboard.press("k");
+
+  // Reverse reads it backwards.
+  await page.keyboard.press("j");
+  await expect(speed).toHaveText("-1x");
+  await expect.poll(() => peakOver(page, 100)).toBeGreaterThan(0.05);
+  const back = (await probe(page))!.source!;
+  await page.waitForTimeout(200);
+  expect((await probe(page))!.source).toBeLessThan(back);
+  await page.keyboard.press("k");
+
+  // A drag on the source's own playhead track.
+  const track = (await source
+    .getByRole("slider", { name: "Playhead" })
+    .boundingBox())!;
+  const dragged = await reads(async () => {
+    let x = track.x + track.width * 0.1;
+    await page.mouse.move(x, track.y + track.height / 2);
+    await page.mouse.down();
+    for (let i = 0; i < 20; i++) {
+      x += 2;
+      await page.mouse.move(x, track.y + track.height / 2);
+      await page.waitForTimeout(16);
+    }
+    await page.mouse.up();
+  });
+  expect(dragged.peak).toBeGreaterThan(0.05);
+  expect(dragged.high).toBeLessThan(400_000);
+
+  // A frame step, and K held with L tapped, play exactly the frame they land on.
+  await viewer.click();
+  const at = await frame();
+  const stepped = await reads(() => page.keyboard.press("ArrowRight"));
+  expect([stepped.low, stepped.high]).toEqual([
+    (at + 1) * 1600,
+    (at + 2) * 1600 - 1,
+  ]);
+  const tapped = await reads(async () => {
+    await page.keyboard.down("k");
+    await page.keyboard.down("l");
+    await page.keyboard.up("l");
+    await page.keyboard.up("k");
+  });
+  expect([tapped.low, tapped.high]).toEqual([
+    (at + 2) * 1600,
+    (at + 3) * 1600 - 1,
+  ]);
+
+  // Alt+Q hands the keys, and the sound, to the timeline: its tone, where its playhead is.
+  await page.keyboard.press("Alt+q");
+  await expect(source).toBeHidden();
+  const there = await frame();
+  const timelineStep = await reads(() => page.keyboard.press("ArrowRight"));
+  expect([timelineStep.low, timelineStep.high]).toEqual([
+    (there + 1) * 1600,
+    (there + 2) * 1600 - 1,
+  ]);
+  expect(timelineStep.low).toBeGreaterThan(700_000);
+  // And back again: the source's own frame.
+  await page.keyboard.press("Alt+q");
+  await expect(source).toBeVisible();
+  const again = await reads(() => page.keyboard.press("ArrowRight"));
+  expect([again.low, again.high]).toEqual([
+    (at + 3) * 1600,
+    (at + 4) * 1600 - 1,
+  ]);
+
+  // Switching or closing mid-shuttle leaves nothing playing.
+  await page.keyboard.press("l");
+  await page.keyboard.press("l");
+  await expect.poll(() => peakOver(page, 100)).toBeGreaterThan(0.05);
+  await page.keyboard.press("Alt+q");
+  await expect(source).toBeHidden();
+  await page.waitForTimeout(50);
+  expect(await peakOver(page, 200)).toBe(0);
+  await page.keyboard.press("Alt+q");
+  await expect(source).toBeVisible();
+  await page.keyboard.press("l");
+  await page.keyboard.press("l");
+  await expect.poll(() => peakOver(page, 100)).toBeGreaterThan(0.05);
+  await source.getByRole("button", { name: "Close source" }).click();
+  await expect(source).toBeHidden();
+  await page.waitForTimeout(50);
+  expect(await peakOver(page, 200)).toBe(0);
+
+  // Shift+S silences source drags and steps; its shuttle still sounds.
+  await row("voice.wav").dblclick();
+  await expect(source).toBeVisible();
+  await viewer.click();
+  await page.keyboard.press("Shift+S");
+  expect((await reads(() => page.keyboard.press("ArrowRight"))).peak).toBe(0);
+  await page.keyboard.press("l");
+  await page.keyboard.press("l");
+  await expect.poll(() => peakOver(page, 100)).toBeGreaterThan(0.05);
+  await page.keyboard.press("k");
+  await page.keyboard.press("Shift+S");
+
+  // A source with no sound stays silent.
+  await expect(row("mute.mp4")).toHaveAttribute("draggable", "true");
+  await row("mute.mp4").dblclick();
+  await viewer.click();
+  await page.keyboard.press("l");
+  await page.keyboard.press("l");
+  await expect(speed).toHaveText("2x");
+  await page.waitForTimeout(100);
+  expect(await peakOver(page, 400)).toBe(0);
+  await page.keyboard.press("k");
 });
