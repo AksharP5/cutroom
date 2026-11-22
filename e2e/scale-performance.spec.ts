@@ -420,8 +420,10 @@ test(
         ).toBeAttached();
       }
       console.log(JSON.stringify({ undoAfterAgentMs: undoMs }));
-      // Main took 650 to 850 ms here: the press waited on the agent's lint and timeline reads.
-      expect(undoMs.toSorted((a, b) => a - b)[1]!).toBeLessThan(150);
+      // Before the fix the press waited on the agent's lint and timeline reads: 650 to 850 ms.
+      // Each press above already showed before the engine answered; this bounds the repaint,
+      // which takes 40 to 100 ms on a quiet runner and up to 350 ms on a slow one.
+      expect(undoMs.toSorted((a, b) => a - b)[1]!).toBeLessThan(400);
     } finally {
       await agent.close();
     }
