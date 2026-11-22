@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { readFile, readdir, realpath } from "node:fs/promises";
 import {
   basename,
   dirname,
@@ -11,7 +11,7 @@ import {
 } from "node:path";
 import type { Project } from "../../shared/project.ts";
 import { HttpError } from "../../shared/errors.ts";
-import { protectedPath } from "../../shared/sourcePaths.ts";
+import { isTimelinePath, protectedPath } from "../../shared/sourcePaths.ts";
 
 /** Leading slashes, dot segments, and Windows separators all name files within the project. */
 export function canonicalProjectPath(path: string) {
@@ -122,4 +122,30 @@ export function unavailableProjectFile(error: unknown): boolean {
     (error instanceof Error && "code" in error && error.code === "ENOTDIR") ||
     (error instanceof HttpError && [403, 404].includes(error.status))
   );
+}
+
+/** HTML files at the project root, index.html first: the files that can be timelines. */
+export async function rootHtmlFiles(project: Pick<Project, "path">) {
+  const entries = await readdir(project.path, { withFileTypes: true });
+  return entries
+    .flatMap((entry) =>
+      entry.isFile() && isTimelinePath(entry.name) ? [entry.name] : [],
+    )
+    .sort((a, b) =>
+      a === "index.html" ? -1 : b === "index.html" ? 1 : a.localeCompare(b),
+    );
+}
+
+/** The project's timelines: the compositions at its root, index.html first. */
+export async function listTimelines(project: Pick<Project, "path">) {
+  const files = await rootHtmlFiles(project);
+  const compositions = await Promise.all(
+    files.map((file) =>
+      readFile(join(project.path, file), "utf8").then(
+        (html) => /data-composition-id\s*=/.test(html),
+        () => false,
+      ),
+    ),
+  );
+  return files.filter((_, index) => compositions[index]);
 }

@@ -135,6 +135,22 @@ export const CreateProjectSchema = z
     duration: z.number().finite().min(1).max(86_400).default(12),
   })
   .refine(withinPictureArea, pictureSizeRule);
+export const DuplicateTimelineSchema = z.object({
+  composition: z
+    .string()
+    .min(1)
+    .default("index.html")
+    .describe("The timeline to copy, a root-level .html file"),
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .optional()
+    .describe(
+      'Name of the copy, without .html. Defaults to "<name> copy"; a taken name gets a number',
+    ),
+});
 export const ImportProjectSchema = z.object({
   path: z.string().min(1),
   name: ProjectNameSchema.optional(),

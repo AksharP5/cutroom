@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { relative, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join, relative, sep } from "node:path";
 import {
   checkSubCompositionUsability,
   parseHTMLContent,
@@ -101,4 +102,33 @@ export function rebasePreviewSceneSources(
     end = attr.valueEnd;
   }
   return end ? parts.join("") + html.slice(end) : html;
+}
+
+/** The compositions `composition` plays, itself included, through its scenes and theirs. */
+export async function playedCompositions(
+  projectDir: string,
+  composition: string,
+) {
+  const played = new Set<string>();
+  const visit = async (path: string): Promise<void> => {
+    if (played.has(path)) return;
+    played.add(path);
+    const html = await readFile(join(projectDir, path), "utf8").catch(() => "");
+    if (!html.includes("data-composition-src")) return;
+    for (const { attributes } of scanHtmlOpeningTags(html)) {
+      const attr = attributes.find(
+        ({ name }) => name === "data-composition-src",
+      );
+      if (attr?.kind !== "value") continue;
+      const selected = resolvePreviewCompositionSrc(
+        projectDir,
+        path,
+        decodeAuthoredAttribute(attr.value),
+      );
+      if (selected)
+        await visit(relative(projectDir, selected.file).split(sep).join("/"));
+    }
+  };
+  await visit(composition);
+  return played;
 }

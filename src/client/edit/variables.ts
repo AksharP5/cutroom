@@ -44,11 +44,15 @@ const FileChangeSchema = z.object({ path: z.string() });
 const path = (projectId: string) =>
   `/projects/${encodeURIComponent(projectId)}/variables`;
 
-/** Keeps `useVariables` on this composition while mounted. */
-export function useFollowVariables(projectId: string, composition: string) {
+/** Keeps `useVariables` on this composition while mounted; null while it is not known yet. */
+export function useFollowVariables(
+  projectId: string,
+  composition: string | null,
+) {
   useEffect(() => {
     const closing = new AbortController();
     useVariables.setState({ projectId, state: null });
+    if (composition === null) return;
     const load = () =>
       api(
         `${path(projectId)}?${new URLSearchParams({ composition })}`,

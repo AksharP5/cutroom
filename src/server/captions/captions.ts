@@ -232,6 +232,25 @@ const unreadable = () =>
     "The captions file was changed outside Cutroom, so it cannot be read back. Undo that change, or remove the captions clip and add captions again.",
   );
 
+function captionsRoot(html: string) {
+  const template = parseSourceDocument(html).document.querySelector("template");
+  if (!template) return null;
+  return parseSourceDocument(template.innerHTML).document.querySelector(
+    `[${CAPTIONS_ATTRIBUTE}]`,
+  );
+}
+
+/** The same captions file under another composition id, following another transcript. */
+export function copyCaptions(html: string, id: string, transcriptId: string) {
+  const read = readCaptions(html);
+  if (!read) return null;
+  return renderCaptions(
+    { ...read.captions, transcriptId },
+    { ...read.frame, id },
+    Number(captionsRoot(html)!.getAttribute("data-duration")),
+  );
+}
+
 /**
  * Captions from a file Cutroom wrote, or null for any other composition. A file that claims to be
  * captions must pass the same schema Cutroom writes from, or it is refused rather than guessed.
@@ -239,10 +258,7 @@ const unreadable = () =>
 export function readCaptions(
   html: string,
 ): { captions: Captions; frame: CaptionsFrame } | null {
-  const template = parseSourceDocument(html).document.querySelector("template");
-  if (!template) return null;
-  const { document } = parseSourceDocument(template.innerHTML);
-  const root = document.querySelector(`[${CAPTIONS_ATTRIBUTE}]`);
+  const root = captionsRoot(html);
   if (!root) return null;
   const id = root.getAttribute("data-composition-id") ?? "";
   const width = Number(root.getAttribute("data-width"));

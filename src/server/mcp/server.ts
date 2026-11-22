@@ -15,6 +15,7 @@ import {
   AnnotationPatchSchema,
   CreateProjectSchema,
   CutWordsSchema,
+  DuplicateTimelineSchema,
   ImportProjectSchema,
   RenameProjectSchema,
   SourceWriteSchema,
@@ -279,11 +280,26 @@ export function createMcpServer(options: McpOptions = {}) {
   registry.registerTool(
     "project_read",
     {
-      description: "Read annotations and transcripts for a local project.",
+      description:
+        "Read annotations, transcripts and timelines for a local project. timelines lists the project's timelines: the .html files at its root, index.html (the main one) first. Every timeline tool takes one as composition.",
       inputSchema: project,
       annotations: readOnly,
     },
-    (input) => request(`/projects/${id(input.projectId)}/document`),
+    (input) =>
+      request(`/projects/${id(input.projectId)}/document`, "GET", undefined, {
+        reply: async (document) => ({
+          ...z.looseObject({}).parse(document),
+          timelines: z
+            .object({ timelines: z.array(z.string()) })
+            .parse(
+              await (
+                await requestLocal(
+                  `/api/cutroom/projects/${id(input.projectId)}/timelines`,
+                )
+              ).json(),
+            ).timelines,
+        }),
+      }),
   );
   registry.registerTool(
     "project_lint",
@@ -467,6 +483,17 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     ({ projectId, ...input }) =>
       request(`/projects/${id(projectId)}/media/rename`, "POST", input),
+  );
+  registry.registerTool(
+    "timeline_duplicate",
+    {
+      description:
+        "Copy a timeline as a new timeline beside it, as one undo step, like Duplicate Timeline in an editor: same clips, tracks, markers, in/out, track view settings, transcripts and captions. Returns the new composition path; pass it as composition to timeline_read, timeline_edit, export_start and every other timeline tool to work on the copy while the original stays as it is.",
+      inputSchema: DuplicateTimelineSchema.extend(project),
+      annotations: edit,
+    },
+    ({ projectId, ...input }) =>
+      request(`/projects/${id(projectId)}/timelines/duplicate`, "POST", input),
   );
   registry.registerTool(
     "media_remove",

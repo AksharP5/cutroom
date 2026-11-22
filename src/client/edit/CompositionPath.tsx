@@ -10,8 +10,9 @@ const compositionName = (path: string, projectName: string) =>
     : (path.split("/").at(-1) ?? path).replace(/\.html?$/i, "");
 
 /**
- * Where the timeline is, shown only inside a sub-composition: the project, the compositions it
- * was opened through, and the open one. A name above the open one goes back to it.
+ * Where the timeline is: inside a scene, the timeline and compositions it was opened through and
+ * the open one, where a name above the open one goes back to it. Another timeline than the main
+ * one shows its name alone, since it was opened as an equal.
  */
 export function CompositionPath({
   projectId,
@@ -22,7 +23,7 @@ export function CompositionPath({
 }) {
   const composition = useTimeline((state) => state.composition);
   const parents = useTimeline((state) => state.parents);
-  if (!parents.length) return null;
+  if (!parents.length && composition === ROOT_COMPOSITION) return null;
   return (
     <nav className="edit-path" aria-label="Composition">
       {parents.map((path, index) => (

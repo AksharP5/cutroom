@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, posix } from "node:path";
 import { parseFpsWithDefault } from "@hyperframes/core";
 import { parseSourceDocument } from "@hyperframes/studio-server";
 import type { FileMutationInput } from "@hyperframes/studio-server";
@@ -17,6 +19,7 @@ import {
 } from "../../shared/timeline/apply";
 import type { Fps } from "../../shared/timeline/schema";
 import { readSource } from "../projects/store";
+import type { ProjectStore } from "../projects/store";
 import { projectWritePath } from "../projects/path";
 import { setElementAttributes } from "../timeline/composition";
 import { transcriptView } from "../transcript/cuts";
@@ -344,4 +347,43 @@ export async function followTranscript(
     html: patched,
     files: [await captionsWrite(project, placed, layout.captions, duration)],
   };
+}
+
+/** A new captions file beside `sourceFile`, `compositions/captions.html` unless that is taken. */
+export async function createCaptionsFile(
+  store: ProjectStore,
+  project: Project,
+  sourceFile: string,
+  html: (id: string) => string,
+) {
+  const folder = posix.dirname(sourceFile);
+  for (let index = 1; index < 100; index++) {
+    const id = index === 1 ? "captions" : `captions-${index}`;
+    const file = posix.join(folder, "compositions", `${id}.html`);
+    const absolute = await projectWritePath(project, file, {
+      allowMissing: true,
+    });
+    await mkdir(dirname(absolute), { recursive: true });
+    const content = html(id);
+    const written = await writeFile(absolute, content, { flag: "wx" }).then(
+      () => true,
+      (error: unknown) => {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "EEXIST"
+        )
+          return false;
+        throw error;
+      },
+    );
+    if (written) {
+      store.captureHistoryCreation(absolute, content);
+      return { id, file };
+    }
+  }
+  throw new HttpError(
+    409,
+    "Too many captions files. Remove unused ones from compositions/.",
+  );
 }

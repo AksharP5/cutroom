@@ -20,7 +20,7 @@ import { projectViews } from "../projects/view";
 import { projectMutationGuard } from "../projects/authorization";
 import { AGENT_HEADER } from "../../shared/review";
 import type { ReviewService } from "../projects/review";
-import type { z } from "zod";
+import { z } from "zod";
 import { Hono } from "hono";
 import { planPreviewPipeline } from "../hyperframes/pipelinePlan";
 import { isPinnedGsap } from "../hyperframes/previewTimingPolicy";
@@ -28,6 +28,7 @@ import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
 import { fileContentVersion } from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
+import { isTimelinePath } from "../../shared/sourcePaths";
 import type { Project, ProjectSummary } from "../../shared/project";
 import {
   TimelineError,
@@ -1048,6 +1049,36 @@ export function createTimelineRoutes(
     const settings = parseInput(TimelineViewSettingsSchema, await c.req.json());
     await views.save(project, composition, settings);
     return c.json(settings);
+  });
+  /** The timeline the project reopens on: the last one opened, while it is still there. */
+  api.get("/projects/:id/timeline-open", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const open = await views.readOpen(project);
+    const composition =
+      open &&
+      isTimelinePath(open) &&
+      (await projectPath(project, open).then(
+        () => true,
+        () => false,
+      ))
+        ? open
+        : "index.html";
+    return c.json({ composition });
+  });
+  api.put("/projects/:id/timeline-open", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const { composition } = parseInput(
+      z.object({
+        composition: z
+          .string()
+          .transform(canonicalProjectPath)
+          .refine(isTimelinePath, "Choose a root-level timeline."),
+      }),
+      await c.req.json(),
+    );
+    await readSource(project, composition);
+    await views.saveOpen(project, composition);
+    return c.json({ composition });
   });
   // Destinations by themselves, for agents: other view preferences stay as the editor left them.
   const destinations = async (project: Project, composition: string) => {

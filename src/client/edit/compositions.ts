@@ -1,10 +1,18 @@
+import { z } from "zod";
 import { localMediaPath } from "../../shared/media";
+import { isTimelinePath } from "../../shared/sourcePaths";
 import { clipEnd, toFrames } from "../../shared/timeline/apply";
 import type { Clip, Fps } from "../../shared/timeline/schema";
 import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
+import { api, json } from "../api";
 import { showToast } from "../workspace";
-import { ROOT_COMPOSITION, showComposition, useTimeline } from "./timeline";
+import {
+  ROOT_COMPOSITION,
+  onCompositionGone,
+  showComposition,
+  useTimeline,
+} from "./timeline";
 import { transport, useTransport } from "./transport";
 
 /** Where each composition's playhead and selection were when it was last left, by project. */
@@ -51,7 +59,43 @@ function go(
   void (opened ? reading : reading.then(seek)).catch((error: unknown) =>
     showToast(error instanceof Error ? error.message : String(error)),
   );
+  // The project reopens on the timeline last shown.
+  if (!parents.length)
+    void api(
+      `/projects/${encodeURIComponent(projectId)}/timeline-open`,
+      TimelinePathSchema,
+      json("PUT", { composition }),
+    ).catch((error: unknown) => console.warn("Open timeline", error));
 }
+
+const TimelinePathSchema = z.object({ composition: z.string() });
+
+/** The timeline a project reopens on: the one last shown, or index.html. */
+export const lastTimeline = (projectId: string, signal: AbortSignal) =>
+  api(
+    `/projects/${encodeURIComponent(projectId)}/timeline-open`,
+    TimelinePathSchema,
+    { signal },
+  ).then(
+    ({ composition }) => composition,
+    (error: unknown) => {
+      if (!signal.aborted) console.warn("Open timeline", error);
+      return ROOT_COMPOSITION;
+    },
+  );
+
+/** Copies a timeline beside it in one undo step. The copy shows in the Compositions list. */
+export const duplicateTimeline = (projectId: string, composition: string) =>
+  void api(
+    `/projects/${encodeURIComponent(projectId)}/timelines/duplicate`,
+    TimelinePathSchema,
+    json("POST", { composition }),
+  ).catch((error: unknown) =>
+    showToast(error instanceof Error ? error.message : String(error)),
+  );
+
+// A timeline whose file went away, as when its duplication is undone, leaves for the main one.
+onCompositionGone((projectId) => go(projectId, ROOT_COMPOSITION, []));
 
 /** The project file a sub-composition host plays, or null for any other clip. */
 export function hostedComposition(clip: Clip, composition: string) {
@@ -107,7 +151,8 @@ export function leaveComposition(projectId: string, to?: string) {
 
 /**
  * Opens any composition of the project, from a note or the composition list, at `seconds` when
- * given. One that is not open above this one opens from the root.
+ * given. A timeline opens in place of the one shown, as its equal. A scene that is not open above
+ * this one opens from the timeline being edited.
  */
 export function openComposition(
   projectId: string,
@@ -116,14 +161,14 @@ export function openComposition(
 ) {
   const frame =
     seconds === undefined ? undefined : (fps: Fps) => toFrames(seconds, fps);
-  const { parents } = useTimeline.getState();
+  const { parents, composition: open } = useTimeline.getState();
   const index = parents.indexOf(composition);
   if (index >= 0)
     return go(projectId, composition, parents.slice(0, index), frame);
   go(
     projectId,
     composition,
-    composition === ROOT_COMPOSITION ? [] : [ROOT_COMPOSITION],
+    isTimelinePath(composition) ? [] : [parents[0] ?? open],
     frame,
   );
 }

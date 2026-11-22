@@ -189,6 +189,8 @@ export async function toolSubject(
       if (paths?.length) return `${paths.length} media files`;
       return undefined;
     }
+    case "timeline_duplicate":
+      return fileName(text("composition") ?? "index.html");
     case "media_rename":
     case "media_remove": {
       const media = text("path");

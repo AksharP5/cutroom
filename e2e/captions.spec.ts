@@ -137,6 +137,10 @@ test("a person imports subtitles, adds captions, restyles and corrects them, and
   const project = await footageProject(request, "Captions by hand");
   await page.goto(`/#project/${project.id}`);
   await page.getByRole("button", { name: "Script", exact: true }).click();
+  // The import goes to the chosen footage, so wait for the panel to list it.
+  await expect(page.getByLabel("Footage", { exact: true })).toHaveText(
+    "talk.mp4",
+  );
   await page.locator('.script-panel input[type="file"]').setInputFiles({
     name: "talk.srt",
     mimeType: "text/plain",

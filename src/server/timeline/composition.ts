@@ -2011,6 +2011,32 @@ function rewriteAttributes(
   );
 }
 
+/**
+ * Changes attributes on any element of the file, templates included, as `change` asks from its
+ * written attributes. Every other byte stays as written.
+ */
+export function rewriteElements(
+  html: string,
+  change: (attrs: Readonly<Record<string, string>>) => AttributeChange[],
+): string {
+  const spans = new Map(
+    scanHtmlOpeningTags(html).map((span) => [span.start, span]),
+  );
+  return applyEdits(
+    html,
+    [...descendants(parseElements(html).roots, true)].flatMap((element) => {
+      const changes = change(element.attrs);
+      return changes.length
+        ? attributeEdits(
+            openingTag(spans, element, element.attrs.id ?? element.tag),
+            html,
+            changes,
+          )
+        : [];
+    }),
+  );
+}
+
 /** The attributes of the element with `id`, as written. Null when no element has that id. */
 export function elementAttributes(
   html: string,

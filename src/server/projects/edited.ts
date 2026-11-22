@@ -8,7 +8,7 @@ import { localMediaPath } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
 import { projectSourceTypes } from "../../shared/sourcePaths";
-import { isMissing, projectWritePath } from "./path";
+import { isMissing, projectWritePath, rootHtmlFiles } from "./path";
 
 function sourceReferences(source: string, path: string): string[] {
   const quoted = (text: string) =>
@@ -52,63 +52,77 @@ function sourceReferences(source: string, path: string): string[] {
 // Home lists every project; an unchanged file's references are not parsed again.
 const parsed = new Map<
   string,
-  { mtimeMs: number; size: number; references: string[] }
+  { mtimeMs: number; size: number; references: string[]; composition: boolean }
 >();
 
 /** Follow authoring dependencies, never directory listings or media bytes. */
 export async function projectEditedAt(project: Project) {
-  const pending = new Set(["index.html", "cutroom.json"]);
   const visited = new Set<string>();
   let newest: number | undefined;
-  for (const path of pending) {
-    if (path.split("/").some(isProjectIgnoredDir)) continue;
-    try {
-      const absolute = await projectWritePath(project, path);
-      if (visited.has(absolute)) continue;
-      visited.add(absolute);
-      const info = await stat(absolute);
-      if (!info.isFile()) continue;
-      newest = Math.max(newest ?? -Infinity, info.mtimeMs);
-      if (info.size > 10 * 1024 * 1024) continue;
-      const cached = parsed.get(absolute);
-      const references =
-        cached?.mtimeMs === info.mtimeMs && cached.size === info.size
-          ? cached.references
-          : sourceReferences(await readFile(absolute, "utf8"), path);
-      parsed.set(absolute, {
-        mtimeMs: info.mtimeMs,
-        size: info.size,
-        references,
-      });
-      for (const url of references) {
-        const linked = localMediaPath(path, url.trim());
-        if (!linked || !projectSourceTypes.has(extname(linked).toLowerCase()))
+  /** With `timelines`, a starting file counts only when it is a composition. */
+  const follow = async (pending: Set<string>, timelines = false) => {
+    const starts = new Set(pending);
+    for (const path of pending) {
+      if (path.split("/").some(isProjectIgnoredDir)) continue;
+      try {
+        const absolute = await projectWritePath(project, path);
+        if (visited.has(absolute)) continue;
+        visited.add(absolute);
+        const info = await stat(absolute);
+        if (!info.isFile()) continue;
+        if (info.size > 10 * 1024 * 1024) {
+          if (!timelines) newest = Math.max(newest ?? -Infinity, info.mtimeMs);
           continue;
-        // HyperFrames uses an existing sibling first, then a project-root asset.
-        const rooted = localMediaPath("index.html", url.trim());
-        if (rooted && linked !== rooted) {
-          try {
-            await projectWritePath(project, linked);
-          } catch (error) {
-            if (error instanceof HttpError && error.status === 404) {
-              pending.add(rooted);
-              continue;
-            }
-            if (error instanceof HttpError && error.status === 403) continue;
-            throw error;
-          }
         }
-        pending.add(linked);
+        const cached = parsed.get(absolute);
+        const read =
+          cached?.mtimeMs === info.mtimeMs && cached.size === info.size
+            ? cached
+            : await readFile(absolute, "utf8").then((source) => ({
+                mtimeMs: info.mtimeMs,
+                size: info.size,
+                references: sourceReferences(source, path),
+                composition: /data-composition-id\s*=/.test(source),
+              }));
+        parsed.set(absolute, read);
+        if (timelines && starts.has(path) && !read.composition) continue;
+        newest = Math.max(newest ?? -Infinity, info.mtimeMs);
+        for (const url of read.references) {
+          const linked = localMediaPath(path, url.trim());
+          if (!linked || !projectSourceTypes.has(extname(linked).toLowerCase()))
+            continue;
+          // HyperFrames uses an existing sibling first, then a project-root asset.
+          const rooted = localMediaPath("index.html", url.trim());
+          if (rooted && linked !== rooted) {
+            try {
+              await projectWritePath(project, linked);
+            } catch (error) {
+              if (error instanceof HttpError && error.status === 404) {
+                pending.add(rooted);
+                continue;
+              }
+              if (error instanceof HttpError && error.status === 403) continue;
+              throw error;
+            }
+          }
+          pending.add(linked);
+        }
+      } catch (error) {
+        if (
+          isMissing(error) ||
+          (error instanceof HttpError && [403, 404].includes(error.status))
+        )
+          continue;
+        throw error;
       }
-    } catch (error) {
-      if (
-        isMissing(error) ||
-        (error instanceof HttpError && [403, 404].includes(error.status))
-      )
-        continue;
-      throw error;
     }
-  }
+  };
+  await follow(new Set(["index.html", "cutroom.json"]));
+  // Then every other timeline, a composition at the root, and what it links.
+  await follow(
+    new Set(await rootHtmlFiles(project).catch((): string[] => [])),
+    true,
+  );
   return newest === undefined
     ? project.updatedAt
     : new Date(newest).toISOString();

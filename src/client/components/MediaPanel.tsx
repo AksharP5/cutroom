@@ -466,10 +466,9 @@ export function MediaPanel({
   const nativeImport = useRef<string | undefined>(undefined);
   const desktop = window.cutroomDesktop;
   const compositions = useCompositions(projectId);
-  // The list appears once the project has a scene; the root alone needs no list.
+  // The list is the timeline bin, so it is there from the project's first timeline.
   const [view, setView] = useState<"media" | "compositions">("media");
-  const showing =
-    compositions && compositions.length > 1 ? view : ("media" as const);
+  const showing = compositions?.length ? view : ("media" as const);
   const [message, setMessage] = useState("");
   const [renaming, setRenaming] = useState<string>();
   /** A file the timeline still uses, waiting for the owner's answer. */
@@ -820,7 +819,7 @@ export function MediaPanel({
       }}
     >
       <header className="panel-header">
-        {compositions && compositions.length > 1 ? (
+        {compositions?.length ? (
           <h2 className="panel-views">
             {(
               [

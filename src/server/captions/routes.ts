@@ -1,5 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, posix } from "node:path";
+import { posix } from "node:path";
 import { Hono } from "hono";
 import { parseSourceDocument } from "@hyperframes/studio-server";
 import type { FileMutationInput } from "@hyperframes/studio-server";
@@ -40,6 +39,7 @@ import {
   followTranscript,
   layoutCaptions,
   placedCaptions,
+  createCaptionsFile,
 } from "./project";
 import { cueWords, formatSubtitles, parseSubtitles } from "./subtitles";
 
@@ -75,44 +75,6 @@ export function createCaptionRoutes(
       : null;
   };
 
-  /** A new file beside the composition, `compositions/captions.html` unless that is taken. */
-  const createFile = async (
-    project: Project,
-    sourceFile: string,
-    html: (id: string) => string,
-  ) => {
-    const folder = posix.dirname(sourceFile);
-    for (let index = 1; index < 100; index++) {
-      const id = index === 1 ? "captions" : `captions-${index}`;
-      const file = posix.join(folder, "compositions", `${id}.html`);
-      const absolute = await projectWritePath(project, file, {
-        allowMissing: true,
-      });
-      await mkdir(dirname(absolute), { recursive: true });
-      const content = html(id);
-      const written = await writeFile(absolute, content, { flag: "wx" }).then(
-        () => true,
-        (error: unknown) => {
-          if (
-            error instanceof Error &&
-            "code" in error &&
-            error.code === "EEXIST"
-          )
-            return false;
-          throw error;
-        },
-      );
-      if (written) {
-        store.captureHistoryCreation(absolute, content);
-        return { id, file };
-      }
-    }
-    throw new HttpError(
-      409,
-      "Too many captions files. Remove unused ones from compositions/.",
-    );
-  };
-
   /** New captions: a file, and a clip on a new Captions track above every other. */
   const add = async (
     project: Project,
@@ -136,12 +98,16 @@ export function createCaptionRoutes(
         "None of this transcript's words are on the timeline.",
       );
     const duration = placement.durationFrames;
-    const { file } = await createFile(project, sourceFile, (id) =>
-      renderCaptions(
-        layout.captions,
-        { id, width: composition.width, height: composition.height },
-        toSeconds(duration, composition.fps),
-      ),
+    const { file } = await createCaptionsFile(
+      store,
+      project,
+      sourceFile,
+      (id) =>
+        renderCaptions(
+          layout.captions,
+          { id, width: composition.width, height: composition.height },
+          toSeconds(duration, composition.fps),
+        ),
     );
     const src = sourceUrl(sourceFile, file);
     const result = await editInWindow(

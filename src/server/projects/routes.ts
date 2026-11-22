@@ -14,6 +14,7 @@ import {
   AnnotationPatchSchema,
   CreateProjectSchema,
   CutWordsSchema,
+  DuplicateTimelineSchema,
   ImportProjectSchema,
   RenameProjectSchema,
   SourceWriteSchema,
@@ -44,8 +45,10 @@ import { mediaUses, removeMedia, renameMedia } from "./mediaFiles";
 import { ReviewFileError, addAnnotation } from "./review";
 import type { ReviewService } from "./review";
 import { readSource } from "./store";
+import { duplicateTimeline } from "./timelines";
 import {
   canonicalProjectPath,
+  listTimelines,
   projectStatePath,
   projectWritePath,
 } from "./path";
@@ -211,6 +214,22 @@ export function createProjectRoutes(
         },
       ),
     );
+  });
+  api.get("/projects/:id/timelines", async (c) =>
+    c.json({
+      timelines: await listTimelines(await store.get(c.req.param("id"))),
+    }),
+  );
+  api.post("/projects/:id/timelines/duplicate", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(DuplicateTimelineSchema, await c.req.json());
+    const result = await reviews.editAssets(
+      project,
+      c.req.header(AGENT_HEADER),
+      () => duplicateTimeline(store, project, input, agentWho(c, project)),
+    );
+    if (result.historyId) c.header(EDIT_HISTORY_HEADER, result.historyId);
+    return c.json(result, 201);
   });
   /** The editor asks this before it removes, so its question is not a refused request. */
   api.get("/projects/:id/media/uses", async (c) => {

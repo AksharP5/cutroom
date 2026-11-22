@@ -71,6 +71,7 @@ import {
 } from "./source";
 import { SourceViewer } from "./SourceViewer";
 import { CompositionPath } from "./CompositionPath";
+import { lastTimeline } from "./compositions";
 import { ToolButtons } from "./ToolButtons";
 import { CodePanel } from "./code/CodePanel";
 import { codeCanLeave, openFile, useCode } from "./code/code";
@@ -180,10 +181,12 @@ export function EditPage({
   const [fullscreen, setFullscreen] = useState(false);
   const history = useTimeline((state) => state.history);
   const composition = useTimeline((state) => state.composition);
+  /** The timeline to open is known, so the viewer loads only that one. */
+  const opened = useTimeline((state) => state.projectId === projectId);
   const missingRoot = useWorkspace(
     (state) => state.editorErrors.timeline === NO_COMPOSITION_ROOT,
   );
-  useFollowVariables(projectId, composition);
+  useFollowVariables(projectId, opened ? composition : null);
   const snapping = useTimeline((state) => state.snapping);
   const linkedSelection = useTimeline((state) => state.linkedSelection);
   const source = useSource((state) => state.file !== null);
@@ -193,7 +196,6 @@ export function EditPage({
 
   useEffect(() => {
     const closing = new AbortController();
-    openTimeline(projectId, closing.signal);
     transport.seek(0);
     const unsubscribe = useTimeline.subscribe(({ view }) => {
       if (view) transport.setTimeline(view.timeline);
@@ -201,7 +203,12 @@ export function EditPage({
     const fail = (error: unknown) => {
       if (!closing.signal.aborted) report(error);
     };
-    void loadTimeline(projectId, closing.signal);
+    // The project opens on the timeline last shown, and reads only that one.
+    void lastTimeline(projectId, closing.signal).then((composition) => {
+      if (closing.signal.aborted) return;
+      openTimeline(projectId, closing.signal, composition);
+      return loadTimeline(projectId, closing.signal);
+    });
     // Any project change can move the timeline or the undo history.
     const stopProject = subscribeProjectEvents(
       projectId,
@@ -717,17 +724,19 @@ export function EditPage({
         aria-label="Viewer"
         onPointerDownCapture={clearBrowserSelection}
       >
-        <Viewer
-          key={projectId}
-          projectId={projectId}
-          composition={composition}
-          change={previewChange}
-          zoom={zoom}
-          mode={mode}
-          notes={notes}
-          onOpenNote={onOpenNote}
-          onSaveNote={onSaveNote}
-        />
+        {opened && (
+          <Viewer
+            key={projectId}
+            projectId={projectId}
+            composition={composition}
+            change={previewChange}
+            zoom={zoom}
+            mode={mode}
+            notes={notes}
+            onOpenNote={onOpenNote}
+            onSaveNote={onSaveNote}
+          />
+        )}
         <SourceViewer projectId={projectId} />
         <TransportBar
           key={sourceShown ? "source" : "timeline"}
