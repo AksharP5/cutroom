@@ -583,8 +583,13 @@ test("review: undo or MCP rename cannot leave a missing source available to Inse
   baseURL,
 }) => {
   const { project, media, row, sources } = await open(page, request);
-  await row("talk.mp4").dblclick();
-  await expect(page.locator(".edit-source-name")).toHaveText("talk.mp4");
+  // A double-click opens a video only once its length and format are known.
+  const openSource = async (name: string) => {
+    await expect(row(name)).toHaveAttribute("draggable", "true");
+    await row(name).dblclick();
+    await expect(page.locator(".edit-source-name")).toHaveText(name);
+  };
+  await openSource("talk.mp4");
   await row("talk.mp4").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
   await media.getByRole("textbox", { name: "Rename talk.mp4" }).fill("renamed");
@@ -599,8 +604,7 @@ test("review: undo or MCP rename cannot leave a missing source available to Inse
   await expect(page.locator(".edit-source")).toHaveCount(0);
   expect(await sources()).toEqual(["assets/talk.mp4", "assets/talk.mp4"]);
 
-  await expect(row("talk.mp4")).toBeVisible();
-  await row("talk.mp4").dblclick();
+  await openSource("talk.mp4");
   const client = new Client({ name: "media-source-test", version: "1" });
   try {
     await client.connect(
@@ -623,7 +627,7 @@ test("review: undo or MCP rename cannot leave a missing source available to Inse
       "assets/external.mp4",
       "assets/external.mp4",
     ]);
-    await row("external.mp4").dblclick();
+    await openSource("external.mp4");
     expect(
       (
         await client.callTool({
@@ -633,7 +637,7 @@ test("review: undo or MCP rename cannot leave a missing source available to Inse
       ).isError,
     ).not.toBe(true);
     await expect(page.locator(".edit-source")).toHaveCount(0);
-    await row("talk.mp4").dblclick();
+    await openSource("talk.mp4");
     expect(
       (
         await client.callTool({
