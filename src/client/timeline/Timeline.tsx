@@ -1129,7 +1129,7 @@ export function Timeline({
     lanes,
     timeline.clips,
     layout.rows,
-    () => viewport.current?.state().ppf ?? 0,
+    () => viewport.current?.state(),
     (slides) => bodies.current?.slide(slides),
     gestures.held,
     sizes.slide,

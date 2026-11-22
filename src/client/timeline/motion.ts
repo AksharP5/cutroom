@@ -4,6 +4,7 @@ import type { Clip } from "../../shared/timeline/schema";
 import type { Slide } from "./bodies";
 import { cssEasing, cssMilliseconds } from "./math";
 import type { Row } from "./math";
+import type { ViewState } from "./view";
 
 /** How far a clip is drawn from where its layout puts it, in pixels. */
 export interface Offset {
@@ -37,6 +38,13 @@ export function readSlideTiming(style: CSSStyleDeclaration) {
 }
 
 /**
+ * A shorter move lands at once: it does not read as travel, and in Fit on a long timeline every
+ * clip after a ripple moves about that far, each one restyled every frame of the slide. It also
+ * covers the arithmetic noise of a drag that already held the clip in place.
+ */
+const MIN_SLIDE = 4;
+
+/**
  * Slides clips from where they were drawn, `offsets` away, to where they are. Their boxes, names
  * and outlines move by transform, added to any slide or zoom still running, and `slideBodies`
  * moves their filmstrips and waveforms on the canvas the same way. Reduced motion sets
@@ -55,9 +63,8 @@ export function slideClips(
     (inlineTiming ? undefined : slideTiming.get(root)) ??
     readSlideTiming(getComputedStyle(root));
   if (!duration) return;
-  // Under half a pixel is arithmetic noise from a drag that already held the clip in place.
   const slides = [...offsets].flatMap(([id, { x, y }]) =>
-    Math.abs(x) >= 0.5 || Math.abs(y) >= 0.5
+    Math.abs(x) >= MIN_SLIDE || Math.abs(y) >= MIN_SLIDE
       ? [{ id, x, y, duration, ease }]
       : [],
   );
@@ -130,6 +137,9 @@ export function slideClips(
  * were drawn, so the change reads as motion. A drag that held clips away from their layout leaves
  * those offsets in `held`; a clip the drag already put where the edit puts it does not slide.
  *
+ * Only clips whose slide crosses the visible lanes move: each moving clip restyles every frame,
+ * and a ripple near the start of a long timeline moves every clip after it.
+ *
  * Call it before the timeline measures its new length. A fitted viewport holds this scale until
  * the slide ends. The microtask starts the motion after the edit's layout effects have run.
  */
@@ -137,7 +147,7 @@ export function useClipMotion(
   lanes: RefObject<HTMLElement | null>,
   clips: readonly Clip[],
   rows: readonly Row[],
-  ppf: () => number,
+  view: () => ViewState | undefined,
   slideBodies: (slides: Slide[]) => void,
   held: RefObject<ReadonlyMap<string, Offset> | null>,
   initialTiming: ReturnType<typeof readSlideTiming>,
@@ -179,28 +189,31 @@ export function useClipMotion(
     });
     if (!moved.length) return;
     const top = new Map(rows.map((row) => [row.track.index, row.top]));
-    const drawn = ppf();
+    const drawn = view()?.ppf ?? 0;
     queueMicrotask(() => {
-      const zoom = ppf();
-      slideClips(
-        root,
-        new Map(
-          moved.map(({ clip, old }) => {
-            const at = hold?.get(clip.id);
-            return [
-              clip.id,
-              {
-                x: old.start * drawn - clip.start * zoom + (at?.x ?? 0),
-                y:
-                  (top.get(old.track) ?? 0) -
-                  (top.get(clip.track) ?? 0) +
-                  (at?.y ?? 0),
-              },
-            ];
-          }),
-        ),
-        slideBodies,
-      );
+      const shown = view();
+      const zoom = shown?.ppf ?? 0;
+      const left = shown && zoom ? shown.frames.from * zoom : -Infinity;
+      const right = shown && zoom ? shown.frames.to * zoom : Infinity;
+      const offsets = new Map<string, Offset>();
+      for (const { clip, old } of moved) {
+        const at = hold?.get(clip.id);
+        const from = old.start * drawn + (at?.x ?? 0);
+        const to = clip.start * zoom;
+        if (
+          Math.min(from, to) > right ||
+          Math.max(from, to) + clip.duration * zoom < left
+        )
+          continue;
+        offsets.set(clip.id, {
+          x: from - to,
+          y:
+            (top.get(old.track) ?? 0) -
+            (top.get(clip.track) ?? 0) +
+            (at?.y ?? 0),
+        });
+      }
+      slideClips(root, offsets, slideBodies);
     });
     // Rows and zoom are read when clips change; neither moves a clip by itself.
   }, [clips]);
