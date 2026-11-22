@@ -26,7 +26,7 @@ import { framesAfter, framesBefore } from "../../shared/timeline/transition";
 import { versionsAtEdge } from "../../shared/timeline/versions";
 import { formatWindows } from "./composition";
 import type { ParsedComposition } from "./composition";
-import { elementClip } from "./transitions";
+import { elementClip } from "../../shared/timeline/element";
 
 export function planFormat(
   parsed: ParsedComposition,
