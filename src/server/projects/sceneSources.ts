@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import {
   checkSubCompositionUsability,
@@ -16,7 +16,7 @@ import {
 } from "@hyperframes/parsers";
 import { parseDeclarations } from "../../shared/variables.ts";
 import { isTimelinePath } from "../../shared/sourcePaths.ts";
-import { listTimelines } from "./path.ts";
+import { rootHtmlFiles } from "./path.ts";
 
 /** Both compilers read the document defaults, then the root selected by the mount. */
 export function mountedSceneVariables(html: string, compositionId: string) {
@@ -106,17 +106,23 @@ export function rebasePreviewSceneSources(
   return end ? parts.join("") + html.slice(end) : html;
 }
 
-/** The compositions `composition` plays, itself included, through its scenes and theirs. */
-export async function playedCompositions(
-  projectDir: string,
-  composition: string,
-) {
-  const played = new Set<string>();
-  const visit = async (path: string): Promise<void> => {
-    if (played.has(path)) return;
-    played.add(path);
-    const html = await readFile(join(projectDir, path), "utf8").catch(() => "");
-    if (!html.includes("data-composition-src")) return;
+// Each file's own mounts, kept while its size and modification time stay the same.
+const mountsByFile = new Map<
+  string,
+  { mtimeMs: number; size: number; mounts: string[] }
+>();
+
+/** The project files `path` mounts directly, through `data-composition-src`. */
+async function directMounts(projectDir: string, path: string) {
+  const absolute = join(projectDir, path);
+  const info = await stat(absolute).catch(() => null);
+  if (!info?.isFile()) return [];
+  const known = mountsByFile.get(absolute);
+  if (known?.mtimeMs === info.mtimeMs && known.size === info.size)
+    return known.mounts;
+  const html = await readFile(absolute, "utf8").catch(() => "");
+  const mounts: string[] = [];
+  if (html.includes("data-composition-src"))
     for (const { attributes } of scanHtmlOpeningTags(html)) {
       const attr = attributes.find(
         ({ name }) => name === "data-composition-src",
@@ -128,8 +134,27 @@ export async function playedCompositions(
         decodeAuthoredAttribute(attr.value),
       );
       if (selected)
-        await visit(relative(projectDir, selected.file).split(sep).join("/"));
+        mounts.push(relative(projectDir, selected.file).split(sep).join("/"));
     }
+  mountsByFile.set(absolute, {
+    mtimeMs: info.mtimeMs,
+    size: info.size,
+    mounts,
+  });
+  return mounts;
+}
+
+/** The compositions `composition` plays, itself included, through its scenes and theirs. */
+export async function playedCompositions(
+  projectDir: string,
+  composition: string,
+) {
+  const played = new Set<string>();
+  const visit = async (path: string): Promise<void> => {
+    if (played.has(path)) return;
+    played.add(path);
+    for (const mounted of await directMounts(projectDir, path))
+      await visit(mounted);
   };
   await visit(composition);
   return played;
@@ -146,7 +171,7 @@ export async function affectedCompositions(
   fromIndex: readonly string[] | null,
 ) {
   if (fromIndex === null) return isTimelinePath(path) ? [path] : null;
-  const others = (await listTimelines({ path: projectDir })).filter(
+  const others = (await rootHtmlFiles({ path: projectDir })).filter(
     (timeline) => timeline !== "index.html" && !fromIndex.includes(timeline),
   );
   const playing = await Promise.all(
