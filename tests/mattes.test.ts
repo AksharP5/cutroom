@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import {
   lstat,
+  readdir,
   mkdir,
   symlink,
   mkdtemp,
@@ -627,5 +628,118 @@ test.skipIf(!tools)(
     expect(
       existsSync(join(project.path, "mattes/talk 00-00-00 to 00-00-01.mp4")),
     ).toBe(false);
+  },
+);
+
+const exportHtml = (src: string, extra = "") =>
+  `<main data-composition-id="main"><video id="v" muted src="${src}" data-start="0" data-duration="0.5" data-media-start="1.2" data-track-index="0" data-cutroom-matte="shrink:0;soften:0"${extra}></video></main>`;
+const prepare = (
+  project: { id: string; path: string },
+  service: ReturnType<typeof createMatteService>,
+  html: string,
+  signal = new AbortController().signal,
+) =>
+  prepareMatteExport({
+    project,
+    composition: "index.html",
+    html,
+    mattes: service,
+    signal,
+    onWait: () => {},
+  });
+
+test.skipIf(!tools)(
+  "an export stops with a reason when a matte job is stopped or cannot run, rather than waiting forever",
+  async () => {
+    const { project, model, modelFile } = await setup();
+    await alternating(join(project.path, "talk.mp4"));
+    process.env.STUB_SEGMENTER_DELAY_MS = "40";
+    cleanup.push(async () => delete process.env.STUB_SEGMENTER_DELAY_MS);
+    const service = createMatteService({ model, segmenter, modelFile });
+    cleanup.push(() => service.close());
+    const exported = prepare(project, service, exportHtml("talk.mp4"));
+    const running = settled(service, project, (status) =>
+      status.jobs.some((job) => job.done > 2),
+    );
+    const [job] = (await running).jobs;
+    service.stop(project.id, job!.id);
+    await expect(exported).rejects.toThrow("was stopped");
+    await expect(
+      prepare(project, service, exportHtml("missing.mp4")),
+    ).rejects.toThrow("cannot be removed");
+    await expect(
+      prepare(
+        project,
+        service,
+        exportHtml(
+          "talk.mp4",
+          ` data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":0.5},{"t":1,"v":2}]}]}'`,
+        ),
+      ),
+    ).rejects.toThrow("speed ramp");
+  },
+);
+
+test.skipIf(!tools)(
+  "a clip whose removal failed exports as shot, as the viewer shows it",
+  async () => {
+    const { project, model, modelFile } = await setup();
+    await alternating(join(project.path, "talk.mp4"));
+    const service = createMatteService({
+      model,
+      modelFile,
+      segmenter: new URL("./fixtures/failing-segmenter.ts", import.meta.url),
+    });
+    cleanup.push(() => service.close());
+    const html = exportHtml("talk.mp4");
+    const prepared = await prepare(project, service, html);
+    cleanup.push(async () => prepared?.cleanup());
+    expect(prepared?.html).toBe(html);
+  },
+);
+
+test.skipIf(!tools)(
+  "an export never writes its cutouts through a link planted at mattes/.export",
+  async () => {
+    const { project, model, modelFile, root } = await setup();
+    await alternating(join(project.path, "talk.mp4"));
+    const outside = join(root, "outside");
+    await mkdir(outside);
+    await mkdir(join(project.path, "mattes"));
+    await symlink(outside, join(project.path, "mattes/.export"));
+    const service = createMatteService({ model, segmenter, modelFile });
+    cleanup.push(() => service.close());
+    await expect(
+      prepare(project, service, exportHtml("talk.mp4")),
+    ).rejects.toThrow();
+    expect(await readdir(outside)).toEqual([]);
+  },
+);
+
+test.skipIf(!tools)(
+  "a timeline read lets go of jobs no clip needs any more, keeping the frames made",
+  async () => {
+    const { project, model, modelFile } = await setup();
+    await alternating(join(project.path, "talk.mp4"));
+    await alternating(join(project.path, "other.mp4"));
+    process.env.STUB_SEGMENTER_DELAY_MS = "40";
+    cleanup.push(async () => delete process.env.STUB_SEGMENTER_DELAY_MS);
+    const service = createMatteService({ model, segmenter, modelFile });
+    cleanup.push(() => service.close());
+    const talk = { src: "talk.mp4", from: 0, to: 3, composition: "index.html" };
+    await service.request(project, talk);
+    await service.request(project, { ...talk, src: "other.mp4" });
+    const running = settled(service, project, (status) =>
+      status.jobs.some((job) => job.done > 2),
+    );
+    await running;
+    // The clip went back to Keep: nothing on the timeline needs either job.
+    const stopped = settled(service, project, (status) =>
+      status.jobs.every((job) => job.status === "stopped"),
+    );
+    await service.release(project, "index.html", []);
+    const { jobs } = await stopped;
+    expect(jobs).toHaveLength(1);
+    expect((await manifest(project)).mattes).toHaveLength(1);
   },
 );

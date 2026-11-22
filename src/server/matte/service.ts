@@ -48,6 +48,13 @@ import {
 import type { MatteModelPaths, WeightsFile } from "./model.ts";
 
 type MatteProject = Pick<Project, "id" | "path">;
+export interface MatteRequest {
+  src: string;
+  from: number;
+  to: number;
+  retry?: boolean;
+  composition?: string;
+}
 const MANIFEST = `${MATTES_FOLDER}/mattes.json`;
 /** Status events are coalesced to at most four a second. */
 const EVENT_INTERVAL_MS = 250;
@@ -82,6 +89,8 @@ interface SourceFrames {
 
 interface Job extends MatteJob {
   project: MatteProject;
+  /** The composition whose clips asked for it, so a later read of that timeline can let it go. */
+  composition?: string;
   source: SourceFrames;
   startedAt?: number;
   endedAt?: number;
@@ -247,6 +256,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         ({
           project: _p,
           source: _s,
+          composition: _c,
           startedAt,
           endedAt,
           stop: _s2,
@@ -607,10 +617,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
      * Queues the source frames between media times `from` and `to` that have no fresh matte and
      * no job. A range that failed is asked again only with `retry`.
      */
-    async queue(
-      project: MatteProject,
-      request: { src: string; from: number; to: number; retry?: boolean },
-    ) {
+    async queue(project: MatteProject, request: MatteRequest) {
       const source = await sourceFrames(project, request.src);
       const first = source.still
         ? 0
@@ -647,6 +654,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         jobs.push({
           id: randomUUID(),
           project,
+          composition: request.composition,
           source,
           src: source.path,
           start: source.start,
@@ -679,6 +687,50 @@ export function createMatteService(options: MatteServiceOptions = {}) {
       else {
         jobs.splice(jobs.indexOf(job), 1);
         changed(projectId);
+      }
+    },
+
+    /**
+     * Stops the jobs a composition's clips asked for that none of `needed` covers any more: the
+     * clip went back to Keep, was deleted, or an undo took its Remove away. Frames already made
+     * are kept.
+     */
+    async release(
+      project: MatteProject,
+      composition: string,
+      needed: readonly { src: string; from: number; to: number }[],
+    ) {
+      const sources = new Map(
+        await Promise.all(
+          needed.map(
+            async ({ src }) =>
+              [
+                src,
+                (await resolveProjectPath(project, src).catch(() => null))
+                  ?.path,
+              ] as const,
+          ),
+        ),
+      );
+      for (const job of jobs.filter(
+        (job) =>
+          job.project.id === project.id &&
+          job.composition === composition &&
+          (job.status === "waiting" ||
+            job.status === "needs-model" ||
+            job.status === "running"),
+      )) {
+        const used = needed.some(
+          (need) =>
+            sources.get(need.src) === job.src &&
+            job.first < Math.ceil((need.to - job.start) * job.rate - 1e-6) &&
+            job.first + job.frames >
+              Math.floor((need.from - job.start) * job.rate + 1e-6),
+        );
+        if (used) continue;
+        if (job.stop) job.stop();
+        else jobs.splice(jobs.indexOf(job), 1);
+        changed(project.id);
       }
     },
 
@@ -760,10 +812,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
      * Requests for one project run one after another, so two at once never queue the same
      * frames twice.
      */
-    request(
-      project: MatteProject,
-      request: { src: string; from: number; to: number; retry?: boolean },
-    ) {
+    request(project: MatteProject, request: MatteRequest) {
       const queued = (requests.get(project.id) ?? Promise.resolve())
         .catch(() => {})
         .then(() => queue(project, request));

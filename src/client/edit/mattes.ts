@@ -77,8 +77,11 @@ export function watchMattes(projectId: string, signal: AbortSignal) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stopTimeline = useTimeline.subscribe((state, previous) => {
     if (state.projectId !== projectId || state.view === previous.view) return;
-    // A timeline with no Remove clip asks nothing, so most edits cost nothing here.
-    if (!state.view?.timeline.clips.some((clip) => clip.background)) return;
+    // A timeline with no Remove clip, before or after, asks nothing, so most edits cost
+    // nothing here. One that just lost its last lets its jobs go.
+    const removing = (view: typeof state.view) =>
+      view?.timeline.clips.some((clip) => clip.background) ?? false;
+    if (!removing(state.view) && !removing(previous.view)) return;
     clearTimeout(timer);
     timer = setTimeout(
       () => void syncMattes(projectId).catch(() => {}),

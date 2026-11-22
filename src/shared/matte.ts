@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import { localMediaPath } from "./media.ts";
 import { offsetSourceTime } from "./timeline/time.ts";
 import type { Clip, Fps, Timeline } from "./timeline/schema.ts";
@@ -140,9 +141,10 @@ export function clipMatte(
   const grid = entries[0] ?? jobs[0];
   if (!grid) return { state: "waiting", done: [] };
   const first = matteFrameAt(grid, from);
-  const end = Math.max(
-    first + 1,
-    Math.ceil((to - grid.start) * grid.rate - 1e-6),
+  // Frames past the source's last are never made: a clip playing to the end needs none.
+  const end = Math.min(
+    grid.count,
+    Math.max(first + 1, Math.ceil((to - grid.start) * grid.rate - 1e-6)),
   );
   const made = [
     ...entries,
@@ -216,9 +218,13 @@ export function clipMatte(
     : { state: "ready", done };
 }
 
+/** A speed ramp, which mattes do not follow yet: the clip keeps its original picture. */
+export const isRamped = (clip: Pick<Clip, "automation">) =>
+  parseRateLane(clip.automation) !== null;
+
 /** The source media times a video clip plays, without handles; null for clips with no source. */
 export function clipSourceRange(clip: Clip, fps: Fps) {
-  if (clip.mediaStart === null || !clip.src) return null;
+  if (clip.mediaStart === null || !clip.src || isRamped(clip)) return null;
   return {
     from: clip.mediaStart,
     to: offsetSourceTime(

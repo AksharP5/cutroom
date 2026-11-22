@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { dirname, join, posix, relative } from "node:path";
 import { scanHtmlOpeningTags } from "@hyperframes/parsers";
+import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { z } from "zod";
 import { localMediaPath } from "../../shared/media.ts";
@@ -13,10 +14,11 @@ import {
 } from "../../shared/timeline/background.ts";
 import type { Background } from "../../shared/timeline/background.ts";
 import { localMediaInputOptions } from "../media/input.ts";
+import { projectPath } from "../projects/path.ts";
 import type { MatteService } from "./service.ts";
 
 /** Where an export's cutouts are written: inside the project, so the render can read them, hidden. */
-const EXPORT_FOLDER = `${MATTES_FOLDER}/.export`;
+export const EXPORT_FOLDER = `${MATTES_FOLDER}/.export`;
 
 interface MattedVideo {
   src: string;
@@ -46,9 +48,10 @@ export function mattedVideos(html: string): MattedVideo[] {
     // A hidden clip, such as one outside a layer being rendered, needs no cutout.
     const hidden = tag.attributes.some((entry) => entry.name === "data-hidden");
     if (!marked || hidden || !src || !(duration > 0)) return [];
-    if (!(rate > 0))
+    const automation = value("data-automation")?.value ?? null;
+    if (!(rate > 0) || parseRateLane(automation) !== null)
       throw new Error(
-        "A clip with its background removed and a speed ramp cannot be exported yet. Set a constant speed, or keep its background.",
+        `${value("id")?.value ?? src.value} has a speed ramp and its background removed, which cannot be exported yet. Set a constant speed, or keep its background.`,
       );
     const mediaStart = value("data-media-start");
     return [
@@ -149,7 +152,7 @@ async function renderCutout(options: {
   ffprobe: string;
   source: string;
   output: string;
-  projectDir: string;
+  project: { path: string };
   mattes: MatteEntry[];
   first: number;
   end: number;
@@ -169,7 +172,7 @@ async function renderCutout(options: {
   if (!stored) throw new Error("The clip has no matte to cut out.");
   const mask = await picture(
     options.ffprobe,
-    join(options.projectDir, stored.file),
+    await projectPath(options.project, stored.file),
   );
   const child = Bun.spawn(
     [
@@ -210,25 +213,38 @@ async function renderCutout(options: {
     if (to <= from) continue;
     if (!entry.subject) {
       const empty = new Uint8Array(mask.width * mask.height).fill(16);
-      for (let frame = from; frame < to; frame++) child.stdin.write(empty);
+      for (let frame = from; frame < to; frame++) {
+        child.stdin.write(empty);
+        await child.stdin.flush();
+      }
       continue;
     }
     const decode = Bun.spawn(
       [
-        ...[ffmpeg, "-v", "error", "-nostdin"],
+        ...[ffmpeg, "-v", "error", "-nostdin", ...localMediaInputOptions],
         ...[
           "-ss",
           Math.max(0, (from - entry.first - 0.5) / entry.rate).toFixed(6),
         ],
-        ...["-i", join(options.projectDir, entry.file)],
+        ...["-f", "mov", "-i", await projectPath(options.project, entry.file)],
         ...["-frames:v", String(to - from), "-fps_mode", "passthrough"],
         ...["-vf", "extractplanes=y", "-f", "rawvideo", "pipe:1"],
       ],
       { stdout: "pipe", stderr: "ignore", signal: options.signal },
     );
-    for await (const chunk of decode.stdout) child.stdin.write(chunk);
-    if ((await decode.exited) !== 0)
-      throw new Error(`FFmpeg could not read the matte ${entry.file}.`);
+    try {
+      // Waits for the encoder to take each chunk, so a long range never piles up in memory.
+      for await (const chunk of decode.stdout) {
+        child.stdin.write(chunk);
+        await child.stdin.flush();
+      }
+      if ((await decode.exited) !== 0)
+        throw new Error(`FFmpeg could not read the matte ${entry.file}.`);
+    } catch (error) {
+      decode.kill("SIGKILL");
+      child.kill("SIGKILL");
+      throw error;
+    }
   }
   await child.stdin.end();
   if ((await child.exited) !== 0)
@@ -271,34 +287,63 @@ export async function prepareMatteExport(options: {
       to: video.mediaStart + video.played,
     };
   });
-  // Ask for every range, then wait until each is made.
-  let status: MatteStatus | undefined;
-  for (const need of needs)
-    status = await options.mattes.request(options.project, {
-      src: need.src,
-      from: need.from,
-      to: need.to,
-    });
+  // Ask for what is missing on every pass, so a range that lost its job is asked again, and stop
+  // with a reason when nothing will make it. A clip whose removal failed exports as shot, as the
+  // viewer shows it.
+  let status: MatteStatus;
   for (;;) {
+    if (options.signal.aborted) throw new Error("The export was cancelled.");
     status = await options.mattes.status(options.project);
-    if (
-      status.model.status === "missing" ||
-      status.model.status === "no-runtime"
-    )
+    const model = status.model;
+    if (model.status === "missing" || model.status === "no-runtime")
       throw new Error(
         "Remove background needs its model. Download it from a clip's Background row, then export again.",
       );
-    const states = needs.map((need) =>
-      clipMatte(status!, need.src, need.from, need.to),
-    );
-    const failed = states.find((state) => state.state === "failed");
-    if (failed && failed.state === "failed")
+    if (model.status === "failed")
       throw new Error(
-        `Background removal stopped, so the export cannot show the cutout. ${failed.error}`,
+        `The background removal model could not be downloaded, so the export cannot show the cutout. ${model.error}`,
+      );
+    const stopped = needs.find((need) =>
+      status.jobs.some(
+        (job) =>
+          job.status === "stopped" &&
+          job.src === need.src &&
+          job.first < Math.ceil((need.to - job.start) * job.rate) &&
+          job.first + job.frames >
+            Math.floor((need.from - job.start) * job.rate),
+      ),
+    );
+    if (stopped)
+      throw new Error(
+        `Background removal for ${stopped.src} was stopped, so the export cannot show its cutout. Turn Remove on again, or keep its background.`,
+      );
+    for (const need of needs)
+      status = await options.mattes
+        .request(options.project, {
+          src: need.src,
+          from: need.from,
+          to: need.to,
+          composition: options.composition,
+        })
+        .catch((error: unknown) => {
+          throw new Error(
+            `The background of ${need.src} cannot be removed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+    const states = needs.map((need) =>
+      clipMatte(status, need.src, need.from, need.to),
+    );
+    const unqueued = needs.find(
+      (_need, index) =>
+        states[index]!.state === "waiting" && !("job" in states[index]!),
+    );
+    if (unqueued)
+      throw new Error(
+        `Nothing is making the matte of ${unqueued.src}, so the export cannot show its cutout.`,
       );
     if (
-      states.every(
-        (state) => state.state === "ready" || state.state === "no-subject",
+      states.every((state) =>
+        ["ready", "no-subject", "failed"].includes(state.state),
       )
     )
       break;
@@ -308,18 +353,19 @@ export async function prepareMatteExport(options: {
           total +
           (state.state === "running"
             ? state.progress
-            : state.state === "ready"
-              ? 1
-              : 0),
+            : state.state === "waiting" || state.state === "needs-model"
+              ? 0
+              : 1),
         0,
       ) / states.length,
     );
     await Bun.sleep(250);
-    if (options.signal.aborted) throw new Error("The export was cancelled.");
   }
-  const folder = `${EXPORT_FOLDER}/${randomUUID()}`;
-  const absolute = join(options.project.path, folder);
-  await mkdir(absolute, { recursive: true });
+  const parent = await projectPath(options.project, EXPORT_FOLDER, true);
+  await mkdir(parent, { recursive: true });
+  // A folder only this export made: nothing already there, a link included, is written through.
+  const absolute = join(parent, randomUUID());
+  await mkdir(absolute);
   const cleanup = () => rm(absolute, { recursive: true, force: true });
   try {
     const edits: { start: number; end: number; text: string }[] = [];
@@ -344,7 +390,7 @@ export async function prepareMatteExport(options: {
         ffprobe,
         source: join(options.project.path, src),
         output: join(absolute, name),
-        projectDir: options.project.path,
+        project: options.project,
         mattes: entries,
         first,
         end,

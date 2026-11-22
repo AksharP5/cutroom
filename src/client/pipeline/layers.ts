@@ -26,6 +26,11 @@ type ShownAdjustment = {
 
 type FrameLayers = {
   pictures: Shown[];
+  /**
+   * Cutouts above every HyperFrames layer at the frame, such as a presenter over a title, drawn
+   * on the canvas over the preview. Only clips with their background removed go there.
+   */
+  above?: Shown[];
   adjustments?: ShownAdjustment[];
 };
 
@@ -190,14 +195,27 @@ function layerQuery(
       a: { level: number; index: number },
       b: { level: number; index: number },
     ) => a.level < b.level || (a.level === b.level && a.index < b.index);
+    const sorted = (layers: typeof shown) =>
+      layers
+        .sort((a, b) => a.level - b.level || a.index - b.index)
+        .map(({ level: _level, index: _index, ...rest }) => rest);
+    const lower = shown.filter((layer) =>
+      hyperframes.every((other) => below(layer, other)),
+    );
+    const upper = shown.filter((layer) => !lower.includes(layer));
+    // A picture between HyperFrames layers, or an uncut one above them, needs HyperFrames.
     if (
-      shown.some((layer) => hyperframes.some((other) => !below(layer, other)))
+      upper.some(
+        (layer) =>
+          !layer.clip.background ||
+          hyperframes.some((other) => !below(other, layer)),
+      )
     )
       return null;
-    const pictures = shown
-      .sort((a, b) => a.level - b.level || a.index - b.index)
-      .map(({ level: _level, index: _index, ...rest }) => rest);
-    if (!adjustmentCandidates) return { pictures };
+    const pictures = sorted(lower);
+    const above = upper.length ? sorted(upper) : undefined;
+    if (!adjustmentCandidates) return { pictures, above };
+    if (above) return null;
 
     let graded: ShownAdjustment[] | undefined;
     for (const { clip, first, end } of adjustmentCandidates) {
@@ -249,6 +267,7 @@ function visible(all: FrameLayers | null): FrameLayers | null {
   if (covering <= 0) return all;
   return {
     pictures: all.pictures.slice(covering),
+    above: all.above,
     adjustments: all.adjustments
       ?.filter(({ after }) => after > covering)
       .map(({ clip, after }) => ({ clip, after: after - covering })),
@@ -287,9 +306,15 @@ export function appearances(
 ): Appearance[] {
   const at = layerQuery(timeline, plan, from, to);
   const found: Appearance[] = [];
-  let before = new Set(visible(at(from))?.pictures.map(({ clip }) => clip.id));
+  const start = visible(at(from));
+  let before = new Set(
+    [...(start?.pictures ?? []), ...(start?.above ?? [])].map(
+      ({ clip }) => clip.id,
+    ),
+  );
   for (let frame = from + 1; frame <= to; frame++) {
-    const layers = visible(at(frame))?.pictures;
+    const shown = visible(at(frame));
+    const layers = shown && [...shown.pictures, ...(shown.above ?? [])];
     if (!layers) {
       before.clear();
       continue;

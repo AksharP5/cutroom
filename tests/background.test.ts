@@ -15,6 +15,7 @@ import { planPreviewPipeline } from "../src/server/hyperframes/pipelinePlan";
 import { clipMatte, matteNeeds } from "../src/shared/matte";
 import type { MatteStatus } from "../src/shared/matte";
 import { countingIds } from "./clip-ids";
+import { frameLayersAt } from "../src/client/pipeline/layers";
 
 const page = (body: string) =>
   `<!doctype html>\n<html><head></head>\n<body><main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-duration="10" data-fps="30">\n${body}\n</main></body></html>\n`;
@@ -149,4 +150,64 @@ test("a clip needs what it plays and a second each side, and is ready only once 
   expect(
     clipMatte(status([entry(0, 300, false)]), "shot.mp4", 2, 6).state,
   ).toBe("no-subject");
+});
+
+test("a cutout above a title draws over it, while uncut footage there still needs HyperFrames", () => {
+  const fill = "position:absolute;inset:0;width:100%;height:100%";
+  const title = `<div id="title" class="clip" data-start="0" data-duration="2" data-track-index="1" style="position:absolute;left:0;top:0">Behind</div>`;
+  const presenter = (matte: string) =>
+    `<video id="presenter" src="shot.mp4" muted ${matte} data-start="0" data-duration="2" data-media-start="0" data-track-index="2" style="${fill}"></video>`;
+  const html = (matte: string) =>
+    page(
+      `<video id="plate" src="plate.mp4" muted data-start="0" data-duration="2" data-media-start="0" data-track-index="0" style="${fill}"></video>${title}${presenter(matte)}`,
+    );
+  const layers = (source: string) => {
+    const plan = planPreviewPipeline(source, { num: 30, den: 1 });
+    if ("reason" in plan) throw new Error(plan.reason);
+    const frame = frameLayersAt(parse(source).timeline, plan, 30);
+    return (
+      frame && {
+        below: frame.pictures.map(({ clip }) => clip.id),
+        above: frame.above?.map(({ clip }) => clip.id),
+      }
+    );
+  };
+  expect(layers(html('data-cutroom-matte="shrink:1;soften:1"'))).toEqual({
+    below: ["plate"],
+    above: ["presenter"],
+  });
+  expect(layers(html(""))).toBeNull();
+});
+
+test("a clip playing to its source's last frame is ready once that frame is made, and a ramp asks for no matte", () => {
+  const grid = { start: 0, rate: 30, count: 73 };
+  const status: MatteStatus = {
+    model: { status: "ready" },
+    jobs: [],
+    mattes: [
+      {
+        file: "mattes/shot.mp4",
+        src: "shot.mp4",
+        size: 1,
+        mtimeMs: 1,
+        ...grid,
+        first: 0,
+        frames: 73,
+        variable: false,
+        model: "u2net_human_seg",
+        subject: true,
+      },
+    ],
+  };
+  // Played to the end at 29.97 fps rounding, a hair past frame 73.
+  expect(clipMatte(status, "shot.mp4", 1, 73 / 30 + 0.0001).state).toBe(
+    "ready",
+  );
+  const ramped = edit(page(shot), [
+    { type: "setClip", clipId: "shot", background: { mode: "remove" } },
+  ]).replace(
+    "<video ",
+    `<video data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":0.5},{"t":4,"v":2}]}]}' `,
+  );
+  expect(matteNeeds(parse(ramped).timeline, "index.html")).toEqual([]);
 });

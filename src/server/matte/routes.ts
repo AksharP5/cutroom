@@ -41,13 +41,12 @@ export function createMatteRoutes(
   ) => {
     const composition = canonicalProjectPath(path);
     const view = await timelineSnapshot(project, composition);
-    if (view.timeline)
-      for (const { clip: _clip, ...need } of matteNeeds(
-        view.timeline,
-        composition,
-      ))
-        // A source that is offline or unreadable shows its original picture.
-        await mattes.request(project, need).catch(() => {});
+    if (!view.timeline) return mattes.status(project);
+    const needs = matteNeeds(view.timeline, composition);
+    await mattes.release(project, composition, needs);
+    for (const { clip: _clip, ...need } of needs)
+      // A source that is offline or unreadable shows its original picture.
+      await mattes.request(project, { ...need, composition }).catch(() => {});
     return mattes.status(project);
   };
   api.post("/projects/:id/mattes", async (c) => {

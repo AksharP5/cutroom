@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { usePipeline } from "../../pipeline/setting";
+import { isRamped } from "../../../shared/matte";
 import type { Clip } from "../../../shared/timeline/schema";
 import { matteModelSize } from "../../../shared/matte";
 import { TimecodeText } from "../../components/TimecodeText";
@@ -61,22 +63,30 @@ export function BackgroundRow({
   // A failure or an empty clip shows the original picture, which is what Keep shows.
   const shown =
     removed && state !== "failed" && state !== "no-subject" ? "remove" : "keep";
+  /** Keep stops the clip's job and writes Keep whenever the project still says Remove. */
+  const keep = () => {
+    if (matte && "job" in matte && matte.job)
+      void stopMatte(projectId, matte.job);
+    if (removed) void keepBackground(projectId, [clip]);
+  };
   const choose = (mode: "keep" | "remove") => {
-    if (mode === shown) return;
-    if (mode === "keep") return void keepBackground(projectId, [clip]);
+    if (mode === "keep") return keep();
+    if (!removed) return void removeBackground(projectId, [clip]);
+    // Remove on a failed clip tries again; an empty one has nothing to retry until it changes.
     if (matte && state === "failed")
-      return void retryMatte(projectId, {
+      void retryMatte(projectId, {
         src: matte.src,
         from: matte.from,
         to: matte.to,
       });
-    void removeBackground(projectId, [clip]);
   };
-  const stop = () => {
-    if (matte && "job" in matte && matte.job)
-      void stopMatte(projectId, matte.job);
-    void keepBackground(projectId, [clip]);
-  };
+  // Only the GPU footage pipeline draws the cutout; where HyperFrames draws the clip it is uncut.
+  const pipelined = usePipeline(
+    (pipeline) =>
+      pipeline.enabled && pipeline.active && pipeline.drawn.includes(clip.id),
+  );
+  const uncut =
+    removed && (isRamped(clip) || (state === "ready" && !pipelined));
   const needsModel =
     removed &&
     state !== "ready" &&
@@ -112,6 +122,15 @@ export function BackgroundRow({
           </div>
         </div>
       </div>
+      {uncut && (
+        <div className="matte-note">
+          <span>
+            {isRamped(clip)
+              ? "Speed ramps keep their background for now."
+              : "The viewer shows this clip uncut here."}
+          </span>
+        </div>
+      )}
       {needsModel && model.status === "missing" && (
         <div className="matte-note">
           <span>Remove background needs a {matteModelSize} download.</span>
@@ -123,11 +142,7 @@ export function BackgroundRow({
             >
               Download
             </button>
-            <button
-              type="button"
-              className="text-button quiet"
-              onClick={() => void keepBackground(projectId, [clip])}
-            >
+            <button type="button" className="text-button quiet" onClick={keep}>
               Cancel
             </button>
           </div>
@@ -167,7 +182,7 @@ export function BackgroundRow({
         (state === "waiting" || state === "needs-model") && (
           <div className="matte-status" role="status">
             <span>Waiting</span>
-            <button type="button" className="text-button quiet" onClick={stop}>
+            <button type="button" className="text-button quiet" onClick={keep}>
               Stop
             </button>
           </div>
@@ -176,7 +191,7 @@ export function BackgroundRow({
         <div className="matte-status" role="status">
           <span>Removing {percent(matte.progress)}</span>
           <TimecodeText timecode={elapsed(matte.elapsed)} />
-          <button type="button" className="text-button quiet" onClick={stop}>
+          <button type="button" className="text-button quiet" onClick={keep}>
             Stop
           </button>
         </div>

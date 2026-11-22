@@ -26,7 +26,10 @@ const subject: [number, number, number] = [230, 180, 60];
  * A plain colour on V1 and, on V2, a yellow disc over a dark checked background: the stub model
  * keeps bright red, so the disc is the subject.
  */
-async function projectWithSubject(request: APIRequestContext) {
+async function projectWithSubject(
+  request: APIRequestContext,
+  { behind = false } = {},
+) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -66,13 +69,19 @@ async function projectWithSubject(request: APIRequestContext) {
     "<!doctype html><html><head><style>html,body{margin:0;background:#000}main{position:relative;width:640px;height:360px}</style></head><body>" +
       '<main data-composition-id="main" data-width="640" data-height="360" data-duration="2" data-fps="30">' +
       '<video id="lower" muted src="lower.mp4" data-start="0" data-duration="2" data-media-start="1" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>' +
-      '<video id="subject" muted src="subject.mp4" data-start="0" data-duration="2" data-media-start="1" data-track-index="1" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>' +
+      (behind
+        ? // Words on V2, behind the cutout on V3: a red band across the disc's left half.
+          '<div id="words" class="clip" data-start="0" data-duration="2" data-track-index="1" style="position:absolute;left:100px;top:150px;width:300px;height:60px;background:#e04040"></div>' +
+          '<video id="subject" muted src="subject.mp4" data-start="0" data-duration="2" data-media-start="1" data-track-index="2" data-cutroom-matte="shrink:1;soften:1" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>'
+        : '<video id="subject" muted src="subject.mp4" data-start="0" data-duration="2" data-media-start="1" data-track-index="1" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>') +
       "</main></body></html>",
   );
   return project;
 }
 
-async function viewerPixels(page: Page) {
+type Points = readonly (readonly [number, number])[];
+
+async function viewerPixels(page: Page, samples: Points = points) {
   const png = await page.locator(".edit-picture").screenshot();
   return page.evaluate(
     async ({ source, points }) => {
@@ -94,13 +103,14 @@ async function viewerPixels(page: Page) {
           .data.slice(0, 3),
       ]);
     },
-    { source: png.toString("base64"), points },
+    { source: png.toString("base64"), points: samples },
   );
 }
 
 async function exportedPixels(
   request: APIRequestContext,
   project: { id: string; path: string },
+  samples: Points = points,
 ) {
   const result = await request.post("/api/projects/" + project.id + "/export", {
     data: {
@@ -128,7 +138,7 @@ async function exportedPixels(
     ],
     { encoding: "buffer", maxBuffer: 1024 ** 2 },
   );
-  return points.map(([x, y]) => {
+  return samples.map(([x, y]) => {
     const offset = (Math.round(y * height) * width + Math.round(x * width)) * 3;
     return [...stdout.subarray(offset, offset + 3)];
   });
@@ -194,4 +204,48 @@ test("removes a clip's background in the viewer and the MP4, and keeps it again"
   await expect
     .poll(async () => near((await viewerPixels(page))[1]!, lower, 30))
     .toBe(false);
+});
+
+test("text behind a cutout: the title on V2 shows around the subject on V3, in the viewer and the MP4", async ({
+  page,
+  request,
+}) => {
+  const project = await projectWithSubject(request, { behind: true });
+  // On the subject over the words, on the words beside it, and on V1.
+  const samples = [
+    [0.55, 0.5],
+    [0.22, 0.5],
+    [0.9, 0.85],
+  ] as const;
+  const words: [number, number, number] = [224, 64, 64];
+  await page.goto("/#project/" + project.id);
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, at);
+  await expect
+    .poll(
+      async () => {
+        const [subjectPixel, wordsPixel, lowerPixel] = await viewerPixels(
+          page,
+          samples,
+        );
+        return (
+          near(subjectPixel!, subject) &&
+          near(wordsPixel!, words) &&
+          near(lowerPixel!, lower)
+        );
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-pipeline",
+    "on",
+  );
+  const viewer = await viewerPixels(page, samples);
+  const exported = await exportedPixels(request, project, samples);
+  const errors = viewer.flatMap((pixel, i) =>
+    pixel.map((value, channel) => Math.abs(value - exported[i]![channel]!)),
+  );
+  console.log("Text behind subject RGB error", { viewer, exported });
+  expect(Math.max(...errors)).toBeLessThanOrEqual(8);
 });
