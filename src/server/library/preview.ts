@@ -62,32 +62,61 @@ export function createLibraryPreviews(library: Library) {
   // Under /api/isolated/, the one prefix that answers requests from opaque frames.
   const base = `/isolated/${key}/`;
   const builds = new Map<string, Promise<void>>();
+  /** Each item's files, written once per server run and shared by every size. */
+  const written = new Map<string, Promise<void>>();
 
-  /** Builds the item's preview at `size` once per server run, into the library cache. */
+  /**
+   * Builds the item's preview at `size` once per server run, into the library cache: its files
+   * once, then for each size a page that mounts it. Only a fragment component's host is drawn at
+   * the size, so it alone is written again, beside the shared files.
+   */
   function build(item: RegistryItem, size: Size) {
-    const folder = `${item.name}/${size.width}x${size.height}`;
-    let pending = builds.get(folder);
-    if (pending) return pending.then(() => folder);
+    const sized = `${size.width}x${size.height}`;
+    const key = `${item.name}/${sized}`;
+    let pending = builds.get(key);
+    if (pending) return pending.then(() => key);
     pending = (async () => {
-      const dir = library.previewDir(folder);
-      const { scene, files } = await itemProjectFiles(library, item, size);
-      await rm(dir, { recursive: true, force: true });
-      for (const file of files) {
-        await mkdir(dirname(join(dir, file.path)), { recursive: true });
-        await writeFile(join(dir, file.path), file.bytes);
+      const dir = library.previewDir(item.name);
+      const { scene, files, fragment } = await itemProjectFiles(
+        library,
+        item,
+        size,
+      );
+      let shared = written.get(item.name);
+      if (!shared) {
+        shared = (async () => {
+          await rm(dir, { recursive: true, force: true });
+          for (const file of files) {
+            if (fragment && file.path === scene) continue;
+            await mkdir(dirname(join(dir, file.path)), { recursive: true });
+            await writeFile(join(dir, file.path), file.bytes);
+          }
+        })();
+        written.set(item.name, shared);
+        shared.catch(() => written.delete(item.name));
       }
-      const sceneHtml = files.find(({ path }) => path === scene)!.bytes;
+      await shared;
+      const sceneFile = files.find(({ path }) => path === scene)!;
+      // A host sits beside the path an add gives it, so its relative URLs are the same.
+      const mounted = fragment
+        ? scene.replace(/\.html$/, `@${sized}.html`)
+        : scene;
+      if (fragment) {
+        await mkdir(dirname(join(dir, mounted)), { recursive: true });
+        await writeFile(join(dir, mounted), sceneFile.bytes);
+      }
       const root = parseComposition(
-        typeof sceneHtml === "string"
-          ? sceneHtml
-          : new TextDecoder().decode(sceneHtml),
+        typeof sceneFile.bytes === "string"
+          ? sceneFile.bytes
+          : new TextDecoder().decode(sceneFile.bytes),
         emptyTimelineSettings(),
-        { scope: compositionScope(scene) },
+        { scope: compositionScope(mounted) },
       ).root;
+      const entryFile = `index@${sized}.html`;
       await writeFile(
-        join(dir, "index.html"),
+        join(dir, entryFile),
         previewPage(
-          scene,
+          mounted,
           root.attrs,
           size,
           item.duration ?? COMPONENT_SECONDS,
@@ -95,23 +124,24 @@ export function createLibraryPreviews(library: Library) {
       );
       // One document with the item's scene inside and the runtime from this prefix.
       const html = await bundleToSingleHtml(dir, {
+        entryFile,
         runtime: "placeholder",
         inlineAssets: false,
         staticGuard: false,
         sceneParts: false,
       });
       await writeFile(
-        join(dir, ".preview.html"),
+        join(dir, `.preview@${sized}.html`),
         html.replace(
           'data-hyperframes-preview-runtime="1" src=""',
           `data-hyperframes-preview-runtime="1" src="../../runtime.js"`,
         ),
       );
     })();
-    builds.set(folder, pending);
+    builds.set(key, pending);
     // A failed build, such as a download that stopped, is tried again on the next open.
-    pending.catch(() => builds.delete(folder));
-    return pending.then(() => folder);
+    pending.catch(() => builds.delete(key));
+    return pending.then(() => key);
   }
 
   const api = new Hono();
@@ -145,12 +175,14 @@ export function createLibraryPreviews(library: Library) {
       headers.set("Content-Type", "application/javascript");
       return new Response(previewRuntimeScript(), { headers });
     }
-    // <name>/<width>x<height>/ is the page; anything below it is one of its files.
-    const match = /^([a-z0-9-]+\/\d+x\d+)\/(.*)$/.exec(path);
-    if (!match || !builds.has(match[1]!)) return c.notFound();
+    // <name>/<width>x<height>/ is the page; anything below it is one of the item's files.
+    const match = /^([a-z0-9-]+)\/(\d+x\d+)\/(.*)$/.exec(path);
+    if (!match || !builds.has(`${match[1]}/${match[2]}`)) return c.notFound();
     const dir = library.previewDir(match[1]!);
-    const rest = match[2]!;
-    const file = rest ? resolve(dir, rest) : join(dir, ".preview.html");
+    const rest = match[3]!;
+    const file = rest
+      ? resolve(dir, rest)
+      : join(dir, `.preview@${match[2]}.html`);
     const inside = relative(dir, file);
     // Only the page's own files: nothing outside its folder, and no hidden file by name.
     if (
@@ -163,7 +195,7 @@ export function createLibraryPreviews(library: Library) {
       return c.notFound();
     const body = Bun.file(file);
     if (!(await body.exists())) return c.notFound();
-    if (!match[2]) headers.set("Content-Type", "text/html; charset=utf-8");
+    if (!rest) headers.set("Content-Type", "text/html; charset=utf-8");
     return new Response(body, { headers });
   });
   return api;

@@ -7,7 +7,7 @@ import { COMPONENT_SECONDS, libraryTitle } from "../../shared/library";
 import type { LibraryAdd, LibraryAdded } from "../../shared/library";
 import { fileFingerprint, sourceUrl } from "../../shared/media";
 import type { Project } from "../../shared/project";
-import { applyAll, toFrames } from "../../shared/timeline/apply";
+import { applyAll, randomClipId, toFrames } from "../../shared/timeline/apply";
 import { TimelineError } from "../../shared/timeline/errors";
 import { CommandSchema } from "../../shared/timeline/schema";
 import type { Timeline, TimelineView } from "../../shared/timeline/schema";
@@ -161,10 +161,15 @@ export async function itemProjectFiles(
   files.sort(
     (a, b) => Number(b.path === scenePath) - Number(a.path === scenePath),
   );
-  return { scene: scenePath, files };
+  return { scene: scenePath, files, fragment };
 }
 
-/** The commands that place the item: its track made first when it is new, then the clip. */
+/**
+ * The commands that place the item: its track made first when it is new, then the clip. A part
+ * marked from an In point is inserted at its marked length and slipped by `start`: the clip keeps
+ * its place and length and plays the item from there, and nothing past the marked part is
+ * overwritten.
+ */
 function placement(
   timeline: Timeline,
   input: {
@@ -172,11 +177,19 @@ function placement(
     at: number;
     mode: "insert" | "overwrite";
     duration?: number;
+    start?: number;
   },
   item: RegistryItem,
   src: string,
   label: string,
 ) {
+  const id = input.start
+    ? randomClipId(
+        item.name,
+        null,
+        new Set(timeline.clips.map((clip) => clip.id)),
+      )
+    : undefined;
   return z.array(CommandSchema).parse([
     ...(timeline.tracks.some(({ index }) => index === input.track)
       ? []
@@ -187,14 +200,17 @@ function placement(
       track: input.track,
       at: input.at,
       clip: {
+        ...(id && { id }),
         kind: "composition",
         src,
         duration:
           input.duration ??
-          toFrames(item.duration ?? COMPONENT_SECONDS, timeline.fps),
+          toFrames(item.duration ?? COMPONENT_SECONDS, timeline.fps) -
+            (input.start ?? 0),
         label,
       },
     },
+    ...(id ? [{ type: "slip", clipId: id, by: input.start }] : []),
   ]);
 }
 
@@ -341,7 +357,10 @@ export async function addLibraryItem({
               input.composition,
               (latest: Timeline) => {
                 before = new Set(latest.clips.map((clip) => clip.id));
-                return placement(latest, input, item, src, title);
+                // The engine writes a clip as inserted, so its slip is a second edit in this entry.
+                return placement(latest, input, item, src, title).filter(
+                  ({ type }) => type !== "slip",
+                );
               },
               token !== undefined,
             )
@@ -359,6 +378,18 @@ export async function addLibraryItem({
               500,
               `${title} was not placed on the timeline.`,
             );
+          const start = input.start;
+          if (start)
+            await timeline
+              .editInWindow(
+                project,
+                input.composition,
+                () => [{ type: "slip", clipId: clip.id, by: start }],
+                token !== undefined,
+              )
+              .catch((error: unknown) => {
+                throw refusal(error);
+              });
 
           if (Object.keys(variables).length) {
             const source = await readSource(project, input.composition);

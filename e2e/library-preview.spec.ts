@@ -304,3 +304,34 @@ test("@performance a library row's first frame shows within 500 ms from the cach
   console.log(`row click to first frame: ${Math.round(elapsed)} ms`);
   expect(elapsed).toBeLessThan(500);
 });
+
+test("a part marked from an In point plays the item from there, and undoes in one step", async ({
+  page,
+  request,
+}) => {
+  const { timeline } = await openProject(page, request, "Library in mark");
+  await openLibraryItem(page, "Lower Third, Fixture");
+  await expect(
+    page.frameLocator(".library-source iframe").locator(".lt-card"),
+  ).toBeAttached();
+  await page.keyboard.press("Home");
+  for (let step = 0; step < 15; step++) await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("i");
+  for (let step = 0; step < 30; step++) await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("o");
+  await page.keyboard.press("F9");
+  const placed = async () =>
+    (await timeline()).timeline.clips.find((clip) =>
+      clip.src?.endsWith("lt-fixture.html"),
+    );
+  // In on frame 15 and Out on frame 45: 31 frames, from half a second into the item.
+  await expect
+    .poll(async () => {
+      const clip = await placed();
+      return clip && { duration: clip.duration, mediaStart: clip.mediaStart };
+    })
+    .toEqual({ duration: 31, mediaStart: 0.5 });
+  await page.locator(".tl-lanes").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+z");
+  await expect.poll(placed).toBeUndefined();
+});

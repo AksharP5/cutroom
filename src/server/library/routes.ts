@@ -2,12 +2,15 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
 import {
+  COMPONENT_SECONDS,
   LibraryAddSchema,
   LibrarySearchSchema,
   librarySearch,
 } from "../../shared/library";
 import type { LibraryCatalog } from "../../shared/library";
+import { HttpError } from "../../shared/errors";
 import { AGENT_HEADER } from "../../shared/review";
+import { toFrames } from "../../shared/timeline/apply";
 import { projectMutationGuard } from "../projects/authorization";
 import type { ReviewService } from "../projects/review";
 import { historyWho, parseInput } from "../projects/routes";
@@ -84,14 +87,22 @@ export function createLibraryRoutes(
   /** The search agents use: up to `limit` matches, each saying whether the project has it. */
   api.get("/projects/:id/library", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const { query, category, limit } = parseInput(
+    const { query, category, limit, composition } = parseInput(
       LibrarySearchSchema,
       c.req.query(),
     );
-    const [{ items, offline }, document] = await Promise.all([
+    const [{ items, offline }, document, view] = await Promise.all([
       catalog(),
       store.document(project),
+      timeline.timelineSnapshot(project, composition),
     ]);
+    // Lengths in the timeline's frames, as library_add and timeline_edit take them.
+    const fps = "timeline" in view ? view.timeline?.fps : undefined;
+    if (!fps)
+      throw new HttpError(
+        422,
+        ("error" in view && view.error) || "The timeline cannot be read.",
+      );
     const inProject = new Set(document.library?.map(({ name }) => name));
     const matches = librarySearch(query);
     return c.json({
@@ -104,8 +115,9 @@ export function createLibraryRoutes(
             matches(item),
         )
         .slice(0, limit)
-        .map(({ hasPoster: _, cached: __, ...item }) => ({
+        .map(({ hasPoster: _, cached: __, hidden: ___, ...item }) => ({
           ...item,
+          duration: toFrames(item.duration ?? COMPONENT_SECONDS, fps),
           inProject: inProject.has(item.name),
         })),
     });

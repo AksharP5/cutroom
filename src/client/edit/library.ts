@@ -84,6 +84,7 @@ export async function addFromLibrary(
     at: number;
     mode: "insert" | "overwrite";
     duration?: number;
+    start?: number;
   },
 ) {
   const { projectId, view } = useTimeline.getState();
@@ -145,6 +146,8 @@ export async function placeLibraryAtPlayhead(
   mode: "insert" | "overwrite",
   /** Frames to place, for a part marked in the source viewer; the item's own length otherwise. */
   frames = libraryFrames(item),
+  /** Frames into the item where that part begins, at its In mark. */
+  start = 0,
 ) {
   const timeline = useTimeline.getState().view?.timeline;
   if (!timeline) return;
@@ -168,6 +171,7 @@ export async function placeLibraryAtPlayhead(
       at,
       mode,
       ...(frames !== libraryFrames(item) && { duration: frames }),
+      ...(start > 0 && { start }),
     })
   )
     transport.follow(at + frames)();

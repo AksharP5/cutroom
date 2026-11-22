@@ -79,6 +79,12 @@ export const LibrarySearchSchema = z.object({
     .describe("Words matched against title, name, tags and description"),
   category: LibraryCategorySchema.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+  composition: z
+    .string()
+    .min(1)
+    .max(2_000)
+    .default("index.html")
+    .describe("The timeline whose frame rate lengths are given in"),
 });
 
 export const LibraryAddSchema = z.object({
@@ -95,6 +101,15 @@ export const LibraryAddSchema = z.object({
     .min(0)
     .describe("Video track index, as timeline_read numbers them"),
   at: z.number().int().min(0).describe("Start frame"),
+  start: z
+    .number()
+    .int()
+    .min(0)
+    .max(10_000_000)
+    .optional()
+    .describe(
+      "Frames into the item where the clip begins, for a part marked from its In point; the clip keeps its place and length",
+    ),
   mode: z.enum(["insert", "overwrite"]).default("overwrite"),
   duration: z
     .number()
