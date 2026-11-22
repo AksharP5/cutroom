@@ -348,7 +348,6 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         if (path === null || paths.has(path)) continue;
         paths.add(path);
         void media.get(version.src).catch(() => {});
-        void scrubs.get(path).catch(() => {});
       }
     }
     const warming = audition;
@@ -368,6 +367,13 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       eligible.includes(selected) ? selected : undefined,
       ...(hovered === null ? neighbours.slice(-1) : neighbours),
     ]);
+    // A take's scrub proxy can need encoding; ask only for the takes a move can reach next.
+    for (const index of [selected, ...neighbours]) {
+      const path = eligible.includes(index)
+        ? localMediaPath(view.composition, clip.versions[index]!.src)
+        : null;
+      if (path !== null) void scrubs.get(path).catch(() => {});
+    }
     for (const [index, take] of warming.takes) {
       if (resident.has(index)) continue;
       warming.takes.delete(index);
