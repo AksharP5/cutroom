@@ -12,6 +12,8 @@ import {
   versionPartners,
   versionShortReason,
 } from "../../shared/timeline/versions";
+import { TimecodeText } from "../components/TimecodeText";
+import { formatTimecode } from "../../shared/timeline/timecode";
 import { menuStep } from "../components/menu";
 import type { MenuSearch } from "../components/menu";
 import { hint, restoreMenuFocus } from "../keymap";
@@ -183,7 +185,6 @@ function VersionsMenu({
         buttons[next]?.focus({ preventScroll: true });
       }}
     >
-      <div className="versions-count">{versions.length} versions</div>
       {versions.map((version, index) => {
         const invalid = version.offline || version.fits === false;
         const matched = index === active;
@@ -196,20 +197,24 @@ function VersionsMenu({
           (localMediaPath("index.html", version.src) ?? version.src)
             .split("/")
             .at(-1) ?? version.src;
-        const limit = version.sourceIn || invalid ? 16 : 22;
+        const offset = Math.round(version.sourceIn ?? 0);
+        const limit = offset ? 10 : invalid ? 16 : 22;
         const filename =
           source.length > limit
             ? `${source.slice(0, limit - 8)}…${source.slice(-7)}`
             : source;
-        const rate = Math.round(sourceRate(version, fps));
-        const offset = Math.round(version.sourceIn ?? 0);
-        const note = version.offline
-          ? "Offline"
-          : version.fits === false
-            ? "Too short"
-            : offset
-              ? `+${Math.floor(offset / rate)}:${String(offset % rate).padStart(2, "0")}`
-              : "";
+        const note = version.offline ? (
+          "Offline"
+        ) : version.fits === false ? (
+          "Too short"
+        ) : offset ? (
+          <TimecodeText
+            timecode={formatTimecode(offset, {
+              num: Math.round(sourceRate(version, fps)),
+              den: 1,
+            })}
+          />
+        ) : null;
         const origin = (
           <span className="versions-source">
             <span>{filename}</span>

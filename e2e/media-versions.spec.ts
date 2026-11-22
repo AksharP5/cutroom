@@ -453,7 +453,7 @@ for (const mode of playbackModes)
       );
       if (!longProject) {
         expect(configured.warnings?.[0]?.warning).toContain(
-          "Short cue is 2:00 shorter",
+          "Short cue is 00:00:02:00 shorter",
         );
         const refused = await call("clip_version_show", {
           projectId,
@@ -461,7 +461,7 @@ for (const mode of playbackModes)
           version: "Short cue",
         });
         expect(refused.isError).toBe(true);
-        expect(JSON.stringify(refused.content)).toContain("2:00 shorter");
+        expect(JSON.stringify(refused.content)).toContain("00:00:02:00 shorter");
       }
       const count = measure && !longProject ? "5" : "4";
       if (longProject) {
@@ -489,7 +489,7 @@ for (const mode of playbackModes)
       const second = menu.getByRole("menuitemradio", { name: /Take 2/ });
       const wide = menu.getByRole("menuitemradio", { name: /Wide/ });
       const preview = page.frameLocator("iframe[data-live]");
-      await expect(second).toContainText("+2:10");
+      await expect(second).toContainText("00:00:02:10");
       if (!longProject)
         await expect(
           menu.getByRole("menuitemradio", { name: /Short cue/ }),

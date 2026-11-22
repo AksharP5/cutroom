@@ -81,11 +81,6 @@
     transition-duration: var(--duration-press);
   }
 }
-.versions-count {
-  padding: var(--space-1) var(--space-2);
-  color: var(--text-secondary);
-  font-size: var(--type-xs);
-}
 .versions-menu button {
   position: relative;
   display: grid;

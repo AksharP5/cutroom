@@ -7,6 +7,7 @@ import {
 } from "./clipTiming";
 import { frames, secondsOf, sourceAt } from "./piece";
 import type { ExactTime } from "./piece";
+import { formatTimecode } from "./timecode";
 import { isAudioKind, MAX_VERSIONS } from "./schema";
 import type { Clip, Fps, Timeline, Version } from "./schema";
 import { framesAfter, framesBefore } from "./transition";
@@ -222,11 +223,8 @@ export function updateVersionFits(timeline: Timeline): Timeline {
   return changed ? { ...timeline, clips: next } : timeline;
 }
 
-export const versionShortReason = (version: Version, fps: Fps) => {
-  const frames = version.shortBy ?? 0;
-  const rate = Math.round(fps.num / fps.den);
-  return `${version.name} is ${Math.floor(frames / rate)}:${String(frames % rate).padStart(2, "0")} shorter than the clip.`;
-};
+export const versionShortReason = (version: Version, fps: Fps) =>
+  `${version.name} is ${formatTimecode(version.shortBy ?? 0, fps)} shorter than the clip.`;
 
 export function versionMedia(
   version: Version,
