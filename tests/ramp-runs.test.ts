@@ -29,6 +29,8 @@ import { placedMedia } from "../src/shared/timeline/placedMedia";
 import {
   documentRampRuns,
   RUN_BLOCK_SAMPLES,
+  RUN_MARGIN_SAMPLES,
+  runBuildFrames,
 } from "../src/shared/timeline/rampRuns";
 import type { RampRun } from "../src/shared/timeline/rampRuns";
 import { sampleGridAudio } from "../src/server/hyperframes/audioClock";
@@ -39,7 +41,10 @@ import {
   prepareRampPreview,
   rampSliceResponse,
 } from "../src/server/hyperframes/rampPreview";
-import { sliceLocalRun } from "../src/server/hyperframes/rampSource";
+import {
+  prepareLocalRun,
+  sliceLocalRun,
+} from "../src/server/hyperframes/rampSource";
 import { prepareStretch } from "../src/server/hyperframes/rampAudio";
 import { createRenderWorkers } from "../src/server/hyperframes/jobs";
 import { browserExecutable } from "../src/server/hyperframes/render";
@@ -97,9 +102,10 @@ test("S2-S4: a split, and a split with a tail dissolve, slice the uncut ramp's r
       { type: "split", at: 60, clipIds: ["snd"], ids: { snd: ["tail"] } },
     ]),
   );
+  const whole = { src: "index.wav", run: uncut.run, frames: 240_000 };
   expect([split.get("snd"), split.get("tail")]).toEqual([
-    { src: "index.wav", run: uncut.run, from: 0, to: 96_000 },
-    { src: "index.wav", run: uncut.run, from: 96_000, to: 240_000 },
+    { ...whole, from: 0, to: 96_000 },
+    { ...whole, from: 96_000, to: 240_000 },
   ]);
   const dissolved = edit(p6, [
     { type: "split", at: 60, clipIds: ["snd"], ids: { snd: ["tail"] } },
@@ -111,12 +117,12 @@ test("S2-S4: a split, and a split with a tail dissolve, slice the uncut ramp's r
     },
   ]);
   const runs = runsOf(dissolved);
-  // The tail runs 5 frames past the cut under the dissolve, still inside the first block.
+  // The tail runs 5 frames past the cut under the dissolve: the same run, reaching further.
   expect(runs.get("tail")).toEqual({
-    src: "index.wav",
-    run: uncut.run,
+    ...whole,
     from: 96_000,
     to: 248_000,
+    frames: 248_000,
   });
 });
 
@@ -131,14 +137,14 @@ test("S3: a ramp a hair before frame 30 starts at sample 48,000 and its split jo
     ]),
   );
   // Curve zero is frame 30, exactly sample 48,000, so the run counts from there.
-  expect(uncut.run).toMatchObject({ phase: ["0", "1"], first: 0, count: 1 });
+  expect(uncut.run).toMatchObject({ phase: ["0", "1"], first: 0 });
   expect([uncut.from, split.get("snd")!.to, split.get("tail")!.to]).toEqual([
     0, 48_000, 192_000,
   ]);
   expect(split.get("tail")!.run).toEqual(uncut.run);
 });
 
-test("E5 and decision 3: a trim inside the 10 s block keeps the run; one across it starts a new one", () => {
+test("E5: a trim of a tail, shorter or longer, keeps the run; a head trim into the next block starts another", () => {
   const long = composition(
     `<audio id="snd" src="index.wav" data-start="0" data-duration="12" data-track-index="0" data-automation='${RAMP}'></audio>`,
   );
@@ -146,19 +152,36 @@ test("E5 and decision 3: a trim inside the 10 s block keeps the run; one across 
     { type: "split", at: 120, clipIds: ["snd"], ids: { snd: ["tail"] } },
   ]);
   const before = runsOf(split);
-  // 12 s spans blocks 0 and 1; trimming the tail by 1 s stays in block 1.
+  expect(before.get("tail")).toMatchObject({ frames: 12 * 48_000 });
+  // Trimming the tail by 1 s, or back across the 10 s block boundary, keeps the run: it starts
+  // where it did and needs to reach less far.
+  for (const [to, seconds] of [
+    [330, 11],
+    [270, 9],
+  ] as const) {
+    const trimmed = runsOf(
+      edit(split, [{ type: "trim", clipId: "tail", edge: "end", to }]),
+    );
+    for (const id of ["snd", "tail"]) {
+      expect(runKey(trimmed.get(id)!.run)).toBe(runKey(before.get(id)!.run));
+      expect(trimmed.get(id)!.frames).toBe(seconds * 48_000);
+    }
+  }
+  // A head trim that leaves the first piece starting in the next block starts the run there.
+  const alone = runsOf(
+    edit(long, [{ type: "trim", clipId: "snd", edge: "start", to: 315 }]),
+  );
+  expect(alone.get("snd")).toMatchObject({
+    run: { first: 1 },
+    from: 10.5 * 48_000 - RUN_BLOCK_SAMPLES,
+  });
+  // One that stays in the first block keeps it.
   const inside = runsOf(
-    edit(split, [{ type: "trim", clipId: "tail", edge: "end", to: 330 }]),
+    edit(long, [{ type: "trim", clipId: "snd", edge: "start", to: 150 }]),
   );
-  expect(runKey(inside.get("tail")!.run)).toBe(runKey(before.get("tail")!.run));
-  expect(runKey(inside.get("snd")!.run)).toBe(runKey(before.get("snd")!.run));
-  // Trimming the tail to 9 s leaves block 1, so both pieces move to a one-block run.
-  const across = runsOf(
-    edit(split, [{ type: "trim", clipId: "tail", edge: "end", to: 270 }]),
+  expect(runKey(inside.get("snd")!.run)).toBe(
+    runKey(runsOf(long).get("snd")!.run),
   );
-  expect(before.get("snd")!.run.count).toBe(2);
-  expect(across.get("snd")!.run.count).toBe(1);
-  expect(across.get("tail")!.run).toEqual(across.get("snd")!.run);
 });
 
 test("pieces a whole block apart get separate runs, and nothing is stretched between them", () => {
@@ -183,11 +206,12 @@ test("pieces a whole block apart get separate runs, and nothing is stretched bet
     ]),
   );
   // 0-5 s is block 0; 35-40 s is block 3. Blocks 1 and 2 are not stretched.
-  expect(cut.get("snd")!.run).toMatchObject({ first: 0, count: 1 });
-  expect(cut.get("tail")!.run).toMatchObject({ first: 3, count: 1 });
+  expect(cut.get("snd")).toMatchObject({ run: { first: 0 }, frames: 240_000 });
   expect(cut.get("tail")).toMatchObject({
+    run: { first: 3 },
     from: 35 * 48_000 - 3 * RUN_BLOCK_SAMPLES,
     to: 40 * 48_000 - 3 * RUN_BLOCK_SAMPLES,
+    frames: 40 * 48_000 - 3 * RUN_BLOCK_SAMPLES,
   });
 });
 
@@ -247,19 +271,40 @@ test("S8: sound moved alone two frames later leaves the family and gets its own 
   // The muted picture has no sound to prepare.
   expect([...before.keys()]).toEqual(["snd", "snd-tail"]);
   expect(before.get("snd")!.run).toEqual(before.get("snd-tail")!.run);
-  expect(before.get("snd")!.run.count).toBe(2);
-  // The head of the sound is now alone in one block, and the moved tail is a family of its
-  // own, counted from its own curve zero.
-  expect(runs.get("snd")!.run.count).toBe(1);
+  expect(before.get("snd")!.frames).toBe(12 * 48_000);
+  // The head of the sound is now a family alone and needs only its own 9 s. The moved tail is a
+  // family of its own, counted from its own curve zero. Two frames at 30 fps are whole samples,
+  // so its run plays the same samples as the head's and is the same file.
+  expect(runs.get("snd")!.frames).toBe(9 * 48_000);
   expect(runs.get("snd-tail")).toMatchObject({
-    run: { count: 2 },
     from: 9 * 48_000,
     to: 12 * 48_000,
+    frames: 12 * 48_000,
   });
   const offsets = syncOffsets(
     parseComposition(moved, emptyTimelineSettings()).timeline,
   );
   expect([offsets.get("pic-tail"), offsets.get("snd-tail")]).toEqual([-2, 2]);
+});
+
+test("S8 at 29.97: two frames move curve zero off its sample phase, so the moved sound has a run of its own", () => {
+  const ntsc = linked.replaceAll('data-fps="30"', 'data-fps="30000/1001"');
+  const split = edit(ntsc, [
+    {
+      type: "split",
+      at: 60,
+      clipIds: ["pic", "snd"],
+      ids: { pic: ["pic-tail"], snd: ["snd-tail"] },
+    },
+  ]);
+  const runs = runsOf(
+    edit(split, [
+      { type: "move", clipIds: ["snd-tail"], by: 2, linked: false },
+    ]),
+  );
+  // Two frames are 3,203.2 samples.
+  expect(runs.get("snd")!.run.phase).toEqual(["0", "1"]);
+  expect(runs.get("snd-tail")!.run.phase).toEqual(["1", "5"]);
 });
 
 /** 20 s of stereo 48 kHz where each sample names itself: left `n mod 8192`, right `n / 8192`. */
@@ -532,50 +577,68 @@ test.skipIf(!Bun.which("ffmpeg"))(
 );
 
 test.skipIf(!Bun.which("ffmpeg"))(
-  "E5, E6 and churn: a run on disk queues no work; only an edit that changes a run makes one",
+  "E5, E6 and churn: one run per ramp; it grows when a piece needs more and keeps every sample it had",
   async () => {
     const dir = await mkdtemp(join(tmpdir(), "ramp-runs-cache-"));
     const media = createMediaService();
-    const run = (html: string) => runsOf(html).get("snd")!.run;
-    const ask = (html: string) =>
-      media.rampRun(project(dir), "index.wav", run(html));
+    const ask = (html: string) => {
+      const { run, frames } = runsOf(html).get("snd")!;
+      return media.rampRun(project(dir), "index.wav", run, frames);
+    };
+    const data = async (key: string) =>
+      (await readFile(await media.rampRunFile(project(dir), key))).subarray(44);
+    const clip = (seconds: number) =>
+      composition(
+        `<audio id="snd" src="index.wav" data-start="0" data-duration="${seconds}" data-track-index="0" data-automation='${RAMP}'></audio>`,
+      );
     try {
       await indexWav(join(dir, "index.wav"));
-      const long = composition(
-        `<audio id="snd" src="index.wav" data-start="0" data-duration="12" data-track-index="0" data-automation='${RAMP}'></audio>`,
-      );
-      const first = await ask(long);
+      const first = await ask(clip(5));
       expect(first.available).toBe(false);
       expect(await first.pending).toBe(true);
+      const short = await data(first.key);
+      // Made to the next whole second past 5 s and the flush margin.
+      expect(short.length).toBe(6 * 48_000 * 4);
       // E6: the run exists, so asking again queues nothing.
-      const again = await ask(long);
-      expect(again).toEqual({
+      expect(await ask(clip(5))).toEqual({
         key: first.key,
         available: true,
         pending: undefined,
       });
-      // A split and E5's one-second trim inside the block ask for the same run.
-      const split = edit(long, [
+      // A piece that needs 12 s asks for the same run, which is made longer once.
+      const longer = await ask(clip(12));
+      expect(longer.key).toBe(first.key);
+      expect(longer.available).toBe(false);
+      expect(await longer.pending).toBe(true);
+      const long = await data(first.key);
+      expect(long.length).toBe(13 * 48_000 * 4);
+      // Every sample the shorter file covered is the same, to the bit.
+      const covered = (6 * 48_000 - RUN_MARGIN_SAMPLES) * 4;
+      expect(long.subarray(0, covered).equals(short.subarray(0, covered))).toBe(
+        true,
+      );
+      // A split, E5's one-second trim, and a trim back across the block boundary need no work.
+      const split = edit(clip(12), [
         { type: "split", at: 120, clipIds: ["snd"], ids: { snd: ["tail"] } },
       ]);
-      const trimmed = edit(split, [
-        { type: "trim", clipId: "tail", edge: "end", to: 330 },
-      ]);
-      for (const html of [split, trimmed])
+      for (const html of [
+        split,
+        edit(split, [{ type: "trim", clipId: "tail", edge: "end", to: 330 }]),
+        edit(split, [{ type: "trim", clipId: "tail", edge: "end", to: 270 }]),
+      ])
         expect(await ask(html)).toEqual({
           key: first.key,
           available: true,
           pending: undefined,
         });
-      // A trim across the block boundary needs one new run.
-      const across = await ask(
-        edit(split, [{ type: "trim", clipId: "tail", edge: "end", to: 270 }]),
-      );
-      expect(across.key).not.toBe(first.key);
-      expect(await across.pending).toBe(true);
-      expect((await jobs(dir)).sort()).toEqual(
-        [`${first.key}.wav`, `${across.key}.wav`].sort(),
-      );
+      expect(await jobs(dir)).toEqual([`${first.key}.wav`]);
+      // A run file cut short on disk no longer covers the pieces, so it is made again.
+      const file = await media.rampRunFile(project(dir), first.key);
+      await writeFile(file, (await readFile(file)).subarray(0, 44));
+      const repaired = await ask(clip(12));
+      expect(repaired.available).toBe(false);
+      expect(await repaired.pending).toBe(true);
+      expect((await data(first.key)).equals(long)).toBe(true);
     } finally {
       await media.dispose();
       await rm(dir, { recursive: true, force: true });
@@ -588,7 +651,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
   "E7: past the budget, the least recently used runs go and the open preview's stay",
   async () => {
     const dir = await mkdtemp(join(tmpdir(), "ramp-runs-budget-"));
-    const runBytes = 44 + RUN_BLOCK_SAMPLES * 4;
+    const runBytes = 44 + runBuildFrames(2 * 48_000) * 4;
     // Room for two runs.
     const media = createMediaService({ rampRunBytes: 2.5 * runBytes });
     const runAt = (mediaStart: number) =>
@@ -596,15 +659,17 @@ test.skipIf(!Bun.which("ffmpeg"))(
         composition(
           `<audio id="snd" src="index.wav" data-start="0" data-duration="2" data-media-start="${mediaStart}" data-track-index="0" data-automation='${RAMP}'></audio>`,
         ),
-      ).get("snd")!.run;
+      ).get("snd")!;
     try {
       await indexWav(join(dir, "index.wav"));
       const preview = media.rampPins();
       const build = async (mediaStart: number, pins?: typeof preview) => {
+        const { run, frames } = runAt(mediaStart);
         const result = await media.rampRun(
           project(dir),
           "index.wav",
-          runAt(mediaStart),
+          run,
+          frames,
           pins,
         );
         await result.pending;
@@ -652,7 +717,8 @@ test("a run that starts before its source is silent there, not an error", async 
       96_000,
       (frame) => frame / 48_000 - 1,
       async (path, start, seconds) => {
-        expect([start, seconds]).toEqual([0, 1]);
+        // The source from its start, and a second past the end for the stretcher to read ahead.
+        expect([start, seconds]).toEqual([0, 2]);
         await writeFile(path, await readFile(join(dir, "index.wav")));
         return { success: true, outputPath: path };
       },
@@ -768,4 +834,52 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
     }
   },
   240_000,
+);
+
+test.skipIf(!Bun.which("ffmpeg"))(
+  "a run made longer keeps every sample it covered, to the bit, along a steep ramp",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ramp-runs-extend-"));
+    try {
+      await indexWav(join(dir, "index.wav"), 40);
+      // Slow to fast and back: 0.25x to 8x, where the stretcher reads furthest ahead.
+      const run = {
+        points: [
+          { t: 0, v: 0.25 },
+          { t: 2, v: 8 },
+          { t: 3, v: 0.5 },
+        ],
+        zero: 250_000,
+        phase: ["2", "5"] as [string, string],
+        first: 0,
+      };
+      const lengths = [1.2, 2.5, 4, 9.3].map((seconds) => seconds * 48_000);
+      const files = await Promise.all(
+        lengths.map(async (frames, index) => {
+          const output = join(dir, `${index}.wav`);
+          const result = await prepareLocalRun(
+            join(dir, "index.wav"),
+            output,
+            run,
+            frames,
+          );
+          expect(result?.success).toBe(true);
+          return (await readFile(output)).subarray(44);
+        }),
+      );
+      const longest = files.at(-1)!;
+      for (const [index, frames] of lengths.slice(0, -1).entries()) {
+        const covered = (runBuildFrames(frames) - RUN_MARGIN_SAMPLES) * 4;
+        expect(covered).toBeGreaterThanOrEqual(frames * 4);
+        expect(
+          files[index]!.subarray(0, covered).equals(
+            longest.subarray(0, covered),
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+  60_000,
 );

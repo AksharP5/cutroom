@@ -101,6 +101,7 @@ export function sampleGridAudio(
             run: slice.run,
             from: slice.from,
             to: slice.to,
+            frames: slice.frames,
             file: runFiles[runId(slice.src, slice.run)],
           },
         }),

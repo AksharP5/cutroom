@@ -26,10 +26,18 @@ export async function prepareRampExport(options: {
     entryFile: composition,
   });
   if (!html.includes("data-automation")) return null;
-  const wanted = new Map<string, { path: string; run: RampRun }>();
+  const wanted = new Map<
+    string,
+    { path: string; run: RampRun; frames: number }
+  >();
   for (const slice of documentRampRuns(placedMedia(html)).values()) {
     const path = slice && localMediaPath(composition, slice.src);
-    if (path) wanted.set(runId(slice.src, slice.run), { path, run: slice.run });
+    if (path)
+      wanted.set(runId(slice.src, slice.run), {
+        path,
+        run: slice.run,
+        frames: slice.frames,
+      });
   }
   if (!wanted.size) return null;
   const pins = media.rampPins();
@@ -48,9 +56,9 @@ export async function prepareRampExport(options: {
     await Promise.race([
       aborted,
       Promise.all(
-        Array.from(wanted, async ([id, { path, run }]) => {
+        Array.from(wanted, async ([id, { path, run, frames }]) => {
           const result = await media
-            .rampRun(project, path, run, pins)
+            .rampRun(project, path, run, frames, pins)
             .catch((error: unknown) => {
               console.warn(`Could not prepare ramp audio for ${path}:`, error);
               return null;

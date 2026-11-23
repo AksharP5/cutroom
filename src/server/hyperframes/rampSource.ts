@@ -109,17 +109,22 @@ async function localDecoder(
   };
 }
 
-/** Prepare a ramp run from a local source, as the media service does for the viewer and export. */
+/**
+ * Prepare a ramp run from a local source, as the media service does for the viewer and export,
+ * long enough to cover `frames`.
+ */
 export async function prepareLocalRun(
   source: string,
   output: string,
   run: RampRun,
+  frames: number,
   signal?: AbortSignal,
   timeout?: number,
 ) {
   return prepareRampRun(
     output,
     run,
+    frames,
     await localDecoder(source, signal, timeout),
     signal,
   );
@@ -157,13 +162,13 @@ const madeRuns = new Map<string, Promise<string | null>>();
 export async function sliceLocalRun(
   source: string,
   output: string,
-  { run, from, to, file }: RunSlice & { file?: string },
+  { run, from, to, frames, file }: RunSlice & { file?: string },
   signal?: AbortSignal,
   timeout?: number,
 ) {
   let path = file;
   if (!path) {
-    const key = `${source}\0${JSON.stringify(run)}`;
+    const key = `${source}\0${JSON.stringify(run)}\0${frames}`;
     let made = madeRuns.get(key);
     if (!made) {
       console.warn(
@@ -172,7 +177,9 @@ export async function sliceLocalRun(
       const directory = join(dirname(output), ".ramp-runs");
       const target = join(directory, `${madeRuns.size}.wav`);
       made = mkdir(directory, { recursive: true })
-        .then(() => prepareLocalRun(source, target, run, signal, timeout))
+        .then(() =>
+          prepareLocalRun(source, target, run, frames, signal, timeout),
+        )
         .then((result) => (result?.success ? target : null));
       madeRuns.set(key, made);
     }

@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 import { MAX_PLAYBACK_RATE } from "@hyperframes/parsers/media-duration";
 import {
   MAX_WAV_FRAMES,
-  runFrames,
+  RUN_MARGIN_SAMPLES,
+  runBuildFrames,
   runSourceTime,
 } from "../../shared/timeline/rampRuns.ts";
 import type { RampRun } from "../../shared/timeline/rampRuns.ts";
@@ -97,6 +98,9 @@ async function stretchAudio(
   stretch._configure(CHANNELS, BLOCK, INTERVAL, 0);
   const inputLatency = stretch._inputLatency();
   const outputLatency = stretch._outputLatency();
+  // A run file's last margin is the flush; everything before it must be settled output.
+  if (outputLatency + INTERVAL > RUN_MARGIN_SAMPLES)
+    throw new Error("The stretcher's latency exceeds a run's margin.");
   // The extra frame covers rounding the two source endpoints.
   const capacity = Math.max(
     INTERVAL * MAX_PLAYBACK_RATE + 1,
@@ -225,9 +229,12 @@ export async function prepareStretch<
   signal?: AbortSignal,
 ): Promise<Result | undefined> {
   const begin = Math.round(sourceAt(0) * SAMPLE_RATE);
-  const end = Math.round(sourceAt(frames) * SAMPLE_RATE);
-  if (frames < 1 || frames > MAX_WAV_FRAMES || end - begin > MAX_WAV_FRAMES)
+  const last = Math.round(sourceAt(frames) * SAMPLE_RATE);
+  if (frames < 1 || frames > MAX_WAV_FRAMES || last - begin > MAX_WAV_FRAMES)
     return;
+  // The stretcher reads ahead of the source sample it is at. Decoding a second further means
+  // what it reads near the end is the source, as it would be in a longer stretch.
+  const end = last + SAMPLE_RATE;
   signal?.throwIfAborted();
   const origin = Math.max(0, begin);
   const directory = await mkdtemp(join(dirname(destination), ".audio-ramp-"));
@@ -251,18 +258,22 @@ export async function prepareStretch<
   }
 }
 
-/** A run's samples, stretched from its first sample so every piece that slices it joins seamlessly. */
+/**
+ * A run's samples, stretched from its first sample so every piece that slices it joins
+ * seamlessly, made long enough to cover `frames`.
+ */
 export const prepareRampRun = <
   Result extends { success: boolean; outputPath: string },
 >(
   destination: string,
   run: RampRun,
+  frames: number,
   decode: Decode<Result>,
   signal?: AbortSignal,
 ) =>
   prepareStretch(
     destination,
-    runFrames(run),
+    runBuildFrames(frames),
     (frame) => runSourceTime(run, frame),
     decode,
     signal,

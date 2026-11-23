@@ -29,8 +29,13 @@ export const RampRunSchema = z.object({
   zero: z.number().int(),
   phase: z.tuple([z.string().regex(/^\d+$/), z.string().regex(/^[1-9]\d*$/)]),
   first: z.number().int(),
-  count: z.number().int().positive(),
 }) satisfies z.ZodType<RampRun>;
+/** A run to make, and how many of its samples the file must cover. */
+export const RampTaskSchema = z.object({
+  run: RampRunSchema,
+  frames: z.number().int().positive(),
+});
+export type RampTask = z.infer<typeof RampTaskSchema>;
 export const MediaInfoSchema = z.object({
   channels: z.number().int().positive().optional(),
   video: z
@@ -77,7 +82,7 @@ export const MediaTaskSchema = z.object({
   ffprobe: z.string(),
   info: MediaInfoSchema.optional(),
   time: z.number().nonnegative().optional(),
-  ramp: RampRunSchema.optional(),
+  ramp: RampTaskSchema.optional(),
   encoder: z.enum(["nvenc", "x264"]).optional(),
   /** An editing proxy is made a run of pieces at a time, then joined into one file. */
   proxy: z

@@ -16,7 +16,8 @@ import type { JobState } from "../../shared/jobs";
 import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
 import { FilmstripSchema, MediaInfoSchema, PiecesSchema } from "./protocol";
-import type { MediaKind, MediaTask, Pieces } from "./protocol";
+import type { MediaKind, MediaTask, Pieces, RampTask } from "./protocol";
+import { RUN_MARGIN_SAMPLES } from "../../shared/timeline/rampRuns";
 import type { RampRun } from "../../shared/timeline/rampRuns";
 import {
   fragmentsStart,
@@ -108,7 +109,7 @@ const recipe = {
   scrub: "media-v7",
   proxy: "media-v8",
   pieces: "media-v12",
-  ramp: "ramp-run-v1",
+  ramp: "ramp-run-v2",
   pcm: "pcm-v1",
 } satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
@@ -514,7 +515,7 @@ export function createMediaService(
     path: string,
     kind: MediaKind,
     time = 0,
-    ramp?: RampRun,
+    ramp?: RampTask,
     pins?: RampPins,
   ): Promise<MediaResult> => {
     if (closing)
@@ -557,7 +558,7 @@ export function createMediaService(
     }
     const key = createHash("sha256")
       .update(
-        `${recipe[kind]}\0${kind}\0${identity}\0${ramp ? JSON.stringify(ramp) : (frame ?? "")}`,
+        `${recipe[kind]}\0${kind}\0${identity}\0${ramp ? JSON.stringify(ramp.run) : (frame ?? "")}`,
       )
       .digest("hex");
     await mkdir(await projectPath(project, ".cutroom", true), {
@@ -579,12 +580,19 @@ export function createMediaService(
       if (error instanceof HttpError && error.status === 404) return null;
       throw error;
     });
-    if (cached && kind === "ramp") {
+    // A run is keyed by where it starts, so a file too short for this request is made again
+    // longer under the same key. The stretcher is causal: the samples it had stay the same.
+    const short =
+      ramp &&
+      cached &&
+      ((await stat(cached).catch(() => null))?.size ?? 0) <
+        44 + (ramp.frames + RUN_MARGIN_SAMPLES) * 4;
+    if (cached && ramp && !short) {
       // Marks the run as recently used for the budget.
       const now = new Date();
       await utimes(cached, now, now).catch(() => {});
     }
-    if (cached)
+    if (cached && !short)
       return {
         key,
         artifact: cached,
@@ -736,28 +744,47 @@ export function createMediaService(
     pump();
     return { key, pieces, state: machine.state, job };
   };
+  /**
+   * A ramp run of a source file, built once per key. Holding it in `pins` first keeps it
+   * from being evicted while the document or export that asked for it is open.
+   */
+  const rampRun = async (
+    project: Project,
+    path: string,
+    run: RampRun,
+    frames: number,
+    pins?: RampPins,
+  ): Promise<{
+    key: string;
+    available: boolean;
+    pending: Promise<boolean> | undefined;
+  }> => {
+    const result = await request(
+      project,
+      path,
+      "ramp",
+      0,
+      { run, frames },
+      pins,
+    );
+    const building =
+      result.state.status === "queued" || result.state.status === "running"
+        ? result.job?.ready?.promise
+        : undefined;
+    return {
+      key: result.key,
+      available: Boolean(result.artifact),
+      // A job already making this run may make it shorter than asked; then ask again.
+      pending: building?.then(async (made) => {
+        if (!made) return false;
+        const again = await rampRun(project, path, run, frames, pins);
+        return again.available || ((await again.pending) ?? false);
+      }),
+    };
+  };
   return {
     request,
-    /**
-     * A ramp run of a source file, built once per key. Holding it in `pins` first keeps it
-     * from being evicted while the document or export that asked for it is open.
-     */
-    async rampRun(
-      project: Project,
-      path: string,
-      run: RampRun,
-      pins?: RampPins,
-    ) {
-      const result = await request(project, path, "ramp", 0, run, pins);
-      return {
-        key: result.key,
-        available: Boolean(result.artifact),
-        pending:
-          result.state.status === "queued" || result.state.status === "running"
-            ? result.job?.ready?.promise
-            : undefined,
-      };
-    },
+    rampRun,
     rampRunFile(project: Project, key: string) {
       return projectPath(project, `.cutroom/cache/${RUNS}/${key}.wav`);
     },

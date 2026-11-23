@@ -235,7 +235,8 @@ try {
     const result = await prepareLocalRun(
       task.source,
       join(task.directory, "ramp.wav"),
-      task.ramp,
+      task.ramp.run,
+      task.ramp.frames,
       abort.signal,
     );
     if (!result?.success)

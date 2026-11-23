@@ -1335,6 +1335,7 @@ export function createHyperframesApi(
               project,
               asset.path,
               asset.run,
+              asset.frames,
               record.ramp?.pins,
             );
             if (

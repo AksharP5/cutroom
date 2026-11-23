@@ -1,12 +1,5 @@
 import { execFile } from "node:child_process";
-import {
-  mkdir,
-  readdir,
-  readFile,
-  rm,
-  truncate,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Locator } from "@playwright/test";
@@ -282,17 +275,17 @@ for (const mode of [
               ? route.continue()
               : route.abort(),
           );
-        if (truncated) {
-          const cache = join(project.path, ".cutroom/cache/ramp-runs");
-          let wrote = 0;
-          for (const name of await readdir(cache)) {
-            const path = join(cache, name);
-            if (!name.endsWith(".wav")) continue;
-            await truncate(path, 44);
-            wrote++;
-          }
-          expect(wrote).toBe(1);
-        }
+        // The server makes a run cut short on disk again, so the viewer's own check of a
+        // short WAV is reached by cutting the response: its header, and nothing after it.
+        if (truncated)
+          await page.route("**/ramp-audio/*.wav", async (route) => {
+            const response = await route.fetch({ headers: {} });
+            await route.fulfill({
+              status: 200,
+              contentType: "audio/wav",
+              body: (await response.body()).subarray(0, 44),
+            });
+          });
         const mediaRequest = page.waitForRequest("**/ramp-audio/*.wav");
         await stop.click();
         const preparedMedia = await mediaRequest;
@@ -305,10 +298,8 @@ for (const mode of [
         const header = await request.get(preparedUrl, {
           headers: { Range: "bytes=0-43" },
         });
-        // A run cut short on disk no longer covers the clip, so its slice is refused.
-        expect(header.status()).toBe(truncated ? 404 : 206);
-        if (!truncated)
-          expect((await header.body()).subarray(0, 4).toString()).toBe("RIFF");
+        expect(header.status()).toBe(206);
+        expect((await header.body()).subarray(0, 4).toString()).toBe("RIFF");
         await page.reload();
         await expect(live).toHaveAttribute("src", /cutroom-native-ramp=1/);
         await expect(stage).toHaveAttribute("data-preview-ready");

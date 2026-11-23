@@ -21,7 +21,10 @@ import {
   placedMedia,
   startAtPlayed,
 } from "../../shared/timeline/placedMedia";
-import { documentRampRuns } from "../../shared/timeline/rampRuns";
+import {
+  documentRampRuns,
+  RUN_MARGIN_SAMPLES,
+} from "../../shared/timeline/rampRuns";
 import type { RampRun } from "../../shared/timeline/rampRuns";
 import { projectPath } from "../projects/store";
 import type { MediaService } from "../media/service";
@@ -31,7 +34,7 @@ const WAV_HEADER_BYTES = 44;
 const WAV_FRAME_BYTES = 4;
 
 type Edit = { from: number; to: number; text: string };
-type RampAsset = { path: string; run: RampRun };
+type RampAsset = { path: string; run: RampRun; frames: number };
 const companionAttrs = [
   "data-start",
   "data-duration",
@@ -271,7 +274,7 @@ export async function prepareRampPreview(
         startAtPlayed(piece, (name) => attrs.get(name) ?? null),
       );
       const result = await media
-        .rampRun(project, path, slice.run, pins)
+        .rampRun(project, path, slice.run, slice.frames, pins)
         .catch((error: unknown) => {
           console.warn("Could not prepare preview ramp audio:", error);
           return null;
@@ -279,7 +282,8 @@ export async function prepareRampPreview(
       if (!result) return;
       if (result.pending) pending.push(result.pending);
       if (!result.available) return;
-      assets.set(result.key, { path, run: slice.run });
+      // Every piece of a run asks for the same extent, so any one of them can rebuild it.
+      assets.set(result.key, { path, run: slice.run, frames: slice.frames });
       // The piece's own samples of the run, served as a WAV of their own.
       const prepared = `${prefix}ramp-audio/${result.key}-${slice.from}-${slice.to}.wav`;
       pieces.push([prepared, (slice.to - slice.from) / AUDIO_SAMPLE_RATE]);
@@ -356,7 +360,11 @@ export async function rampSliceResponse(
 ) {
   const run = Bun.file(file);
   const data = WAV_HEADER_BYTES + from * WAV_FRAME_BYTES;
-  if (to <= from || WAV_HEADER_BYTES + to * WAV_FRAME_BYTES > run.size)
+  // The run's last margin is the stretcher's flush, which no piece plays.
+  if (
+    to <= from ||
+    WAV_HEADER_BYTES + (to + RUN_MARGIN_SAMPLES) * WAV_FRAME_BYTES > run.size
+  )
     throw new HttpError(404, "The ramp audio run does not cover this clip.");
   const header = wavHeader(to - from);
   const size = header.length + (to - from) * WAV_FRAME_BYTES;
