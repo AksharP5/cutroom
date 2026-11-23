@@ -71,10 +71,10 @@ function documentFps(root: Element | null): Fps {
 /** Use the compiled document's render ids and host instances, but read each
  * timestamp on the grid of the file that authored it. */
 export function placedMedia(
-  html: string,
+  html: string | Document,
   subCompositions: ReadonlyMap<string, string> = new Map(),
 ) {
-  const { document } = parseHTML(html);
+  const document = typeof html === "string" ? parseHTML(html).document : html;
   const root = document.querySelector(HOST);
   const fps = documentFps(root);
   const childRates = new Map<string, Fps>();

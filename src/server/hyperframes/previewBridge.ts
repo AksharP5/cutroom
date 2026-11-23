@@ -4,6 +4,7 @@ import {
 } from "./diagnostics";
 import type { DiagnosticWindow } from "./diagnostics";
 import { parse } from "parse5";
+import { parseHTML } from "linkedom";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import {
   MAX_PLAYBACK_RATE,
@@ -4816,6 +4817,34 @@ export function previewDocument(
     timing,
     pictures,
   };
+}
+
+/**
+ * The picture table after a live timing update, without compiling again: the served document
+ * with the update's timing values written in, placed again.
+ */
+export function livePictureTable(
+  served: string,
+  timing: PreviewTiming,
+  scenes: ReadonlyMap<string, string>,
+) {
+  if (!served.includes("<video")) return null;
+  const { document } = parseHTML(served);
+  const elements = new Map(
+    Array.from(
+      document.querySelectorAll("[data-hf-cutroom-clip-id]"),
+      (element) => [element.getAttribute("data-hf-cutroom-clip-id"), element],
+    ),
+  );
+  for (const { id, values } of timing.clips) {
+    const element = elements.get(id);
+    if (!element) continue;
+    for (const [name, value] of Object.entries(values))
+      if (value === null) element.removeAttribute(name);
+      else element.setAttribute(name, value);
+  }
+  const { placed, fps } = placedMedia(document, scenes);
+  return pictureTable(placed, fps);
 }
 
 export function withPreviewBridge(html: string, composition = "index.html") {

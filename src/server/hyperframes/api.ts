@@ -124,7 +124,11 @@ import {
   updatePreviewSourceTiming,
 } from "./previewTiming";
 import type { PreviewTiming, TrackGainPreview } from "../../shared/preview";
-import { previewDocument, withPreviewClipIdentities } from "./previewBridge";
+import {
+  livePictureTable,
+  previewDocument,
+  withPreviewClipIdentities,
+} from "./previewBridge";
 import { readTrackMix, trackMixStamp } from "../timeline/mix";
 import {
   compositionScope,
@@ -281,6 +285,9 @@ export function createHyperframesApi(
     authored: PreviewTiming;
     compiled: PreviewTiming;
     mix: TrackGainPreview;
+    /** The served document and its scene files, to place its videos after an update. */
+    served: string;
+    scenes: ReadonlyMap<string, string>;
   };
   const sourceTimings = new Map<string, SourceTiming>();
   const rememberSourceTiming = (id: string, timing: SourceTiming) => {
@@ -1454,6 +1461,7 @@ export function createHyperframesApi(
           return c.json({
             version: sourceBefore.version,
             timing,
+            pictures: livePictureTable(prior.served, timing, prior.scenes),
             mix,
             live: true,
           });
@@ -1637,6 +1645,8 @@ export function createHyperframesApi(
         authored,
         compiled,
         mix,
+        served: ramp?.html ?? html,
+        scenes,
       };
     };
     if (timingOnly) {
@@ -1655,6 +1665,7 @@ export function createHyperframesApi(
         return c.json({
           version: sourceBefore.version,
           timing: null,
+          pictures: document.pictures,
           mix,
           live: true,
         });

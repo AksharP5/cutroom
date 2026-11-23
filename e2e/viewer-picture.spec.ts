@@ -115,6 +115,8 @@ type Row = {
     edit?: CommandInput[];
     from: (frame: number) => number | null;
   };
+  /** An edit made in the editor before anything is exported, which updates the document in place. */
+  live?: (page: Page) => Promise<void>;
   /** Plain 1x clips the footage pipeline can draw: true for both, "only" for the pipeline alone. */
   pipeline?: boolean | "only";
 };
@@ -328,6 +330,28 @@ const ROWS: Row[] = [
     expected: (n) => 15 + (n % 46),
   },
   {
+    // HyperFrames' runtime alone shows the picture before export's at P6's frames 13 and 15,
+    // so only a new table after the move passes at frames 14 and 16.
+    name: "P6 ramp moved a frame later by a live timing update",
+    fps: thirty,
+    frames: 160,
+    async setup(dir) {
+      await source(dir, "p6.mp4", "30", 200);
+      return page(thirty, 160, videoTag("p", "p6.mp4", "0", "5", GEOMETRIC));
+    },
+    async live(page) {
+      // Wait as the timing performance spec does, until the document may update in place.
+      await page.waitForTimeout(4500);
+      await page.locator('[data-clip="p"]').click({ force: true });
+      const start = page.getByLabel("Start", { exact: true });
+      await start.focus();
+      await start.press("ArrowUp");
+      await start.press("Enter");
+    },
+    check: [...range(10, 20), 61, 121],
+    expected: (n) => ({ 61: 43, 121: 129 })[n],
+  },
+  {
     name: "P14 held tail",
     fps: thirty,
     frames: 90,
@@ -466,6 +490,33 @@ for (const row of ROWS)
         index,
         (await row.reference?.html?.(project.path)) ?? html,
       );
+      // The first edit writes HyperFrames' manifests, which a loaded document cannot take in place.
+      if (row.live)
+        for (const by of [1, -1]) {
+          const view = z
+            .object({ revision: z.string() })
+            .parse(
+              await (
+                await request.get(
+                  `/api/cutroom/projects/${project.id}/timeline`,
+                )
+              ).json(),
+            );
+          const moved = await request.post(
+            `/api/cutroom/projects/${project.id}/commands`,
+            {
+              data: {
+                composition: "index.html",
+                expectedRevision: view.revision,
+                label: "Write the manifests",
+                commands: [
+                  { type: "move", clipIds: ["p"], by, mode: "overwrite" },
+                ],
+              },
+            },
+          );
+          expect(moved.ok(), await moved.text()).toBe(true);
+        }
       await page.addInitScript((on) => {
         if (window === window.top)
           localStorage.setItem("cutroom.footagePipeline", String(on));
@@ -483,6 +534,18 @@ for (const row of ROWS)
           });
       };
       await settled();
+      if (row.live) {
+        // The edit reaches the loaded document in place, with its new picture table.
+        const live = page.locator("iframe[data-live]");
+        const before = await live.getAttribute("src");
+        const timing = page.waitForResponse((response) =>
+          response.url().includes("cutroom-timing=1"),
+        );
+        await row.live(page);
+        await timing;
+        await settled();
+        expect(await live.getAttribute("src")).toBe(before);
+      }
       let reference: number[] | undefined;
       if (row.reference) {
         reference = await exportedLabels(
@@ -503,8 +566,11 @@ for (const row of ROWS)
         request,
         info.outputPath("export.mp4"),
       );
-      expect(exported).toHaveLength(row.frames);
       const frames = row.check ?? range(0, row.frames);
+      // An edit can lengthen the composition; every checked frame must be exported.
+      expect(exported.length).toBeGreaterThanOrEqual(
+        row.live ? Math.max(...frames) + 1 : row.frames,
+      );
       const shown: number[] = [];
       let at = -2;
       for (const frame of frames) {
