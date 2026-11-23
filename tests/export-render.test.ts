@@ -14,7 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { createRenderWorkers } from "../src/server/hyperframes/jobs";
-import { prepareRampAudio } from "../src/server/hyperframes/rampAudio";
+import { prepareStretch } from "../src/server/hyperframes/rampAudio";
+import { sourceTimeAt } from "@hyperframes/core/speed-ramp";
 import { browserExecutable } from "../src/server/hyperframes/render";
 
 async function command(args: string[]) {
@@ -552,16 +553,17 @@ test.skipIf(!Bun.which("ffmpeg"))(
       ]);
       const stretched = async (name: string) => {
         const path = join(directory, name);
-        const result = await prepareRampAudio(
+        const lane = {
+          target: "rate",
+          points: [
+            { t: 0, v: 0.25 },
+            { t: 1, v: 0.4 },
+          ],
+        };
+        const result = await prepareStretch(
           path,
-          1,
-          {
-            target: "rate",
-            points: [
-              { t: 0, v: 0.25 },
-              { t: 1, v: 0.4 },
-            ],
-          },
+          48_000,
+          (frame) => sourceTimeAt(lane, frame / 48_000),
           async (outputPath) => {
             await copyFile(source, outputPath);
             return { success: true, outputPath };

@@ -218,6 +218,16 @@ export function createRenderWorkers(configuration: {
     signal: AbortSignal;
     onWait: (progress: number) => void;
   }) => Promise<{ html: string; cleanup: () => Promise<void> } | null>;
+  /**
+   * Builds the ramp audio runs the export plays, and keeps them until it ends. The render
+   * worker reads them by `runId` instead of stretching sound itself.
+   */
+  prepareRampRuns?: (input: {
+    projectId: string;
+    composition: string;
+    signal: AbortSignal;
+    onWait: (progress: number) => void;
+  }) => Promise<{ runs: Record<string, string>; release: () => void } | null>;
   /** Told about each export once its file is in place. */
   published?: (projectId: string, path: string) => Promise<void>;
   /** Sizes the export's capture browsers to the memory free when it starts. */
@@ -315,6 +325,9 @@ export function createRenderWorkers(configuration: {
       /** Stops a wait for mattes or a cutout render when the export is cancelled. */
       const mattes = new AbortController();
       let matteCleanup: (() => Promise<void>) | undefined;
+      let rampRuns: Awaited<
+        ReturnType<NonNullable<typeof configuration.prepareRampRuns>>
+      > = null;
       /** From the moment the file is linked into place the export has happened; a late cancel can't undo it. */
       let publishing = false;
       const isCancelling = () => job.state.status === "cancelling";
@@ -440,6 +453,16 @@ export function createRenderWorkers(configuration: {
             matteCleanup = matted.cleanup;
           }
         }
+        if (isCancelling()) return;
+        rampRuns =
+          (await configuration.prepareRampRuns?.({
+            projectId: options.project.id,
+            composition: options.composition ?? "index.html",
+            signal: mattes.signal,
+            onWait: (progress) => {
+              state.stage = `Preparing ramp audio ${Math.floor(progress * 100)}%`;
+            },
+          })) ?? null;
         if (isCancelling()) return;
         const direct = useDirect
           ? await directPlan(options, sources, output)
@@ -593,6 +616,7 @@ export function createRenderWorkers(configuration: {
             outputPath: rendered,
             options: config,
             sources,
+            rampRuns: rampRuns?.runs,
             range: output?.range,
             scopedMedia: workload?.timedMedia !== undefined,
             scratchDir: scratch,
@@ -741,6 +765,7 @@ export function createRenderWorkers(configuration: {
               );
             if (scratch) cleanup.push(remove(scratch));
             if (matteCleanup) cleanup.push(matteCleanup());
+            rampRuns?.release();
             if (worker) cleanup.push(pruneFrames());
             // A folder moved mid-export takes staging with it; say so rather than claim it was removed.
             if (staging)

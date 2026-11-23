@@ -107,6 +107,8 @@ type Media = AuthoredWindow & {
   curve: Curve;
   loop?: boolean;
   global?: boolean;
+  /** Plays no sound: muted, or a video marked as having no audio. */
+  silent?: boolean;
 };
 export type Composition = {
   fps: Fps;
@@ -532,27 +534,6 @@ export function sourceAt(piece: Piece, position: ExactTime): SourceTime {
   if (loop.kind === "exact" && typeof time !== "number")
     return wrapExact(time, loop.start, loop.length);
   return typeof time === "number" ? wrapRamp(loop, time) : time;
-}
-
-/**
- * The stretched sound a ramp piece plays: the source and curve time at its first output sample,
- * and its length in whole samples. Export and the viewer prepare the same audio from this.
- */
-export function rampWindow(piece: Piece) {
-  const { samples, line } = piece;
-  const first = fraction(samples.start, SAMPLES);
-  const start = sourceAt(piece, first);
-  if (line.kind !== "ramp" || typeof start !== "number") return null;
-  // Rounding to the nearest sample can put the first one up to half a sample before an
-  // in-point of 0. Anything earlier is a real negative source time, which has no sound.
-  const rounding =
-    Math.max(...line.rate.points.map(({ v }) => v)) / (2 * AUDIO_SAMPLE_RATE);
-  if (start < -rounding) return null;
-  return {
-    start: Math.max(0, start),
-    duration: Number(samples.end - samples.start) / AUDIO_SAMPLE_RATE,
-    lane: { ...line.rate, offset: secondsOf(subtract(first, line.curveZero)) },
-  };
 }
 
 /**

@@ -1,6 +1,7 @@
 import { ProjectRateSchema } from "../../shared/projectFormat";
 import { z } from "zod";
 import { mediaSettings } from "../../shared/media";
+import type { RampRun } from "../../shared/timeline/rampRuns";
 
 export const MediaKindSchema = z.enum([
   "probe",
@@ -14,12 +15,22 @@ export const MediaKindSchema = z.enum([
   "pcm",
 ]);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
-export const RampWindowSchema = z.object({
-  start: z.number().finite().nonnegative(),
-  duration: z.number().finite().positive(),
-  rate: z.string(),
-});
-export type RampWindow = z.infer<typeof RampWindowSchema>;
+/** A ramp run as `rampRuns.ts` derives it; the worker rebuilds the same samples from it. */
+export const RampRunSchema = z.object({
+  points: z
+    .array(
+      z.object({
+        t: z.number().finite(),
+        v: z.number().finite(),
+        curve: z.number().finite().optional(),
+      }),
+    )
+    .min(1),
+  zero: z.number().int(),
+  phase: z.tuple([z.string().regex(/^\d+$/), z.string().regex(/^[1-9]\d*$/)]),
+  first: z.number().int(),
+  count: z.number().int().positive(),
+}) satisfies z.ZodType<RampRun>;
 export const MediaInfoSchema = z.object({
   channels: z.number().int().positive().optional(),
   video: z
@@ -66,7 +77,7 @@ export const MediaTaskSchema = z.object({
   ffprobe: z.string(),
   info: MediaInfoSchema.optional(),
   time: z.number().nonnegative().optional(),
-  ramp: RampWindowSchema.optional(),
+  ramp: RampRunSchema.optional(),
   encoder: z.enum(["nvenc", "x264"]).optional(),
   /** An editing proxy is made a run of pieces at a time, then joined into one file. */
   proxy: z

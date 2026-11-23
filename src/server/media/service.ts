@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, rename, rm, stat } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rename,
+  rm,
+  stat,
+  utimes,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { fileFingerprint } from "../../shared/media";
 import { HttpError } from "../../shared/errors";
@@ -8,7 +16,8 @@ import type { JobState } from "../../shared/jobs";
 import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
 import { FilmstripSchema, MediaInfoSchema, PiecesSchema } from "./protocol";
-import type { MediaKind, MediaTask, Pieces, RampWindow } from "./protocol";
+import type { MediaKind, MediaTask, Pieces } from "./protocol";
+import type { RampRun } from "../../shared/timeline/rampRuns";
 import {
   fragmentsStart,
   pieceAt,
@@ -99,7 +108,7 @@ const recipe = {
   scrub: "media-v7",
   proxy: "media-v8",
   pieces: "media-v12",
-  ramp: "ramp-v1",
+  ramp: "ramp-run-v1",
   pcm: "pcm-v1",
 } satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
@@ -114,6 +123,8 @@ const background = (kind: MediaKind) =>
   kind === "filmstrip" || kind === "scrub" || kind === "ramp" || kind === "pcm";
 
 export type MediaService = ReturnType<typeof createMediaService>;
+export type RampPins = { hold(file: string): void; release(): void };
+const RUNS = "ramp-runs";
 
 export function createMediaService(
   options: {
@@ -124,8 +135,15 @@ export function createMediaService(
     removeDirectory?: (directory: string) => Promise<void>;
     /** Whether NVENC works here; asked once, before the first editing proxy. */
     nvenc?: () => Promise<boolean>;
+    /** Bytes of ramp audio runs a project keeps. Runs in use stay even past it. */
+    rampRunBytes?: number;
   } = {},
 ) {
+  const rampRunBytes =
+    options.rampRunBytes ??
+    (Number(process.env.CUTROOM_RAMP_CACHE_MB) || 1024) * 2 ** 20;
+  /** How many holders keep each run file: an open preview document or a running export. */
+  const pinned = new Map<string, number>();
   let nvenc: Promise<boolean> | undefined;
   const jobs = new Map<string, MediaJob>();
   const queue: MediaJob[] = [];
@@ -156,6 +174,35 @@ export function createMediaService(
         await removeDirectory(path);
         remaining--;
       }
+    });
+    maintenance = task.catch(() => {});
+    return task;
+  };
+  /** Remove the least recently used ramp runs until the project is under its budget. */
+  const trimRuns = (runs: string) => {
+    const task = maintenance.then(async () => {
+      const files = await Promise.all(
+        (await readdir(runs, { withFileTypes: true }))
+          .filter((entry) => entry.isFile() && entry.name.endsWith(".wav"))
+          .map(async (entry) => {
+            const path = join(runs, entry.name);
+            const info = await stat(path).catch(() => null);
+            return info && { path, size: info.size, used: info.mtimeMs };
+          }),
+      );
+      const present = files.filter((file) => file !== null);
+      let total = present.reduce((sum, file) => sum + file.size, 0);
+      if (total <= rampRunBytes) return;
+      present.sort((a, b) => a.used - b.used);
+      for (const { path, size } of present) {
+        if (total <= rampRunBytes) return;
+        if (pinned.has(path)) continue;
+        await rm(path, { force: true });
+        total -= size;
+      }
+      console.warn(
+        `Ramp audio in use takes ${Math.ceil(total / 2 ** 20)} MB, over the ${Math.round(rampRunBytes / 2 ** 20)} MB budget. It stays until it is no longer used.`,
+      );
     });
     maintenance = task.catch(() => {});
     return task;
@@ -456,7 +503,8 @@ export function createMediaService(
     path: string,
     kind: MediaKind,
     time = 0,
-    ramp?: RampWindow,
+    ramp?: RampRun,
+    pins?: RampPins,
   ): Promise<MediaResult> => {
     if (closing)
       throw new HttpError(503, "The media service is shutting down.");
@@ -506,14 +554,25 @@ export function createMediaService(
     });
     const cache = await projectPath(project, ".cutroom/cache", true);
     await mkdir(cache, { recursive: true });
-    const directory = join(cache, key);
+    // A run is one file in its own tier, kept within a byte budget rather than an entry count.
+    const runs = join(cache, RUNS);
+    const directory =
+      kind === "ramp" ? join(runs, `${key}.wav`) : join(cache, key);
+    pins?.hold(directory);
     const cached = await projectPath(
       project,
-      `.cutroom/cache/${key}/${artifacts[kind]}`,
+      kind === "ramp"
+        ? `.cutroom/cache/${RUNS}/${key}.wav`
+        : `.cutroom/cache/${key}/${artifacts[kind]}`,
     ).catch((error: unknown) => {
       if (error instanceof HttpError && error.status === 404) return null;
       throw error;
     });
+    if (cached && kind === "ramp") {
+      // Marks the run as recently used for the budget.
+      const now = new Date();
+      await utimes(cached, now, now).catch(() => {});
+    }
     if (cached)
       return {
         key,
@@ -593,9 +652,17 @@ export function createMediaService(
               "The source media changed during preview generation. Request it again.",
             );
           if (machine.state.status !== "running") return;
-          await rename(scratch, directory);
-          scratch = undefined;
-          await trimCache(cache, directory);
+          if (kind === "ramp") {
+            await mkdir(runs, { recursive: true });
+            await rename(join(scratch, artifacts.ramp), directory);
+            await removeDirectory(scratch);
+            scratch = undefined;
+            await trimRuns(runs);
+          } else {
+            await rename(scratch, directory);
+            scratch = undefined;
+            await trimCache(cache, directory);
+          }
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error);
         } finally {
@@ -660,8 +727,17 @@ export function createMediaService(
   };
   return {
     request,
-    async rampAudio(project: Project, path: string, window: RampWindow) {
-      const result = await request(project, path, "ramp", 0, window);
+    /**
+     * A ramp run of a source file, built once per key. Holding it in `pins` first keeps it
+     * from being evicted while the document or export that asked for it is open.
+     */
+    async rampRun(
+      project: Project,
+      path: string,
+      run: RampRun,
+      pins?: RampPins,
+    ) {
+      const result = await request(project, path, "ramp", 0, run, pins);
       return {
         key: result.key,
         available: Boolean(result.artifact),
@@ -671,8 +747,27 @@ export function createMediaService(
             : undefined,
       };
     },
-    rampArtifact(project: Project, key: string) {
-      return projectPath(project, `.cutroom/cache/${key}/${artifacts.ramp}`);
+    rampRunFile(project: Project, key: string) {
+      return projectPath(project, `.cutroom/cache/${RUNS}/${key}.wav`);
+    },
+    /** Pins for the runs one document or export uses, released together. */
+    rampPins(): RampPins {
+      const held = new Set<string>();
+      return {
+        hold(file) {
+          if (held.has(file)) return;
+          held.add(file);
+          pinned.set(file, (pinned.get(file) ?? 0) + 1);
+        },
+        release() {
+          for (const file of held) {
+            const count = (pinned.get(file) ?? 1) - 1;
+            if (count) pinned.set(file, count);
+            else pinned.delete(file);
+          }
+          held.clear();
+        },
+      };
     },
     /** The requested piece's presentation times, with its neighbours at either boundary. */
     async proxySamples(project: Project, path: string, time: number) {

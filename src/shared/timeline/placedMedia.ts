@@ -169,6 +169,12 @@ export function placedMedia(
                 }),
             },
             loop: element.hasAttribute("loop"),
+            silent:
+              element.hasAttribute("muted") ||
+              (element.localName === "video" &&
+                ![null, "true"].includes(
+                  element.getAttribute("data-has-audio"),
+                )),
             global:
               readMediaStartBasis(
                 element.getAttribute(MEDIA_START_BASIS_ATTR),
