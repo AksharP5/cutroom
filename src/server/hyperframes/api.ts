@@ -1280,23 +1280,20 @@ export function createHyperframesApi(
       const response = await framesOf(
         await store.get(projectId),
         url.searchParams.get("path") ?? undefined,
-      ).then(
-        (grid) =>
-          Response.json(grid, { headers: { "cache-control": "no-store" } }),
-        (error: unknown) => {
-          if (error instanceof HttpError)
-            return Response.json(
-              { error: error.message },
-              { status: error.status },
-            );
-          if (error instanceof z.ZodError)
-            return Response.json(
-              { error: "Choose a media path." },
-              { status: 400 },
-            );
-          throw error;
-        },
-      );
+        c.req.header("if-none-match"),
+      ).catch((error: unknown) => {
+        if (error instanceof HttpError)
+          return Response.json(
+            { error: error.message },
+            { status: error.status },
+          );
+        if (error instanceof z.ZodError)
+          return Response.json(
+            { error: "Choose a media path." },
+            { status: 400 },
+          );
+        throw error;
+      });
       isolate(response.headers);
       return response;
     }

@@ -344,7 +344,9 @@ test("picture lookup handles differing rates, native PTS, hidden heads and held 
     ).toEqual(expected.map(BigInt));
   }
   const vfr = {
-    times: [0, 40, 50, 100, 120, 200].map((ms) => micros(ms * 1000)),
+    tick: fraction(1n, 1000n),
+    offset: micros(0),
+    ticks: [0, 40, 50, 100, 120, 200],
   };
   expect(
     Array.from({ length: 7 }, (_, n) => pictureAt(vfr, frames(n, thirty))),
@@ -352,15 +354,16 @@ test("picture lookup handles differing rates, native PTS, hidden heads and held 
   expect(pictureAt(vfr, micros(39989))).toBe(0n);
   expect(pictureAt(vfr, micros(39990))).toBe(1n);
   const native = {
-    times: [
-      { n: 1n, d: 1n },
-      { n: 1001n, d: 1000n },
-    ],
+    tick: fraction(1n, 1000n),
+    offset: micros(0),
+    ticks: [1000, 1001],
   };
   expect(pictureAt(native, micros(1))).toBeNull();
   expect(pictureAt(native, micros(2))).toBe(0n);
   expect(pictureAt(native, micros(2000000))).toBe(1n);
-  expect(pictureAt({ times: [] }, micros(0))).toBeNull();
+  expect(
+    pictureAt({ tick: fraction(1n), offset: micros(0), ticks: [] }, micros(0)),
+  ).toBeNull();
 
   const decimal = resolvePiece(
     placedMedia({

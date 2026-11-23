@@ -6,9 +6,10 @@ import {
   pictureSourceWire,
   sourcePictures,
 } from "../src/server/media/pictureIndex";
-import { fraction } from "../src/shared/timeline/piece";
+import { fraction, pictureStart } from "../src/shared/timeline/piece";
 import { placedMedia } from "../src/shared/timeline/placedMedia";
 import {
+  encodeTicks,
   framePicture,
   pictureSeek,
   pictureTable,
@@ -108,7 +109,10 @@ test.skipIf(!ready)(
         ),
       );
       const starts = [0, 40, 50, 100, 120, 200];
-      expect("times" in source.index && source.index.times).toEqual(
+      if (!("ticks" in source.index))
+        throw new Error("The fixture should index its own times.");
+      const { index } = source;
+      expect(Array.from(index.ticks, (_, k) => pictureStart(index, k))).toEqual(
         starts.map((ms) => fraction(BigInt(ms), 1000n)),
       );
       expect([0, 1, 2, 3, 4, 5, 6].map(at)).toEqual([0, 0, 2, 3, 4, 4, 5]);
@@ -136,4 +140,42 @@ test("P12: a picture decoded on Matroska's millisecond clock is the grid picture
     expect(presentedPicture(index, Math.round((k * 1000) / 60) * 1000)).toBe(
       BigInt(k),
     );
+});
+
+test("a long recording's picture times travel as a few runs and come back exactly", () => {
+  // OBS on a millisecond clock at 60 fps, dropping one picture in a thousand, for 2.8 hours.
+  const ms = { num: 1n, d: 1000n };
+  const step = fraction(1000n, 60n);
+  const recorded: number[] = [];
+  for (let slot = 0; recorded.length < 604_196; slot++)
+    if (slot % 1000 !== 999) recorded.push(Math.round((slot * 1000) / 60));
+  const wire = encodeTicks(recorded, step);
+  expect(wire.runs.length).toBeLessThan(5000);
+  // Any list, such as a phone's variable rate, survives exactly, if not as compactly.
+  let at = 7;
+  const irregular = Array.from(
+    { length: 5000 },
+    (_, k) => (at += 1 + ((k * 7919) % 37)),
+  );
+  for (const [ticks, by] of [
+    [recorded, step],
+    [irregular, step],
+    [irregular, fraction(1n)],
+  ] as const) {
+    const source = readPictureSource(
+      JSON.parse(
+        JSON.stringify({
+          index: {
+            tick: `${ms.num}/${ms.d}`,
+            offset: "0/1",
+            ticks: encodeTicks(ticks, by),
+          },
+          end: null,
+        }),
+      ),
+    );
+    if (!source || !("ticks" in source.index))
+      throw new Error("The viewer could not read the index.");
+    expect(Array.from(source.index.ticks)).toEqual(ticks);
+  }
 });

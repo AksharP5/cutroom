@@ -94,8 +94,27 @@ const videoTag = (
 ) =>
   `<video id="${id}" src="${src}" muted data-start="${start}" data-duration="${duration}" data-track-index="0" ${attrs} style="position:absolute;inset:0;width:100%;height:100%"></video>`;
 
-const page = (fps: Fps, frames: number, body: string) =>
+const composition = (fps: Fps, frames: number, body: string) =>
   `<!doctype html><html><head><style>html,body{margin:0;background:#000}</style></head><body><main id="main" data-composition-id="main" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="${seconds(frames, fps)}" data-fps="${fps.den === 1 ? fps.num : `${fps.num}/${fps.den}`}">${body}</main></body></html>`;
+
+/** Move clip `p` a frame later from the inspector, as the timing performance spec edits. */
+async function liveMove(
+  page: Page,
+  timed: (edit: () => Promise<void>) => Promise<void>,
+) {
+  // Wait as that spec does, until the document may update in place.
+  await page.waitForTimeout(4500);
+  await page.locator('[data-clip="p"]').click({ force: true });
+  const start = page.getByLabel("Start", { exact: true });
+  await start.focus();
+  await timed(async () => {
+    await start.press("ArrowUp");
+    await start.press("Enter");
+  });
+}
+
+/** An HEVC copy, which Chromium cannot decode, so the viewer plays its editing proxy. */
+const HEVC = ["-c:v", "libx265", "-x265-params", "log-level=error"];
 
 type Row = {
   name: string;
@@ -115,8 +134,14 @@ type Row = {
     edit?: CommandInput[];
     from: (frame: number) => number | null;
   };
-  /** An edit made in the editor before anything is exported, which updates the document in place. */
-  live?: (page: Page) => Promise<void>;
+  /**
+   * Edits made in the editor before anything is exported, each through `timed`, which waits
+   * for the timing update it sends to the loaded document and for the picture after it.
+   */
+  live?: (
+    page: Page,
+    timed: (edit: () => Promise<void>) => Promise<void>,
+  ) => Promise<void>;
   /** Plain 1x clips the footage pipeline can draw: true for both, "only" for the pipeline alone. */
   pipeline?: boolean | "only";
 };
@@ -141,7 +166,7 @@ const ROWS: Row[] = [
         ...["-g", "30", "-bf", "2"],
         ...["-x264-params", "open-gop=1:scenecut=0:b-adapt=0"],
       ]);
-      return page(
+      return composition(
         thirty,
         100,
         videoTag("head", "open.mp4", "0", seconds(59, thirty)) +
@@ -164,7 +189,7 @@ const ROWS: Row[] = [
     async setup(dir) {
       await source(dir, "p5.mp4", "24000/1001", 48);
       const fps = { num: 24000, den: 1001 };
-      return page(
+      return composition(
         fps,
         24,
         videoTag(
@@ -185,7 +210,11 @@ const ROWS: Row[] = [
     frames: 150,
     async setup(dir) {
       await source(dir, "p6.mp4", "30", 200);
-      return page(thirty, 150, videoTag("p", "p6.mp4", "0", "5", GEOMETRIC));
+      return composition(
+        thirty,
+        150,
+        videoTag("p", "p6.mp4", "0", "5", GEOMETRIC),
+      );
     },
     // The closed form: 1.4427 s and 4.3281 s, far from a picture boundary.
     expected: (n) => ({ 60: 43, 120: 129 })[n],
@@ -196,7 +225,7 @@ const ROWS: Row[] = [
     frames: 180,
     async setup(dir) {
       await source(dir, "p6.mp4", "30", 240);
-      return page(
+      return composition(
         thirty,
         180,
         videoTag("p", "p6.mp4", "0", "5", GEOMETRIC) +
@@ -226,7 +255,11 @@ const ROWS: Row[] = [
     pipeline: true,
     async setup(dir) {
       await source(dir, "p8.mp4", "25", 60);
-      return page(ntsc, 30, videoTag("p", "p8.mp4", "0", seconds(30, ntsc)));
+      return composition(
+        ntsc,
+        30,
+        videoTag("p", "p8.mp4", "0", seconds(30, ntsc)),
+      );
     },
     expected: (n) => [0, 0, 1, 2, 3, 4, 5, 5, 6, 7][n],
   },
@@ -237,7 +270,11 @@ const ROWS: Row[] = [
     pipeline: true,
     async setup(dir) {
       await source(dir, "p9.mp4", "24000/1001", 60);
-      return page(ntsc, 30, videoTag("p", "p9.mp4", "0", seconds(30, ntsc)));
+      return composition(
+        ntsc,
+        30,
+        videoTag("p", "p9.mp4", "0", seconds(30, ntsc)),
+      );
     },
     expected: (n) => Math.floor((n * 4) / 5),
   },
@@ -248,7 +285,11 @@ const ROWS: Row[] = [
     pipeline: true,
     async setup(dir) {
       await source(dir, "p10.mp4", "60000/1001", 60);
-      return page(ntsc, 25, videoTag("p", "p10.mp4", "0", seconds(25, ntsc)));
+      return composition(
+        ntsc,
+        25,
+        videoTag("p", "p10.mp4", "0", seconds(25, ntsc)),
+      );
     },
     expected: (n) => 2 * n,
   },
@@ -269,7 +310,11 @@ const ROWS: Row[] = [
         ],
         ",setpts='if(lt(N,3),if(eq(N,0),0,if(eq(N,1),40,50)),if(eq(N,3),100,if(eq(N,4),120,200)))'",
       );
-      return page(thirty, 7, videoTag("p", "p11.mp4", "0", seconds(7, thirty)));
+      return composition(
+        thirty,
+        7,
+        videoTag("p", "p11.mp4", "0", seconds(7, thirty)),
+      );
     },
     expected: (n) => [0, 0, 2, 3, 4, 4, 5][n]!,
   },
@@ -280,7 +325,11 @@ const ROWS: Row[] = [
     async setup(dir) {
       await source(dir, "p12.mkv", "60", 60);
       const fps = { num: 60, den: 1 };
-      return page(fps, 40, videoTag("p", "p12.mkv", "0", seconds(40, fps)));
+      return composition(
+        fps,
+        40,
+        videoTag("p", "p12.mkv", "0", seconds(40, fps)),
+      );
     },
     expected: (n) => n,
   },
@@ -290,7 +339,7 @@ const ROWS: Row[] = [
     frames: 150,
     async setup(dir) {
       await source(dir, "p13.mp4", "30", 60);
-      return page(
+      return composition(
         thirty,
         150,
         videoTag("p", "p13.mp4", "0", "5", 'data-media-start="0.5" loop'),
@@ -307,7 +356,7 @@ const ROWS: Row[] = [
       await source(dir, "p13b.mp4", "30000/1001", 61, [
         ...["-video_track_timescale", "30000"],
       ]);
-      return page(
+      return composition(
         ntsc,
         2000,
         videoTag(
@@ -337,19 +386,78 @@ const ROWS: Row[] = [
     frames: 160,
     async setup(dir) {
       await source(dir, "p6.mp4", "30", 200);
-      return page(thirty, 160, videoTag("p", "p6.mp4", "0", "5", GEOMETRIC));
+      return composition(
+        thirty,
+        160,
+        videoTag("p", "p6.mp4", "0", "5", GEOMETRIC),
+      );
     },
-    async live(page) {
-      // Wait as the timing performance spec does, until the document may update in place.
-      await page.waitForTimeout(4500);
-      await page.locator('[data-clip="p"]').click({ force: true });
-      const start = page.getByLabel("Start", { exact: true });
-      await start.focus();
-      await start.press("ArrowUp");
-      await start.press("Enter");
+    async live(page, timed) {
+      await liveMove(page, timed);
     },
     check: [...range(10, 20), 61, 121],
     expected: (n) => ({ 61: 43, 121: 129 })[n],
+  },
+  {
+    name: "P6 ramp moved a frame later and back by live timing updates",
+    fps: thirty,
+    frames: 160,
+    async setup(dir) {
+      await source(dir, "p6.mp4", "30", 200);
+      return composition(
+        thirty,
+        160,
+        videoTag("p", "p6.mp4", "0", "5", GEOMETRIC),
+      );
+    },
+    async live(page, timed) {
+      await liveMove(page, timed);
+      // Leave the Start field, whose own undo would take the keys.
+      await page.locator('[data-clip="p"]').click({ force: true });
+      await timed(() => page.keyboard.press("Control+z"));
+    },
+    // Back where it started, so frames 13 and 15 show P6's pictures again.
+    check: [...range(10, 20), 60, 120],
+    expected: (n) => ({ 13: 7, 15: 8, 60: 43, 120: 129 })[n],
+  },
+  {
+    name: "P6 ramp on an HEVC file played from its editing proxy",
+    fps: thirty,
+    frames: 150,
+    async setup(dir) {
+      await source(dir, "p6.mp4", "30", 200, HEVC);
+      return composition(
+        thirty,
+        150,
+        videoTag("p", "p6.mp4", "0", "5", GEOMETRIC),
+      );
+    },
+    check: [...range(10, 20), 60, 120],
+    expected: (n) => ({ 13: 7, 15: 8, 60: 43, 120: 129 })[n],
+  },
+  {
+    name: "P13b loop on an HEVC file played from its editing proxy",
+    fps: ntsc,
+    frames: 200,
+    async setup(dir) {
+      await source(dir, "p13b.mp4", "30000/1001", 61, [
+        ...HEVC,
+        ...["-video_track_timescale", "30000"],
+      ]);
+      return composition(
+        ntsc,
+        200,
+        videoTag(
+          "p",
+          "p13b.mp4",
+          "0",
+          seconds(200, ntsc),
+          'data-media-start="0.500500" loop',
+        ),
+      );
+    },
+    check: [...range(44, 48), ...range(90, 94), ...range(182, 186)],
+    expected: (n) => 15 + (n % 46),
   },
   {
     name: "P14 held tail",
@@ -358,7 +466,7 @@ const ROWS: Row[] = [
     pipeline: true,
     async setup(dir) {
       await source(dir, "p14.mp4", "30", 60);
-      return page(thirty, 90, videoTag("p", "p14.mp4", "0", "3"));
+      return composition(thirty, 90, videoTag("p", "p14.mp4", "0", "3"));
     },
     check: range(55, 90),
     expected: (n) => Math.min(n, 59),
@@ -370,7 +478,7 @@ const ROWS: Row[] = [
     async setup(dir) {
       await source(dir, "p6.mp4", "30", 200);
       await writeFile(join(dir, "scene.html"), scene);
-      return page(
+      return composition(
         thirty,
         160,
         `<div id="mount" class="clip" data-composition-id="scene" data-composition-src="scene.html" data-start="${seconds(100, thirty)}" data-duration="2" data-media-start="0.5" data-track-index="0" data-width="${WIDTH}" data-height="${HEIGHT}" style="position:absolute;inset:0"></div>`,
@@ -378,7 +486,7 @@ const ROWS: Row[] = [
     },
     // The scene rendered alone, shifted by the mount and its 15-frame in-point.
     reference: {
-      html: async () => page(thirty, 150, sceneVideo),
+      html: async () => composition(thirty, 150, sceneVideo),
       from: (n) => (n >= 100 ? n - 85 : null),
     },
     check: [...range(98, 160)],
@@ -538,12 +646,14 @@ for (const row of ROWS)
         // The edit reaches the loaded document in place, with its new picture table.
         const live = page.locator("iframe[data-live]");
         const before = await live.getAttribute("src");
-        const timing = page.waitForResponse((response) =>
-          response.url().includes("cutroom-timing=1"),
-        );
-        await row.live(page);
-        await timing;
-        await settled();
+        await row.live(page, async (edit) => {
+          const timing = page.waitForResponse((response) =>
+            response.url().includes("cutroom-timing=1"),
+          );
+          await edit();
+          await timing;
+          await settled();
+        });
         expect(await live.getAttribute("src")).toBe(before);
       }
       let reference: number[] | undefined;
@@ -618,3 +728,109 @@ for (const row of ROWS)
       expect(shown).toEqual(frames.map((frame) => exported[frame]));
       await expect(page.locator(".status-error")).toHaveCount(0);
     });
+
+test("a resting picture Chromium decodes wrong is sought once more, then reported", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Wrong picture", width: WIDTH, height: HEIGHT },
+      })
+    ).json(),
+  );
+  await source(project.path, "plain.mp4", "30", 60);
+  await writeFile(
+    join(project.path, "index.html"),
+    composition(thirty, 60, videoTag("p", "plain.mp4", "0", "2")),
+  );
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  await page.goto(`/#project/${project.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  await goTo(page, 10, thirty);
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  expect(await shownLabel(page)).toBe(10);
+  // Chromium hands back the next picture's frame, as a seek before an open-GOP keyframe can.
+  const body = page.frameLocator("iframe[data-live]").locator("body");
+  await body.evaluate(() => {
+    const video = document.querySelector("video")!;
+    const NativeFrame = VideoFrame;
+    const state = { wrong: 0, served: 0, seeks: 0 };
+    Reflect.set(window, "wrongPictures", state);
+    video.addEventListener("seeking", () => state.seeks++);
+    window.VideoFrame = new Proxy(NativeFrame, {
+      construct(Frame, args: unknown[], target) {
+        if (args[0] !== video || state.wrong <= 0)
+          return Reflect.construct(Frame, args, target);
+        state.wrong--;
+        state.served++;
+        const real = new NativeFrame(video);
+        const timestamp = real.timestamp + 1e6 / 30;
+        real.close();
+        return new NativeFrame(video, { timestamp });
+      },
+    });
+  });
+  const wrongPictures = () =>
+    body.evaluate(() =>
+      structuredClone(
+        Reflect.get(window, "wrongPictures") as {
+          wrong: number;
+          served: number;
+          seeks: number;
+        },
+      ),
+    );
+  const picture = page.getByRole("application", { name: "Picture" });
+
+  // One wrong frame: one more seek, then the right picture is held.
+  await body.evaluate(() =>
+    Object.assign(Reflect.get(window, "wrongPictures"), { wrong: 1, seeks: 0 }),
+  );
+  await picture.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  expect(await shownLabel(page)).toBe(11);
+  const once = await wrongPictures();
+  expect(once.served).toBe(1);
+  expect(once.seeks).toBe(2);
+  await expect(page.locator(".status-error")).toHaveCount(0);
+
+  // Wrong every time: the one extra seek, then the frame times out with an error.
+  await body.evaluate(() =>
+    Object.assign(Reflect.get(window, "wrongPictures"), {
+      wrong: Infinity,
+      served: 0,
+      seeks: 0,
+    }),
+  );
+  await picture.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(1000);
+  const retried = await wrongPictures();
+  await expect(page.locator(".status-error")).toContainText(
+    "did not draw the frame in time",
+    { timeout: 12_000 },
+  );
+  await expect(stage).not.toHaveAttribute("data-preview-ready");
+  const always = await wrongPictures();
+  expect(always.served).toBeGreaterThan(1);
+  // The step's seek and the retry, with no more while it waits out the deadline.
+  expect(retried.seeks).toBeGreaterThanOrEqual(2);
+  expect(retried.seeks).toBeLessThanOrEqual(3);
+  expect(always.seeks).toBe(retried.seeks);
+
+  // Decoding right again, the next step holds its picture.
+  await body.evaluate(() =>
+    Object.assign(Reflect.get(window, "wrongPictures"), { wrong: 0 }),
+  );
+  await picture.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  expect(await shownLabel(page)).toBe(13);
+});

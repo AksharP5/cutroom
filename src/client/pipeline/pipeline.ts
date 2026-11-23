@@ -260,7 +260,13 @@ export function attachPipeline(
       if (!response.ok) throw error;
       return openSource(url, closing.signal);
     });
-    return { ...opened, pictures: await pictures, path };
+    // A long recording's first scan takes seconds. Draw its frames at their own times until
+    // the index comes.
+    const ready = await Promise.race([
+      pictures,
+      new Promise<undefined>((resolve) => setTimeout(resolve, 400)),
+    ]);
+    return { ...opened, pictures: ready ?? null, indexed: pictures, path };
   });
   const scrubs = sourceCache((path) =>
     openSource(
@@ -270,7 +276,8 @@ export function attachPipeline(
     ),
   );
   const sources = sourceCache(async (src): Promise<Source> => {
-    const { createDecoder, intrinsic, pictures, path } = await media.get(src);
+    const { createDecoder, intrinsic, pictures, indexed, path } =
+      await media.get(src);
     let askedAt = -Infinity;
     let asking: Promise<void> | null = null;
     const decoder = createDecoder();
@@ -297,6 +304,12 @@ export function attachPipeline(
         return asking;
       },
     };
+    if (!pictures)
+      void indexed.then((late) => {
+        if (!late || closing.signal.aborted) return;
+        found.pictures = late;
+        void draw();
+      });
     return found;
   });
   const source = sources.get;
@@ -773,7 +786,7 @@ export function attachPipeline(
           const pictures = await pictureSources.get(path);
           // The scrub encode can rebase timestamps. Align its first frame to a constant-rate
           // file's first picture. Otherwise keep the ordinal from the original's sample index.
-          if (pictures && !("times" in pictures.index) && !original?.cached) {
+          if (pictures && !("ticks" in pictures.index) && !original?.cached) {
             const offset =
               pictureTime(pictures, seconds) - secondsOf(pictures.index.origin);
             const proxy = await auditionStandIn(

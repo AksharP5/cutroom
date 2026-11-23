@@ -20,16 +20,17 @@ import type { Fps } from "./schema.ts";
 
 /**
  * The viewer's picture facts as JSON: exact times as `"n/d"`, a constant-rate file as its grid,
- * any other as the integer ticks of its presented pictures on one clock. Self-contained, because
+ * any other as runs of its pictures' tick counts (see `encodeTicks`). Self-contained, because
  * the preview bridge runs a bundle of this module.
  */
 type Text = string;
 type TextWindow = { start: Text; end: Text };
 
+type TickRuns = { first: number; step: Text; runs: number[] };
 export type PictureSourceWire = {
   index:
     | { origin: Text; rate: Fps; count: Text }
-    | { tick: Text; offset: Text; ticks: number[] };
+    | { tick: Text; offset: Text; ticks: TickRuns };
   end: Text | null;
 };
 /** A source file's picture index and the playable end its loops wrap at. */
@@ -95,6 +96,59 @@ export function pictureTable(
   return { fps, videos };
 }
 
+const roundDiv = (n: bigint, d: bigint) => {
+  const twice = 2n * n + d;
+  const whole = twice / (2n * d);
+  return twice < 0n && twice % (2n * d) !== 0n ? whole - 1n : whole;
+};
+
+/**
+ * Tick counts as runs on a nominal grid of `step` ticks per picture: each picture is its slot
+ * on the grid plus a residual, and equal (slot step, residual) pairs repeat as one run. A
+ * recording that drops a picture now and then, on a millisecond clock or any other, takes a few
+ * numbers per drop. Any list of ticks survives exactly; a file with no grid takes a step of one
+ * tick and runs of equal gaps.
+ */
+export function encodeTicks(
+  ticks: ArrayLike<number>,
+  step: ExactTime,
+): TickRuns {
+  const first = ticks[0] ?? 0;
+  const runs: number[] = [];
+  let slot = 0n;
+  for (let k = 1; k < ticks.length; k++) {
+    const since = BigInt(ticks[k]! - first);
+    const next = roundDiv(since * step.d, step.n);
+    const residual = Number(since - roundDiv(next * step.n, step.d));
+    const by = Number(next - slot);
+    slot = next;
+    const last = runs.length - 3;
+    if (last >= 0 && runs[last + 1] === by && runs[last + 2] === residual)
+      runs[last]!++;
+    else runs.push(1, by, residual);
+  }
+  return { first, step: timeText(step), runs };
+}
+
+function decodeTicks({ first, step: stepText, runs }: TickRuns) {
+  const step = readTime(stepText);
+  let count = 1;
+  for (let i = 0; i < runs.length; i += 3) count += runs[i]!;
+  const ticks = new Float64Array(count);
+  ticks[0] = first;
+  let slot = 0n;
+  let k = 1;
+  for (let i = 0; i < runs.length; i += 3) {
+    const by = BigInt(runs[i + 1]!);
+    const residual = runs[i + 2]!;
+    for (let n = runs[i]!; n > 0; n--) {
+      slot += by;
+      ticks[k++] = first + Number(roundDiv(slot * step.n, step.d)) + residual;
+    }
+  }
+  return ticks;
+}
+
 /** Null for anything that is not a picture source, such as a file with no video. */
 export function readPictureSource(body: unknown): PictureSource | null {
   if (!body || typeof body !== "object" || !("index" in body)) return null;
@@ -126,25 +180,30 @@ export function readPictureSource(body: unknown): PictureSource | null {
     };
   }
   if (!("tick" in index && "offset" in index && "ticks" in index)) return null;
-  const { ticks } = index;
+  const runs: unknown = index.ticks;
   if (
-    !Array.isArray(ticks) ||
-    !ticks.length ||
-    !ticks.every(
-      (tick, i) => Number.isSafeInteger(tick) && (!i || tick >= ticks[i - 1]),
-    )
+    !runs ||
+    typeof runs !== "object" ||
+    !("first" in runs) ||
+    !Number.isSafeInteger(runs.first) ||
+    !("step" in runs) ||
+    !("runs" in runs) ||
+    !Array.isArray(runs.runs) ||
+    runs.runs.length % 3 !== 0 ||
+    !runs.runs.every((value) => Number.isSafeInteger(value))
   )
     return null;
-  const unit = readTime(index.tick);
-  const offset = readTime(index.offset);
+  const ticks = decodeTicks({
+    first: Number(runs.first),
+    step: String(runs.step),
+    runs: runs.runs,
+  });
+  if (!ticks.every((tick, i) => !i || tick >= ticks[i - 1]!)) return null;
   return {
     index: {
-      times: ticks.map((tick: number) =>
-        fraction(
-          offset.n * unit.d + BigInt(tick) * unit.n * offset.d,
-          offset.d * unit.d,
-        ),
-      ),
+      tick: readTime(index.tick),
+      offset: readTime(index.offset),
+      ticks,
     },
     end,
   };
@@ -260,20 +319,21 @@ export function framePicture(
  * the interval before it.
  */
 export function pictureSeek(index: PictureIndex, ordinal: bigint) {
-  if (!("times" in index)) {
+  if (!("ticks" in index)) {
     const { origin, rate } = index;
     return secondsOf(origin) + ((Number(ordinal) + 0.25) * rate.den) / rate.num;
   }
-  const { times } = index;
-  const at = Math.min(Number(ordinal), times.length - 1);
-  const start = secondsOf(times[at]!);
-  const next = times[at + 1];
-  const previous = times[at - 1];
-  const gap = next
-    ? secondsOf(next) - start
-    : previous
-      ? start - secondsOf(previous)
-      : 0.004;
+  const { ticks, tick, offset } = index;
+  const at = Math.min(Number(ordinal), ticks.length - 1);
+  const seconds = (count: number) =>
+    secondsOf(offset) + count * secondsOf(tick);
+  const start = seconds(ticks[at]!);
+  const gap =
+    at + 1 < ticks.length
+      ? seconds(ticks[at + 1]!) - start
+      : at > 0
+        ? start - seconds(ticks[at - 1]!)
+        : 0.004;
   return start + gap / 4;
 }
 
@@ -291,7 +351,7 @@ export const timePicture = (index: PictureIndex, asked: number) =>
  * index's own.
  */
 export function presentedPicture(index: PictureIndex, timestamp: number) {
-  if ("times" in index) return pictureAt(index, micros(Math.round(timestamp)));
+  if ("ticks" in index) return pictureAt(index, micros(Math.round(timestamp)));
   const { origin, rate, count } = index;
   const slot = Math.round(
     ((timestamp / 1e6 - secondsOf(origin)) * rate.num) / rate.den,

@@ -593,9 +593,24 @@ export function sourceSampleOffset(piece: Piece): bigint | null {
   return sampleOf(subtract(micros(piece.zero), piece.line.curveZero));
 }
 
+/**
+ * A source's presented pictures: a constant-rate grid, or each picture's start as a whole
+ * number of `tick`s after `offset`, in presentation order. Integers keep a long recording's
+ * index small and its lookups cheap.
+ */
 export type PictureIndex =
   | { origin: ExactTime; rate: Fps; count: bigint }
-  | { times: readonly ExactTime[] };
+  | { tick: ExactTime; offset: ExactTime; ticks: ArrayLike<number> };
+
+/** The start of picture `ordinal` of a variable-rate index. */
+export const pictureStart = (
+  index: Extract<PictureIndex, { ticks: unknown }>,
+  ordinal: number,
+) =>
+  add(
+    index.offset,
+    fraction(BigInt(index.ticks[ordinal]!) * index.tick.n, index.tick.d),
+  );
 
 const PICTURE_LEAD_US = attrMicros(MEDIA_ELEMENT_LEAD_SECONDS);
 // The pinned extractor treats a stream starting 1 second away (within 1 µs) as hidden.
@@ -606,8 +621,8 @@ export function pictureAt(
   index: PictureIndex,
   time: SourceTime,
 ): bigint | null {
-  const origin = "times" in index ? index.times[0] : index.origin;
-  if (!origin) return null;
+  if ("ticks" in index && !index.ticks.length) return null;
+  const origin = "ticks" in index ? pictureStart(index, 0) : index.origin;
   const elapsed =
     typeof time === "number"
       ? time - secondsOf(origin)
@@ -619,7 +634,7 @@ export function pictureAt(
   )
     return null;
 
-  if (!("times" in index)) {
+  if (!("ticks" in index)) {
     if (index.count === 0n) return null;
     const { rate } = index;
     const ordinal =
@@ -641,21 +656,22 @@ export function pictureAt(
         : ordinal;
   }
 
-  const target =
-    typeof time === "number"
-      ? time + MEDIA_ELEMENT_LEAD_SECONDS
-      : add(time, micros(PICTURE_LEAD_US));
+  // The last picture starting at or before the time plus the lead, found among integers:
+  // `bound` is the latest tick count at or before it.
+  const { tick, offset, ticks } = index;
+  let bound: number;
+  if (typeof time === "number")
+    bound =
+      (time + MEDIA_ELEMENT_LEAD_SECONDS - secondsOf(offset)) / secondsOf(tick);
+  else {
+    const since = subtract(add(time, micros(PICTURE_LEAD_US)), offset);
+    bound = Number(floorDiv(since.n * tick.d, since.d * tick.n));
+  }
   let low = 0;
-  let high = index.times.length;
+  let high = ticks.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    const pts = index.times[middle];
-    if (
-      typeof target === "number"
-        ? secondsOf(pts) <= target
-        : difference(pts, target) <= 0n
-    )
-      low = middle + 1;
+    if (ticks[middle]! <= bound) low = middle + 1;
     else high = middle;
   }
   return BigInt(Math.max(0, low - 1));

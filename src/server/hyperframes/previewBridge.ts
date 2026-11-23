@@ -1673,6 +1673,8 @@ function installPreviewBridge(
   /** Videos a live update added, hidden until their first frame is held or they play. */
   const pendingVideos = new Set<HTMLVideoElement>();
   const FRAME_TIMEOUT = 8_000;
+  /** How long a paused picture waits for a source's picture index before holding without it. */
+  const PICTURES_WAIT_MS = 400;
   /** How long a moving playhead must rest before the sources decode its exact frame. */
   const SCRUB_REST_MS = 60;
   let retired = false;
@@ -2470,7 +2472,12 @@ function installPreviewBridge(
               continue;
             }
             // Pictures are selected by each source's index, which a new source reads first.
-            await Promise.all(videos.map(loadPictures));
+            // A long recording's first scan takes seconds: hold the runtime's picture meanwhile,
+            // and the index's arrival moves it to export's.
+            await Promise.race([
+              Promise.all(videos.map(loadPictures)),
+              new Promise((resolve) => setTimeout(resolve, PICTURES_WAIT_MS)),
+            ]);
             if (!current()) return;
             // The footage pipeline can take a video while its index loads; it no longer shows
             // natively, so look again at which videos do before checking where they rest.
@@ -2754,6 +2761,7 @@ function installPreviewBridge(
         .then((found) => {
           knownSources.set(path, found);
           // A paused video the runtime placed before the index came moves to export's picture.
+          let moved = false;
           if (found)
             for (const video of document.querySelectorAll("video"))
               if (
@@ -2762,8 +2770,17 @@ function installPreviewBridge(
                 !asked.has(video) &&
                 !parked.has(video) &&
                 !deferredSeeks.has(video)
-              )
+              ) {
                 mediaTime.set.call(video, nativeTime.get!.call(video));
+                moved = true;
+              }
+          // A picture already held without the index is held again on it.
+          if (
+            moved &&
+            exactVersion === pictureVersion &&
+            !win.__player?.isPlaying()
+          )
+            void refreshPicture().catch(reportFrameFailure);
           return found;
         });
       pictureSources.set(path, pending);
@@ -2773,7 +2790,10 @@ function installPreviewBridge(
   let pictureTable = initialPictures;
   const resolvedSlots = new WeakMap<
     PictureTable["videos"][string],
-    { source: PictureSource; piece: ReturnType<typeof pictures.slotPiece> }
+    {
+      source: PictureSource;
+      piece: ReturnType<typeof pictures.slotPiece> | null;
+    }
   >();
   /** Seeks to a source time rather than the playhead's picture, such as an edit frame's edge. */
   const sourceSeeks = new WeakSet<HTMLMediaElement>();
@@ -2801,18 +2821,17 @@ function installPreviewBridge(
     const { fps } = pictureTable;
     let resolved = resolvedSlots.get(slot);
     if (resolved?.source !== source) {
+      let piece = null;
       try {
-        resolved = {
-          source,
-          piece: pictures.slotPiece(id, slot, fps, source.end),
-        };
+        piece = pictures.slotPiece(id, slot, fps, source.end);
       } catch (error) {
-        // The runtime's seek goes on; the viewer says why its picture may differ from export.
+        // The runtime's seek goes on; the viewer says once why its picture may differ.
         reportFrameFailure(error);
-        return null;
       }
+      resolved = { source, piece };
       resolvedSlots.set(slot, resolved);
     }
+    if (!resolved.piece) return null;
     const ordinal = pictures.framePicture(
       resolved.piece,
       source.index,
@@ -3037,11 +3056,13 @@ function installPreviewBridge(
         return;
       }
       const path = editingProxyPath(this);
-      const rest = path ? null : restingPicture(this);
+      const rest = restingPicture(this);
       const native = nativeTime.get!.call(this);
-      // A video already inside the picture stays: seeking within it presents no new frame.
+      // A source already inside the picture stays: seeking within it presents no new frame.
+      // An editing proxy goes to the sample of that picture, below.
       const target =
         rest &&
+        !path &&
         !this.seeking &&
         pictures.timePicture(rest.source.index, native) === rest.ordinal
           ? native
@@ -4822,11 +4843,6 @@ export function previewDocument(
   };
 }
 
-/**
- * The picture table after a live timing update, without compiling again: the served document
- * with the update's timing values written in, placed again. Every update writes every clip's
- * values, so the document is parsed once and rewritten in place.
- */
 /** Parse the served document for later live updates, so the first edit does not wait for it. */
 export function prepareLivePictures(served: {
   html: string;
@@ -4836,6 +4852,11 @@ export function prepareLivePictures(served: {
     served.document ??= parseHTML(served.html).document;
 }
 
+/**
+ * The picture table after a live timing update, without compiling again: the served document
+ * with the update's timing values written in, placed again. Every update writes every clip's
+ * values, so the document is parsed once and rewritten in place.
+ */
 export function livePictureTable(
   served: { html: string; document?: Document },
   timing: PreviewTiming,
