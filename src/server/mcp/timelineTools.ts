@@ -1,3 +1,4 @@
+import { ClipBackgroundSchema } from "../../shared/matte";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type {
   CallToolResult,
@@ -131,11 +132,38 @@ export function registerTimelineTools(
       view: TimelineViewSchema.parse(await read.json()),
     };
   };
+  /** Each video clip's background with its matte state, or undefined when it cannot be read. */
+  const readBackgrounds = async (projectId: string, composition: string) => {
+    const response = await fetchLocal(
+      `/api/cutroom/projects/${id(projectId)}/mattes?composition=${id(composition)}`,
+    );
+    if (!response.ok) return undefined;
+    const { clips } = z
+      .object({
+        clips: z.record(z.string(), ClipBackgroundSchema.nullable()),
+      })
+      .parse(await response.json());
+    return new Map(
+      Object.entries(clips).flatMap(([clip, background]) =>
+        background ? [[clip, background] as const] : [],
+      ),
+    );
+  };
+  /** Queues the mattes Remove clips lack, as the open editor does after an edit. */
+  const syncMattes = (
+    projectId: string,
+    composition: string,
+    retry: readonly string[] = [],
+  ) =>
+    fetchLocal(
+      `/api/cutroom/projects/${id(projectId)}/mattes/sync?composition=${id(composition)}&retry=${retry.map(id).join(",")}`,
+      { method: "POST" },
+    );
   server.registerTool(
     "timeline_read",
     {
       description:
-        "Read the timeline in integer frames at the composition's fps: tracks (including empty ones), clips, markers, the in/out range, and the revision to pass to timeline_edit. Clips come in full while their JSON stays under 256 KiB, about 490 clips. Past that, an unfiltered read returns timeline.clipSummary with per-track counts and half-open frame spans in place of timeline.clips, and a read filtered by from/to or tracks returns compact clips. Pass from/to and tracks for exact clip details. Frame filters also narrow markers; tracks and the revision cover the whole timeline. Compact clips omit null fields, playbackRate 1, hasAudio and adjustment false, enabled true, fadeIn and fadeOut 0, style {} and fx []. Authored values such as opacity 1 and volume 0 stay. agentChanges lists clips still awaiting the owner's review; pass clipEdits: true for the owner and agent edit ledger behind it. Clip fields: x/y are additive offsets in composition CSS pixels on top of authored CSS and animation, not coordinates; positive x is right, positive y is down, null is none. scaleX/scaleY (1 = own size), rotation (degrees clockwise about the centre) and crop (pixels off each edge of the clip's own box) apply on top of authored transforms; null is none, and sourceRestrictions.transform says why setClip would refuse them. The composition's own animation can override all of these, so check with timeline_view; they never move linked audio. keyframes animates position, scale, rotation, crop and opacity: per property, keyframes {frame, value, ease} at clip-local frames (0 is the clip's first frame), in the static fields' units, which read null while their property has keyframes; ease (linear, ease-in, ease-out, ease-in-out, hold) shapes the motion to the next keyframe, and the value holds before the first and after the last. Edit them with setKeyframe, removeKeyframe and moveKeyframe. text holds a text element's words, with <br> and preserved source line breaks as newlines; sourceRestrictions.text says why setClip text would be refused. title holds a Cutroom title's look and motion. style holds any other visual clip's inline look as setClip.style writes it (text style, fill, radius, shadow, blur, width, height, objectFit), with only the fields set inline in that form; the composition's stylesheets decide the rest. volume is linear clip gain (1 = 0 dB, null = unity). A track's volume is a separate gain stage on top; clips with trackGainWarning keep their authored audio group and skip it. authoredAudioGroupId names the clip's authored bus. timeline.authoredAudioGroups lists this composition's buses, including empty ones: id, label, linear volume, muted, solo, fx, automated (an automation lane owns its gain) and members (clips routed to it). setAudioGroup {group, label, volume, muted, solo, fx, automation: null} changes one bus, only the fields given; {clipId} instead of group names a member's bus. removeAudioGroup {group} deletes a bus and returns its clips to track mixing. Both refuse missing or source-restricted buses and locked member tracks. While anything is soloed, a clip sounds when its track or its bus is soloed; mute wins. Each stage goes up to +12 dB. automation is null or the clip's volume envelope: volume lists points {frame, gain} at clip-local frames, gain being linear on top of the clip's gain (1 = no change), straight between points and held before the first and after the last; set it with setClip.automation {volume: [...]}. lanes names effect-parameter lanes, which setClip.automation keeps. A baked ramp may bend between points; writing points back makes straight runs. fx on a clip or a track is its audio effect chain in signal order: {id, type, params} with params left out at their defaults, enabled false when bypassed, and preset naming the preset that added it. A track's chain processes every clip on it except those with trackGainWarning. timeline.main is the master bus over the whole mix: volume (linear, -60 to +12 dB, after its effects) and fx, its chain; set either with setMaster. audio_loudness puts the mix's loudness gain in main.fx. Change them with setClip.fx and setTrack.fx, which take the whole chain; an entry with an existing id keeps the values it leaves out, and {preset} adds a preset's effects. fadeIn/fadeOut are authored frame lengths; playback scales both by min(1, duration / (fadeIn + fadeOut)). transitionIn/transitionOut hold a cut's transition on both clips that meet there; clip start and duration stay at the cut, and the media running past it under the transition is not counted. link groups clips that edit as one; link and unlink change it. syncOffset, present only when linked picture and sound of one file have drifted apart, is how many frames this clip plays its source later than its partner (negative is earlier); moving it by -syncOffset frames or slipping it by syncOffset resyncs it. region is a zoom on that clip, or an adjustment layer's zoom, blur or highlight: {effect, box {x, y, width, height} in fractions of the frame from the top left, in and out ramp frames at the clip's edges, ease, blur px, dim, area, radius px, feather px}. A clip with adjustment true is an adjustment layer: it draws nothing itself and applies its region to every picture on the video tracks below it while it plays.",
+        "Read the timeline in integer frames at the composition's fps: tracks (including empty ones), clips, markers, the in/out range, and the revision to pass to timeline_edit. Clips come in full while their JSON stays under 256 KiB, about 490 clips. Past that, an unfiltered read returns timeline.clipSummary with per-track counts and half-open frame spans in place of timeline.clips, and a read filtered by from/to or tracks returns compact clips. Pass from/to and tracks for exact clip details. Frame filters also narrow markers; tracks and the revision cover the whole timeline. Compact clips omit null fields, playbackRate 1, hasAudio and adjustment false, enabled true, fadeIn and fadeOut 0, style {} and fx []. Authored values such as opacity 1 and volume 0 stay. agentChanges lists clips still awaiting the owner's review; pass clipEdits: true for the owner and agent edit ledger behind it. Clip fields: x/y are additive offsets in composition CSS pixels on top of authored CSS and animation, not coordinates; positive x is right, positive y is down, null is none. scaleX/scaleY (1 = own size), rotation (degrees clockwise about the centre) and crop (pixels off each edge of the clip's own box) apply on top of authored transforms; null is none, and sourceRestrictions.transform says why setClip would refuse them. The composition's own animation can override all of these, so check with timeline_view; they never move linked audio. keyframes animates position, scale, rotation, crop and opacity: per property, keyframes {frame, value, ease} at clip-local frames (0 is the clip's first frame), in the static fields' units, which read null while their property has keyframes; ease (linear, ease-in, ease-out, ease-in-out, hold) shapes the motion to the next keyframe, and the value holds before the first and after the last. Edit them with setKeyframe, removeKeyframe and moveKeyframe. text holds a text element's words, with <br> and preserved source line breaks as newlines; sourceRestrictions.text says why setClip text would be refused. title holds a Cutroom title's look and motion. style holds any other visual clip's inline look as setClip.style writes it (text style, fill, radius, shadow, blur, width, height, objectFit), with only the fields set inline in that form; the composition's stylesheets decide the rest. volume is linear clip gain (1 = 0 dB, null = unity). A track's volume is a separate gain stage on top; clips with trackGainWarning keep their authored audio group and skip it. authoredAudioGroupId names the clip's authored bus. timeline.authoredAudioGroups lists this composition's buses, including empty ones: id, label, linear volume, muted, solo, fx, automated (an automation lane owns its gain) and members (clips routed to it). setAudioGroup {group, label, volume, muted, solo, fx, automation: null} changes one bus, only the fields given; {clipId} instead of group names a member's bus. removeAudioGroup {group} deletes a bus and returns its clips to track mixing. Both refuse missing or source-restricted buses and locked member tracks. While anything is soloed, a clip sounds when its track or its bus is soloed; mute wins. Each stage goes up to +12 dB. automation is null or the clip's volume envelope: volume lists points {frame, gain} at clip-local frames, gain being linear on top of the clip's gain (1 = no change), straight between points and held before the first and after the last; set it with setClip.automation {volume: [...]}. lanes names effect-parameter lanes, which setClip.automation keeps. A baked ramp may bend between points; writing points back makes straight runs. fx on a clip or a track is its audio effect chain in signal order: {id, type, params} with params left out at their defaults, enabled false when bypassed, and preset naming the preset that added it. A track's chain processes every clip on it except those with trackGainWarning. timeline.main is the master bus over the whole mix: volume (linear, -60 to +12 dB, after its effects) and fx, its chain; set either with setMaster. audio_loudness puts the mix's loudness gain in main.fx. Change them with setClip.fx and setTrack.fx, which take the whole chain; an entry with an existing id keeps the values it leaves out, and {preset} adds a preset's effects. fadeIn/fadeOut are authored frame lengths; playback scales both by min(1, duration / (fadeIn + fadeOut)). transitionIn/transitionOut hold a cut's transition on both clips that meet there; clip start and duration stay at the cut, and the media running past it under the transition is not counted. link groups clips that edit as one; link and unlink change it. syncOffset, present only when linked picture and sound of one file have drifted apart, is how many frames this clip plays its source later than its partner (negative is earlier); moving it by -syncOffset frames or slipping it by syncOffset resyncs it. region is a zoom on that clip, or an adjustment layer's zoom, blur or highlight: {effect, box {x, y, width, height} in fractions of the frame from the top left, in and out ramp frames at the clip's edges, ease, blur px, dim, area, radius px, feather px}. A clip with adjustment true is an adjustment layer: it draws nothing itself and applies its region to every picture on the video tracks below it while it plays. background is null when a video keeps its background; when it is removed, {mode: \"remove\", state, progress, error, shrink, soften}: state is ready (the cutout shows), waiting, running (progress 0 to 1), needs-model (matte_download first) or failed (error says why); shrink and soften are edge pixels. Set it with setClip.background and poll matte_status until ready before a render that needs the cutout.",
       inputSchema: {
         ...input,
         from: z
@@ -189,6 +217,10 @@ export function registerTimelineTools(
         timeline,
         ...view
       } = result.view;
+      // Matte progress is read only when a clip has its background removed.
+      const backgrounds = timeline.clips.some((clip) => clip.background)
+        ? await readBackgrounds(projectId, composition)
+        : undefined;
       const reply = {
         ...view,
         ...(clipEdits && { clipEdits: ledger }),
@@ -196,6 +228,7 @@ export function registerTimelineTools(
           timeline,
           { from, to, tracks },
           replyFormat,
+          backgrounds,
         ),
       };
       return {
@@ -257,22 +290,70 @@ export function registerTimelineTools(
       );
       // A read at another revision cannot show what this edit changed.
       const exact = before.view.revision === batch.expectedRevision;
-      return request(`/projects/${id(projectId)}/commands`, "POST", batch, {
-        followup: (data) =>
-          notifyAnimation({
-            event: "animation-left-behind",
-            requestId,
-            projectId,
-            ...data,
-          }),
-        reply: (result) =>
-          editReply(
-            before.view,
-            TimelineViewSchema.parse(result),
-            formatChanged || fullTimeline || !exact,
-            exact && !formatChanged ? replyFormat : "legacy",
-          ),
-      });
+      const backgrounds = batch.commands.flatMap((command) =>
+        command.type === "setClip" && command.background !== undefined
+          ? [command.clipId]
+          : [],
+      );
+      const result = await request(
+        `/projects/${id(projectId)}/commands`,
+        "POST",
+        batch,
+        {
+          followup: (data) =>
+            notifyAnimation({
+              event: "animation-left-behind",
+              requestId,
+              projectId,
+              ...data,
+            }),
+          reply: (result) =>
+            editReply(
+              before.view,
+              TimelineViewSchema.parse(result),
+              formatChanged || fullTimeline || !exact,
+              exact && !formatChanged ? replyFormat : "legacy",
+            ),
+        },
+      );
+      if (result.isError || !backgrounds.length) return result;
+      // The edit has landed; the matte jobs run after it, without an editor open.
+      // Remove on a clip whose matte failed runs it again.
+      await syncMattes(
+        projectId,
+        batch.composition,
+        batch.commands.flatMap((command) =>
+          command.type === "setClip" && command.background?.mode === "remove"
+            ? [command.clipId]
+            : [],
+        ),
+      );
+      const states = await readBackgrounds(projectId, batch.composition);
+      const background = Object.fromEntries(
+        backgrounds.flatMap((clipId) => {
+          const state = states?.get(clipId);
+          return state ? [[clipId, state]] : [];
+        }),
+      );
+      const structured = z
+        .object({ result: z.looseObject({}) })
+        .safeParse(result.structuredContent);
+      return {
+        ...result,
+        content: [
+          ...result.content,
+          {
+            type: "text",
+            text: `Background: ${JSON.stringify(background)}. Poll matte_status for progress.`,
+          },
+        ],
+        ...(structured.success && {
+          structuredContent: {
+            ...structured.data,
+            result: { ...structured.data.result, background },
+          },
+        }),
+      };
     },
   );
   /** Applies mix commands as one undo step, reporting what was measured beside the changes. */

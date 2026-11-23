@@ -50,6 +50,7 @@ import { registerLayerTextTools } from "./layerTextTools";
 import { registerFontTools } from "./fontTools";
 import { registerLibraryTools } from "./libraryTools";
 import { registerGradeTools } from "./gradeTools";
+import { registerMatteTools } from "./matteTools";
 import { compactLint } from "../../shared/lint";
 import { canonicalProjectPath } from "../projects/path";
 import { externalHistoryCredential } from "../projects/historyActor";
@@ -677,6 +678,7 @@ export function createMcpServer(options: McpOptions = {}) {
   registerFontTools(registry, request);
   registerGradeTools(registry, request);
   registerLibraryTools(registry, request);
+  registerMatteTools(registry, request);
   registry.registerTool(
     "history_list",
     {

@@ -211,6 +211,8 @@ export async function createApp(
   );
   app.route("/api/cutroom", createFontRoutes(projects, review));
   app.route("/api/cutroom", createGradeRoutes(projects, review));
+  // Before the agent routes, whose guard refuses agents' writes to every route mounted after them.
+  app.route("/api/cutroom", mattes);
   const library = createLibrary({ dataDir });
   await library
     .removeOtherReleases()
@@ -225,7 +227,6 @@ export async function createApp(
   app.route("/api", createLibraryPreviews(library));
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api/cutroom", media);
-  app.route("/api/cutroom", mattes);
   app.route("/api", editor);
   const mcp = createMcpHttpHandler({ baseUrl });
   app.all("/mcp", (c) => mcp(c.req.raw));

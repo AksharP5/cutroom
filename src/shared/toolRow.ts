@@ -289,6 +289,21 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => (target ? `the LUT ${target}` : "a LUT"),
   },
+  matte_status: {
+    verb: ["Checked", "Checking", "Check"],
+    kind: "project",
+    object: () => "background removal",
+  },
+  matte_cancel: {
+    verb: ["Stopped", "Stopping", "Stop"],
+    kind: "edit",
+    object: () => "background removal",
+  },
+  matte_download: {
+    verb: ["Downloaded", "Downloading", "Download"],
+    kind: "edit",
+    object: () => "the background removal model",
+  },
   grade_save_lut: {
     verb: ["Saved", "Saving", "Save"],
     kind: "edit",
