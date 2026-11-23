@@ -1651,7 +1651,23 @@ input.tl-track-gain {
   gap: var(--space-2);
   color: var(--text-secondary);
 }
-/* A ramped clip's speed line is the gain line drawn on its filmstrip. It takes no presses yet. */
+/* A clip's speed line is the gain line drawn on its filmstrip. Its points take presses unless the
+   track is locked, where the line is drawn without handles. */
 .tl-speed .tl-volume-point {
+  pointer-events: auto;
+}
+.tl-speed .tl-volume-point[data-ease="hold"] {
+  rotate: 0deg;
+}
+.tl-speed.locked .tl-volume-point {
+  display: none;
+}
+.tl-speed.locked .tl-gain {
   pointer-events: none;
+}
+.tl-lanes[data-cursor="speed"] {
+  cursor: move;
+}
+.tl-lanes[data-cursor="speedLine"] {
+  cursor: ns-resize;
 }

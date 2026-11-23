@@ -1068,6 +1068,7 @@ export function Inspector({
                   <SourceOut clip={clip} fps={timeline.fps} />
                 </FieldRow>
                 <SpeedRows
+                  key={clip.id}
                   projectId={projectId}
                   clip={clip}
                   fps={timeline.fps}

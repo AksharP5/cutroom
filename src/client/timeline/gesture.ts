@@ -13,6 +13,16 @@ import {
 } from "../../shared/timeline/apply";
 import { CommandSchema } from "../../shared/timeline/schema";
 import { clipFades, volumePoints } from "../../shared/timeline/mix";
+import {
+  mostSpeed,
+  speedLevel,
+  speedPoints,
+} from "../../shared/timeline/speed";
+import { formatTimecode } from "../../shared/timeline/timecode";
+import {
+  MAX_PLAYBACK_RATE,
+  MIN_PLAYBACK_RATE,
+} from "@hyperframes/parsers/media-duration";
 import type { MediaDrag } from "./mediaDrag";
 import { sourceUrl } from "../../shared/media";
 import type {
@@ -30,6 +40,9 @@ const EDGE_PX = 6;
 const ROLL_PX = 4;
 /** Pixels within which a dragged edge jumps to a clip edge, the playhead, a marker, or in/out. */
 export const SNAP_PX = 8;
+/** Speeds a held speed point jumps to within `SPEED_SNAP_PX` pixels, as a gain line finds 0 dB. */
+const SNAP_SPEEDS = [0.25, 0.5, 1, 2, 4];
+const SPEED_SNAP_PX = 3;
 
 /** The timeline's share of the tool state: Draw and Comment leave it on the pointer. */
 export type Tool = "pointer" | "trim" | "blade";
@@ -45,6 +58,10 @@ export type Intent =
   | { kind: "fade"; clipId: string; edge: "fadeIn" | "fadeOut" }
   /** A volume point, by its index on the clip's volume lane. */
   | { kind: "point"; clipId: string; index: number }
+  /** A speed point, by its index on the clip's ramp. */
+  | { kind: "speed"; clipId: string; index: number }
+  /** A clip's speed line: its constant speed, or the points either side of the press. */
+  | { kind: "speedLine"; clipId: string }
   | { kind: "move"; clipId: string; alone: boolean }
   | { kind: "trim"; clipId: string; edge: "start" | "end"; ripple: boolean }
   /** `left` ends where `right` starts; the cut between them moves. */
@@ -140,8 +157,13 @@ export function step(
             ...held,
             phase: "dragging",
             intent:
-              intent.kind === "gain" && across > down
-                ? { kind: "move", clipId: intent.clipId, alone: intent.alone }
+              (intent.kind === "gain" || intent.kind === "speedLine") &&
+              across > down
+                ? {
+                    kind: "move",
+                    clipId: intent.clipId,
+                    alone: "alone" in intent && intent.alone,
+                  }
                 : intent,
             point,
             loose: false,
@@ -150,7 +172,9 @@ export function step(
         };
       const loose =
         gesture.phase === "dragging" ||
-        (intent.kind === "gain" && down >= 1 && down > across);
+        ((intent.kind === "gain" || intent.kind === "speedLine") &&
+          down >= 1 &&
+          down > across);
       return {
         gesture: loose
           ? { ...held, phase: "dragging", point, loose }
@@ -181,6 +205,8 @@ export interface Hit {
   /** The press is on the clip's name strip, along its top. */
   strip?: boolean;
   mix?: "gain" | "fadeIn" | "fadeOut" | { point: number };
+  /** The press is on a speed line, or on one of its points. */
+  speed?: "line" | { point: number };
 }
 
 /**
@@ -205,10 +231,14 @@ export function intentAt(
   // A point on the clip's first or last frame sits on its edge, where it is still the point.
   if (tool === "pointer" && typeof hit.mix === "object" && clip.hasAudio)
     return { kind: "point", clipId: clip.id, index: hit.mix.point };
+  if (tool === "pointer" && typeof hit.speed === "object")
+    return { kind: "speed", clipId: clip.id, index: hit.speed.point };
   const reach = Math.min(EDGE_PX, width / 3);
   const edge = x < reach ? "start" : x >= width - reach ? "end" : null;
   if (tool === "pointer" && edge)
     return { kind: "trim", clipId: clip.id, edge, ripple: false };
+  if (tool === "pointer" && hit.speed === "line")
+    return { kind: "speedLine", clipId: clip.id };
   if (tool === "pointer" && typeof hit.mix === "string" && clip.hasAudio)
     return hit.mix === "gain"
       ? { kind: "gain", clipId: clip.id, alone }
@@ -305,6 +335,8 @@ export interface Preview {
   delta: number;
   /** The frame a razor cuts at or a dropped clip starts on. */
   at?: number;
+  /** What a held speed point reads: its speed and frame, or the limit that stopped it. */
+  readout?: string;
   /**
    * Clips in `shown` that the edit cuts off others, as when a ripple passes through a music
    * bed, each by the id of the clip it was cut from.
@@ -434,6 +466,12 @@ export interface DragInput {
   gain?: GainDrag;
   /** Where a held volume point is, in percent down its clip's body, and the body's height. */
   level?: { at: number; body: number };
+  /**
+   * How far up a held speed point or line has travelled, in percent of its clip's body, with
+   * Shift's steps already ten times finer, the body's height in pixels, and whether Shift is
+   * held now, which leaves the speed off the snap list as Shift leaves a gain line off 0 dB.
+   */
+  speed?: { travel: number; body: number; fine: boolean };
   /** The frame under the pointer. */
   frame: number;
   /** The track of the row under the pointer, or null between rows. */
@@ -529,6 +567,131 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
         frame - point.frame,
         null,
       );
+    }
+    case "speed":
+    case "speedLine": {
+      const clip = find(intent.clipId);
+      const { fps } = timeline;
+      const points = speedPoints(clip, fps);
+      const held = input.speed;
+      // Two decades of speed fill the body.
+      const factor = held ? 10 ** ((held.travel / 100) * 2) : 1;
+      const snapSpeed = (speed: number) => {
+        const free = Math.min(
+          MAX_PLAYBACK_RATE,
+          Math.max(MIN_PLAYBACK_RATE, speed),
+        );
+        if (!input.reach || !held || held.fine) return free;
+        const near = SNAP_SPEEDS.find(
+          (target) =>
+            Math.abs(speedLevel(target) - speedLevel(free)) * held.body <=
+            SPEED_SNAP_PX,
+        );
+        return near ?? Math.round(free * 1e4) / 1e4;
+      };
+      const read = (speed: number, frame: number) =>
+        `${Math.round(speed * 100)}% at ${formatTimecode(clip.start + Math.round(frame), fps)}`;
+      if (!points) {
+        const speed = snapSpeed(clip.playbackRate * factor);
+        return {
+          ...edit(
+            "Change speed",
+            speed === clip.playbackRate
+              ? []
+              : [{ type: "setSpeed", clipId: clip.id, speed }],
+            0,
+            null,
+          ),
+          readout: `${Math.round(speed * 100)}%`,
+        };
+      }
+      const inputs = points.map(({ frame, speed, ease }) =>
+        ease === "custom" ? { frame, speed } : { frame, speed, ease },
+      );
+      if (intent.kind === "speedLine") {
+        // The segment under the press moves as one, or the end point beyond the last.
+        const local = drag.origin - clip.start;
+        const after = points.findIndex((point) => point.frame > local);
+        const moved =
+          after < 0
+            ? [points.length - 1]
+            : after === 0
+              ? [0]
+              : [after - 1, after];
+        const next = inputs.map((point, index) =>
+          moved.includes(index)
+            ? {
+                ...point,
+                speed:
+                  Math.round(
+                    Math.min(
+                      MAX_PLAYBACK_RATE,
+                      Math.max(MIN_PLAYBACK_RATE, point.speed * factor),
+                    ) * 1e4,
+                  ) / 1e4,
+              }
+            : point,
+        );
+        const first = next[moved[0]!]!;
+        return {
+          ...edit(
+            "Move speed line",
+            factor === 1
+              ? []
+              : [{ type: "setSpeed", clipId: clip.id, points: next }],
+            0,
+            null,
+          ),
+          readout: read(first.speed, first.frame),
+        };
+      }
+      const point = points[intent.index];
+      if (!point) return still("Move speed point");
+      // A point stays between its neighbours, a frame from each.
+      const before = points[intent.index - 1];
+      const after = points[intent.index + 1];
+      const low = before
+        ? Math.floor(before.frame) + 1
+        : Math.min(0, point.frame);
+      const high = after
+        ? Math.ceil(after.frame) - 1
+        : Math.max(clip.duration, point.frame);
+      const free = Math.round(point.frame + travel);
+      const snapped =
+        travel === 0 ? null : snap([clip.start + free], targets, input.reach);
+      const frame =
+        travel === 0 || low > high
+          ? point.frame
+          : Math.max(low, Math.min(high, free + (snapped?.by ?? 0)));
+      let speed = snapSpeed(point.speed * factor);
+      const placed = (value: number) =>
+        inputs.map((each, index) =>
+          index === intent.index ? { ...each, frame, speed: value } : each,
+        );
+      let readout = read(speed, frame);
+      const result = edit(
+        "Move speed point",
+        frame === point.frame && speed === point.speed
+          ? []
+          : [{ type: "setSpeed", clipId: clip.id, points: placed(speed) }],
+        frame - point.frame,
+        snapped && frame === free + snapped.by ? snapped.at : null,
+      );
+      if (result.valid || speed <= point.speed) return { ...result, readout };
+      // The source ends first: the point stops at the most it can take.
+      const most = mostSpeed(clip, placed(speed), intent.index, fps);
+      if (most === null) return { ...result, readout };
+      speed = Math.max(point.speed, most);
+      readout = `Source ends. ${Math.round(speed * 100)}% is the most this point can go.`;
+      return {
+        ...edit(
+          "Move speed point",
+          [{ type: "setSpeed", clipId: clip.id, points: placed(speed) }],
+          frame - point.frame,
+          null,
+        ),
+        readout,
+      };
     }
     case "fade": {
       const clip = find(intent.clipId);

@@ -1242,6 +1242,19 @@
   font-stretch: var(--stretch-mono);
   pointer-events: none;
 }
+.clip-inspector .speed-point {
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  cursor: grab;
+}
+.clip-inspector .speed-point:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.speed-point[aria-pressed="true"] {
+  background: var(--text-primary);
+}
 .speed-point {
   position: absolute;
   left: var(--at);
@@ -1287,4 +1300,12 @@
 }
 .speed-point[data-ease="hold"] {
   rotate: 0deg;
+}
+/* Shown only while a drag is stopped by a limit. */
+.speed-hint {
+  margin: 0;
+  padding-bottom: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+  line-height: var(--leading-tight);
 }

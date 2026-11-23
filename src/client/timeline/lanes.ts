@@ -14,6 +14,13 @@ import { audioGainToText, gainTimesLane } from "@hyperframes/core/audio-gain";
 import { sampleAutomationLane } from "@hyperframes/core/audio-automation";
 import { clipFades, volumePoints } from "../../shared/timeline/mix";
 import { isAudioKind } from "../../shared/timeline/schema";
+import {
+  speedAtFrame,
+  speedLevel,
+  speedPoints,
+} from "../../shared/timeline/speed";
+import { speedPath } from "./ClipSpeed";
+import { transport } from "../edit/transport";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
 import type {
@@ -39,7 +46,15 @@ import {
   snapTargets,
   step,
 } from "./gesture";
-import type { Drag, Gesture, Hit, Outcome, Preview, Tool } from "./gesture";
+import type {
+  Drag,
+  Gesture,
+  Hit,
+  Intent,
+  Outcome,
+  Preview,
+  Tool,
+} from "./gesture";
 import { LENGTH_MIN_WIDTH, clipsByTrack, rowsBetween } from "./math";
 import type { Row, RowLayout, TrackClips } from "./math";
 import { addFromLibrary } from "../edit/library";
@@ -95,6 +110,12 @@ const nameStrip = () =>
     ),
   ));
 
+/** Shift on a gain or speed line is fine adjustment, not a range selection. */
+const fine = (intent: Intent | null) =>
+  intent?.kind === "gain" ||
+  intent?.kind === "speed" ||
+  intent?.kind === "speedLine";
+
 const sameIds = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
   a.size === b.size && [...a].every((id) => b.has(id));
 
@@ -116,6 +137,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const gain = useRef<(GainDrag & { top: number }) | null>(null);
   /** A held volume point's clip body: how far down the lanes it starts, and its height. */
   const pointBody = useRef<{ top: number; body: number } | null>(null);
+  /** A held speed point or line: how far up it has gone, in percent of its body, and the body. */
+  const speedHeld = useRef<{
+    travel: number;
+    body: number;
+    fine: boolean;
+  } | null>(null);
   /** An Alt press on a gain line or point, which a click turns into a point edit. */
   const pointClick = useRef<{ hit: Hit; x: number } | null>(null);
   /** What the last drawn preview was made from; the same input draws nothing again. */
@@ -131,6 +158,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const placed = useRef<ReadonlyMap<string, Offset>>(new Map());
   /** Clips whose gain line and fades the last preview redrew, so a drag back to its start redraws them too. */
   const remixed = useRef<ReadonlySet<string>>(new Set());
+  /** Speed lines a preview has redrawn, to draw back when it ends. */
+  const resped = useRef(new Set<string>());
   /** The offsets a committed drag left its clips at, for `useClipMotion`. */
   const held = useRef<ReadonlyMap<string, Offset> | null>(null);
   const hoveredMix = useRef<HTMLElement | null>(null);
@@ -214,6 +243,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       create: target?.create,
       reach: reach(bypass),
       gain: (intent.kind === "gain" && gain.current) || undefined,
+      speed: speedHeld.current ?? undefined,
       level:
         intent.kind === "point" && pointBody.current
           ? {
@@ -352,6 +382,34 @@ export function useLaneGestures(options: LaneGestureOptions) {
         if (quiet) quiet.nodeValue = lead;
         text.nodeValue = quiet ? value : lead + value;
       }
+    for (const clip of shown.clips) {
+      // Only a clip whose speed this preview changes, or changed, is looked up.
+      const old = before.get(clip.id);
+      const same = old?.automation === clip.automation;
+      if (same && !resped.current.has(clip.id)) continue;
+      if (same) resped.current.delete(clip.id);
+      else resped.current.add(clip.id);
+      const line = root.querySelector<HTMLElement>(
+        `[data-clip-speed="${CSS.escape(clip.id)}"]`,
+      );
+      if (!line) continue;
+      const path = speedPath(clip, shown.fps);
+      for (const curve of line.querySelectorAll("path"))
+        curve.setAttribute("d", path);
+      const handles = line.querySelectorAll<HTMLElement>("[data-speed-point]");
+      (speedPoints(clip, shown.fps) ?? []).forEach(
+        ({ frame, speed }, index) => {
+          handles[index]?.style.setProperty(
+            "--at",
+            `${(frame / clip.duration) * 100}%`,
+          );
+          handles[index]?.style.setProperty(
+            "--level",
+            String(speedLevel(speed) * 100),
+          );
+        },
+      );
+    }
     const remixing = new Set<string>();
     for (const clip of shown.clips) {
       const old = before.get(clip.id);
@@ -485,13 +543,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
     destinationRow.current = null;
     gain.current = null;
     pointBody.current = null;
+    speedHeld.current = null;
     drawn.current = "";
     return offsets;
   }
 
   function hitAt(event: PointerEvent): Hit | null {
     if (!(event.target instanceof Element)) return null;
-    const boxes = "[data-clip], [data-clip-mix]";
+    const boxes = "[data-clip], [data-clip-mix], [data-clip-speed]";
     const element =
       event.target.closest<HTMLElement>(boxes) ??
       // A clip's box stops one pixel short of its span so a cut shows. That seam is still the
@@ -502,12 +561,18 @@ export function useLaneGestures(options: LaneGestureOptions) {
             ?.closest<HTMLElement>(boxes)
         : null);
     const clip = latest.current.timeline.clips.find(
-      (item) => item.id === (element?.dataset.clip ?? element?.dataset.clipMix),
+      (item) =>
+        item.id ===
+        (element?.dataset.clip ??
+          element?.dataset.clipMix ??
+          element?.dataset.clipSpeed),
     );
     if (!element || !clip) return null;
     const box = element.getBoundingClientRect();
     const handle = event.target.closest<HTMLElement>("[data-mix]");
     const mix = handle?.dataset.mix;
+    const speed =
+      event.target.closest<HTMLElement>("[data-speed]")?.dataset.speed;
     return {
       clip,
       x: event.clientX - box.left,
@@ -517,6 +582,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
         ? { mix }
         : mix === "point"
           ? { mix: { point: Number(handle?.dataset.point) } }
+          : {}),
+      ...(speed === "line"
+        ? { speed }
+        : speed !== undefined
+          ? { speed: { point: Number(speed) } }
           : {}),
     };
   }
@@ -579,13 +649,21 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const readoutWidth = readout.current?.offsetWidth || 120;
     const readoutHeight = readout.current?.offsetHeight || 24;
     const input = dragInput(active);
-    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.gain?.from}:${input.gain?.dy}:${input.level?.at}`;
+    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.gain?.from}:${input.gain?.dy}:${input.level?.at}:${input.speed?.travel}:${input.speed?.fine}`;
     if (key !== drawn.current) {
       drawn.current = key;
       const next = dragPreview(active, input);
       render(active.timeline, next);
       if (!drag.current) return;
       previewEditFrame(next.shown, active.intent);
+      // The playhead rides a held speed point, onto the frame the viewer shows for it.
+      const { intent: held } = active;
+      if (held.kind === "speed") {
+        const clip = next.shown.clips.find((item) => item.id === held.clipId);
+        const point =
+          clip && speedPoints(clip, active.timeline.fps)?.[held.index];
+        if (point) transport.seek(clip.start + Math.round(point.frame));
+      }
       const { intent } = active;
       if (intent.kind === "blade") {
         const clip = active.timeline.clips.find(
@@ -601,7 +679,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
           "clipId" in intent
             ? next.shown.clips.find((each) => each.id === intent.clipId)
             : undefined;
-        if (intent.kind === "gain") {
+        if (next.readout !== undefined) {
+          readout.current.textContent = next.readout;
+        } else if (intent.kind === "gain") {
           readout.current.textContent = audioGainToText(clip!.volume ?? 1);
         } else if (intent.kind === "point") {
           const point = volumePoints(clip!.automation, active.timeline.fps)?.[
@@ -782,6 +862,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
         : dragPreview(active, dragInput(active));
     settle(result, active.timeline);
     latest.current.onTrackDrag(false);
+    // The playhead stays on a speed point where it was let go, on the frame the viewer showed.
+    const held = active.intent;
+    if (held.kind !== "speed" || !result?.valid) return;
+    const clip = result.shown.clips.find((item) => item.id === held.clipId);
+    const point = clip && speedPoints(clip, timeline.fps)?.[held.index];
+    if (point) transport.seek(clip.start + Math.round(point.frame));
   }
 
   /** Ends a preview: with its edit when it has one the editor takes, otherwise by going back. */
@@ -910,6 +996,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
       (hit?.mix === "gain" || typeof hit?.mix === "object") &&
       intentAt(tool, timeline, hit) !== null;
     if (onLine && toggle) return editPoint(hit!, event.clientX);
+    const onSpeed =
+      tool === "pointer" &&
+      hit?.speed !== undefined &&
+      intentAt(tool, timeline, hit) !== null;
+    if (onSpeed && (toggle || event.altKey))
+      return editSpeedPoint(hit!, event.clientX);
     // Alt still drags a clip without its partners; only an Alt-click edits points.
     pointClick.current =
       onLine && event.altKey ? { hit: hit!, x: event.clientX } : null;
@@ -923,9 +1015,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
     // keeps it too, since a mostly horizontal gain drag becomes that same move.
     const keep =
       hit !== null &&
-      (intent?.kind === "move" || intent?.kind === "gain") &&
+      (intent?.kind === "move" ||
+        intent?.kind === "gain" ||
+        intent?.kind === "speedLine") &&
       !toggle &&
-      (!event.shiftKey || intent?.kind === "gain") &&
+      (!event.shiftKey || fine(intent)) &&
       !event.altKey &&
       selection.ids.has(hit.clip.id);
     let selected = selection;
@@ -943,7 +1037,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
           hit.clip.id,
           {
             toggle,
-            range: event.shiftKey && intent?.kind !== "gain",
+            range: event.shiftKey && !fine(intent),
             alone: event.altKey,
           },
           linkedSelection,
@@ -953,9 +1047,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     // Shift on a gain line is fine adjustment; other modified presses edit the selection.
     if (
       !intent ||
-      (hit &&
-        tool !== "blade" &&
-        (toggle || (event.shiftKey && intent.kind !== "gain")))
+      (hit && tool !== "blade" && (toggle || (event.shiftKey && !fine(intent))))
     )
       return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -997,6 +1089,16 @@ export function useLaneGestures(options: LaneGestureOptions) {
     );
     if (intent.kind === "gain" && hit)
       holdGain(hit.clip, timeline.fps, event.shiftKey);
+    if ((intent.kind === "speed" || intent.kind === "speedLine") && hit) {
+      const body = latest.current.lanes.current
+        ?.querySelector(
+          `[data-clip-speed="${CSS.escape(hit.clip.id)}"] .tl-fade-curve`,
+        )
+        ?.getBoundingClientRect().height;
+      speedHeld.current = body
+        ? { travel: 0, body, fine: event.shiftKey }
+        : null;
+    }
     if (intent.kind === "point" && hit) {
       const curve = curveOf(hit.clip);
       pointBody.current = curve
@@ -1050,6 +1152,50 @@ export function useLaneGestures(options: LaneGestureOptions) {
     ]);
   }
 
+  /**
+   * Alt- or Ctrl-click on a speed line adds a point there at the speed the line has, so nothing
+   * changes until it is dragged; on a point, it removes the point. Each is one undo step.
+   */
+  function editSpeedPoint(hit: Hit, clientX: number) {
+    const { timeline, onEdit } = latest.current;
+    const { clip } = hit;
+    const { fps } = timeline;
+    const points = (speedPoints(clip, fps) ?? []).map(
+      ({ frame, speed, ease }) =>
+        ease === "custom" ? { frame, speed } : { frame, speed, ease },
+    );
+    if (typeof hit.speed === "object") {
+      const index = hit.speed.point;
+      const rest = points.filter((_, other) => other !== index);
+      onEdit(
+        "Remove speed point",
+        rest.length
+          ? [{ type: "setSpeed", clipId: clip.id, points: rest }]
+          : [
+              {
+                type: "setSpeed",
+                clipId: clip.id,
+                speed: points[index]?.speed ?? 1,
+              },
+            ],
+      );
+      return;
+    }
+    const frame = Math.max(
+      0,
+      Math.min(clip.duration, Math.round(frameAt(clientX) - clip.start)),
+    );
+    if (points.some((point) => Math.round(point.frame) === frame)) return;
+    const speed = Math.round(speedAtFrame(clip, fps, frame) * 1e4) / 1e4;
+    onEdit("Add speed point", [
+      {
+        type: "setSpeed",
+        clipId: clip.id,
+        points: [...points, { frame, speed }],
+      },
+    ]);
+  }
+
   /** The box a clip's gain line is drawn in, on screen. */
   const curveOf = (clip: Clip) =>
     latest.current.lanes.current
@@ -1084,6 +1230,13 @@ export function useLaneGestures(options: LaneGestureOptions) {
   }
 
   function movePointer(event: PointerEvent<HTMLDivElement>) {
+    const speed = speedHeld.current;
+    if (speed) speed.fine = event.shiftKey;
+    if (speed)
+      speed.travel +=
+        ((pointer.current.y - event.clientY) / speed.body) *
+        100 *
+        (event.shiftKey ? 0.1 : 1);
     const held = gain.current;
     if (held) {
       // Shift changed: the line is taken up again where it is, at the gain it shows, so it

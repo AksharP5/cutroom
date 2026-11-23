@@ -166,6 +166,10 @@ export function speedCurve(clip: Clip, fps: Fps): readonly CurveSample[] {
 const LOG_MIN = Math.log10(MIN_PLAYBACK_RATE);
 const LOG_MAX = Math.log10(MAX_PLAYBACK_RATE);
 
+/** The speed a fraction of the way down the log scale, the inverse of `speedLevel`. */
+export const speedAtLevel = (level: number) =>
+  10 ** (LOG_MAX - level * (LOG_MAX - LOG_MIN));
+
 /** How far down the speed scale a speed sits, 0 at 1000% to 1 at 10%, on a log scale. */
 export const speedLevel = (speed: number) =>
   (LOG_MAX -

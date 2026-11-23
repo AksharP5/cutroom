@@ -272,3 +272,168 @@ test("owner and agent undo and redo their own speed ramps", async ({
     await agent.close();
   }
 });
+
+/** The clip's ramp as the server saved it: each point's curve time and speed. */
+const savedRamp = async (page: Page, clipId: string) => {
+  const project = page.url().split("#project/")[1]!;
+  const { timeline } = await (
+    await page.request.get(`/api/cutroom/projects/${project}/timeline`)
+  ).json();
+  const clip = timeline.clips.find(
+    (item: { id: string }) => item.id === clipId,
+  );
+  return {
+    duration: clip.duration as number,
+    playbackRate: clip.playbackRate as number,
+    points: clip.automation
+      ? (
+          JSON.parse(clip.automation).lanes as {
+            target: string;
+            points: unknown[];
+          }[]
+        ).find((lane) => lane.target === "rate")?.points
+      : undefined,
+  };
+};
+
+test("speed points drag on the clip, with the playhead and viewer following, and Esc puts them back", async ({
+  page,
+  request,
+}) => {
+  await rampProject(page, request);
+  await page.locator('[data-clip="broll"]').click();
+  const before = await savedRamp(page, "broll");
+  const clock = page.getByRole("button", {
+    name: "Current time. Click to type a time.",
+  });
+  const handle = page.locator(
+    '[data-clip-speed="broll"] [data-speed-point="1"]',
+  );
+  const box = (await handle.boundingBox())!;
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+
+  // Esc during a drag puts the point back and saves nothing.
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y - 8, { steps: 4 });
+  await expect(page.locator(".tl-readout")).toContainText("% at 00:00:07:15");
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  expect(await savedRamp(page, "broll")).toEqual(before);
+
+  // Up by 6 px snaps to 400%; the playhead rides the point and stays there.
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y - 6, { steps: 3 });
+  await expect(page.locator(".tl-readout")).toHaveText("400% at 00:00:07:15");
+  await expect(clock).toHaveText("00:00:07:15");
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await savedRamp(page, "broll")).points?.[1])
+    .toEqual({ t: 1.5, v: 4 });
+  await expect(clock).toHaveText("00:00:07:15");
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => savedRamp(page, "broll")).toEqual(before);
+
+  // Alt-click on the line adds a point at the line's speed; on a point, removes it.
+  const points = page.locator('[data-clip-speed="broll"] [data-speed-point]');
+  const clipBox = (await page
+    .locator('[data-clip-speed="broll"]')
+    .boundingBox())!;
+  const third = page.locator(
+    '[data-clip-speed="broll"] [data-speed-point="2"]',
+  );
+  const thirdBox = (await third.boundingBox())!;
+  // Halfway from the second point to the third, on the straight log segment between them.
+  const lineX = (x + thirdBox.x + thirdBox.width / 2) / 2;
+  const lineY = (y + thirdBox.y + thirdBox.height / 2) / 2;
+  expect(lineX).toBeGreaterThan(clipBox.x);
+  await page.keyboard.down("Alt");
+  await page.mouse.click(lineX, lineY);
+  await page.keyboard.up("Alt");
+  await expect(points).toHaveCount(6);
+  await page.keyboard.down("Alt");
+  await points.nth(2).click();
+  await page.keyboard.up("Alt");
+  await expect(points).toHaveCount(5);
+});
+
+test("Ctrl+R shows a constant clip's speed line, which drags its speed", async ({
+  page,
+  request,
+}) => {
+  await rampProject(page, request);
+  await page.locator('[data-clip="plain"]').click();
+  const line = page.locator('[data-clip-speed="plain"]');
+  await expect(line).toHaveCount(0);
+  await page.keyboard.press("Control+r");
+  await expect(line).toBeVisible();
+  await page.locator('[data-clip="plain"]').click({ button: "right" });
+  await expect(
+    page.getByRole("menuitemcheckbox", { name: "Show speed curve" }),
+  ).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+
+  // Dragging the flat line up to the 200% snap doubles the speed, so the clip halves.
+  const band = (await line.locator(".tl-fade-curve").boundingBox())!;
+  const x = band.x + band.width / 2;
+  const y = band.y + band.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  for (let dy = 1; dy <= 6; dy++) await page.mouse.move(x, y - dy);
+  await expect(page.locator(".tl-readout")).toHaveText("200%");
+  await page.mouse.up();
+  await expect
+    .poll(() => savedRamp(page, "plain"))
+    .toMatchObject({ playbackRate: 2, duration: 90 });
+  await page.keyboard.press("Control+r");
+  await expect(line).toHaveCount(0);
+});
+
+test("the speed graph edits points by pointer and by key", async ({
+  page,
+  request,
+}) => {
+  await rampProject(page, request);
+  await page.locator('[data-clip="broll"]').click();
+  await seekFrame(page, 180 + 45);
+  const graph = page
+    .locator(".inspector-timing")
+    .getByRole("group", { name: "Speed over the clip" });
+  const point = graph.getByRole("button", {
+    name: "Speed point at 00:00:07:15, 160%",
+  });
+
+  // Keys: Up steps to the next speed in the list, Right a frame, Shift+Right ten.
+  await point.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(
+    graph.getByRole("button", { name: "Speed point at 00:00:07:15, 200%" }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Shift+ArrowRight");
+  await expect
+    .poll(async () => (await savedRamp(page, "broll")).points?.[1])
+    .toEqual({ t: 1.866667, v: 2 });
+  // Delete removes the focused point.
+  await page.keyboard.press("Delete");
+  await expect(graph.locator(".speed-point")).toHaveCount(4);
+  for (let undo = 0; undo < 4; undo++) await page.keyboard.press("Control+z");
+  await expect(graph.locator(".speed-point")).toHaveCount(5);
+
+  // A drag stopped by the end of the source says why, and saves the most it allows.
+  const last = graph.locator(".speed-point").nth(3);
+  const box = (await last.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y - 200, { steps: 6 });
+  await expect(page.locator(".speed-hint")).toContainText(
+    /^Source ends\. \d+% is the most this point can go\.$/,
+  );
+  await page.mouse.up();
+  await expect(page.locator(".speed-hint")).toHaveCount(0);
+  await expect
+    .poll(async () => (await savedRamp(page, "broll")).points?.[3])
+    .not.toEqual({ t: 4.5, v: 1.6 });
+});

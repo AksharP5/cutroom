@@ -1,3 +1,5 @@
+import { toggleSpeedLines } from "../timeline/ClipSpeed";
+import { isAudioKind } from "../../shared/timeline/schema";
 import { watchMattes } from "./mattes";
 import { useContext, useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
@@ -602,6 +604,20 @@ export function EditPage({
     },
     clipChangeClipDuration: () => timingField("Duration"),
     clipChangeClipSpeed: () => timingField("Speed"),
+    clipRetimeControls: () => {
+      const { view, selection } = useTimeline.getState();
+      if (!view) return;
+      toggleSpeedLines(
+        view.timeline.clips
+          .filter(
+            (clip) =>
+              selection.ids.has(clip.id) &&
+              clip.mediaStart !== null &&
+              !isAudioKind(clip.kind),
+          )
+          .map((clip) => clip.id),
+      );
+    },
     fileNewTimeline: () => newTimeline(projectId),
     editUndo: () => step("undo"),
     editRedo: () => step("redo"),

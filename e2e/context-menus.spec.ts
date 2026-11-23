@@ -120,7 +120,14 @@ test("the clip menu acts on the selection through the same edits as the keys", a
   await expect(row(clips, "editCut")).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
-  // A video's background row sits after Freeze frame, as in the spec.
+  // The speed rows sit after Freeze frame; Reset speed waits for a speed to reset.
+  await expect(
+    clips.getByRole("menuitemcheckbox", {
+      name: keymap.clipRetimeControls.label,
+    }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  // A video's background row comes next, as in the spec.
   await expect(
     clips.getByRole("menuitem", { name: "Remove background" }),
   ).toBeFocused();

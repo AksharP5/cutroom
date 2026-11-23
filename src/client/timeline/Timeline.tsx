@@ -14,7 +14,7 @@ import { isAudioKind } from "../../shared/timeline/schema";
 import { SelectMenu } from "../components/SelectMenu";
 import { voiceoverTrack } from "../../shared/voiceover";
 import { ClipMix, mixBody } from "./mix";
-import { ClipSpeed } from "./ClipSpeed";
+import { ClipSpeed, useSpeedShown } from "./ClipSpeed";
 import { hasRamp } from "../../shared/timeline/speed";
 import { TrackGain } from "./TrackGain";
 import { getAudioFxDef } from "@hyperframes/core/audio-fx";
@@ -938,6 +938,7 @@ export function Timeline({
       .join("\n"),
   );
   const offline = useMemo(() => new Set(offlineIds.split("\n")), [offlineIds]);
+  const speedShown = useSpeedShown((state) => state.ids);
   const offsets = useMemo(
     () => syncOffsets({ clips: timeline.clips, fps: timeline.fps }),
     [timeline.clips, timeline.fps],
@@ -1550,7 +1551,9 @@ export function Timeline({
                       {rowClips
                         .filter(
                           ({ clip }) =>
-                            !isAudioKind(clip.kind) && hasRamp(clip),
+                            !isAudioKind(clip.kind) &&
+                            clip.mediaStart !== null &&
+                            (hasRamp(clip) || speedShown.has(clip.id)),
                         )
                         .map(({ clip, row }) => (
                           <ClipSpeed
