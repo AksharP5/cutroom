@@ -14,6 +14,8 @@ import { isAudioKind } from "../../shared/timeline/schema";
 import { SelectMenu } from "../components/SelectMenu";
 import { voiceoverTrack } from "../../shared/voiceover";
 import { ClipMix, mixBody } from "./mix";
+import { ClipSpeed } from "./ClipSpeed";
+import { hasRamp } from "../../shared/timeline/speed";
 import { TrackGain } from "./TrackGain";
 import { getAudioFxDef } from "@hyperframes/core/audio-fx";
 import { AudioMeters } from "./meters";
@@ -1543,6 +1545,23 @@ export function Timeline({
                             row={row}
                             fps={timeline.fps}
                             selected={selection.ids.has(clip.id)}
+                          />
+                        ))}
+                      {rowClips
+                        .filter(
+                          ({ clip }) =>
+                            !isAudioKind(clip.kind) && hasRamp(clip),
+                        )
+                        .map(({ clip, row }) => (
+                          <ClipSpeed
+                            key={`speed:${clip.id}`}
+                            clip={clip}
+                            row={row}
+                            fps={timeline.fps}
+                            points={
+                              !!mounted &&
+                              clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH
+                            }
                           />
                         ))}
                       {rowClips.map(

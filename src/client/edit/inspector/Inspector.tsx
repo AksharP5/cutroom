@@ -9,10 +9,6 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
-import {
-  MAX_PLAYBACK_RATE,
-  MIN_PLAYBACK_RATE,
-} from "@hyperframes/parsers/media-duration";
 import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { clearAudioAutomation, clipFades } from "../../../shared/timeline/mix";
 import { z } from "zod";
@@ -33,6 +29,8 @@ import { TimecodeText } from "../../components/TimecodeText";
 import { combinedGainText, inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { TransitionSection } from "./TransitionSection";
+import { SourceOut, SpeedRows } from "./SpeedRows";
+import { hasRamp } from "../../../shared/timeline/speed";
 import { FieldRow, ValueCell, ValueField } from "./ValueField";
 import { FxRack } from "./FxRack";
 import { AudioGroupRouting } from "./AudioGroupRouting";
@@ -80,6 +78,9 @@ import {
   usePictureMove,
   useTextEdit,
 } from "../preview";
+
+/** Whether this session has shown a ramp in Timing yet. After that, Timing's open state is yours. */
+let rampShown = false;
 
 /** A text field or text area, where typing is under way. */
 const isField = (target: EventTarget | null) =>
@@ -414,6 +415,13 @@ export function Inspector({
     // Typing replaces the words, so retitling is double-click, type, Enter.
     field.select();
   }, [textEdit, open, clip?.id, textOpen]);
+  // A ramp you can't see is the bug: Timing opens the first time a ramped clip is selected.
+  const ramped = !!clip && hasRamp(clip);
+  useEffect(() => {
+    if (!ramped || rampShown) return;
+    rampShown = true;
+    setTimingOpen(true);
+  }, [ramped]);
   const timingEdit = useTimingEdit((state) => state.field);
   useEffect(() => {
     if (!timingEdit || !open) return;
@@ -1046,29 +1054,26 @@ export function Inspector({
               }
             />
             {clip.src !== null && clip.mediaStart !== null && (
-              <FieldRow label="Source" onReset={() => timing("speed", 1)}>
-                <ValueCell
-                  key={`${clip.id}:sourceIn`}
-                  axis="In"
-                  label="Source in"
-                  value={toFrames(clip.mediaStart, timeline.fps)}
-                  unit="timecode"
+              <>
+                <FieldRow label="Source">
+                  <ValueCell
+                    key={`${clip.id}:sourceIn`}
+                    axis="In"
+                    label="Source in"
+                    value={toFrames(clip.mediaStart, timeline.fps)}
+                    unit="timecode"
+                    fps={timeline.fps}
+                    onCommit={(value) => timing("sourceIn", value)}
+                  />
+                  <SourceOut clip={clip} fps={timeline.fps} />
+                </FieldRow>
+                <SpeedRows
+                  clip={clip}
                   fps={timeline.fps}
-                  onCommit={(value) => timing("sourceIn", value)}
+                  disabled={track?.track.locked}
+                  onSpeed={(value) => timing("speed", value)}
                 />
-                <ValueCell
-                  key={`${clip.id}:speed`}
-                  axis="Speed"
-                  label="Speed"
-                  value={clip.playbackRate}
-                  initial={1}
-                  unit="percent"
-                  min={MIN_PLAYBACK_RATE}
-                  max={MAX_PLAYBACK_RATE}
-                  fps={timeline.fps}
-                  onCommit={(value) => timing("speed", value)}
-                />
-              </FieldRow>
+              </>
             )}
           </details>
           <ChangeList

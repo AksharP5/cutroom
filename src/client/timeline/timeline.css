@@ -1651,3 +1651,7 @@ input.tl-track-gain {
   gap: var(--space-2);
   color: var(--text-secondary);
 }
+/* A ramped clip's speed line is the gain line drawn on its filmstrip. It takes no presses yet. */
+.tl-speed .tl-volume-point {
+  pointer-events: none;
+}
