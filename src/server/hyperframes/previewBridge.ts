@@ -4504,12 +4504,17 @@ export function previewDocument(
   ) => {
     for (const [name, value] of changes) {
       const location = node.sourceCodeLocation?.attrs?.[name];
+      const text = `${name}="${String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;")}"`;
       if (location)
-        edits.push({
-          at: location.startOffset,
-          end: location.endOffset,
-          text: `${name}="${value}"`,
-        });
+        edits.push({ at: location.startOffset, end: location.endOffset, text });
+      // A baked fade can give a clip automation it did not have.
+      else if (node.sourceCodeLocation?.startTag) {
+        const at =
+          node.sourceCodeLocation.startTag.startOffset +
+          node.tagName.length +
+          1;
+        edits.push({ at, end: at, text: ` ${text}` });
+      }
     }
   };
   const maybeAdjustment = html.includes("data-cutroom-adjustment");
@@ -4618,7 +4623,8 @@ export function previewDocument(
           getAttribute: (name) => attrs.get(name) ?? null,
         }),
       );
-      const played = item && startAtPlayed(item, (name) => attrs.has(name));
+      const played =
+        item && startAtPlayed(item, (name) => attrs.get(name) ?? null);
       writeTiming(node, played?.length ? played : changes);
     }
   }

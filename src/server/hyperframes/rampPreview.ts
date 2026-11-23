@@ -262,7 +262,9 @@ export async function prepareRampPreview(
           lanes: [{ ...lane, offset: stretch.lane.offset }],
         }),
       };
-      const timing = new Map(startAtPlayed(piece, (name) => attrs.has(name)));
+      const timing = new Map(
+        startAtPlayed(piece, (name) => attrs.get(name) ?? null),
+      );
       const result = await media
         .rampAudio(project, path, window)
         .catch((error: unknown) => {
@@ -274,11 +276,15 @@ export async function prepareRampPreview(
       if (!result.available) return;
       assets.set(result.key, { path, window });
       const prepared = `${prefix}ramp-audio/${result.key}.wav`;
-      const remaining = envelope.lanes.filter(
+      // A trimmed mount re-times the clip-local lanes; the rate lane goes into the prepared sound.
+      const mixed = timing.get("data-automation");
+      timing.delete("data-automation");
+      const lanes = mixed ? parseAutomation(mixed) : envelope;
+      const remaining = lanes.lanes.filter(
         (entry) => entry.target !== RATE_TARGET,
       );
       const audio = remaining.length
-        ? serializeAutomation({ ...envelope, lanes: remaining })
+        ? serializeAutomation({ ...lanes, lanes: remaining })
         : null;
       if (node.tagName === "video") {
         let id = `cutroom-ramp-${index}`;

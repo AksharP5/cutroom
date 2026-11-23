@@ -372,21 +372,17 @@ test("each mount of a scene, and a trimmed mount inside a trimmed mount, prepare
       snd__hf2: { samples: 96_000, start: "1", duration: "2" },
       snd__hf3: { samples: 132_000, start: "0.25", duration: "2.75" },
     });
-    // Export fades from where the mount opens; the viewer's element now starts there too.
+    // The mount opens 1 s into the clip, after its 0.25 s fade-in has ended: neither side fades in
+    // again there. Both keep the fade-out at the end.
     const b = audios.find(({ id }) => id === "snd__hf2")!;
     expect({
       start: b.start,
       end: b.end,
       fadeIn: b.fadeIn,
       fadeOut: b.fadeOut,
-    }).toEqual({
-      start: 2,
-      end: 4,
-      fadeIn: 0.25,
-      fadeOut: 0.25,
-    });
+    }).toEqual({ start: 2, end: 4, fadeIn: 0, fadeOut: 0.25 });
     expect(viewer.get("snd__hf2")!.element).toMatchObject({
-      fadeIn: "0.25",
+      fadeIn: "0",
       fadeOut: "0.25",
     });
   } finally {
