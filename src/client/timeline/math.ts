@@ -382,7 +382,8 @@ export interface FilmTile {
  * edge. Tiles are `width` wide and the first starts on the clip's first frame, so no tile moves
  * when the view scrolls. Each shows the source frame under its left edge, held back to a whole
  * number of `step`s after the clip's media start: the first tile is exactly the clip's first
- * frame, and a clip asks for the same frames at every zoom that shares a step.
+ * frame, and a clip asks for the same frames at every zoom that shares a step. A ramp passes
+ * `sourceAt`, the source seconds it plays `x` pixels in; a constant speed is a straight line.
  */
 export function filmTiles(
   clip: Pick<Clip, "mediaStart" | "playbackRate">,
@@ -391,15 +392,18 @@ export function filmTiles(
   step: number,
   from: number,
   to: number,
+  sourceAt?: (x: number) => number,
 ): FilmTile[] {
+  const mediaStart = clip.mediaStart ?? 0;
   const first = Math.max(0, Math.floor(from / width));
   return Array.from(
     { length: Math.max(0, Math.ceil(to / width) - first) },
     (_, index) => {
       const x = (first + index) * width;
       // An offset a hair under a step, from the division, belongs to that step.
-      const steps = Math.floor((x * secondsPerPixel) / step + 1e-6);
-      return { x, time: (clip.mediaStart ?? 0) + steps * step };
+      const offset = sourceAt ? sourceAt(x) - mediaStart : x * secondsPerPixel;
+      const steps = Math.floor(offset / step + 1e-6);
+      return { x, time: mediaStart + steps * step };
     },
   );
 }

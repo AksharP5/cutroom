@@ -4,6 +4,7 @@ import {
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
 import {
+  add,
   attrMicros,
   decode,
   encode,
@@ -11,10 +12,11 @@ import {
   frames,
   micros,
   positionAtSource,
+  rampSourceTimes,
   regridSourceMap,
   resolvePiece,
 } from "./piece";
-import type { ExactTime, StoredSource } from "./piece";
+import type { ExactTime, Piece, StoredSource } from "./piece";
 import type { Clip, Fps } from "./schema";
 import { framesAfter, framesBefore, takesTransition } from "./transition";
 
@@ -191,5 +193,34 @@ export function framesBeforeIn(clip: Clip, fps: Fps) {
     clip.start -
     start -
     (encode(line, line.curve, frames(start, fps), fps).mediaStart < 0 ? 1 : 0)
+  );
+}
+
+const rampPieces = new WeakMap<Clip, { fps: Fps; piece: Piece }>();
+
+/**
+ * Source seconds a ramped clip plays at `count` positions `step` timeline seconds apart, from
+ * `from` frames into the clip, on the curve every other consumer reads. Null at a constant
+ * speed, whose source is a straight line from its in-point.
+ */
+export function rampSourceSeconds(
+  clip: Clip,
+  fps: Fps,
+  from: number,
+  step: number,
+  count: number,
+) {
+  if (!clip.automation || !readClipSource(clip).lane) return null;
+  let held = rampPieces.get(clip);
+  if (held?.fps !== fps) {
+    held = { fps, piece: resolveClip(clip, fps) };
+    rampPieces.set(clip, held);
+  }
+  const offset = micros(Math.round(((from * fps.den) / fps.num) * 1e6));
+  return rampSourceTimes(
+    held.piece,
+    add(frames(clip.start, fps), offset),
+    step,
+    count,
   );
 }

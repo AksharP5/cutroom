@@ -1,3 +1,7 @@
+import {
+  rampSourceSeconds,
+  readClipSource,
+} from "../../shared/timeline/clipTiming";
 import { mediaSettings, peakLevels } from "../../shared/media";
 import type { Clip, Fps } from "../../shared/timeline/schema";
 import {
@@ -214,20 +218,32 @@ export function createBodies(
       if (xb <= xa) return;
       const perPixel = sourceSecondsPerPixel(ppf, fps, clip.playbackRate) / dpr;
       const start = (clip.mediaStart ?? 0) - x0 * perPixel;
+      // A ramp reads each column's edges off the clip's own curve, one entry per edge.
+      const ramp = rampSourceSeconds(
+        clip,
+        fps,
+        (xa - x0) / (ppf * dpr),
+        sourceSecondsPerPixel(ppf, fps, 1) / dpr,
+        xb - xa + 1,
+      );
+      const sourceAt = (x: number) =>
+        ramp ? ramp[x - xa]! : start + x * perPixel;
       const loaded = (level: number, fetch: boolean) => {
         if (level < 0 || level >= peakLevels.length) return false;
         const chunk = bucketSeconds(level) * PEAK_CHUNK;
-        const to = Math.floor((start + xb * perPixel) / chunk);
+        const to = Math.floor(Math.max(sourceAt(xa), sourceAt(xb)) / chunk);
         let all = true;
         for (
-          let at = Math.floor((start + xa * perPixel) / chunk);
+          let at = Math.floor(Math.min(sourceAt(xa), sourceAt(xb)) / chunk);
           at <= to;
           at++
         )
           all = media.peaks(src, level, at, fetch) !== undefined && all;
         return all;
       };
-      const target = peakLevel(perPixel);
+      const target = peakLevel(
+        ramp ? (sourceAt(xb) - sourceAt(xa)) / (xb - xa) : perPixel,
+      );
       // Until the level for this zoom arrives, a neighbouring one already in memory is drawn.
       const level = loaded(target, true)
         ? target
@@ -239,8 +255,7 @@ export function createBodies(
       const fades = clip.fadeIn || clip.fadeOut ? clipFades(clip) : NO_FADES;
       const lane = volumeLane(clip);
       const framesPerPixel = 1 / (ppf * dpr);
-      const perBucket = perPixel / bucketSeconds(level);
-      const first = start / bucketSeconds(level);
+      const bucketLength = bucketSeconds(level);
       const span = y1 - y0;
       const middle = (y0 + y1) / 2;
       if (strip) {
@@ -261,8 +276,11 @@ export function createBodies(
               : "video"
         ];
       for (let x = xa; x < xb; x++) {
-        const from = Math.floor(first + x * perBucket);
-        const to = Math.max(from + 1, Math.floor(first + (x + 1) * perBucket));
+        const from = Math.floor(sourceAt(x) / bucketLength);
+        const to = Math.max(
+          from + 1,
+          Math.floor(sourceAt(x + 1) / bucketLength),
+        );
         let low = Infinity;
         let high = -Infinity;
         for (let bucket = from; bucket < to; bucket++) {
@@ -376,6 +394,8 @@ export function createBodies(
       const perPixel = sourceSecondsPerPixel(ppf, fps, clip.playbackRate);
       const step = frameStep(tile * perPixel);
       const exact = step < mediaSettings.filmstripInterval;
+      // A ramp's tile shows what plays under its left edge, read off the clip's own curve.
+      const ramped = !!clip.automation && !!readClipSource(clip).lane;
       for (const { x, time } of filmTiles(
         clip,
         tile,
@@ -383,6 +403,9 @@ export function createBodies(
         step,
         from,
         to,
+        ramped
+          ? (x) => rampSourceSeconds(clip, fps, x / ppf, 0, 1)![0]!
+          : undefined,
       )) {
         const frame = exact ? media.frame(src, time) : undefined;
         if (

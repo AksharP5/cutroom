@@ -1,4 +1,9 @@
 import { waveformPeak } from "../src/client/timeline/math";
+import {
+  rampSourceSeconds,
+  resolveClip,
+} from "../src/shared/timeline/clipTiming";
+import { frames, pictureAt, sourceAt } from "../src/shared/timeline/piece";
 import { expect, test } from "bun:test";
 import { normalizeTimeline } from "../src/shared/timeline/apply";
 import type { Clip, Timeline, Track } from "../src/shared/timeline/schema";
@@ -665,4 +670,62 @@ test("waveform dB mapping hides the noise floor and gives speech room without hi
   expect(waveformPeak(-(10 ** (-3.5 / 20)))).toBe(-height(-3.5));
   expect(waveformPeak(1)).toBe(0.9);
   expect(waveformPeak(2)).toBe(0.9);
+});
+
+test("a ramped clip's filmstrip and waveform show the source it plays, not a straight line", () => {
+  // P6: 30 fps, 0.5x to 2x over 4 s, 5 s long. At frame 120 it plays 4.33 s of source, where a
+  // straight line from the in-point at 1x says 4.00 s, ten frames earlier.
+  const ramp = JSON.stringify({
+    version: 1,
+    lanes: [
+      {
+        target: "rate",
+        points: [
+          { t: 0, v: 0.5 },
+          { t: 4, v: 2 },
+        ],
+      },
+    ],
+  });
+  const p6 = clip("p6", 0, 0, 150, { automation: ramp });
+  const grid = { origin: frames(0, fps30), rate: fps30, count: 600n };
+  const played = (frame: number) =>
+    pictureAt(grid, sourceAt(resolveClip(p6, fps30), frames(frame, fps30)));
+  expect(played(120)).toBe(129n);
+
+  // The filmstrip tile at frame 142, at 2 px a frame with one-frame steps, shows that picture.
+  const ppf = 2;
+  const [tile] = filmTiles(
+    p6,
+    71,
+    sourceSecondsPerPixel(ppf, fps30, 1),
+    1 / 30,
+    284,
+    285,
+    (x) => rampSourceSeconds(p6, fps30, x / ppf, 0, 1)![0]!,
+  ).filter((each) => each.x === 284);
+  expect(pictureAt(grid, tile!.time)).toBe(played(284 / ppf));
+  expect(
+    pictureAt(
+      grid,
+      filmTiles(
+        p6,
+        71,
+        sourceSecondsPerPixel(ppf, fps30, 1),
+        1 / 30,
+        284,
+        285,
+      ).find((each) => each.x === 284)!.time,
+    ),
+  ).not.toBe(played(284 / ppf));
+
+  // The waveform's column edges come from the same curve, here every frame from 100 to 130.
+  const columns = rampSourceSeconds(p6, fps30, 100, 1 / 30, 31)!;
+  for (let frame = 100; frame <= 130; frame++)
+    expect(pictureAt(grid, columns[frame - 100]!)).toBe(played(frame));
+
+  // A constant clip keeps its straight line and asks nothing of the curve.
+  expect(
+    rampSourceSeconds(clip("plain", 0, 0, 150), fps30, 0, 1, 4),
+  ).toBeNull();
 });
