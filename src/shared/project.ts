@@ -152,8 +152,8 @@ export const TimelineNameSchema = z
     (name) => new TextEncoder().encode(name).length <= TIMELINE_NAME_BYTES,
     `Keep the timeline name to ${TIMELINE_NAME_BYTES} bytes, so its file name fits.`,
   );
-/** How long a new project, and a new timeline in one, lasts until it is changed, in seconds. */
-export const NEW_PROJECT_SECONDS = 12;
+/** How long a new timeline in a project lasts until it is changed, in seconds. */
+export const NEW_TIMELINE_SECONDS = 12;
 export const CreateProjectSchema = z
   .object({
     name: ProjectNameSchema,
@@ -165,7 +165,10 @@ export const CreateProjectSchema = z
       .finite()
       .min(1)
       .max(86_400)
-      .default(NEW_PROJECT_SECONDS),
+      .optional()
+      .describe(
+        "Seconds the empty timeline lasts. Omit it to let the first clips set the length.",
+      ),
   })
   .refine(withinPictureArea, pictureSizeRule);
 export const DuplicateTimelineSchema = z.object({

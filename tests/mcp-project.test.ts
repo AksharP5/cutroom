@@ -32,6 +32,7 @@ import { z } from "zod";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { editSummary } from "../src/shared/toolRow";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
+import { addStarterClips } from "./starter-clips";
 
 test("marker names and colours round-trip through MCP, disk, and undo history", async () => {
   const fixture = await projectFixture();
@@ -40,6 +41,7 @@ test("marker names and colours round-trip through MCP, disk, and undo history", 
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Marker review beats" });
+  await addStarterClips(project);
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -178,8 +180,8 @@ test("an external MCP client edits the same project and undo history as the UI",
       .object({ structuredContent: z.object({ result: SourceSchema }) })
       .parse(read).structuredContent.result;
     const content = original.content.replace(
-      "Drop media in, or ask your agent to start.",
-      "Changed through MCP.",
+      "</main>",
+      '<p id="note" class="clip" data-start="0" data-duration="1" data-track-index="0">Changed through MCP.</p></main>',
     );
     const saved = await client.callTool({
       name: "source_write",
@@ -239,6 +241,7 @@ test("the stdio bridge refuses remote or credential-bearing API origins", () => 
 test("the published stdio entry point connects an outside agent to the running server", async () => {
   const fixture = await projectFixture();
   const project = await fixture.store.create({ name: "Stdio project" });
+  await addStarterClips(project);
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -323,6 +326,7 @@ test("MCP transcription status retains the legacy job shape through successful a
   const client = new Client({ name: "job-status-test", version: "1" });
   try {
     const project = await fixture.store.create({ name: "Job status" });
+    await addStarterClips(project);
     await writeFile(
       join(project.path, "index.html"),
       '<html><body><main data-composition-id="main" data-duration="2"><audio id="speech" class="clip" src="speech.wav" data-start="0" data-duration="2"></audio></main></body></html>',
@@ -375,6 +379,7 @@ test("MCP transcription status retains the legacy job shape through successful a
 test("review_list gives an agent every stroke, the pin, and the range of a note made on the picture", async () => {
   const fixture = await projectFixture();
   const project = await fixture.store.create({ name: "Picture notes" });
+  await addStarterClips(project);
   const handler = createMcpHttpHandler({
     fetch: (url, init) => fixture.app.request(url, init),
   });
@@ -446,6 +451,7 @@ test("title text edits through MCP write the source, undo in one step, and refus
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Launch cut" });
+  await addStarterClips(project);
   const file = join(project.path, "index.html");
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -548,6 +554,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
     const client = new Client({ name: "media-details-test", version: "1" });
     try {
       const project = await runtime.projects.create({ name: "Media details" });
+      await addStarterClips(project);
       const assets = join(project.path, "assets");
       await mkdir(assets, { recursive: true });
       const ffmpeg = (...args: string[]) =>
@@ -732,6 +739,7 @@ test.skipIf(
     await writeFile(stalling, "#!/bin/sh\nexec sleep 60\n", { mode: 0o755 });
     try {
       const project = await runtime.projects.create({ name: "Media probes" });
+      await addStarterClips(project);
       const assets = join(project.path, "assets");
       await mkdir(assets, { recursive: true });
       const tone = join(root, "tone.wav");

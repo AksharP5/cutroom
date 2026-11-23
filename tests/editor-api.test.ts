@@ -6,6 +6,7 @@ import { fileContentVersion } from "@hyperframes/studio-server";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createReviewService } from "../src/server/projects/review";
 import { createProjectStore } from "../src/server/projects/store";
+import { addStarterClips } from "./starter-clips";
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -23,6 +24,7 @@ async function setup() {
     height: 240,
     duration: 2,
   });
+  await addStarterClips(project);
   const api = createHyperframesApi(store, createReviewService(store));
   cleanups.push(() => api.dispose());
   return { store, project, api };

@@ -8,6 +8,7 @@ import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { projectFixture } from "./project-fixture";
+import { addStarterClips } from "./starter-clips";
 
 async function connect() {
   const fixture = await projectFixture();
@@ -16,6 +17,7 @@ async function connect() {
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Replies" });
+  await addStarterClips(project);
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,

@@ -32,6 +32,7 @@ import {
   SourceSchema,
 } from "../src/shared/project";
 import type { DuplicateJob, Project } from "../src/shared/project";
+import { addStarterClips } from "./starter-clips";
 
 const HistorySchema = z.object({
   entries: z.array(z.object({ id: z.string(), label: z.string() })),
@@ -145,6 +146,7 @@ describe.each(disks)("on $base", ({ base, clones }) => {
 
   test("a copy starts its own history, and an edit and undo in it leave the original's alone", async () => {
     const original = await runtime.projects.create({ name: "Rough cut" });
+    await addStarterClips(original);
     const edited = await editTitle(original, "First pass");
     const before = await history(original);
     expect(before.length).toBeGreaterThan(0);
@@ -169,6 +171,7 @@ describe.each(disks)("on $base", ({ base, clones }) => {
 
   test("the copy's files are its own: writing media in place in the copy leaves the original's bytes", async () => {
     const original = await runtime.projects.create({ name: "Footage" });
+    await addStarterClips(original);
     const footage = crypto.getRandomValues(new Uint8Array(4 * 1024 * 1024));
     await writeFile(join(original.path, "assets/clip.mp4"), footage);
     const copy = await copyOf(await duplicate(original));
@@ -191,6 +194,7 @@ describe.each(disks)("on $base", ({ base, clones }) => {
 
   test("the copy keeps its notes and settings and leaves the original's history, outputs, cache and escaping links", async () => {
     const original = await runtime.projects.create({ name: "Sidecars" });
+    await addStarterClips(original);
     const at = (path: string) => join(original.path, path);
     const write = async (path: string, content: string | Uint8Array) => {
       await mkdir(dirname(at(path)), { recursive: true });
@@ -279,6 +283,7 @@ describe.each(disks)("on $base", ({ base, clones }) => {
 
   test("copies are named after the original and never take a name in use", async () => {
     const original = await runtime.projects.create({ name: "Promo" });
+    await addStarterClips(original);
     const first = await copyOf(await duplicate(original));
     const second = await copyOf(await duplicate(original));
     const ofCopy = await copyOf(await duplicate(first));
@@ -293,7 +298,9 @@ describe.each(disks)("on $base", ({ base, clones }) => {
 
   test("an agent duplicates only the project its turn runs in, sees only its own jobs, and cannot cancel", async () => {
     const own = await runtime.projects.create({ name: "Agent's" });
+    await addStarterClips(own);
     const other = await runtime.projects.create({ name: "Someone else's" });
+    await addStarterClips(other);
     const theirs = await duplicate(other);
     await runtime.review.beginTurn(own, {
       kind: "message",
@@ -337,6 +344,7 @@ describe.each(disks)("on $base", ({ base, clones }) => {
 
   test("a large file that changes before it is copied fails the duplicate and leaves nothing behind", async () => {
     const original = await runtime.projects.create({ name: "Changing" });
+    await addStarterClips(original);
     const big = join(original.path, "assets/take.mov");
     await writeFile(big, new Uint8Array(2 * 1024 * 1024));
     // Hold the copy queue so the change lands between the snapshot and the copy.
@@ -358,6 +366,7 @@ describe.each(disks)("on $base", ({ base, clones }) => {
 
   test("a file name that is not UTF-8 is refused by name, without a server path", async () => {
     const original = await runtime.projects.create({ name: "Bytes" });
+    await addStarterClips(original);
     writeFileSync(
       Buffer.concat([
         Buffer.from(join(original.path, "assets/take")),
@@ -378,6 +387,7 @@ describe.each(disks)("on $base", ({ base, clones }) => {
     "without clones, large files are byte-copied with progress, and Cancel mid-copy removes the copy",
     async () => {
       const original = await runtime.projects.create({ name: "Big" });
+      await addStarterClips(original);
       const footage = join(original.path, "assets/footage.mp4");
       await writeFile(footage, new Uint8Array(256 * 1024 * 1024).fill(7));
       let job = await begin(original);
@@ -408,6 +418,7 @@ describe.each(disks)("on $base", ({ base, clones }) => {
 
   test("a duplicate killed mid-copy leaves nothing on the list, and the next start removes only its abandoned staging folder", async () => {
     const original = await runtime.projects.create({ name: "Crash" });
+    await addStarterClips(original);
     // Enough files that the copy is still running when it is killed.
     await mkdir(join(original.path, "scenes"));
     await Promise.all(
@@ -499,6 +510,7 @@ describe.each(disks)("on $base", ({ base, clones }) => {
     "a project cannot be duplicated while it exports",
     async () => {
       const project = await runtime.projects.create({ name: "Exporting" });
+      await addStarterClips(project);
       const started = await runtime.app.request(
         `${origin}/api/projects/${project.id}/render`,
         {

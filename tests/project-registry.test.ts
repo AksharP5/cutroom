@@ -8,6 +8,7 @@ import { browserExecutable } from "../src/server/hyperframes/render";
 import { createProjectStore } from "../src/server/projects/store";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
 import { projectFixture } from "./project-fixture";
+import { addStarterClips } from "./starter-clips";
 
 const HistorySchema = z.object({
   entries: z.array(z.object({ id: z.string(), label: z.string() })),
@@ -17,6 +18,7 @@ test("a renamed project keeps its new name after a restart, in the same folder",
   const fixture = await projectFixture();
   try {
     const project = await fixture.store.create({ name: "Rough cut" });
+    await addStarterClips(project);
     for (const name of ["", "Bell\u0007", "Cut\nv2", "abc‮gpj.mp4"])
       expect(
         (await fixture.request(`/projects/${project.id}`, "PATCH", { name }))
@@ -52,6 +54,7 @@ test("removing a project keeps its folder and history, and importing the folder 
   const fixture = await projectFixture();
   try {
     const project = await fixture.store.create({ name: "Keep me" });
+    await addStarterClips(project);
     const original = SourceSchema.parse(
       await (await fixture.request(`/projects/${project.id}/source`)).json(),
     );
@@ -127,6 +130,7 @@ test("agents cannot remove a project", async () => {
   const fixture = await projectFixture();
   try {
     const project = await fixture.store.create({ name: "Owner only" });
+    await addStarterClips(project);
     const response = await fixture.app.request(
       `/api/cutroom/projects/${project.id}`,
       { method: "DELETE", headers: { "x-cutroom-agent": "external" } },
@@ -155,6 +159,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       });
     try {
       const project = await runtime.projects.create({ name: "Exporting" });
+      await addStarterClips(project);
       const started = await request(`/projects/${project.id}/render`, "POST", {
         format: "mp4",
         quality: "draft",

@@ -71,7 +71,11 @@ test("visual review, native skill selection, and script edits survive real works
     await (await request.get(`/api/cutroom/projects/${id}`)).json(),
   );
   const frame = page.frameLocator("hyperframes-player iframe").last();
-  await expect(frame.locator("#headline")).toHaveText("A new perspective");
+  // A new project's composition opens empty.
+  await expect(
+    frame.locator('main[data-composition-id="main"]'),
+  ).toBeAttached();
+  await expect(frame.locator("main [data-start]")).toHaveCount(0);
   expect(scriptRequests).toHaveLength(0);
 
   await page

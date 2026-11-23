@@ -17,6 +17,8 @@ import {
 } from "../src/shared/project";
 import { projectPath } from "../src/server/projects/path";
 import { declaredFonts } from "../src/server/timeline/titles";
+import { parseComposition } from "../src/server/timeline/composition";
+import { emptyTimelineSettings } from "../src/shared/timeline/schema";
 import { projectFixture } from "./project-fixture";
 
 test("a removed project folder refuses paths that allow missing files", async () => {
@@ -38,7 +40,10 @@ test("new projects ship a valid, self-contained composition declaring four title
     const project = await fixture.store.create({ name: "A & B <cut>" });
     const source = await readFile(join(project.path, "index.html"), "utf8");
     expect(source).toContain("A &amp; B &lt;cut&gt;");
-    expect(source).toContain("Drop media in, or ask your agent to start.");
+    // A new project starts with an empty timeline whose first clips set its length.
+    expect(
+      parseComposition(source, emptyTimelineSettings()).timeline,
+    ).toMatchObject({ clips: [], duration: 0 });
     // The families titles may use are the ones the project declares, so Font offers these four.
     expect(declaredFonts(source).toSorted()).toEqual([
       "Fraunces",
@@ -129,8 +134,8 @@ test("source writes require the exact version and remain undoable", async () => 
       await (await fixture.request(`/projects/${project.id}/source`)).json(),
     );
     const content = original.content.replace(
-      "Drop media in, or ask your agent to start.",
-      "A revised composition.",
+      "</main>",
+      '<p id="note" class="clip" data-start="0" data-duration="1" data-track-index="0">A revised composition.</p></main>',
     );
     const saved = await fixture.request(
       `/projects/${project.id}/source`,

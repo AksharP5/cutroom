@@ -203,6 +203,16 @@
   pointer-events: none;
   text-align: center;
 }
+.edit-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--type-sm);
+  pointer-events: none;
+}
 .edit-preparing {
   position: absolute;
   left: 50%;

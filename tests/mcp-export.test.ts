@@ -9,6 +9,7 @@ import { AGENT_HEADER } from "../src/shared/review";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createMcpServer } from "../src/server/mcp/server";
 import { projectFixture } from "./project-fixture";
+import { addStarterClips } from "./starter-clips";
 
 async function fixture() {
   const project = await projectFixture();
@@ -52,6 +53,7 @@ test("MCP exports share dialog defaults, frame ranges, naming and cancel cleanup
       width: 320,
       height: 240,
     });
+    await addStarterClips(p);
     const directory = join(p.path, ".cutroom/renders");
     await mkdir(directory, { recursive: true });
     await writeFile(join(directory, "MCP cut.mp4"), "existing export");
@@ -154,6 +156,7 @@ test("MCP exports choose a format, a supersampled size and a frame rate", async 
       width: 640,
       height: 360,
     });
+    await addStarterClips(p);
     const document = await f.store.document(p);
     await f.store.writeDocument(
       p,
@@ -240,6 +243,7 @@ test("MCP exports choose a format, a supersampled size and a frame rate", async 
       width: 1280,
       height: 960,
     });
+    await addStarterClips(square);
     const refused = await f.client.callTool({
       name: "export_start",
       arguments: { projectId: square.id, size: "4k" },
@@ -265,6 +269,7 @@ test("exports accept chosen presets and folders, refuse invalid destinations/ran
       width: 320,
       height: 240,
     });
+    await addStarterClips(p);
     const directory = join(f.directory, "chosen");
     await mkdir(directory);
     for (const quality of ["draft", "high"] as const) {
@@ -361,6 +366,7 @@ test("exports accept chosen presets and folders, refuse invalid destinations/ran
       ).toBe(true);
     await mkdir(join(p.path, ".cutroom"), { recursive: true });
     const linked = await f.store.create({ name: "Linked" });
+    await addStarterClips(linked);
     await mkdir(join(linked.path, ".cutroom"), { recursive: true });
     await symlink(directory, join(linked.path, ".cutroom/renders"));
     expect(
@@ -395,7 +401,9 @@ test("exports accept chosen presets and folders, refuse invalid destinations/ran
 test("native cancellation authorizes the job's project and owner-started jobs are visible over MCP", async () => {
   const f = await fixture();
   const own = await f.store.create({ name: "Own" });
+  await addStarterClips(own);
   const other = await f.store.create({ name: "Other" });
+  await addStarterClips(other);
   const turn = await f.review.beginTurn(own, {
     kind: "message",
     id: "turn",
@@ -464,11 +472,13 @@ test("one active export refuses overlapping MCP and editor starts across project
       width: 320,
       height: 240,
     });
+    await addStarterClips(alpha);
     const beta = await f.store.create({
       name: "Beta",
       width: 320,
       height: 240,
     });
+    await addStarterClips(beta);
     const running = result(
       Started,
       await f.client.callTool({
@@ -532,6 +542,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
         width: 640,
         height: 360,
       });
+      await addStarterClips(p);
       await mkdir(join(p.path, "compositions"));
       await writeFile(
         join(p.path, "compositions", "red.html"),

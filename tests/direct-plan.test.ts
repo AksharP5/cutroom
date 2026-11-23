@@ -44,19 +44,13 @@ test("Cutroom's own cuts and b-roll export from the source, and frames under a t
           name: "Direct",
           width: 1920,
           height: 1080,
-          duration: 10,
         })
       ).json(),
     );
-    const starter = await readFile(join(project.path, "index.html"), "utf8");
-    const starterClips = parseComposition(
-      starter,
-      emptyTimelineSettings(),
-    ).timeline.clips.map((clip) => clip.id);
-    // The starter page, two linked cuts, b-roll over the first, a title over the second and a
-    // track gain.
-    const html = edit(starter, [
-      { type: "remove", clipIds: starterClips },
+    const page = await readFile(join(project.path, "index.html"), "utf8");
+    // A new project's empty page, two linked cuts (V1 and A1), b-roll over the first, a title
+    // over the second and a gain on A1.
+    const html = edit(page, [
       {
         type: "insert",
         track: 0,
@@ -71,7 +65,7 @@ test("Cutroom's own cuts and b-roll export from the source, and frames under a t
       },
       {
         type: "insert",
-        track: 1,
+        track: 2,
         at: 20,
         clip: {
           kind: "video",
@@ -83,11 +77,11 @@ test("Cutroom's own cuts and b-roll export from the source, and frames under a t
       },
       {
         type: "insert",
-        track: 2,
+        track: 3,
         at: 90,
         clip: { kind: "title", text: "Name", duration: 30 },
       },
-      { type: "setTrack", index: 3, volume: 0.5 },
+      { type: "setTrack", index: 1, volume: 0.5 },
     ]);
     expect(planDirectExport(html, fps, null)).toEqual({
       width: 1920,
