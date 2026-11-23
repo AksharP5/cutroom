@@ -4821,15 +4821,16 @@ export function previewDocument(
 
 /**
  * The picture table after a live timing update, without compiling again: the served document
- * with the update's timing values written in, placed again.
+ * with the update's timing values written in, placed again. Every update writes every clip's
+ * values, so the document is parsed once and rewritten in place.
  */
 export function livePictureTable(
-  served: string,
+  served: { html: string; document?: Document },
   timing: PreviewTiming,
   scenes: ReadonlyMap<string, string>,
 ) {
-  if (!served.includes("<video")) return null;
-  const { document } = parseHTML(served);
+  if (!served.html.includes("<video")) return null;
+  const document = (served.document ??= parseHTML(served.html).document);
   const elements = new Map(
     Array.from(
       document.querySelectorAll("[data-hf-cutroom-clip-id]"),

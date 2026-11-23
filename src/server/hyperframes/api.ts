@@ -286,7 +286,7 @@ export function createHyperframesApi(
     compiled: PreviewTiming;
     mix: TrackGainPreview;
     /** The served document and its scene files, to place its videos after an update. */
-    served: string;
+    served: { html: string; document?: Document };
     scenes: ReadonlyMap<string, string>;
   };
   const sourceTimings = new Map<string, SourceTiming>();
@@ -1645,7 +1645,7 @@ export function createHyperframesApi(
         authored,
         compiled,
         mix,
-        served: ramp?.html ?? html,
+        served: { html: ramp?.html ?? html },
         scenes,
       };
     };

@@ -16,8 +16,11 @@ export interface Shown {
   fit: Fit;
   /** Source seconds the runtime seeks this clip's media to at the frame. */
   time: number;
-  /** The source time export selects this clip's picture at, exactly. */
-  source: SourceTime;
+  /**
+   * The source time export selects this clip's picture at, exactly. Exact arithmetic, so only
+   * a picture that is drawn asks for it, not every frame a lookahead visits.
+   */
+  source: () => SourceTime;
   /** The clip's own opacity as its transitions animate it. */
   opacity: number;
   brightness: number;
@@ -198,7 +201,7 @@ function layerQuery(
           ) +
           // The runtime seeks just past the frame's start, as HyperFrames does.
           1e-5,
-        source: sourceAt(clipPiece(clip, fps), frames(frame, fps)),
+        source: () => sourceAt(clipPiece(clip, fps), frames(frame, fps)),
         opacity,
         brightness,
         level,

@@ -35,13 +35,17 @@ export type PictureSourceWire = {
 /** A source file's picture index and the playable end its loops wrap at. */
 export type PictureSource = { index: PictureIndex; end: ExactTime | null };
 
-/** One video element as the resolver placed it in the served document. */
+/**
+ * One video element as the resolver placed it in the served document. Most videos sit in the
+ * root composition and play whole, so the fields that would repeat what is implied are left out:
+ * `ownFps` is the table's, `origin` is zero, and `local` and `played` are `edge`.
+ */
 export type PictureSlot = {
-  ownFps: Fps;
-  origin: Text;
-  local: TextWindow;
+  ownFps?: Fps;
+  origin?: Text;
+  local?: TextWindow;
   edge: TextWindow;
-  played: TextWindow;
+  played?: TextWindow;
   stored: StoredSource;
   curve: Curve;
   loop?: boolean;
@@ -71,12 +75,18 @@ export function pictureTable(
   const videos: PictureTable["videos"] = {};
   for (const [id, element] of placed) {
     if (element.kind !== "media" || !id.startsWith("video:")) continue;
+    const edge = textWindow(element.edge);
+    const local = textWindow(element.local);
+    const played = textWindow(element.played);
+    const same = (window: TextWindow) =>
+      window.start === edge.start && window.end === edge.end;
     videos[id.slice("video:".length)] = {
-      ownFps: element.ownFps,
-      origin: timeText(element.origin),
-      local: textWindow(element.local),
-      edge: textWindow(element.edge),
-      played: textWindow(element.played),
+      ...((element.ownFps.num !== fps.num ||
+        element.ownFps.den !== fps.den) && { ownFps: element.ownFps }),
+      ...(element.origin.n !== 0n && { origin: timeText(element.origin) }),
+      ...(!same(local) && { local }),
+      edge,
+      ...(!same(played) && { played }),
       stored: element.stored,
       curve: element.curve,
       ...(element.loop && { loop: true }),
@@ -163,11 +173,11 @@ function isSlot(value: unknown): value is PictureSlot {
   const slot: Partial<Record<keyof PictureSlot, unknown>> = value;
   const { stored, curve } = slot;
   return (
-    isFps(slot.ownFps) &&
-    typeof slot.origin === "string" &&
-    isWindow(slot.local) &&
+    (slot.ownFps === undefined || isFps(slot.ownFps)) &&
+    (slot.origin === undefined || typeof slot.origin === "string") &&
+    (slot.local === undefined || isWindow(slot.local)) &&
     isWindow(slot.edge) &&
-    isWindow(slot.played) &&
+    (slot.played === undefined || isWindow(slot.played)) &&
     !!stored &&
     typeof stored === "object" &&
     "mediaStart" in stored &&
@@ -207,26 +217,21 @@ export function slotPiece(
   fps: Fps,
   end: ExactTime | null,
 ): Piece {
-  const edge = {
-    start: readTime(slot.edge.start),
-    end: readTime(slot.edge.end),
-  };
+  const window = ({ start, end }: TextWindow) => ({
+    start: readTime(start),
+    end: readTime(end),
+  });
+  const edge = window(slot.edge);
   return resolvePiece(
     {
       id,
       src: "",
       path: "",
-      ownFps: slot.ownFps,
-      origin: readTime(slot.origin),
-      local: {
-        start: readTime(slot.local.start),
-        end: readTime(slot.local.end),
-      },
+      ownFps: slot.ownFps ?? fps,
+      origin: slot.origin ? readTime(slot.origin) : fraction(0n),
+      local: slot.local ? window(slot.local) : edge,
       edge,
-      played: {
-        start: readTime(slot.played.start),
-        end: readTime(slot.played.end),
-      },
+      played: slot.played ? window(slot.played) : edge,
       stored: slot.stored,
       curve: slot.curve,
       loop: slot.loop,

@@ -733,7 +733,7 @@ export function attachPipeline(
         const index = indexAt(
           found,
           seconds,
-          selected ? undefined : layer.source,
+          selected ? undefined : layer.source(),
         );
         const lane = laneFor(found, index);
         // Moving seeks draw the proxy, whose frame N is the source's frame N.
@@ -998,7 +998,7 @@ export function attachPipeline(
       sources.add(src);
       void source(src)
         .then((found) => {
-          const index = indexAt(found, layer.time, layer.source);
+          const index = indexAt(found, layer.time, layer.source());
           // The playing lane may hold it now, but drops it as the playhead moves on.
           const spare = found.lanes.find((lane) => lane !== found.playing)!;
           if (!spare.has(index) && !spare.reaches(index))
