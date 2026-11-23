@@ -11,8 +11,8 @@ import {
 } from "@hyperframes/core/audio-automation";
 import type { HfAutomationLane } from "@hyperframes/core/audio-automation";
 import { clampFadesToDuration } from "@hyperframes/core/audio-fade";
-import { TimelineError } from "./errors";
-import type { Clip, Fps } from "./schema";
+import { TimelineError } from "./errors.ts";
+import type { Clip, Fps } from "./schema.ts";
 
 export const CUTROOM_AUDIO_GROUP_PREFIX = "cutroom-bus-";
 
@@ -124,12 +124,12 @@ export function clipFades(clip: Pick<Clip, "fadeIn" | "fadeOut" | "duration">) {
 
 /** Trims keep edge fades; cuts preserve the source envelope across their internal edge. */
 export function windowMix(
-  clip: Clip,
+  clip: Pick<Clip, "fadeIn" | "fadeOut" | "duration" | "automation" | "volume">,
   from: number,
   duration: number,
   fps: Fps,
   mode: "trim" | "cut",
-) {
+): { fadeIn?: number; fadeOut?: number; automation?: string | null } {
   if (mode === "trim" && (from === 0 || !clip.automation)) return {};
   const { fadeIn, fadeOut } =
     mode === "cut" ? clipFades(clip) : { fadeIn: 0, fadeOut: 0 };
@@ -235,4 +235,54 @@ export function windowMix(
       ? serializeAutomation({ ...automation, lanes })
       : null,
   };
+}
+
+/** Fades in seconds, clip-local automation and linear gain: what HyperFrames reads from a clip. */
+export type ClipMix = {
+  fadeIn: number;
+  fadeOut: number;
+  automation: string | null;
+  volume: number | null;
+};
+
+const MICROSECOND_GRID: Fps = { num: 1_000_000, den: 1 };
+
+/**
+ * A clip's mix once something above it, such as a trimmed mount, lets it through `head` seconds
+ * after its own start. Fades and lanes stay clip-local, as a cut leaves them: a fade-in already
+ * under way is baked into the volume lane at the level it has reached, and lanes move earlier.
+ * The tail is untouched. Null when nothing is cut or the bake would exceed HyperFrames' limits.
+ */
+export function mixFromHead(
+  mix: ClipMix,
+  head: number,
+  length: number,
+): ClipMix | null {
+  const from = Math.round(head * 1e6);
+  const duration = Math.round(length * 1e6);
+  if (from <= 0 || from >= duration) return null;
+  try {
+    const cut = windowMix(
+      {
+        fadeIn: Math.round(mix.fadeIn * 1e6),
+        fadeOut: Math.round(mix.fadeOut * 1e6),
+        duration,
+        automation: mix.automation,
+        volume: mix.volume,
+      },
+      from,
+      duration - from,
+      MICROSECOND_GRID,
+      "cut",
+    );
+    return {
+      fadeIn: (cut.fadeIn ?? 0) / 1e6,
+      fadeOut: (cut.fadeOut ?? 0) / 1e6,
+      automation: cut.automation ?? mix.automation,
+      volume: mix.volume,
+    };
+  } catch (error) {
+    if (error instanceof TimelineError) return null;
+    throw error;
+  }
 }

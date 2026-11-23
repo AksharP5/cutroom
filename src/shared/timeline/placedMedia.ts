@@ -13,7 +13,14 @@ import {
   readClipTiming,
   resolveSubCompositionContent,
 } from "@hyperframes/parsers";
+import { HF_AUDIO_AUTOMATION_ATTR } from "@hyperframes/core/audio-automation";
+import {
+  HF_AUDIO_FADE_IN_ATTR,
+  HF_AUDIO_FADE_OUT_ATTR,
+  readFadeSeconds,
+} from "@hyperframes/core/audio-fade";
 import { parseHTML } from "linkedom";
+import { mixFromHead } from "./mix.ts";
 import { attrMicros, place, secondsOf, subtract } from "./piece.ts";
 import type { Composition, PlacedElement, Start } from "./piece.ts";
 import type { Fps } from "./schema.ts";
@@ -182,8 +189,9 @@ export function placedMedia(
 /**
  * Export plays a piece that a trimmed mount cuts from where the mount lets it through: a loop
  * restarts at its in-point there. These attributes give the browser runtime the same start in
- * the piece's own composition, and keep its end. Empty when nothing is cut. A piece needs a
- * length to be placed at all, so a loop written without one is left as written.
+ * the piece's own composition, and keep its end. Its fades and lanes stay clip-local, as
+ * `mixFromHead` leaves them for export. Empty when nothing is cut. A piece needs a length to be
+ * placed at all, so a loop written without one is left as written.
  */
 export function startAtPlayed(
   {
@@ -192,15 +200,47 @@ export function startAtPlayed(
     origin,
     local,
   }: Pick<PlacedElement, "played" | "edge" | "origin" | "local">,
-  has: (name: string) => boolean,
+  get: (name: string) => string | null,
 ): [name: string, value: string][] {
-  if (subtract(played.start, edge.start).n === 0n) return [];
+  const head = subtract(played.start, edge.start);
+  if (head.n === 0n) return [];
   const start = subtract(played.start, origin);
+  const fadeIn = get(HF_AUDIO_FADE_IN_ATTR);
+  const fadeOut = get(HF_AUDIO_FADE_OUT_ATTR);
+  const automation = get(HF_AUDIO_AUTOMATION_ATTR);
+  const volume = get("data-volume");
+  const mix = mixFromHead(
+    {
+      fadeIn: readFadeSeconds(fadeIn),
+      fadeOut: readFadeSeconds(fadeOut),
+      automation,
+      volume: volume === null ? null : Number(volume),
+    },
+    secondsOf(head),
+    secondsOf(subtract(local.end, local.start)),
+  );
+  const changed = (
+    name: string,
+    before: string | null,
+    after: number | string | null,
+  ): [string, string][] =>
+    after === null ||
+    (before === null && after === 0) ||
+    (before !== null && String(after) === before)
+      ? []
+      : [[name, String(after)]];
   return [
     ["data-start", String(secondsOf(start))],
     ["data-duration", String(secondsOf(subtract(local.end, start)))],
-    ...(has("data-end")
+    ...(get("data-end") !== null
       ? [["data-end", String(secondsOf(local.end))] as [string, string]]
+      : []),
+    ...(mix
+      ? [
+          ...changed(HF_AUDIO_FADE_IN_ATTR, fadeIn, mix.fadeIn),
+          ...changed(HF_AUDIO_FADE_OUT_ATTR, fadeOut, mix.fadeOut),
+          ...changed(HF_AUDIO_AUTOMATION_ATTR, automation, mix.automation),
+        ]
       : []),
   ];
 }

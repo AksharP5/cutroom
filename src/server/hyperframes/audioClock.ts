@@ -8,7 +8,9 @@ import {
   sampleOf,
   secondsOf,
   sourceSampleOffset,
+  subtract,
 } from "../../shared/timeline/piece.ts";
+import { mixFromHead } from "../../shared/timeline/mix.ts";
 import type { AudioElement } from "@hyperframes/engine";
 import { placedMedia } from "../../shared/timeline/placedMedia.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
@@ -60,6 +62,17 @@ export function sampleGridAudio(
       offset !== null && audio.playbackRate === 1 && authored
         ? Number(piece.samples.start + offset) / AUDIO_SAMPLE_RATE
         : (ramp?.start ?? audio.mediaStart);
+    // The producer starts the track where a trimmed mount opens; its fades and lanes stay clip-local.
+    const mix = mixFromHead(
+      {
+        fadeIn: audio.fadeIn ?? 0,
+        fadeOut: audio.fadeOut ?? 0,
+        automation: audio.automation ?? null,
+        volume: audio.volume ?? null,
+      },
+      secondsOf(subtract(piece.played.start, piece.edge.start)),
+      secondsOf(subtract(piece.local.end, piece.local.start)),
+    );
     return [
       {
         ...audio,
@@ -67,6 +80,11 @@ export function sampleGridAudio(
         end: measuredEnd ? audio.end : secondsOf(piece.played.end),
         mediaStart,
         ...(ramp && { playbackRate: ramp.lane }),
+        ...(mix && {
+          fadeIn: mix.fadeIn,
+          fadeOut: mix.fadeOut,
+          automation: mix.automation ?? undefined,
+        }),
         samples: { start, end },
       },
     ];
