@@ -283,11 +283,11 @@ for (const mode of [
               : route.abort(),
           );
         if (truncated) {
-          const cache = join(project.path, ".cutroom/cache");
+          const cache = join(project.path, ".cutroom/cache/ramp-runs");
           let wrote = 0;
-          for (const key of await readdir(cache)) {
-            const path = join(cache, key, "ramp.wav");
-            if (!(await readFile(path).catch(() => null))) continue;
+          for (const name of await readdir(cache)) {
+            const path = join(cache, name);
+            if (!name.endsWith(".wav")) continue;
             await truncate(path, 44);
             wrote++;
           }
@@ -305,8 +305,10 @@ for (const mode of [
         const header = await request.get(preparedUrl, {
           headers: { Range: "bytes=0-43" },
         });
-        expect(header.status()).toBe(206);
-        expect((await header.body()).subarray(0, 4).toString()).toBe("RIFF");
+        // A run cut short on disk no longer covers the clip, so its slice is refused.
+        expect(header.status()).toBe(truncated ? 404 : 206);
+        if (!truncated)
+          expect((await header.body()).subarray(0, 4).toString()).toBe("RIFF");
         await page.reload();
         await expect(live).toHaveAttribute("src", /cutroom-native-ramp=1/);
         await expect(stage).toHaveAttribute("data-preview-ready");
@@ -351,9 +353,9 @@ for (const mode of [
       expect(media.status()).toBe(206);
       expect(media.headers()["access-control-allow-origin"]).toBe("null");
       expect((await media.body()).subarray(0, 4).toString()).toBe("RIFF");
-      const key = /\/([a-f0-9]{64})\.wav$/.exec(wav!)?.[1];
+      const key = /\/([a-f0-9]{64})-\d+-\d+\.wav$/.exec(wav!)?.[1];
       expect(key).toBeDefined();
-      await rm(join(project.path, ".cutroom/cache", key!, "ramp.wav"));
+      await rm(join(project.path, ".cutroom/cache/ramp-runs", `${key}.wav`));
       // An active document may only request a parked clip once playback reaches it.
       expect(
         (

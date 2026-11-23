@@ -144,6 +144,8 @@ export function createMediaService(
     (Number(process.env.CUTROOM_RAMP_CACHE_MB) || 1024) * 2 ** 20;
   /** How many holders keep each run file: an open preview document or a running export. */
   const pinned = new Map<string, number>();
+  /** Whether the last trim ended over budget, so the log says so once per crossing. */
+  let overBudget = false;
   let nvenc: Promise<boolean> | undefined;
   const jobs = new Map<string, MediaJob>();
   const queue: MediaJob[] = [];
@@ -192,14 +194,23 @@ export function createMediaService(
       );
       const present = files.filter((file) => file !== null);
       let total = present.reduce((sum, file) => sum + file.size, 0);
-      if (total <= rampRunBytes) return;
+      if (total <= rampRunBytes) {
+        overBudget = false;
+        return;
+      }
       present.sort((a, b) => a.used - b.used);
       for (const { path, size } of present) {
-        if (total <= rampRunBytes) return;
+        if (total <= rampRunBytes) break;
         if (pinned.has(path)) continue;
         await rm(path, { force: true });
         total -= size;
       }
+      const over = total > rampRunBytes;
+      if (!over || overBudget) {
+        overBudget = over;
+        return;
+      }
+      overBudget = true;
       console.warn(
         `Ramp audio in use takes ${Math.ceil(total / 2 ** 20)} MB, over the ${Math.round(rampRunBytes / 2 ** 20)} MB budget. It stays until it is no longer used.`,
       );
