@@ -102,6 +102,7 @@ import {
 } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
+import { isTimelinePath } from "../../shared/sourcePaths";
 import {
   createThumbnailRenderer,
   thumbnailRendererVersion,
@@ -443,10 +444,9 @@ export function createHyperframesApi(
         mediaClips: loadedMedia(html, sound),
         durationFrames: timeline.duration,
         fps: timeline.fps,
-        timedMedia:
-          composition === "index.html"
-            ? timedCaptureMedia(html, sound)
-            : undefined,
+        timedMedia: isTimelinePath(composition)
+          ? timedCaptureMedia(html, sound)
+          : undefined,
       };
     },
     published: async (id, path) =>
