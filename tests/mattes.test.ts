@@ -439,7 +439,7 @@ test.skipIf(!tools)(
 );
 
 test.skipIf(!tools)(
-  "an export's cutout carries each source frame's own matte as alpha, and the clip points at it",
+  "a range export neither waits for nor makes the cutout of a clip outside it",
   async () => {
     const { project, model, modelFile } = await setup();
     await alternating(join(project.path, "talk.mp4"));
@@ -451,10 +451,35 @@ test.skipIf(!tools)(
       project,
       composition: "index.html",
       html,
+      range: { start: 0.5, end: 2 },
       mattes: service,
       signal: new AbortController().signal,
       onWait: () => {},
     });
+    expect(prepared).toBeNull();
+    expect((await service.status(project)).jobs).toEqual([]);
+  },
+);
+
+test.skipIf(!tools)(
+  "a marked export's relatively timed cutout carries each source frame's own matte as alpha, and the clip points at it",
+  async () => {
+    const { project, model, modelFile } = await setup();
+    await alternating(join(project.path, "talk.mp4"));
+    const service = createMatteService({ model, segmenter, modelFile });
+    cleanup.push(() => service.close());
+    const html =
+      '<main data-composition-id="main"><div id="intro" data-start="0" data-duration="2"></div><video id="v" muted src="talk.mp4" data-start="intro" data-duration="0.5" data-media-start="1.2" data-track-index="0" data-cutroom-matte="shrink:0;soften:0"></video></main>';
+    const prepared = await prepareMatteExport({
+      project,
+      composition: "index.html",
+      html,
+      range: { start: 2, end: 2.5 },
+      mattes: service,
+      signal: new AbortController().signal,
+      onWait: () => {},
+    });
+    expect(prepared).not.toBeNull();
     cleanup.push(() => prepared!.cleanup());
     const src = /src="([^"]+)"/.exec(prepared!.html)![1]!;
     expect(src).toMatch(/^mattes\/\.export\/[^/]+\/0\.mov$/);

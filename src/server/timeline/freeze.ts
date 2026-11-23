@@ -76,7 +76,12 @@ async function extractPicture(
   signal: AbortSignal,
   retry = false,
 ): Promise<Buffer> {
-  const decode = ordinalDecode(source, [ordinal], 0, retry);
+  const decode = ordinalDecode(
+    source,
+    [ordinal],
+    0,
+    retry ? source.keys.length : 0,
+  );
   const decoder =
     metadata.videoCodec === "vp9"
       ? ["-c:v", "libvpx-vp9"]
@@ -122,7 +127,7 @@ async function extractPicture(
     })(),
     child.exited,
   ]);
-  if (code === 0 && bytes.length && decode.verified())
+  if (code === 0 && bytes.length && decode.unverified() === undefined)
     return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   // A seek that missed the picture is decoded again from the start.
   if (!retry && decode.args.length)
