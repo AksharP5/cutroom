@@ -104,6 +104,16 @@ for (const count of [400, 500] as const)
           firstGap: frames[0],
           maxGap: Math.max(...frames),
         }));
+      // The first frame after Delete is the edit itself, which the maxima below judge. The frames
+      // after it show whether the edit stays choppy: each ripple's 90th percentile, median of the runs.
+      const settling = results
+        .filter(({ interaction }) => interaction === "ripple")
+        .map(({ frames }) => {
+          const after = frames.slice(1).sort((a, b) => a - b);
+          return after[Math.floor(after.length * 0.9)]!;
+        })
+        .sort((a, b) => a - b);
+      const settlingP90 = settling[Math.floor(settling.length / 2)]!;
       // Keep passing CI timings in the log too; failure-only traces omit them.
       console.log(
         JSON.stringify({
@@ -113,6 +123,7 @@ for (const count of [400, 500] as const)
           key: summary.key,
           ripple: summary.ripple,
           rippleRuns,
+          settling,
         }),
       );
       const evidence = {
@@ -173,9 +184,9 @@ for (const count of [400, 500] as const)
           "median of the worst frame gaps per ripple, ms",
         ).toBeLessThan(190);
         expect(
-          summary.ripple.p95,
-          "pooled ripple frame gap p95, ms",
-        ).toBeLessThan(125);
+          settlingP90,
+          "median of each ripple's 90th-percentile frame gap after the edit frame, ms",
+        ).toBeLessThan(100);
       }
     },
   );
