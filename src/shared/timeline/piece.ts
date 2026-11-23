@@ -128,6 +128,23 @@ export type PlacedMedia = Pick<
   Omit<Placement, "played"> & { played?: Window };
 export type PlacedElement = (Media | Visual) & Placement;
 
+/** Where an element that starts at `start` ends on its own grid: `data-duration` before `data-end`. */
+export function windowEnd(
+  el: Omit<AuthoredWindow, "id" | "start">,
+  start: ExactTime,
+  fps: Fps,
+) {
+  if (el.durationUs !== undefined && el.durationUs >= 0n)
+    return add(start, decodeLocal(el.durationUs, fps));
+  if (el.endUs !== undefined) {
+    const end = decodeLocal(el.endUs, fps);
+    return difference(end, start) > 0n ? end : null;
+  }
+  if (el.naturalSeconds !== undefined && el.naturalSeconds > 0)
+    return add(start, decodeLocal(attrMicros(el.naturalSeconds), fps));
+  return null;
+}
+
 export function localWindows<Element extends AuthoredWindow>({
   fps,
   elements,
@@ -138,18 +155,6 @@ export function localWindows<Element extends AuthoredWindow>({
   const byId = new Map(elements.map((el) => [el.id, el]));
   const starts = new Map<string, ExactTime>();
   const visiting = new Set<string>();
-
-  function endOf(el: AuthoredWindow, start: ExactTime) {
-    if (el.durationUs !== undefined && el.durationUs >= 0n)
-      return add(start, decodeLocal(el.durationUs, fps));
-    if (el.endUs !== undefined) {
-      const end = decodeLocal(el.endUs, fps);
-      return difference(end, start) > 0n ? end : null;
-    }
-    if (el.naturalSeconds !== undefined && el.naturalSeconds > 0)
-      return add(start, decodeLocal(attrMicros(el.naturalSeconds), fps));
-    return null;
-  }
 
   function startOf(el: AuthoredWindow): ExactTime {
     const known = starts.get(el.id);
@@ -164,7 +169,7 @@ export function localWindows<Element extends AuthoredWindow>({
       const target = byId.get(el.start.ref);
       if (target) {
         const targetStart = startOf(target);
-        const base = endOf(target, targetStart) ?? targetStart;
+        const base = windowEnd(target, targetStart, fps) ?? targetStart;
         start = max(ZERO, add(base, decodeLocal(el.start.offsetUs, fps)));
       }
     }
@@ -176,7 +181,7 @@ export function localWindows<Element extends AuthoredWindow>({
 
   return elements.map((el) => {
     const start = startOf(el);
-    return { el, start, end: endOf(el, start) };
+    return { el, start, end: windowEnd(el, start, fps) };
   });
 }
 
@@ -527,6 +532,23 @@ export function sourceAt(piece: Piece, position: ExactTime): SourceTime {
   if (loop.kind === "exact" && typeof time !== "number")
     return wrapExact(time, loop.start, loop.length);
   return typeof time === "number" ? wrapRamp(loop, time) : time;
+}
+
+/**
+ * The stretched sound a ramp piece plays: the source and curve time at its first output sample,
+ * and its length in whole samples. Export and the viewer prepare the same audio from this.
+ */
+export function rampWindow(piece: Piece) {
+  const { samples, line } = piece;
+  const first = fraction(samples.start, SAMPLES);
+  const start = sourceAt(piece, first);
+  if (line.kind !== "ramp" || typeof start !== "number") return null;
+  return {
+    // The first sample can sit up to half a sample before an in-point of 0.
+    start: Math.max(0, start),
+    duration: Number(samples.end - samples.start) / AUDIO_SAMPLE_RATE,
+    lane: { ...line.rate, offset: secondsOf(subtract(first, line.curveZero)) },
+  };
 }
 
 /**

@@ -4,7 +4,16 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { parse, serialize, serializeOuter } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
-import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
+import { parseFpsWithDefault } from "@hyperframes/core";
+import {
+  decodeLocal,
+  fraction,
+  secondsOf,
+  subtract,
+  windowEnd,
+} from "../../shared/timeline/piece";
+import { authoredWindow } from "../../shared/timeline/placedMedia";
+import type { Fps } from "../../shared/timeline/schema";
 import { canonicalText } from "../../shared/timeline/schema";
 import {
   declaredFonts,
@@ -371,35 +380,45 @@ function timingOf(
   };
 }
 
-/** The runtime seeks in raw seconds even though its visibility changes on frame boundaries. */
+/**
+ * Hand the runtime each element's own window as export reads it: on the grid of the file that
+ * wrote it, with `data-duration` before `data-end`. A reference start is left for the runtime.
+ */
 export function snappedPreviewWindow(
   attributes: ReadonlyMap<string, string>,
-  inheritedFps: number,
+  inheritedFps: Fps,
 ) {
   const rate = attributes.get("data-fps");
   const parsed = rate === undefined ? null : parseFpsWithDefault(rate);
-  const fps = parsed?.ok ? parsed.value.num / parsed.value.den : inheritedFps;
-  const start = Number(attributes.get("data-start"));
-  const end = attributes.has("data-duration")
-    ? start + Number(attributes.get("data-duration"))
-    : Number(attributes.get("data-end"));
+  const fps = parsed?.ok ? parsed.value : inheritedFps;
   const changes: [string, number][] = [];
-  if (Number.isFinite(start)) {
-    const window = exportClipWindow(start, end, fps);
-    if (window.start !== start || window.end !== end) {
-      for (const [name, value] of [
-        ["data-start", window.start],
-        ["data-duration", window.end - window.start],
-        ["data-end", window.end],
-      ] as const) {
-        if (
-          attributes.has(name) &&
-          Number.isFinite(value) &&
-          Number(attributes.get(name)) !== value
-        )
-          changes.push([name, value]);
-      }
-    }
+  if (!attributes.has("data-start"))
+    return { fps, start: NaN, end: NaN, changes };
+  const authored = authoredWindow({
+    getAttribute: (name) => attributes.get(name) ?? null,
+  });
+  const { start: at } = authored;
+  if (!("us" in at)) return { fps, start: NaN, end: NaN, changes };
+  const decoded = decodeLocal(at.us, fps);
+  const exactStart = decoded.n < 0n ? fraction(0n) : decoded;
+  const exactEnd = windowEnd(authored, exactStart, fps);
+  const start = secondsOf(exactStart);
+  const end = exactEnd ? secondsOf(exactEnd) : Infinity;
+  const duration = exactEnd
+    ? secondsOf(subtract(exactEnd, exactStart))
+    : Infinity;
+  for (const [name, value] of [
+    ["data-start", start],
+    ["data-duration", duration],
+    ["data-end", end],
+  ] as const) {
+    const written = attributes.get(name);
+    if (
+      written !== undefined &&
+      Number.isFinite(value) &&
+      Number(written) !== value
+    )
+      changes.push([name, value]);
   }
   return { fps, start, end, changes };
 }
@@ -429,7 +448,7 @@ export function previewSourceTiming(
     return null;
   const rate = parseFpsWithDefault(attribute(root, "data-fps")?.value);
   if (!rate.ok) return null;
-  const fps = rate.value.num / rate.value.den;
+  const fps = rate.value;
   for (const node of children(root)) {
     const id = attribute(node, "id")?.value;
     if (

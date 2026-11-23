@@ -3,8 +3,6 @@ import { parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { transform } from "lightningcss";
 import type { Selector } from "lightningcss";
-import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
-import { hostInPointSeconds } from "@hyperframes/core/media-timing";
 import {
   AudioAutomationError,
   parseAutomation,
@@ -12,12 +10,17 @@ import {
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
 import type { HfAutomation } from "@hyperframes/core/audio-automation";
-import { readMediaOffsetSeconds } from "@hyperframes/parsers/media-duration";
 import { requestSubPath } from "@hyperframes/studio-server";
 import { isPrivateProjectFile } from "@hyperframes/studio-server/safe-path";
 import { HttpError } from "../../shared/errors";
 import { mediaKind } from "../../shared/media";
 import type { Project } from "../../shared/project";
+import { rampWindow, resolvePiece } from "../../shared/timeline/piece";
+import {
+  placedKey,
+  placedMedia,
+  startAtPlayed,
+} from "../../shared/timeline/placedMedia";
 import { projectPath } from "../projects/store";
 import type { RampWindow } from "../media/protocol";
 import type { MediaService } from "../media/service";
@@ -135,19 +138,18 @@ export async function prepareRampPreview(
   request: URL,
   prefix: string,
   project: Project,
-  media: MediaService,
+  media: Pick<MediaService, "rampAudio">,
 ) {
   if (!html.includes("data-automation") || !html.includes("rate")) return null;
   const document = parse(html, { sourceCodeLocationInfo: true });
   type Node = DefaultTreeAdapterTypes.Element;
-  const entries: { node: Node; fps: number }[] = [];
+  const entries: Node[] = [];
   const ids = new Set<string>();
   const styles: string[] = [];
   let externalStyle = false;
   let base: string | undefined;
   const visit = (
     parent: DefaultTreeAdapterTypes.ParentNode,
-    fps: number,
     hidden: boolean,
   ) => {
     for (const node of parent.childNodes) {
@@ -167,27 +169,16 @@ export async function prepareRampPreview(
             .map((child) => ("value" in child ? child.value : ""))
             .join(""),
         );
-      const parsed = parseFpsWithDefault(attrs.get("data-fps") ?? String(fps));
-      const nodeFps = parsed.ok ? parsed.value.num / parsed.value.den : fps;
-      // The producer rebases a rate lane at a trimmed mount's in-point.
-      // Keep the native path until both render paths share that phase.
-      const trimmedMount =
-        [
-          "data-composition-id",
-          "data-composition-src",
-          "data-composition-file",
-        ].some((name) => attrs.has(name)) &&
-        hostInPointSeconds({
-          getAttribute: (name) => attrs.get(name) ?? null,
-        }) > 0;
-      const disabled = hidden || attrs.has("data-hidden") || trimmedMount;
+      const disabled = hidden || attrs.has("data-hidden");
       if (!disabled && (node.tagName === "audio" || node.tagName === "video"))
-        entries.push({ node, fps: nodeFps });
-      visit(node, nodeFps, disabled);
+        entries.push(node);
+      visit(node, disabled);
     }
   };
-  visit(document, 30, false);
+  visit(document, false);
   const safe = safeStyles(styles, externalStyle);
+  // Export places the same pieces from the same document.
+  const { fps, placed } = placedMedia(html);
   const documentBase = URL.parse(base ?? request.href, request);
   if (!documentBase) return null;
   const edits: Edit[] = [];
@@ -195,7 +186,7 @@ export async function prepareRampPreview(
   const assets = new Map<string, RampAsset>();
   let ramp = false;
   await Promise.all(
-    entries.map(async ({ node, fps }, index) => {
+    entries.map(async (node, index) => {
       if (node.tagName === "audio" ? !safe.audio : !safe.video) return;
       const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
       const raw = attrs.get("data-automation");
@@ -223,16 +214,15 @@ export async function prepareRampPreview(
       }
       const lane = envelope.lanes.find((entry) => entry.target === RATE_TARGET);
       if (!lane?.points.length) return;
-      // Nested mounts retain their clip-local timing, including the original ease
-      // phase. A numeric local window keeps the dry audio independent of its hosts.
-      const start = Number(attrs.get("data-start"));
-      const end = attrs.has("data-duration")
-        ? start + Number(attrs.get("data-duration"))
-        : Number(attrs.get("data-end"));
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
-        return;
-      const clip = exportClipWindow(start, end, fps);
-      if (clip.end <= clip.start) return;
+      const item = placed.get(
+        placedKey(node.tagName, {
+          getAttribute: (name) => attrs.get(name) ?? null,
+        }),
+      );
+      if (item?.kind !== "media") return;
+      const piece = resolvePiece(item, fps);
+      const stretch = rampWindow(piece);
+      if (!stretch || stretch.duration <= 0) return;
       const url = URL.parse(src, documentBase);
       if (
         !url ||
@@ -263,10 +253,14 @@ export async function prepareRampPreview(
         return;
       ramp = true;
       const window = {
-        start: readMediaOffsetSeconds((name) => attrs.get(name) ?? null),
-        duration: clip.end - clip.start,
-        rate: serializeAutomation({ ...envelope, lanes: [lane] }),
+        start: stretch.start,
+        duration: stretch.duration,
+        rate: serializeAutomation({
+          ...envelope,
+          lanes: [{ ...lane, offset: stretch.lane.offset }],
+        }),
       };
+      const timing = new Map(startAtPlayed(piece, (name) => attrs.has(name)));
       const result = await media
         .rampAudio(project, path, window)
         .catch((error: unknown) => {
@@ -290,7 +284,7 @@ export async function prepareRampPreview(
         ids.add(id);
         const routing = companionAttrs
           .flatMap((name) => {
-            const value = attrs.get(name);
+            const value = timing.get(name) ?? attrs.get(name);
             return value === undefined ? [] : [attr(name, value)];
           })
           .join("");
@@ -303,12 +297,13 @@ export async function prepareRampPreview(
         edits.push({ from: offset, to: offset, text: " muted" });
         return;
       }
-      const replacements = new Map([
+      const replacements = new Map<string, string | null>([
         ["src", prepared],
         ["data-automation", audio],
         ["data-media-start", null],
         ["data-playback-start", null],
         ["data-playback-rate", null],
+        ...timing,
       ]);
       for (const [name, value] of replacements) {
         const span = location.attrs?.[name];

@@ -22,6 +22,14 @@ import { adjustmentCapture } from "./adjustmentCapture";
 import { spanIndex } from "../../shared/timeline/spanIndex";
 import { frameSeek } from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
+import type { Fps } from "../../shared/timeline/schema";
+import { hostInPointSeconds } from "@hyperframes/core/media-timing";
+import {
+  HOST_ATTRIBUTES,
+  placedKey,
+  placedMedia,
+  startAtPlayed,
+} from "../../shared/timeline/placedMedia";
 
 interface PreviewWindow extends DiagnosticWindow {
   /** HyperFrames' codec facts for the project's media, by root-relative path. */
@@ -4490,16 +4498,39 @@ export function previewDocument(
     end,
     text,
   }));
+  const writeTiming = (
+    node: DefaultTreeAdapterTypes.Element,
+    changes: readonly (readonly [string, string | number])[],
+  ) => {
+    for (const [name, value] of changes) {
+      const location = node.sourceCodeLocation?.attrs?.[name];
+      if (location)
+        edits.push({
+          at: location.startOffset,
+          end: location.endOffset,
+          text: `${name}="${value}"`,
+        });
+    }
+  };
   const maybeAdjustment = html.includes("data-cutroom-adjustment");
   let hasAdjustment = false;
   // The opaque frame needs CORS media for Web Audio, including gain above unity and its level tap.
   // Only the served preview changes; project source and its producer input stay untouched.
-  const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[], fps = 30) => {
+  const visit = (
+    nodes: DefaultTreeAdapterTypes.ChildNode[],
+    fps: Fps = { num: 30, den: 1 },
+    trimmed = false,
+  ) => {
     for (const node of nodes) {
       if (!("tagName" in node)) continue;
       const timing = new Map(
         node.attrs.map(({ name, value }) => [name, value]),
       );
+      const getAttribute = (name: string) => timing.get(name) ?? null;
+      const inTrimmedMount =
+        trimmed ||
+        (node.attrs.some(({ name }) => HOST_ATTRIBUTES.includes(name)) &&
+          hostInPointSeconds({ getAttribute }) > 0);
       hasAdjustment ||=
         maybeAdjustment && timing.has("data-cutroom-adjustment");
       const id = timing.get("data-hf-cutroom-clip-id");
@@ -4537,15 +4568,13 @@ export function previewDocument(
         end,
         changes,
       } = snappedPreviewWindow(timing, fps);
-      for (const [name, value] of changes) {
-        const location = node.sourceCodeLocation?.attrs?.[name];
-        if (location)
-          edits.push({
-            at: location.startOffset,
-            end: location.endOffset,
-            text: `${name}="${value}"`,
-          });
-      }
+      if (
+        inTrimmedMount &&
+        timing.has("loop") &&
+        (node.tagName === "audio" || node.tagName === "video")
+      )
+        loops.push({ node, changes });
+      else writeTiming(node, changes);
       if (node.tagName === "audio" || node.tagName === "video") {
         const tag = node.sourceCodeLocation?.startTag;
         if (tag) {
@@ -4568,11 +4597,31 @@ export function previewDocument(
           }
         }
       }
-      visit(node.childNodes, nodeFps);
-      if ("content" in node) visit(node.content.childNodes, nodeFps);
+      visit(node.childNodes, nodeFps, inTrimmedMount);
+      if ("content" in node)
+        visit(node.content.childNodes, nodeFps, inTrimmedMount);
     }
   };
+  const loops: {
+    node: DefaultTreeAdapterTypes.Element;
+    changes: readonly (readonly [string, string | number])[];
+  }[] = [];
   visit(document.childNodes);
+  // The runtime counts a loop from the element's own start. Export restarts it where a
+  // trimmed mount lets it through, so the served loop starts there.
+  if (loops.length) {
+    const { placed } = placedMedia(html);
+    for (const { node, changes } of loops) {
+      const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
+      const item = placed.get(
+        placedKey(node.tagName, {
+          getAttribute: (name) => attrs.get(name) ?? null,
+        }),
+      );
+      const played = item && startAtPlayed(item, (name) => attrs.has(name));
+      writeTiming(node, played?.length ? played : changes);
+    }
+  }
   const normalized = applyPreviewEdits(html, edits);
   const timing =
     dependencies === null ? null : previewTiming(normalized, dependencies);
