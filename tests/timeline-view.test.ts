@@ -724,6 +724,11 @@ test("a ramped clip's filmstrip and waveform show the source it plays, not a str
   for (let frame = 100; frame <= 130; frame++)
     expect(pictureAt(grid, columns[frame - 100]!)).toBe(played(frame));
 
+  // A clip sliding between places sits between frames, and still plays the same curve.
+  expect(
+    rampSourceSeconds({ ...p6, start: 0.61 }, fps30, 100, 1 / 30, 31),
+  ).toEqual(columns);
+
   // A constant clip keeps its straight line and asks nothing of the curve.
   expect(
     rampSourceSeconds(clip("plain", 0, 0, 150), fps30, 0, 1, 4),

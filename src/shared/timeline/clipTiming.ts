@@ -4,7 +4,6 @@ import {
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
 import {
-  add,
   attrMicros,
   decode,
   encode,
@@ -213,13 +212,14 @@ export function rampSourceSeconds(
   if (!clip.automation || !readClipSource(clip).lane) return null;
   let held = rampPieces.get(clip);
   if (held?.fps !== fps) {
-    held = { fps, piece: resolveClip(clip, fps) };
+    // What a clip plays from its own first frame does not depend on where it sits, and a clip
+    // the timeline is sliding between places can sit between frames.
+    held = { fps, piece: resolveClip({ ...clip, start: 0 }, fps) };
     rampPieces.set(clip, held);
   }
-  const offset = micros(Math.round(((from * fps.den) / fps.num) * 1e6));
   return rampSourceTimes(
     held.piece,
-    add(frames(clip.start, fps), offset),
+    micros(Math.round(((from * fps.den) / fps.num) * 1e6)),
     step,
     count,
   );
