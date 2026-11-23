@@ -1,4 +1,11 @@
 import { clipEnd, frameTime } from "../../shared/timeline/apply";
+import { resolveClip } from "../../shared/timeline/clipTiming";
+import {
+  frameShowing,
+  frames as framesOf,
+  sourceAt,
+  sourceSeconds,
+} from "../../shared/timeline/piece";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import type { Timeline } from "../../shared/timeline/schema";
 import type { Intent } from "../timeline/gesture";
@@ -90,11 +97,18 @@ export function previewEditFrame(timeline: Timeline, intent: Intent) {
   const shown = clips.filter(
     ({ clip }) => clip.kind === "video" || clip.kind === "image",
   );
-  const frames = shown.map(({ clip, end }) => ({
+  // The source export shows at the edge's frame, and the source frame that shows it.
+  const sources = shown.map(({ clip, end }) =>
+    clip.mediaStart === null
+      ? 0
+      : sourceAt(
+          resolveClip(clip, timeline.fps),
+          framesOf(clip.start + (end ? clip.duration - 1 : 0), timeline.fps),
+        ),
+  );
+  const frames = shown.map(({ clip }, index) => ({
     clipId: clip.id,
-    time:
-      (clip.mediaStart ?? 0) +
-      frameTime(end ? clip.duration - 1 : 0, timeline.fps) * clip.playbackRate,
+    time: sourceSeconds(sources[index]!),
   }));
   const edge = clips.at(-1)!;
   picture = {
@@ -107,7 +121,7 @@ export function previewEditFrame(timeline: Timeline, intent: Intent) {
       frames.length === 2
         ? frames.map(
             (frame, index) =>
-              `${shown[index]!.end ? "Out" : "In"} ${formatTimecode(Math.floor((frame.time * timeline.fps.num) / timeline.fps.den + 1e-6), timeline.fps)}`,
+              `${shown[index]!.end ? "Out" : "In"} ${formatTimecode(frameShowing(sources[index]!, timeline.fps), timeline.fps)}`,
           )
         : [],
   };

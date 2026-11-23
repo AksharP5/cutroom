@@ -113,7 +113,7 @@ async function clipMedia(source: ResolveSource) {
       }
       let probe = probes.get(path);
       if (!probe) {
-        probe = probeMedia(path);
+        probe = probeMedia(path, project.path);
         probes.set(path, probe);
       }
       const facts = await probe;
@@ -261,16 +261,13 @@ export async function exportResolve(
       throw new HttpError(400, "The output folder is not a folder.");
   }
 
-  const found = await clipMedia(source);
-  const ramped = sourceClipWithSpeedAutomation(
-    source.timeline.clips,
-    found.media,
-  );
+  const ramped = sourceClipWithSpeedAutomation(source.timeline.clips);
   if (ramped)
     throw new HttpError(
       422,
       `Resolve timeline import cannot keep the editable speed ramp on "${oneLine(label(ramped))}". Choose MP4 or MOV to keep the ramp in the rendered video. To rebuild it in Resolve, import the clip at a constant speed and add the speed points with Retime Controls.`,
     );
+  const found = await clipMedia(source);
 
   if (requested === own) {
     directory = await projectStatePath(source.project, renders, true);

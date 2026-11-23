@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { parseFps } from "@hyperframes/core";
 import { applyAll } from "../src/shared/timeline/apply";
+import { fraction } from "../src/shared/timeline/piece";
 import { CommandSchema, TimelineSchema } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import { newTrack } from "../src/shared/timeline/tracks";
@@ -73,7 +74,7 @@ const facts = (
     rate: NTSC,
     width: 1920,
     height: 1080,
-    start: 0,
+    pictures: { origin: fraction(0n), rate: NTSC, count: 600n },
     timecode: options.timecode ?? 0,
   },
   audio:

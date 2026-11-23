@@ -15,6 +15,15 @@ import type { Project } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
 import { localMediaPath } from "../../shared/media";
 import { frameTime } from "../../shared/timeline/apply";
+import { resolveClip } from "../../shared/timeline/clipTiming";
+import {
+  frames,
+  positionAtSource,
+  secondsOf,
+  soundSource,
+  sourceSeconds,
+  subtract,
+} from "../../shared/timeline/piece";
 import { clipName } from "../../shared/timeline/labels";
 import { volumePoints } from "../../shared/timeline/mix";
 import type {
@@ -27,6 +36,8 @@ import { projectPath } from "../projects/path";
 
 /** Speech is found at this rate; a word needs no more to be told from a pause. */
 const ANALYSIS_RATE = 16_000;
+/** Seconds of quiet, as the timeline plays it, that count as a pause in speech. */
+const MIN_PAUSE = 0.3;
 
 const clipId = z.string().min(1).max(200);
 
@@ -79,18 +90,34 @@ const ffmpeg = () => {
 };
 
 /** The project file a clip plays, which must exist inside the project. */
-async function sourceOf(project: Project, composition: string, clip: Clip) {
+async function sourceOf(
+  project: Pick<Project, "path">,
+  composition: string,
+  clip: Clip,
+) {
   const path = clip.src && localMediaPath(composition, clip.src);
   if (!path || clip.mediaStart === null)
     throw new HttpError(422, `${clipName(clip)} has no file in the project.`);
   return projectPath(project, path);
 }
 
-/** What a clip plays of its file: from its source offset for its length, at its speed. */
-function window(clip: Clip, fps: Timeline["fps"]) {
-  const seconds = frameTime(clip.duration, fps) * clip.playbackRate;
-  return ["-ss", String(clip.mediaStart ?? 0), "-t", String(seconds)];
+/**
+ * What a clip's sound reads of its file, in source seconds: from the source the mixer reads at
+ * the clip's first output sample to the source at its last, through a ramp as well.
+ */
+export function soundWindow(clip: Clip, fps: Timeline["fps"]) {
+  const piece = resolveClip(clip, fps);
+  const { start, end } = soundSource(piece);
+  const from = sourceSeconds(start);
+  return { piece, from, seconds: sourceSeconds(end) - from };
 }
+
+const window = ({ from, seconds }: ReturnType<typeof soundWindow>) => [
+  "-ss",
+  String(from),
+  "-t",
+  String(seconds),
+];
 
 async function run(args: string[], output: "stdout" | "stderr") {
   const child = Bun.spawn([ffmpeg(), ...args], {
@@ -113,27 +140,19 @@ async function run(args: string[], output: "stdout" | "stderr") {
 }
 
 /**
- * A clip's sound as heard on the timeline, mono at the analysis rate. Paths and numbers are the
- * only things FFmpeg is given.
+ * The source a clip's sound plays, mono at the analysis rate and at the source's own speed.
+ * Paths and numbers are the only things FFmpeg is given.
  */
-async function decode(path: string, clip: Clip, fps: Timeline["fps"]) {
-  if (clip.playbackRate < 0.5 || clip.playbackRate > 2)
-    throw new HttpError(
-      422,
-      `${clipName(clip)} plays at ${clip.playbackRate}x; ducking reads voices from 0.5x to 2x.`,
-    );
+async function decode(path: string, sound: ReturnType<typeof soundWindow>) {
   const { stdout } = await run(
     [
       "-v",
       "error",
-      ...window(clip, fps),
+      ...window(sound),
       ...localMediaInputOptions,
       "-i",
       path,
       "-vn",
-      ...(clip.playbackRate === 1
-        ? []
-        : ["-af", `atempo=${clip.playbackRate}`]),
       "-ac",
       "1",
       "-ar",
@@ -156,7 +175,7 @@ export async function measureLoudness(
     [
       "-hide_banner",
       "-nostats",
-      ...(part ? window(part.clip, part.fps) : []),
+      ...(part ? window(soundWindow(part.clip, part.fps)) : []),
       ...localMediaInputOptions,
       "-i",
       path,
@@ -235,24 +254,34 @@ export async function loudnessPlan(
   };
 }
 
-/** Times the voice speaks, in its own seconds: everything but pauses a third of a second or longer. */
-function speech(samples: Float32Array) {
+/**
+ * Times a voice speaks on the bed's clock: everything but pauses a third of a second or longer
+ * as the timeline plays them. `samples` is the voice's source at its own speed, and `toBed`
+ * places a source second, so a pause is measured after the speed is applied, through a ramp too.
+ */
+function speech(
+  samples: Float32Array,
+  slowest: number,
+  toBed: (seconds: number) => number,
+) {
   const signal = { sampleRate: ANALYSIS_RATE, channels: [samples] };
   const duration = samples.length / ANALYSIS_RATE;
   const level = loudness(signal).lufsIntegrated;
   if (level === null) return [];
-  // A pause is well under the voice's own level, whatever level it was recorded at.
+  // A pause is well under the voice's own level, whatever level it was recorded at. The
+  // shortest source a timeline pause can span is found first, then measured where it plays.
   const quiet = silence(signal, {
     thresholdDb: Math.max(-60, Math.min(-30, level - 20)),
-    minMs: 300,
-  });
+    minMs: MIN_PAUSE * 1000 * slowest,
+  }).filter((pause) => toBed(pause.end) - toBed(pause.start) >= MIN_PAUSE);
   const spans: { start: number; end: number }[] = [];
   let from = 0;
   for (const pause of quiet) {
-    if (pause.start > from) spans.push({ start: from, end: pause.start });
+    if (pause.start > from)
+      spans.push({ start: toBed(from), end: toBed(pause.start) });
     from = pause.end;
   }
-  if (from < duration) spans.push({ start: from, end: duration });
+  if (from < duration) spans.push({ start: toBed(from), end: toBed(duration) });
   return spans;
 }
 
@@ -357,7 +386,7 @@ function voicesFor(timeline: Timeline, bed: Clip, request: DuckRequest) {
 
 /** Volume points that duck a bed under its voices, measured from what they play. */
 export async function duckPlan(
-  project: Project,
+  project: Pick<Project, "path">,
   composition: string,
   timeline: Timeline,
   request: DuckRequest,
@@ -373,17 +402,25 @@ export async function duckPlan(
   const spans = (
     await Promise.all(
       voices.map(async (voice) => {
+        const sound = soundWindow(voice, fps);
         const samples = await decode(
           await sourceOf(project, composition, voice),
-          voice,
-          fps,
+          sound,
         );
-        // On the bed's clock: the voice's own seconds from where it starts on the bed.
-        const offset = frameTime(voice.start - bed.start, fps);
-        return speech(samples).map(({ start, end }) => ({
-          start: start + offset,
-          end: end + offset,
-        }));
+        const { curve } = sound.piece;
+        const slowest =
+          typeof curve === "object"
+            ? Math.min(...curve.points.map(({ v }) => v))
+            : Number(curve);
+        // On the bed's clock: where the voice's source plays, back through its source map.
+        return speech(samples, slowest, (seconds) =>
+          secondsOf(
+            subtract(
+              positionAtSource(sound.piece, sound.from + seconds),
+              frames(bed.start, fps),
+            ),
+          ),
+        );
       }),
     )
   ).flat();

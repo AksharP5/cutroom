@@ -3,7 +3,14 @@ import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import { readPlaybackRate } from "@hyperframes/parsers";
 import { parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
-import { offsetSourceTime } from "../../shared/timeline/time.ts";
+import {
+  attrMicros,
+  decodeLocal,
+  micros,
+  resolvePiece,
+  sourceAt,
+  sourceSeconds,
+} from "../../shared/timeline/piece.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
 
 /** Restore the exact frame grid before FFmpeg samples a saved video transition handle. */
@@ -34,16 +41,37 @@ export function transitionSourceTimes(html: string): string {
           (alignment === "center" || alignment === "end") &&
           !parseRateLane(attrs["data-automation"]) &&
           location &&
-          source?.trim()
+          source?.trim() &&
+          Number.isFinite(Number(source))
         ) {
-          const seconds = Number(source);
-          const exact = offsetSourceTime(
-            seconds,
-            0,
+          // The in-point as the element's source map has it, which every other consumer reads.
+          // A reference start ends on a frame like any other, and a frame stands in for it.
+          const start = Number(attrs["data-start"]);
+          const at = decodeLocal(
+            attrMicros(Number.isFinite(start) ? start : 0),
             rate,
-            readPlaybackRate((key) => attrs[key] ?? null),
           );
-          if (Number.isFinite(exact) && exact >= 0 && exact !== seconds)
+          const window = { start: at, end: at };
+          const exact = sourceSeconds(
+            sourceAt(
+              resolvePiece(
+                {
+                  id: "",
+                  src: "",
+                  path: "",
+                  ownFps: rate,
+                  origin: micros(0),
+                  local: window,
+                  edge: window,
+                  curve: String(readPlaybackRate((key) => attrs[key] ?? null)),
+                  stored: { mediaStart: Number(attrMicros(source)) },
+                },
+                rate,
+              ),
+              at,
+            ),
+          );
+          if (exact >= 0 && exact !== Number(source))
             edits.push({
               start: location.startOffset,
               end: location.endOffset,

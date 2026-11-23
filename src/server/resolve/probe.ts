@@ -1,6 +1,8 @@
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { z } from "zod";
-import { frameGrid } from "../media/frames";
+import { sourcePictures } from "../media/pictureIndex";
+import { fraction } from "../../shared/timeline/piece";
+import type { PictureIndex } from "../../shared/timeline/piece";
 import { localMediaInputOptions } from "../media/input";
 import { timecodeFrames } from "./fcpxml";
 import type { Rate } from "./fcpxml";
@@ -13,8 +15,8 @@ export interface MediaFacts {
     rate: Rate;
     width: number;
     height: number;
-    /** Where export reads the first frame, in seconds on the media timeline. */
-    start: number;
+    /** The pictures export selects from, which Resolve counts as its source frames. */
+    pictures: PictureIndex;
     /** Frames before the first one, from the file's timecode; Resolve numbers source frames from it. */
     timecode: number;
   } | null;
@@ -56,8 +58,14 @@ const parseRate = (text: string | undefined): Rate | null => {
     : null;
 };
 
-/** Probe a local video or audio file; null when FFmpeg cannot read it. */
-export async function probeMedia(path: string): Promise<MediaFacts | null> {
+/**
+ * Probe a local video or audio file; null when FFmpeg cannot read it. A project's files keep
+ * their picture index in its cache.
+ */
+export async function probeMedia(
+  path: string,
+  projectDir?: string,
+): Promise<MediaFacts | null> {
   const ffprobe = findFfBinary("ffprobe", { configuredMustExist: true });
   if (!ffprobe) throw new Error("FFmpeg's ffprobe is needed to read media.");
   const child = Bun.spawn(
@@ -82,7 +90,20 @@ export async function probeMedia(path: string): Promise<MediaFacts | null> {
   );
   const sound = streams.find((stream) => stream.codec_type === "audio");
   const rate = parseRate(picture?.r_frame_rate);
-  const grid = picture && rate ? await frameGrid(path) : null;
+  const indexed =
+    picture && rate ? await sourcePictures(path, { projectDir }) : null;
+  // A file export cannot index still has its pictures, on the grid its rate reports.
+  const pictures: PictureIndex | null =
+    indexed?.index ??
+    (rate && {
+      origin: fraction(0n),
+      rate,
+      count: format.duration
+        ? BigInt(
+            Math.max(1, Math.round((format.duration * rate.num) / rate.den)),
+          )
+        : 2n ** 53n,
+    });
   const timecode =
     picture?.tags?.timecode ??
     streams.find((stream) => stream.tags?.timecode)?.tags?.timecode ??
@@ -90,12 +111,12 @@ export async function probeMedia(path: string): Promise<MediaFacts | null> {
   return {
     path,
     video:
-      picture && rate && picture.width && picture.height
+      picture && rate && pictures && picture.width && picture.height
         ? {
             rate,
             width: picture.width,
             height: picture.height,
-            start: grid?.start ?? 0,
+            pictures,
             timecode: (timecode && timecodeFrames(timecode, rate)) || 0,
           }
         : null,

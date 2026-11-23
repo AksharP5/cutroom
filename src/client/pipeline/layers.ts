@@ -1,6 +1,5 @@
-import { offsetSourceTime } from "../../shared/timeline/time";
 import { resolveClip } from "../../shared/timeline/clipTiming";
-import { frames, sourceAt } from "../../shared/timeline/piece";
+import { frames, sourceAt, sourceSeconds } from "../../shared/timeline/piece";
 import type { Piece, SourceTime } from "../../shared/timeline/piece";
 import { frameTime, toSeconds } from "../../shared/timeline/apply";
 import { framesAfter, framesBefore } from "../../shared/timeline/transition";
@@ -14,8 +13,8 @@ type Fit = Plan["drawable"][string];
 export interface Shown {
   clip: Clip;
   fit: Fit;
-  /** Source seconds the runtime seeks this clip's media to at the frame. */
-  time: number;
+  /** Source seconds the runtime seeks this clip's media to at the frame, read on first use. */
+  readonly time: number;
   /**
    * The source time export selects this clip's picture at, exactly. Exact arithmetic, so only
    * a picture that is drawn asks for it, not every frame a lookahead visits.
@@ -189,19 +188,17 @@ function layerQuery(
             brightness = progress < 0.5 ? 1 - progress * 2 : 0;
           } else if (!under("out")) opacity = still * (1 - progress);
       }
+      let exact: SourceTime | undefined;
+      const source = () =>
+        (exact ??= sourceAt(clipPiece(clip, fps), frames(frame, fps)));
       shown.push({
         clip,
         fit,
-        time:
-          offsetSourceTime(
-            clip.mediaStart,
-            frame - clip.start,
-            fps,
-            clip.playbackRate,
-          ) +
+        get time() {
           // The runtime seeks just past the frame's start, as HyperFrames does.
-          1e-5,
-        source: () => sourceAt(clipPiece(clip, fps), frames(frame, fps)),
+          return sourceSeconds(source()) + 1e-5;
+        },
+        source,
         opacity,
         brightness,
         level,

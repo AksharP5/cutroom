@@ -16,6 +16,15 @@ import type { Grade } from "../../shared/timeline/grade";
 import { REGION_EASE_CURVES } from "../../shared/timeline/region";
 import type { Region } from "../../shared/timeline/region";
 import { elementSpan } from "../../shared/timeline/regionStyle";
+import { resolveClip } from "../../shared/timeline/clipTiming";
+import {
+  AUDIO_SAMPLE_RATE,
+  frames,
+  pictureAt,
+  soundSource,
+  sourceAt,
+  sourceSeconds,
+} from "../../shared/timeline/piece";
 import { isAudioKind } from "../../shared/timeline/schema";
 import type {
   Clip,
@@ -327,27 +336,32 @@ const sourceOrigin = (media: ClipMedia): Rational =>
     ? framesAt(media.facts.video.timecode, media.facts.video.rate)
     : rational(0);
 
-/** The source time a clip starts at, on the frame export shows first. */
-function sourceStart(clip: Clip, media: ClipMedia): Rational {
+/**
+ * The source a clip starts at in Resolve: the picture export shows at its first frame, counted
+ * on Resolve's frame grid, or for sound alone the source sample the mixer reads first.
+ */
+function sourceStart(clip: Clip, media: ClipMedia, fps: Fps): Rational {
   if (media.kind === "still") return rational(0);
-  const seconds = clip.mediaStart ?? 0;
+  const piece = resolveClip(clip, fps);
   const { video, audio } = media.facts;
   if (video) {
-    const frame = Math.max(
-      0,
-      Math.floor(
-        (seconds - video.start) * (video.rate.num / video.rate.den) + 1e-6,
-      ),
+    const ordinal = pictureAt(
+      video.pictures,
+      sourceAt(piece, frames(clip.start, fps)),
     );
-    return add(sourceOrigin(media), framesAt(frame, video.rate));
+    return add(
+      sourceOrigin(media),
+      framesAt(Number(ordinal ?? 0n), video.rate),
+    );
   }
-  const rate = audio?.sampleRate ?? 48_000;
-  return rational(Math.round(seconds * rate), rate);
+  const rate = audio?.sampleRate ?? AUDIO_SAMPLE_RATE;
+  const { start } = soundSource(piece);
+  return rational(Math.round(sourceSeconds(start) * rate), rate);
 }
 
 /** Resolve keeps keys at their full-source offsets when the script changes speed. */
-function keyOrigin(clip: Clip, media: ClipMedia): Rational {
-  const start = sourceStart(clip, media);
+function keyOrigin(clip: Clip, media: ClipMedia, fps: Fps): Rational {
+  const start = sourceStart(clip, media, fps);
   if (clip.playbackRate === 1) return start;
   const origin = sourceOrigin(media);
   const elapsed = add(start, rational(-origin.num, origin.den));
@@ -375,7 +389,7 @@ const num = (value: number) => String(Number(value.toFixed(6)) + 0);
 type Picture = Omit<KeyframeValues, "crop"> & { crop: KeyframeValues["crop"] };
 
 /** What a clip draws at a clip-local frame, its zooms included. */
-function pictureAt(context: Context, clip: Clip, frame: number): Picture {
+function drawnAt(context: Context, clip: Clip, frame: number): Picture {
   const zoom = zoomAt(
     context.zooms.get(clip.id) ?? [],
     frame,
@@ -459,8 +473,7 @@ function keysOf<P extends KeyframeProperty>(
     });
   const values = Array.from(
     { length: clip.duration },
-    (_, frame) =>
-      pictureAt(context, clip, frame)[property] as KeyframeValues[P],
+    (_, frame) => drawnAt(context, clip, frame)[property] as KeyframeValues[P],
   );
   return simplify(values, NUMBERS[property]);
 }
@@ -495,7 +508,7 @@ function pictureAdjustments(
 ): Element[] {
   const { fps } = context;
   const { height } = context.input.size;
-  const first = pictureAt(context, clip, 0);
+  const first = drawnAt(context, clip, 0);
   const adjustments: Element[] = [];
 
   const crop = keysOf(context, clip, "crop");
@@ -734,20 +747,18 @@ function isSound(clip: Clip, media: ClipMedia | undefined): media is FileMedia {
   );
 }
 
-/** The native Resolve speed command sets one constant rate per clip. */
-export function sourceClipWithSpeedAutomation(
-  clips: readonly Clip[],
-  media: ReadonlyMap<string, ClipMedia>,
-) {
-  return clips.find((clip) => {
-    const source = media.get(clip.id);
-    return (
-      source?.kind === "file" &&
-      (isPicture(clip, source) || isSound(clip, source)) &&
-      parseRateLane(clip.automation) !== null
-    );
-  });
-}
+/**
+ * The native Resolve speed command sets one constant rate per clip, so a picture or sound on a
+ * speed ramp is refused. Read from the timeline alone, before any media is probed.
+ */
+export const sourceClipWithSpeedAutomation = (clips: readonly Clip[]) =>
+  clips.find(
+    (clip) =>
+      clip.src !== null &&
+      (clip.kind === "video" ||
+        (isAudioKind(clip.kind) && !clip.versionSilent)) &&
+      parseRateLane(clip.automation) !== null,
+  );
 
 /** Resolve a timeline as Cutroom shows it: an FCPXML document and its markers. */
 export function planResolveTimeline(input: PlanInput): Plan {
@@ -1041,7 +1052,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
   /** A sound clip as a child of its picture. Resolve places these at sequence time. */
   const soundChild = (clip: Clip, file: FileMedia) => {
     const mediaOf = soundOf(file);
-    const start = sourceStart(clip, mediaOf);
+    const start = sourceStart(clip, mediaOf, fps);
     const audible = clip.enabled && !context.silent(clip);
     const { start: at, end } = soundTarget(clip);
     return element(
@@ -1065,10 +1076,14 @@ export function planResolveTimeline(input: PlanInput): Plan {
     attach: { lane?: number; offset: Rational },
   ) => {
     const own = media(clip)!;
-    const start = sourceStart(clip, own);
+    const start = sourceStart(clip, own, fps);
     const visible = clip.enabled && !context.hidden.has(clip.track);
     const { start: at, end } = pictureTarget(clip);
-    const children = pictureAdjustments(context, clip, keyOrigin(clip, own));
+    const children = pictureAdjustments(
+      context,
+      clip,
+      keyOrigin(clip, own, fps),
+    );
     if (separate(clip))
       return element(
         "asset-clip",
@@ -1148,7 +1163,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
   spineClips.forEach((clip, index) => {
     if (clip.start > cursor) gap(cursor, clip.start);
     const node = pictureElement(clip, { offset: framesAt(clip.start, fps) });
-    const start = sourceStart(clip, media(clip)!);
+    const start = sourceStart(clip, media(clip)!, fps);
     slots.push({
       start: clip.start,
       end: clip.start + clip.duration,
@@ -1278,7 +1293,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
   ];
   for (const clip of loose) {
     const own = soundOf(media(clip) as FileMedia);
-    const start = sourceStart(clip, own);
+    const start = sourceStart(clip, own, fps);
     const audible = clip.enabled && !context.silent(clip);
     const { start: at, end } = soundTarget(clip);
     attach(clip, (offset) =>
@@ -1294,7 +1309,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
           enabled: audible ? undefined : 0,
           audioRole: "dialogue",
         },
-        volumeAdjustment(context, clip, keyOrigin(clip, own)),
+        volumeAdjustment(context, clip, keyOrigin(clip, own, fps)),
       ),
     );
   }

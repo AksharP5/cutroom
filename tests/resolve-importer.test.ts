@@ -6,6 +6,7 @@ import { writeResolveImporter } from "../src/server/resolve/importer";
 import { planResolveTimeline } from "../src/server/resolve/plan";
 import type { ClipMedia } from "../src/server/resolve/plan";
 import { applyAll } from "../src/shared/timeline/apply";
+import { fraction } from "../src/shared/timeline/piece";
 import { CommandSchema, TimelineSchema } from "../src/shared/timeline/schema";
 import { newTrack } from "../src/shared/timeline/tracks";
 import { projectFixture } from "./project-fixture";
@@ -124,7 +125,12 @@ test.skipIf(!Bun.which("python3"))(
               kind: "file",
               facts: {
                 path: source,
-                video: { rate: fps, ...size, timecode: 0, start: 0 },
+                video: {
+                  rate: fps,
+                  ...size,
+                  timecode: 0,
+                  pictures: { origin: fraction(0n), rate: fps, count: 240n },
+                },
                 audio: null,
                 duration: 8,
               },

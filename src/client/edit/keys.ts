@@ -2,11 +2,12 @@ import { isAudioKind } from "../../shared/timeline/schema";
 import {
   clipEnd,
   cutRoom,
-  frameTime,
   planBatchTransitions,
   toFrames,
 } from "../../shared/timeline/apply";
 import { takesTransition } from "../../shared/timeline/transition";
+import { resolveClip } from "../../shared/timeline/clipTiming";
+import { frameShowing, frames, sourceAt } from "../../shared/timeline/piece";
 import { TimelineError } from "../../shared/timeline/errors";
 import { activeVersion } from "../../shared/timeline/versions";
 import type {
@@ -522,9 +523,17 @@ export function matchFrame(
       sourceDuration === null
     )
       return [];
-    const seconds =
-      mediaStart +
-      frameTime(target.frame - clip.start, timeline.fps) * clip.playbackRate;
+    // The source viewer's frame that shows the picture export shows under the playhead.
+    const frame = Math.min(
+      toFrames(sourceDuration, timeline.fps) - 1,
+      frameShowing(
+        sourceAt(
+          resolveClip(clip, timeline.fps),
+          frames(target.frame, timeline.fps),
+        ),
+        timeline.fps,
+      ),
+    );
     return [
       {
         id: clip.id,
@@ -542,7 +551,7 @@ export function matchFrame(
                   partner.hasAudio,
               )),
         },
-        frame: toFrames(seconds, timeline.fps),
+        frame,
       },
     ];
   });
