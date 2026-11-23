@@ -462,7 +462,7 @@
 .inspector-net span {
   color: var(--text-tertiary);
 }
-.inspector-net output {
+.inspector-net :is(output, .inspector-net-value) {
   flex: 1;
   text-align: right;
   font: var(--weight-medium) var(--type-2xs) / var(--leading-tight)

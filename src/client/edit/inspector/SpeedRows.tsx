@@ -28,9 +28,10 @@ export function SourceOut({ clip, fps }: { clip: Clip; fps: Fps }) {
       title="The last source frame the clip plays"
     >
       <span aria-hidden="true">Out</span>
-      <output aria-label="Source out" className="mono">
+      {/* Not an <output>: that is a live region, and Out changes with every speed edit. */}
+      <span aria-label="Source out" className="inspector-net-value mono">
         <TimecodeText timecode={formatTimecode(out, fps)} />
-      </output>
+      </span>
     </div>
   );
 }
