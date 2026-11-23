@@ -17,6 +17,7 @@ import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { readTrackMix } from "../src/server/timeline/mix";
 import { projectFixture } from "./project-fixture";
+import { addStarterClips } from "./starter-clips";
 
 const timelineFixture = async () => {
   const fixture = await projectFixture();
@@ -25,6 +26,7 @@ const timelineFixture = async () => {
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Timeline" });
+  await addStarterClips(project);
   const files = () =>
     Promise.all(
       ["index.html", "cutroom.json"].map((file) =>
@@ -62,6 +64,7 @@ test("a project summary reports the picture size and length the editor would sho
       height: 1920,
       duration: 20,
     });
+    await addStarterClips(portrait);
     expect(await summary(portrait.id)).toEqual({
       width: 1080,
       height: 1920,
@@ -1834,6 +1837,7 @@ test("MCP clipboard snapshots survive cuts and timeline switches, paste once, an
     const restored = await edit("index.html", [paste]);
     expect(restored.timeline.clips).toHaveLength(2);
     const another = await fixture.store.create({ name: "Other project" });
+    await addStarterClips(another);
     const anotherView = TimelineViewSchema.parse(
       await (await fixture.request(`/projects/${another.id}/timeline`)).json(),
     );

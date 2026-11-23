@@ -24,6 +24,7 @@ import {
 } from "../src/shared/timeline/reviewChanges";
 import { editLabel } from "../src/shared/timeline/labels";
 import { projectFixture } from "./project-fixture";
+import { addStarterClips } from "./starter-clips";
 
 const fps = { num: 30000, den: 1001 };
 
@@ -34,6 +35,7 @@ test("an unaccepted mark written by #30 survives the new opacity projection and 
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Legacy" });
+  await addStarterClips(project);
   const path = `/projects/${project.id}`;
   try {
     const source =
@@ -206,6 +208,7 @@ test("static opacity preserves other CSS, reads back exactly, and takes one undo
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Inspector" });
+  await addStarterClips(project);
   const path = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
@@ -255,6 +258,7 @@ test("the Changes ledger credits owner and agent, accepts one edit at a time and
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Ledger" });
+  await addStarterClips(project);
   const path = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
@@ -344,6 +348,7 @@ test("undo hides owner and agent rows; redo restores the same pending edit witho
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Undo ledger" });
+  await addStarterClips(project);
   const path = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
@@ -692,6 +697,7 @@ test("position round-trips native baselines, preserves CSS and linked audio, and
   const routes = createTimelineRoutes(fixture.store, fixture.review);
   fixture.app.route("/api/cutroom", routes);
   const project = await fixture.store.create({ name: "Position" });
+  await addStarterClips(project);
   const path = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(

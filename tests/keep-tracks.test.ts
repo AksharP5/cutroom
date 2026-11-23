@@ -19,6 +19,7 @@ import {
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { projectFixture } from "./project-fixture";
+import { addStarterClips } from "./starter-clips";
 
 const source = `<main data-composition-id="main" data-duration="12" data-fps="30">
 <div id="picture" data-start="0" data-duration="12" data-track-index="0">Picture</div>
@@ -84,6 +85,7 @@ test("first lifts persist inferred tracks on disk, with history and MCP targetin
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Persistent tracks" });
+  await addStarterClips(project);
   const base = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(

@@ -142,10 +142,7 @@ type PageFormat = Pick<
   "name" | "width" | "height" | "fps" | "duration"
 >;
 
-/**
- * A timeline page with the project's fonts and styles, holding `clips`: empty for a new timeline,
- * or the starter clips of a new project.
- */
+/** A timeline page with the project's fonts and styles, holding `clips`: empty for a new timeline or project. */
 export function timelinePage(input: PageFormat, clips = ""): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><title>${escapeHtml(input.name)}</title>
@@ -164,31 +161,9 @@ ${PROJECT_FONTS.map(
 html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 body { color: #ededed; background: #111111; font-family: "Instrument Sans", system-ui, sans-serif; }
 .stage { position: relative; width: 100%; height: 100%; overflow: hidden; }
-.background { position: absolute; inset: 0; background: #111111; }
-.title {
-  position: absolute; left: 12%; right: 12%; bottom: 44%; margin: 0;
-  font-size: ${Math.round(Math.min(input.width / 20, input.height / 9))}px;
-  font-weight: 500; letter-spacing: -.035em; line-height: 1.1;
-  overflow-wrap: anywhere;
-}
-.caption {
-  position: absolute; left: 12%; right: 12%; top: 61%; margin: 0;
-  font-size: ${Math.round(Math.min(input.width, input.height) / 36)}px;
-  font-weight: 400; line-height: 1.5; color: #a8a8a8;
-}
 </style></head>
 <body><main id="main" data-composition-id="main" data-no-timeline data-width="${input.width}" data-height="${input.height}" data-fps="${fpsToFfmpegArg(input.fps)}" data-duration="${input.duration}" class="stage">
 ${clips}</main></body></html>\n`;
-}
-
-function starter(input: z.infer<typeof CreateProjectSchema>): string {
-  return timelinePage(
-    input,
-    `<div id="rule" class="clip background" data-start="0" data-duration="${input.duration}" data-track-index="0" data-label="Background"></div>
-<div id="headline" class="clip title" data-start="0" data-duration="${input.duration}" data-track-index="1" data-label="Project title">${escapeHtml(input.name)}</div>
-<div id="caption" class="clip caption" data-start="0" data-duration="${input.duration}" data-track-index="2" data-label="Getting started">Drop media in, or ask your agent to start.</div>
-`,
-  );
 }
 
 /** A project folder's name stem, from its display name. */
@@ -584,7 +559,11 @@ export async function createProjectStore(options: {
           Bun.resolveSync("gsap/dist/gsap.min.js", import.meta.dir),
           join(vendor, "gsap.min.js"),
         );
-        await writeFile(join(path, "index.html"), starter(input));
+        // No declared length: the first clips set it, as they do once every clip is deleted.
+        await writeFile(
+          join(path, "index.html"),
+          timelinePage({ ...input, duration: input.duration ?? 0 }),
+        );
         await writeFile(
           join(path, PROJECT_DOCUMENT_PATH),
           `${JSON.stringify(emptyProjectDocument(), null, 2)}\n`,

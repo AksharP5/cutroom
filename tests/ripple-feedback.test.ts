@@ -14,6 +14,7 @@ import {
   overwriteFeedback,
   rippleFeedback,
 } from "../src/client/edit/feedback";
+import { addStarterClips } from "./starter-clips";
 
 const parsed = (body: string) =>
   parseComposition(
@@ -232,6 +233,7 @@ test("composition reads wait for an admitted edit and return its source with its
   const project = await fixture.store.create({
     name: "Consistent attribution",
   });
+  await addStarterClips(project);
   const original = await readSource(project, "index.html");
   const changed = original.content.replaceAll(
     "Consistent attribution",

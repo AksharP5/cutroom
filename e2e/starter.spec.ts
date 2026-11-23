@@ -1,53 +1,45 @@
 import { expect, test } from "./fixtures";
-import { ProjectSchema } from "../src/shared/project";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
 
-test("a fresh starter loads its local font and keeps the same picture after seeking backwards", async ({
+test("a new project opens on an empty V1 and A1, and its first clip sets the length", async ({
   page,
   request,
 }) => {
-  const project = ProjectSchema.parse(
-    await (
-      await request.post("/api/cutroom/projects", {
-        data: { name: "First cut & next steps", duration: 2 },
-      })
-    ).json(),
+  await page.goto("/");
+  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.keyboard.type("First cut");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/#project\//);
+  const id = /#project\/([\w-]+)/.exec(page.url())![1];
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  await expect(timeline.locator(".tl-head")).toHaveText([/V1/, /A1/]);
+  await expect(timeline.locator("[data-clip]")).toHaveCount(0);
+  const hint = page.locator(".edit-empty");
+  await expect(hint).toHaveText("Drop media in, or ask your agent to start.");
+
+  const route = `/api/cutroom/projects/${id}`;
+  const view = TimelineViewSchema.parse(
+    await (await request.get(`${route}/timeline`)).json(),
   );
-  await page.goto(`/#project/${project.id}`);
-  const preview = page.frameLocator("iframe[data-live]");
-  await expect(preview.locator("#headline")).toHaveText(project.name);
-  await expect(preview.locator("#caption")).toHaveText(
-    "Drop media in, or ask your agent to start.",
-  );
-  expect(
-    await preview.locator("#headline").evaluate(async (title) => {
-      await title.ownerDocument.fonts.ready;
-      return [...title.ownerDocument.fonts].some(
-        (font) => font.family === "Instrument Sans" && font.status === "loaded",
-      );
-    }),
-  ).toBe(true);
-  for (const [id, label] of [
-    ["rule", "Background"],
-    ["headline", "Project title"],
-    ["caption", "Getting started"],
-  ] as const) {
-    await expect(page.locator(`[data-clip-label="${id}"]`)).toContainText(
-      label,
-    );
-  }
-  const initial = await page.locator("iframe[data-live]").screenshot();
-  const time = page.getByRole("button", {
-    name: "Current time. Click to type a time.",
+  const added = await request.post(`${route}/commands`, {
+    data: {
+      expectedRevision: view.revision,
+      commands: [
+        {
+          type: "insert",
+          track: 0,
+          at: 0,
+          clip: { kind: "title", text: "Hello", duration: 60 },
+        },
+      ],
+    },
   });
-  for (const value of ["00:00:01:20", "00:00:00:10", "00:00:00:00"]) {
-    await time.click();
-    const input = page.getByRole("textbox", { name: "Go to time" });
-    await input.pressSequentially(value.replaceAll(":", ""));
-    await input.press("Enter");
-    await expect(time).toHaveText(value);
-    await expect(preview.locator("#headline")).toBeVisible();
-    expect(await page.locator("iframe[data-live]").screenshot()).toEqual(
-      initial,
-    );
-  }
+  expect(added.ok()).toBe(true);
+  await expect(timeline.locator("[data-clip]")).toHaveCount(1);
+  await expect(hint).toHaveCount(0);
+  expect(
+    TimelineViewSchema.parse(
+      await (await request.get(`${route}/timeline`)).json(),
+    ).timeline.duration,
+  ).toBe(60);
 });

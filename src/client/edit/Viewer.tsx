@@ -899,6 +899,7 @@ export function Viewer({
     top: Math.floor((stageSize.height - height) / 2),
   };
   const armed = mode === "draw" || mode === "comment";
+  const empty = useTimeline((state) => state.view?.timeline.clips.length === 0);
   // The next candidate mounts once a dropped one has left: never more than two documents.
   const slots = [
     ...new Set([handoff.confirmed?.gen, handoff.retiring ?? candidate?.gen]),
@@ -978,6 +979,11 @@ export function Viewer({
           ) !== "function" ||
             typeof Reflect.get(HTMLCanvasElement.prototype, "requestPaint") !==
               "function") && <AdjustmentGradeNotice />}
+        {empty && (
+          <p className="edit-empty">
+            Drop media in, or ask your agent to start.
+          </p>
+        )}
         {copies && copies.ready < copies.total && (
           <div className="edit-preparing" role="status">
             {copies.failed

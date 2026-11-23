@@ -8,12 +8,14 @@ import {
 import { createReviewService } from "../src/server/projects/review";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { projectFixture } from "./project-fixture";
+import { addStarterClips } from "./starter-clips";
 
 test("agent clip marks survive reload, clear on Accept or return to accepted source, and include source changes", async () => {
   const fixture = await projectFixture();
   const { store, review, app, request } = fixture;
   app.route("/api/cutroom", createTimelineRoutes(store, review));
   const project = await store.create({ name: "Agent marks" });
+  await addStarterClips(project);
   const path = `/projects/${project.id}`;
   const actor = review.agent(project, undefined);
   const read = async () =>
@@ -101,6 +103,7 @@ test("unreadable review metadata does not block timeline reads or source repairs
   const { store, review, app, request } = fixture;
   app.route("/api/cutroom", createTimelineRoutes(store, review));
   const project = await store.create({ name: "Repair source" });
+  await addStarterClips(project);
   const path = `/projects/${project.id}`;
   try {
     await mkdir(`${project.path}/.cutroom`, { recursive: true });
@@ -126,6 +129,7 @@ test("two claimed notes own their individual edits, and accepting either clears 
   const { store, review, app, request } = fixture;
   app.route("/api/cutroom", createTimelineRoutes(store, review));
   const project = await store.create({ name: "Two claimed notes" });
+  await addStarterClips(project);
   const actor = review.agent(project, undefined);
   const base = `/projects/${project.id}`;
   const notes = await Promise.all(
@@ -224,6 +228,7 @@ test("an unlabelled agent edit is named from its commands, and unaccepted agent 
   const { store, review, app, request } = fixture;
   app.route("/api/cutroom", createTimelineRoutes(store, review));
   const project = await store.create({ name: "Ledger cap" });
+  await addStarterClips(project);
   const path = `/projects/${project.id}`;
   // One agent-edited clip and 210 others, so a single owner batch writes more rows than the cap.
   const clips = Array.from(
@@ -298,6 +303,7 @@ test("shared script edits make one composition row that accepts, undoes, and red
   const { store, review, app, request } = fixture;
   app.route("/api/cutroom", createTimelineRoutes(store, review));
   const project = await store.create({ name: "Shared script review" });
+  await addStarterClips(project);
   const path = `/projects/${project.id}`;
   const read = () => review.clipChanges(project, "index.html");
   const save = async (content: string) => {

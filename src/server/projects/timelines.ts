@@ -6,7 +6,7 @@ import { HttpError } from "../../shared/errors";
 import { sourceUrl } from "../../shared/media";
 import { isTimelinePath } from "../../shared/sourcePaths";
 import {
-  NEW_PROJECT_SECONDS,
+  NEW_TIMELINE_SECONDS,
   PROJECT_DOCUMENT_PATH,
   ProjectDocumentSchema,
   TIMELINE_NAME_BYTES,
@@ -288,7 +288,7 @@ export async function createTimeline(
             width,
             height,
             fps,
-            duration: NEW_PROJECT_SECONDS,
+            duration: NEW_TIMELINE_SECONDS,
           }),
       );
       if (!path) throw new HttpError(409, "Too many timelines have that name.");

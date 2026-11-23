@@ -15,10 +15,12 @@ import { createTimelineRoutes } from "../src/server/timeline/routes";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { projectFixture } from "./project-fixture";
+import { addStarterClips } from "./starter-clips";
 
 test("a newer writer owns an overlapping file even after restoring identical bytes", async () => {
   const fixture = await projectFixture();
   const project = await fixture.store.create({ name: "Overlap" });
+  await addStarterClips(project);
   const base = `/api/cutroom/projects/${project.id}`;
   const agent = externalHistoryCredential();
   const stranger = externalHistoryCredential();
@@ -103,6 +105,7 @@ test("a newer writer owns an overlapping file even after restoring identical byt
 test("source creation stays applied when a later composition depends on it", async () => {
   const fixture = await projectFixture();
   const project = await fixture.store.create({ name: "Dependent scene" });
+  await addStarterClips(project);
   const editor = createHyperframesApi(fixture.store, fixture.review);
   fixture.app.route("/api/editor", editor);
   const base = `/projects/${project.id}`;
@@ -166,6 +169,7 @@ test("undo keeps a split when a later agent edit depends on the new piece", asyn
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Dependent cut" });
+  await addStarterClips(project);
   const base = `/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
@@ -211,6 +215,7 @@ test("undo keeps a split when a later agent edit depends on the new piece", asyn
 test("an incompletely recorded edit blocks undo without advancing to an older edit", async () => {
   const fixture = await projectFixture();
   const project = await fixture.store.create({ name: "Partial capture" });
+  await addStarterClips(project);
   const base = `/projects/${project.id}`;
   const source = (path: string) =>
     fixture.request(`${base}/source`, "PUT", {
@@ -246,6 +251,7 @@ test("an incompletely recorded edit blocks undo without advancing to an older ed
 test("replay refuses an outside write after candidate selection and rolls back earlier files", async () => {
   const fixture = await projectFixture();
   const project = await fixture.store.create({ name: "Replay race" });
+  await addStarterClips(project);
   const a = join(project.path, "a.css");
   const b = join(project.path, "b.css");
   await writeFile(a, "original a");
@@ -299,6 +305,7 @@ test("replay refuses an outside write after candidate selection and rolls back e
 test("an interrupted replay and torn log tail recover without changing history IDs", async () => {
   const fixture = await projectFixture();
   const project = await fixture.store.create({ name: "Restart" });
+  await addStarterClips(project);
   const index = join(project.path, "index.html");
   const original = await readFile(index, "utf8");
   try {
@@ -382,6 +389,7 @@ test("selective undo and redo keep independent fields and markers in the same fi
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Independent edits" });
+  await addStarterClips(project);
   const api = `/api/cutroom/projects/${project.id}`;
   const agent = externalHistoryCredential();
   const read = async () =>
@@ -465,6 +473,7 @@ test("Undo both keeps a later independent edit in the same file", async () => {
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Minimal group" });
+  await addStarterClips(project);
   const api = `/api/cutroom/projects/${project.id}`;
   const agent = externalHistoryCredential();
   const read = async () =>

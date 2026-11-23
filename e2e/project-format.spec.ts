@@ -45,18 +45,24 @@ test("New project remembers its format and the Inspector previews, applies and u
   await expect(page).toHaveURL(new RegExp(`#project/${project.id}`));
   expect((await read()).timeline.fps).toEqual({ num: 60000, den: 1001 });
   expect((await read()).size).toEqual({ width: 1080, height: 1920 });
-  const moved = await request.post(
+  // A new project is empty. A title off a whole second gives the rate change edges to move.
+  const added = await request.post(
     `/api/cutroom/projects/${project.id}/commands`,
     {
       data: {
         expectedRevision: (await read()).revision,
         commands: [
-          { type: "move", mode: "overwrite", clipIds: ["headline"], by: 1 },
+          {
+            type: "insert",
+            track: 0,
+            at: 1,
+            clip: { kind: "title", text: "Vertical cut", duration: 120 },
+          },
         ],
       },
     },
   );
-  expect(moved.ok(), await moved.text()).toBe(true);
+  expect(added.ok(), await added.text()).toBe(true);
   await page.reload();
 
   await page.getByRole("button", { name: "Edit project format" }).click();
