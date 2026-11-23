@@ -177,8 +177,8 @@ export async function prepareRampPreview(
   };
   visit(document, false);
   const safe = safeStyles(styles, externalStyle);
-  // Export places the same pieces from the same document.
-  const { fps, placed } = placedMedia(html);
+  // Export places the same pieces from the same document. Only a rate lane needs them.
+  let placement: ReturnType<typeof placedMedia> | undefined;
   const documentBase = URL.parse(base ?? request.href, request);
   if (!documentBase) return null;
   const edits: Edit[] = [];
@@ -214,6 +214,8 @@ export async function prepareRampPreview(
       }
       const lane = envelope.lanes.find((entry) => entry.target === RATE_TARGET);
       if (!lane?.points.length) return;
+      placement ??= placedMedia(html);
+      const { fps, placed } = placement;
       const item = placed.get(
         placedKey(node.tagName, {
           getAttribute: (name) => attrs.get(name) ?? null,

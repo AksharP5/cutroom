@@ -543,8 +543,12 @@ export function rampWindow(piece: Piece) {
   const first = fraction(samples.start, SAMPLES);
   const start = sourceAt(piece, first);
   if (line.kind !== "ramp" || typeof start !== "number") return null;
+  // Rounding to the nearest sample can put the first one up to half a sample before an
+  // in-point of 0. Anything earlier is a real negative source time, which has no sound.
+  const rounding =
+    Math.max(...line.rate.points.map(({ v }) => v)) / (2 * AUDIO_SAMPLE_RATE);
+  if (start < -rounding) return null;
   return {
-    // The first sample can sit up to half a sample before an in-point of 0.
     start: Math.max(0, start),
     duration: Number(samples.end - samples.start) / AUDIO_SAMPLE_RATE,
     lane: { ...line.rate, offset: secondsOf(subtract(first, line.curveZero)) },

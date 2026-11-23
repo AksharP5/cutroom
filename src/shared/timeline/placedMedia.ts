@@ -182,7 +182,8 @@ export function placedMedia(
 /**
  * Export plays a piece that a trimmed mount cuts from where the mount lets it through: a loop
  * restarts at its in-point there. These attributes give the browser runtime the same start in
- * the piece's own composition, and keep its end. Empty when nothing is cut.
+ * the piece's own composition, and keep its end. Empty when nothing is cut. A piece needs a
+ * length to be placed at all, so a loop written without one is left as written.
  */
 export function startAtPlayed(
   {

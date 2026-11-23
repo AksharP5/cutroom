@@ -68,6 +68,7 @@ test("a looping clip in a trimmed mount plays from its in-point where the mount 
           requestAnimationFrame(() => resolve()),
         );
         const time = player.getTime();
+        // Stop before the wrap at 5 s: the viewer's own loop wrap is checked separately.
         if (time > 2.2 && time < 4.8 && !media.paused)
           readings.push({ time, source: media.currentTime });
       }

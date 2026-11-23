@@ -7,10 +7,13 @@ import { parseAutomation } from "@hyperframes/core/audio-automation";
 import { collectRenderMedia } from "@hyperframes/producer";
 import { PREVIEW_BUNDLE_OPTIONS } from "@hyperframes/studio-server";
 import { parseHTML } from "linkedom";
+import { sourceTimeAt } from "@hyperframes/core/speed-ramp";
 import { sampleGridAudio } from "../src/server/hyperframes/audioClock";
 import { previewDocument } from "../src/server/hyperframes/previewBridge";
 import { prepareRampPreview } from "../src/server/hyperframes/rampPreview";
 import type { RampWindow } from "../src/server/media/protocol";
+import { rampWindow, resolvePiece } from "../src/shared/timeline/piece";
+import { placedMedia } from "../src/shared/timeline/placedMedia";
 
 const RAMP = JSON.stringify({
   version: 1,
@@ -40,8 +43,8 @@ async function project(files: Record<string, string>) {
   return dir;
 }
 
-/** The sound export hands its mixer for each ramp: source and curve time at the first sample, and its length. */
-async function exportWindows(dir: string, scenes: string[]) {
+/** The audio tracks export hands its mixer. */
+async function exportAudios(dir: string, scenes: string[]) {
   const html = await bundleToSingleHtml(dir);
   const files = new Map(
     await Promise.all(
@@ -51,24 +54,28 @@ async function exportWindows(dir: string, scenes: string[]) {
       ),
     ),
   );
+  return sampleGridAudio(collectRenderMedia(html).audios, html, files);
+}
+
+/** The sound export hands its mixer for each ramp: source and curve time at the first sample, and its length. */
+async function exportWindows(dir: string, scenes: string[]) {
   return new Map(
-    sampleGridAudio(collectRenderMedia(html).audios, html, files).flatMap(
-      (audio) =>
-        typeof audio.playbackRate === "object" && audio.samples
-          ? [
-              [
-                audio.id,
-                {
-                  start: audio.mediaStart,
-                  samples: audio.samples.end - audio.samples.start,
-                  lane: {
-                    ...audio.playbackRate,
-                    offset: audio.playbackRate.offset ?? 0,
-                  },
+    (await exportAudios(dir, scenes)).flatMap((audio) =>
+      typeof audio.playbackRate === "object" && audio.samples
+        ? [
+            [
+              audio.id,
+              {
+                start: audio.mediaStart,
+                samples: audio.samples.end - audio.samples.start,
+                lane: {
+                  ...audio.playbackRate,
+                  offset: audio.playbackRate.offset ?? 0,
                 },
-              ] as const,
-            ]
-          : [],
+              },
+            ] as const,
+          ]
+        : [],
     ),
   );
 }
@@ -116,6 +123,8 @@ async function viewerWindows(dir: string) {
           element: {
             start: el.getAttribute("data-start"),
             duration: el.getAttribute("data-duration"),
+            fadeIn: el.getAttribute("data-fade-in"),
+            fadeOut: el.getAttribute("data-fade-out"),
           },
         },
       ] as const;
@@ -175,7 +184,7 @@ test("E12: the viewer prepares the same ramp sound as export for references, bot
     for (const [id, { element: _, ...window }] of viewer)
       expect({ id, ...window }).toEqual({ id, ...exported.get(id)! });
     // The prepared sound begins where the mount lets it through, half a second in.
-    expect(viewer.get("trimmed-sound")!.element).toEqual({
+    expect(viewer.get("trimmed-sound")!.element).toMatchObject({
       start: "0.5",
       duration: "2.5",
     });
@@ -263,6 +272,123 @@ test("the viewer starts a loop where a trimmed mount lets it through, as export 
       duration: bed.getAttribute("data-duration"),
       mediaStart: bed.getAttribute("data-media-start"),
     }).toEqual({ start: "1.5", duration: "8.5", mediaStart: "1" });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a ramp off the sample grid plays from its first sample in export", async () => {
+  // Frame 31 at 29.97 is sample 49,649.6, so the first sample is 49,650, 1/120000 s later. The
+  // curve has run that long, about 4.2 µs of source near its 0.5x start. It ends at frame 61, sample 97,697.6.
+  const dir = await project({
+    "index.html": root(
+      "30000/1001",
+      ramp(
+        "late",
+        'data-start="1.034367" data-duration="1.001" data-media-start="2" data-track-index="0"',
+      ),
+    ),
+  });
+  try {
+    const audio = (await exportAudios(dir, [])).find(
+      ({ id }) => id === "late",
+    )!;
+    expect(audio.samples).toEqual({ start: 49_650, end: 97_698 });
+    expect(audio.playbackRate).toMatchObject({ offset: 1 / 120_000 });
+    const lane = {
+      target: "rate",
+      points: [
+        { t: 0, v: 0.5 },
+        { t: 4, v: 2 },
+      ],
+    };
+    expect(audio.mediaStart).toBeCloseTo(
+      2 + sourceTimeAt(lane, 1 / 120_000),
+      12,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a ramp's first sample may round to just before an in-point of 0, and no further", () => {
+  const { fps, placed } = placedMedia(
+    root(
+      "30",
+      ramp("edge", 'data-start="0" data-duration="1" data-track-index="0"'),
+    ),
+  );
+  const item = placed.get("audio:edge");
+  if (item?.kind !== "media") throw new Error("The ramp was not placed.");
+  const piece = resolvePiece(item, fps);
+  const early = (samples: bigint) =>
+    rampWindow({ ...piece, samples: { ...piece.samples, start: -samples } });
+  // At most 2x, half a sample is 1/48000 s of source; one sample at 0.5x is less than that.
+  expect(early(1n)?.start).toBe(0);
+  // Three samples at 0.5x reach 1/32000 s before the file: real silence, not rounding.
+  expect(early(3n)).toBeNull();
+});
+
+test("each mount of a scene, and a trimmed mount inside a trimmed mount, prepares the sound export plays", async () => {
+  const inner = scene(
+    "inner",
+    "24",
+    ramp(
+      "snd",
+      'data-start="0" data-duration="3" data-media-start="1" data-fade-in="0.25" data-fade-out="0.25" data-track-index="0"',
+    ),
+  );
+  const dir = await project({
+    "index.html": root(
+      "30",
+      '<div id="a" data-composition-id="inner" data-composition-src="inner.html" data-start="0" data-duration="2" data-media-start="0.5" data-track-index="0"></div>' +
+        '<div id="b" data-composition-id="inner" data-composition-src="inner.html" data-start="2" data-duration="2" data-media-start="1" data-track-index="1"></div>' +
+        '<div id="c" data-composition-id="outer" data-composition-src="outer.html" data-start="4" data-duration="3" data-media-start="0.5" data-track-index="2"></div>',
+    ),
+    "inner.html": inner,
+    "outer.html": scene(
+      "outer",
+      "25",
+      '<div id="in" data-composition-id="inner" data-composition-src="inner.html" data-start="0.5" data-duration="3" data-media-start="0.25" data-track-index="0"></div>',
+    ),
+  });
+  try {
+    const viewer = await viewerWindows(dir);
+    const audios = await exportAudios(dir, ["inner.html", "outer.html"]);
+    const exported = await exportWindows(dir, ["inner.html", "outer.html"]);
+    for (const [id, { element: _, ...window }] of viewer)
+      expect({ id, ...window }).toEqual({ id, ...exported.get(id)! });
+    // a: origin -0.5 s, cut to [0, 2). b: origin 1 s, [2, 4). c: the outer scene's origin is
+    // 3.5 s and the inner one's 3.75 s, both mounts open at 4 s, and the clip ends at 6.75 s.
+    expect(
+      Object.fromEntries(
+        Array.from(viewer, ([id, { samples, element }]) => [
+          id,
+          { samples, start: element.start, duration: element.duration },
+        ]),
+      ),
+    ).toEqual({
+      snd: { samples: 96_000, start: "0.5", duration: "2.5" },
+      snd__hf2: { samples: 96_000, start: "1", duration: "2" },
+      snd__hf3: { samples: 132_000, start: "0.25", duration: "2.75" },
+    });
+    // Export fades from where the mount opens; the viewer's element now starts there too.
+    const b = audios.find(({ id }) => id === "snd__hf2")!;
+    expect({
+      start: b.start,
+      end: b.end,
+      fadeIn: b.fadeIn,
+      fadeOut: b.fadeOut,
+    }).toEqual({
+      start: 2,
+      end: 4,
+      fadeIn: 0.25,
+      fadeOut: 0.25,
+    });
+    expect(viewer.get("snd__hf2")!.element).toMatchObject({
+      fadeIn: "0.25",
+      fadeOut: "0.25",
+    });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
