@@ -114,9 +114,11 @@ const fixtures = (async () => {
     numbered(path("ntsc.mp4"), "30000/1001", 20),
     numbered(path("double.mp4"), "60000/1001", 40),
     // P11: pictures at 0, 40, 50, 100, 120 and 200 ms.
-    numbered(path("vfr.mp4"), "30", 6, [
+    // A trailing picture at 233 ms keeps 200 ms off the end, which some FFmpeg builds' edit
+    // lists leave out when the last picture has no duration.
+    numbered(path("vfr.mp4"), "30", 7, [
       "-vf",
-      "settb=1/1000,setpts='if(eq(N,0),0,if(eq(N,1),40,if(eq(N,2),50,if(eq(N,3),100,if(eq(N,4),120,200)))))'",
+      "settb=1/1000,setpts='if(eq(N,0),0,if(eq(N,1),40,if(eq(N,2),50,if(eq(N,3),100,if(eq(N,4),120,if(eq(N,5),200,233))))))'",
       ...["-fps_mode", "passthrough", "-enc_time_base", "1/1000", "-bf", "0"],
       ...["-video_track_timescale", "1000"],
     ]),
