@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { bundleToSingleHtml } from "@hyperframes/core/compiler";
 import { PREVIEW_BUNDLE_OPTIONS } from "@hyperframes/studio-server";
 import { localMediaPath } from "../../shared/media";
@@ -6,6 +7,7 @@ import { placedMedia } from "../../shared/timeline/placedMedia";
 import { documentRampRuns, runId } from "../../shared/timeline/rampRuns";
 import type { RampRun } from "../../shared/timeline/rampRuns";
 import type { MediaService } from "../media/service";
+import { projectPath } from "../projects/store";
 
 /**
  * Before an export: the ramp audio runs its document plays, built by the media service the
@@ -21,6 +23,16 @@ export async function prepareRampExport(options: {
   onWait: (progress: number) => void;
 }) {
   const { project, composition, media, signal } = options;
+  // Only a rate lane, here or in a scene, needs the bundle.
+  const entry = await readFile(
+    await projectPath(project, composition),
+    "utf8",
+  ).catch(() => "");
+  if (
+    !entry.includes("data-automation") &&
+    !entry.includes("data-composition-src")
+  )
+    return null;
   const html = await bundleToSingleHtml(project.path, {
     ...PREVIEW_BUNDLE_OPTIONS,
     entryFile: composition,
@@ -58,7 +70,7 @@ export async function prepareRampExport(options: {
       Promise.all(
         Array.from(wanted, async ([id, { path, run, frames }]) => {
           const result = await media
-            .rampRun(project, path, run, frames, pins)
+            .rampRun(project, path, run, frames, pins, true)
             .catch((error: unknown) => {
               console.warn(`Could not prepare ramp audio for ${path}:`, error);
               return null;

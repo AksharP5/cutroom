@@ -169,7 +169,9 @@ export function placedMedia(
                 }),
             },
             loop: element.hasAttribute("loop"),
+            // Hidden clips, or clips in a hidden scene, play nothing in the viewer or export.
             silent:
+              element.closest("[data-hidden]") !== null ||
               element.hasAttribute("muted") ||
               (element.localName === "video" &&
                 ![null, "true"].includes(

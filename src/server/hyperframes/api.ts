@@ -1320,33 +1320,39 @@ export function createHyperframesApi(
         string,
       ];
       const project = await store.get(projectId);
-      const file = await media
+      // A run evicted before its clip played, or cut short on disk, is made again for the
+      // document that uses it.
+      const present = await media
         .rampRunFile(project, rampFile)
-        .catch(async (error: unknown) => {
-          if (!(error instanceof HttpError) || error.status !== 404)
-            throw error;
-          // A run evicted before its clip played is built again for the document that uses it.
-          for (const record of timingDocuments.values()) {
-            const asset =
-              record.projectId === projectId &&
-              record.ramp?.assets.get(rampFile);
-            if (!asset) continue;
-            const prepared = await media.rampRun(
-              project,
-              asset.path,
-              asset.run,
-              asset.frames,
-              record.ramp?.pins,
-            );
-            if (
-              prepared.key === rampFile &&
-              (prepared.available || (await prepared.pending))
-            )
-              return media.rampRunFile(project, rampFile);
-            break;
-          }
+        .catch((error: unknown) => {
+          if (error instanceof HttpError && error.status === 404) return null;
           throw error;
         });
+      const rebuild = async () => {
+        for (const record of timingDocuments.values()) {
+          const asset =
+            record.projectId === projectId && record.ramp?.assets.get(rampFile);
+          if (!asset) continue;
+          const prepared = await media.rampRun(
+            project,
+            asset.path,
+            asset.run,
+            asset.frames,
+            record.ramp?.pins,
+          );
+          if (
+            prepared.key === rampFile &&
+            (prepared.available || (await prepared.pending))
+          )
+            return media.rampRunFile(project, rampFile);
+          break;
+        }
+        throw new HttpError(404, "The ramp audio is no longer prepared.");
+      };
+      const file =
+        present && (await media.rampRunCovers(present, Number(to)))
+          ? present
+          : await rebuild();
       const response = await rampSliceResponse(
         file,
         Number(from),

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
@@ -15,6 +16,7 @@ import { createJobMachine } from "../../shared/jobs";
 import type { JobState } from "../../shared/jobs";
 import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
+import { projectStatePath } from "../projects/path";
 import { FilmstripSchema, MediaInfoSchema, PiecesSchema } from "./protocol";
 import type { MediaKind, MediaTask, Pieces, RampTask } from "./protocol";
 import { RUN_MARGIN_SAMPLES } from "../../shared/timeline/rampRuns";
@@ -76,6 +78,8 @@ type MediaJob = {
   retryAt?: number;
   work?: ProxyWork;
   ready?: ReturnType<typeof Promise.withResolvers<boolean>>;
+  /** A ramp run an export waits for: it goes ahead of the background passes. */
+  foreground?: boolean;
 };
 const artifacts = {
   probe: "probe.json",
@@ -140,13 +144,16 @@ export function createMediaService(
     rampRunBytes?: number;
   } = {},
 ) {
-  const rampRunBytes =
-    options.rampRunBytes ??
-    (Number(process.env.CUTROOM_RAMP_CACHE_MB) || 1024) * 2 ** 20;
+  const budget = process.env.CUTROOM_RAMP_CACHE_MB?.trim() || "1024";
+  if (options.rampRunBytes === undefined && !(Number(budget) > 0))
+    throw new Error(
+      `CUTROOM_RAMP_CACHE_MB must be a positive number of MiB, not "${budget}".`,
+    );
+  const rampRunBytes = options.rampRunBytes ?? Number(budget) * 2 ** 20;
   /** How many holders keep each run file: an open preview document or a running export. */
   const pinned = new Map<string, number>();
-  /** Whether the last trim ended over budget, so the log says so once per crossing. */
-  let overBudget = false;
+  /** Projects whose last trim ended over budget, by run folder, so each says so once per crossing. */
+  const overBudget = new Set<string>();
   let nvenc: Promise<boolean> | undefined;
   const jobs = new Map<string, MediaJob>();
   const queue: MediaJob[] = [];
@@ -181,6 +188,18 @@ export function createMediaService(
     maintenance = task.catch(() => {});
     return task;
   };
+  /** The project's run folder, made if missing; refused if it or a folder above it is a link. */
+  const runFolder = async (project: Project) => {
+    const path = `.cutroom/cache/${RUNS}`;
+    await mkdir(await projectStatePath(project, path, true), {
+      recursive: true,
+    });
+    return projectStatePath(project, path);
+  };
+  /** Whether a run file holds `frames` settled samples, past which only the flush lies. */
+  const covers = async (file: string, frames: number) =>
+    ((await lstat(file).catch(() => null))?.size ?? 0) >=
+    44 + (frames + RUN_MARGIN_SAMPLES) * 4;
   /** Remove the least recently used ramp runs until the project is under its budget. */
   const trimRuns = (runs: string) => {
     const task = maintenance.then(async () => {
@@ -196,7 +215,7 @@ export function createMediaService(
       const present = files.filter((file) => file !== null);
       let total = present.reduce((sum, file) => sum + file.size, 0);
       if (total <= rampRunBytes) {
-        overBudget = false;
+        overBudget.delete(runs);
         return;
       }
       present.sort((a, b) => a.used - b.used);
@@ -206,12 +225,12 @@ export function createMediaService(
         await rm(path, { force: true });
         total -= size;
       }
-      const over = total > rampRunBytes;
-      if (!over || overBudget) {
-        overBudget = over;
+      if (total <= rampRunBytes) {
+        overBudget.delete(runs);
         return;
       }
-      overBudget = true;
+      if (overBudget.has(runs)) return;
+      overBudget.add(runs);
       console.warn(
         `Ramp audio in use takes ${Math.ceil(total / 2 ** 20)} MB, over the ${Math.round(rampRunBytes / 2 ** 20)} MB budget. It stays until it is no longer used.`,
       );
@@ -222,13 +241,15 @@ export function createMediaService(
   const removeDirectory =
     options.removeDirectory ??
     ((directory: string) => rm(directory, { recursive: true, force: true }));
+  // An export waits on its ramp runs before it can start, as the preview waits on a probe.
+  const rank = (job: MediaJob) => (job.foreground ? 1 : priority[job.kind]);
   const pump = () => {
     // A proxy the preview waits on goes before the others, the latest asked first.
     const askedAt = (job: MediaJob) =>
       job.work && wanted(job) ? job.work.askedAt : -1;
     queue.sort(
       (a, b) =>
-        priority[a.kind] - priority[b.kind] ||
+        rank(a) - rank(b) ||
         askedAt(b) - askedAt(a) ||
         (a.kind === "frame"
           ? b.sequence - a.sequence
@@ -242,7 +263,7 @@ export function createMediaService(
       const index = queue.findIndex((job) =>
         job.kind === "proxy"
           ? !busy((kind) => kind === "proxy")
-          : !background(job.kind) || !busy(background),
+          : job.foreground || !background(job.kind) || !busy(background),
       );
       if (index === -1) break;
       const job = queue.splice(index, 1)[0]!;
@@ -515,8 +536,7 @@ export function createMediaService(
     path: string,
     kind: MediaKind,
     time = 0,
-    ramp?: RampTask,
-    pins?: RampPins,
+    ramp?: RampTask & { pins?: RampPins; foreground?: boolean },
   ): Promise<MediaResult> => {
     if (closing)
       throw new HttpError(503, "The media service is shutting down.");
@@ -567,26 +587,26 @@ export function createMediaService(
     const cache = await projectPath(project, ".cutroom/cache", true);
     await mkdir(cache, { recursive: true });
     // A run is one file in its own tier, kept within a byte budget rather than an entry count.
-    const runs = join(cache, RUNS);
+    // Its folder is app state: a link there is refused, so no write or removal leaves it.
+    const runs = kind === "ramp" ? await runFolder(project) : "";
     const directory =
       kind === "ramp" ? join(runs, `${key}.wav`) : join(cache, key);
-    pins?.hold(directory);
-    const cached = await projectPath(
-      project,
+    ramp?.pins?.hold(directory);
+    const cached =
       kind === "ramp"
-        ? `.cutroom/cache/${RUNS}/${key}.wav`
-        : `.cutroom/cache/${key}/${artifacts[kind]}`,
-    ).catch((error: unknown) => {
-      if (error instanceof HttpError && error.status === 404) return null;
-      throw error;
-    });
+        ? (await lstat(directory).catch(() => null))?.isFile()
+          ? directory
+          : null
+        : await projectPath(
+            project,
+            `.cutroom/cache/${key}/${artifacts[kind]}`,
+          ).catch((error: unknown) => {
+            if (error instanceof HttpError && error.status === 404) return null;
+            throw error;
+          });
     // A run is keyed by where it starts, so a file too short for this request is made again
     // longer under the same key. The stretcher is causal: the samples it had stay the same.
-    const short =
-      ramp &&
-      cached &&
-      ((await stat(cached).catch(() => null))?.size ?? 0) <
-        44 + (ramp.frames + RUN_MARGIN_SAMPLES) * 4;
+    const short = ramp && cached && !(await covers(cached, ramp.frames));
     if (cached && ramp && !short) {
       // Marks the run as recently used for the budget.
       const now = new Date();
@@ -609,6 +629,10 @@ export function createMediaService(
       if (job.retryAt !== undefined && job.retryAt <= Date.now())
         jobs.delete(key);
     const existing = jobs.get(directory);
+    if (existing && ramp?.foreground && !existing.foreground) {
+      existing.foreground = true;
+      pump();
+    }
     if (existing) {
       if (kind === "frame" && existing.machine.state.status === "queued")
         existing.sequence = Math.max(existing.sequence, requestSequence);
@@ -627,6 +651,7 @@ export function createMediaService(
       sequence: requestSequence,
       machine,
       ready: ramp ? Promise.withResolvers<boolean>() : undefined,
+      foreground: ramp?.foreground,
       run: async () => {
         let scratch: string | undefined;
         let failure: string | undefined;
@@ -644,7 +669,7 @@ export function createMediaService(
               ffprobe,
               info,
               time,
-              ramp,
+              ramp: ramp && { run: ramp.run, frames: ramp.frames },
             },
             workerUrl,
             options.stopTimeoutMs ?? 1000,
@@ -672,7 +697,9 @@ export function createMediaService(
             );
           if (machine.state.status !== "running") return;
           if (kind === "ramp") {
-            await mkdir(runs, { recursive: true });
+            // Resolved again: the folder may have been replaced while the run was made.
+            if ((await runFolder(project)) !== runs)
+              throw new Error("The ramp audio folder moved while it was made.");
             await rename(join(scratch, artifacts.ramp), directory);
             await removeDirectory(scratch);
             scratch = undefined;
@@ -746,7 +773,8 @@ export function createMediaService(
   };
   /**
    * A ramp run of a source file, built once per key. Holding it in `pins` first keeps it
-   * from being evicted while the document or export that asked for it is open.
+   * from being evicted while the document or export that asked for it is open. An export asks
+   * in the foreground, ahead of background passes.
    */
   const rampRun = async (
     project: Project,
@@ -754,50 +782,57 @@ export function createMediaService(
     run: RampRun,
     frames: number,
     pins?: RampPins,
-  ): Promise<{
-    key: string;
-    available: boolean;
-    pending: Promise<boolean> | undefined;
-  }> => {
-    const result = await request(
-      project,
-      path,
-      "ramp",
-      0,
-      { run, frames },
-      pins,
-    );
+    foreground = false,
+  ) => {
+    const ramp = { run, frames, foreground };
+    const result = await request(project, path, "ramp", 0, { ...ramp, pins });
     const building =
       result.state.status === "queued" || result.state.status === "running"
         ? result.job?.ready?.promise
         : undefined;
+    const file = async () =>
+      join(await runFolder(project), `${result.key}.wav`);
     return {
       key: result.key,
       available: Boolean(result.artifact),
-      // A job already making this run may make it shorter than asked; then ask again.
-      pending: building?.then(async (made) => {
-        if (!made) return false;
-        const again = await rampRun(project, path, run, frames, pins);
-        return again.available || ((await again.pending) ?? false);
-      }),
+      // A job another request started may make the run shorter than this one needs. Only then
+      // is it asked for once more. A run evicted meanwhile is not made again from here.
+      pending: building
+        ?.then(async (made) => {
+          if (!made) return false;
+          const built = await file();
+          if (!(await lstat(built).catch(() => null))?.isFile()) return false;
+          if (await covers(built, frames)) return true;
+          const again = await request(project, path, "ramp", 0, ramp);
+          return (
+            Boolean(again.artifact) ||
+            (await again.job?.ready?.promise) === true
+          );
+        })
+        .catch(() => false),
     };
   };
   return {
     request,
     rampRun,
     rampRunFile(project: Project, key: string) {
-      return projectPath(project, `.cutroom/cache/${RUNS}/${key}.wav`);
+      return projectStatePath(project, `.cutroom/cache/${RUNS}/${key}.wav`);
     },
+    /** Whether a run file holds `frames` settled samples. */
+    rampRunCovers: covers,
     /** Pins for the runs one document or export uses, released together. */
     rampPins(): RampPins {
       const held = new Set<string>();
+      // Once released, a late request from the same document or export pins nothing.
+      let released = false;
       return {
         hold(file) {
-          if (held.has(file)) return;
+          if (released || held.has(file)) return;
           held.add(file);
           pinned.set(file, (pinned.get(file) ?? 0) + 1);
         },
         release() {
+          released = true;
           for (const file of held) {
             const count = (pinned.get(file) ?? 1) - 1;
             if (count) pinned.set(file, count);
