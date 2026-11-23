@@ -1159,6 +1159,9 @@ test("paused holds match native object-fit, transforms, opacity and stacking, th
           canvas.style.translate = "none";
         });
       await live.locator("video").evaluate(async (video: HTMLVideoElement) => {
+        // A placed video rests on the playhead's picture whatever time it is asked for.
+        // Unplaced, it goes where it is asked, to a picture the hold does not show.
+        video.setAttribute("data-hf-render-id", "unplaced");
         await new Promise<void>((resolve) => {
           video.addEventListener("seeked", () => resolve(), { once: true });
           video.currentTime = 5;
