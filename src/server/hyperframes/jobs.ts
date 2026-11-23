@@ -19,7 +19,7 @@ import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
 import { renderFailure } from "./renderFailure";
 import { planCaptureBrowsers } from "./exportMemory";
-import { countCaptureMedia } from "./captureWorkload";
+import { captureDocument, countCaptureMedia } from "./captureWorkload";
 import type { CaptureWorkload } from "./captureWorkload";
 import { frameTime } from "../../shared/timeline/time";
 import { planDirectExport } from "./directPlan";
@@ -232,11 +232,15 @@ export function createRenderWorkers(configuration: {
   }) => Promise<{ runs: Record<string, string>; release: () => void } | null>;
   /** Told about each export once its file is in place. */
   published?: (projectId: string, path: string) => Promise<void>;
-  /** Sizes the export's capture browsers to the memory free when it starts. */
+  /**
+   * Sizes the export's capture browsers to the memory free when it starts, from the document they
+   * render. Without `sound` they are refused sound, which the export mixes itself.
+   */
   workload?: (
     projectId: string,
     composition: string,
-    sourceOverride?: string,
+    sourceOverride: string | undefined,
+    sound: boolean,
   ) => Promise<CaptureWorkload>;
   stopTimeoutMs?: number;
   startupTimeoutMs?: number;
@@ -480,16 +484,43 @@ export function createRenderWorkers(configuration: {
             ? (gpu ??= configuration.gpu())
             : undefined;
         const entry = options.composition ?? "index.html";
-        const workload = await configuration.workload?.(
-          options.project.id,
-          entry,
-          sources?.[join(options.project.dir, entry)],
-        );
+        const entryPath = join(options.project.dir, entry);
         // One set of browsers captures every run the browser draws, sized to those frames.
         const runs =
           direct?.plan.segments.filter(({ kind }) => kind === "capture") ?? [];
+        const marked = output?.range ? [output.range] : undefined;
+        const drawn = runs.length ? runs : marked;
+        const source =
+          drawn &&
+          (sources?.[entryPath] ??
+            (await readFile(entryPath, "utf8").catch(() => undefined)));
+        const narrowed =
+          drawn && source !== undefined
+            ? captureDocument(source, drawn, options.fps)
+            : undefined;
+        const captureSource = narrowed === source ? undefined : narrowed;
+        // For a mixed export the worker can only use the narrowed document after checking
+        // its direct sources. A fallback captures the whole requested range from the full document.
+        if (captureSource !== undefined && !runs.length)
+          sources = { ...sources, [entryPath]: captureSource };
+        const workload = await configuration.workload?.(
+          options.project.id,
+          entry,
+          captureSource ?? sources?.[entryPath],
+          !drawn,
+        );
+        const fallbackWorkload =
+          runs.length && captureSource !== undefined
+            ? await configuration.workload?.(
+                options.project.id,
+                entry,
+                source,
+                false,
+              )
+            : workload;
         const available = freemem();
         const browserPlan = (
+          workload: CaptureWorkload | undefined,
           ranges?: readonly NonNullable<ExportOptions["range"]>[],
           sourcePixels?: number,
         ) => {
@@ -521,11 +552,16 @@ export function createRenderWorkers(configuration: {
           });
         };
         const fallback = browserPlan(
-          output?.range ? [output.range] : undefined,
+          fallbackWorkload,
+          marked ?? (runs.length && direct ? [direct.plan.frames] : undefined),
         );
         const plan =
           runs.length && direct
-            ? browserPlan(runs, direct.plan.width * direct.plan.height)
+            ? browserPlan(
+                workload,
+                runs,
+                direct.plan.width * direct.plan.height,
+              )
             : fallback;
         // An export drawn wholly from its sources needs no browser. If a source turns out to need
         // one, the worker fails with this refusal rather than starting browsers that would not fit.
@@ -534,15 +570,6 @@ export function createRenderWorkers(configuration: {
         );
         if (plan && "refusal" in plan && !browserFree)
           throw new Error(plan.refusal);
-        const browsers =
-          plan && "browsers" in plan
-            ? Math.min(
-                plan.browsers,
-                fallback && "browsers" in fallback
-                  ? fallback.browsers
-                  : plan.browsers,
-              )
-            : undefined;
         for (const path of leftovers)
           await remove(path).then(
             () => leftovers.delete(path),
@@ -605,10 +632,10 @@ export function createRenderWorkers(configuration: {
               PUPPETEER_TMP_DIR: scratch,
               PRODUCER_TMP_PROJECT_DIR: scratch,
               HYPERFRAMES_EXTRACT_CACHE_DIR: join(scratch, "frames"),
-              ...(browsers
+              ...(fallback && "browsers" in fallback
                 ? {
-                    PRODUCER_MAX_WORKERS: String(browsers),
-                    // HyperFrames otherwise starts two browsers for 120 frames or more, whatever the limit.
+                    PRODUCER_MAX_WORKERS: String(fallback.browsers),
+                    // A default of two browsers must not override a one-browser memory budget.
                     PRODUCER_MIN_PARALLEL_FRAMES: String(
                       Number.MAX_SAFE_INTEGER,
                     ),
@@ -626,7 +653,7 @@ export function createRenderWorkers(configuration: {
             sources,
             rampRuns: rampRuns?.runs,
             range: output?.range,
-            scopedMedia: workload?.timedMedia !== undefined,
+            scopedMedia: fallbackWorkload?.timedMedia !== undefined,
             scratchDir: scratch,
             frameCacheDir: configuration.frameCache?.maxBytes
               ? configuration.frameCache.dir
@@ -634,6 +661,11 @@ export function createRenderWorkers(configuration: {
             gpu: (await nvenc) ?? false,
             direct: direct && {
               ...direct,
+              captureSource: runs.length ? captureSource : undefined,
+              captureBrowsers:
+                runs.length && plan && "browsers" in plan
+                  ? plan.browsers
+                  : undefined,
               captureRefusal:
                 fallback && "refusal" in fallback
                   ? fallback.refusal
@@ -677,7 +709,8 @@ export function createRenderWorkers(configuration: {
                 // Each startup step restarts the limit, including HyperFrames moving a stuck page to a fresh browser.
                 clearTimeout(startupTimeout);
                 startupTimeout = setTimeout(() => {
-                  failure = `The export's browsers made no progress starting for ${Math.round(startupTimeoutMs / 1000)} seconds, so it was stopped. Try again, and close other apps if memory is low.`;
+                  const free = freemem();
+                  failure = `The export's browsers made no progress starting for ${Math.round(startupTimeoutMs / 1000)} seconds, so it was stopped. ${free < 2 * 1024 ** 3 ? `Only ${(free / 1024 ** 3).toFixed(1)} GB of memory was free; close other apps and try again.` : "Try again."}`;
                   stopWorker();
                 }, startupTimeoutMs);
               }

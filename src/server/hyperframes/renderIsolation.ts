@@ -15,6 +15,10 @@ import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportOptions } from "../../shared/export.ts";
 import type { AudioStage, EncodedPart } from "./directExport.ts";
 
+let sourceOverrides: Record<string, string> = {};
+
+export const renderSourceOverride = (path: string) => sourceOverrides[path];
+
 let rangeProgress: ((job: RenderJob) => void) | undefined;
 let audioStage: AudioStage | undefined;
 
@@ -27,6 +31,18 @@ type FrameRange = { startFrame: number; endFrame: number };
 let spliced:
   | { capture: { start: number; end: number }[]; parts: Promise<EncodedPart[]> }
   | undefined;
+
+let rangeFrames: FrameRange | undefined;
+
+/**
+ * The composition frames the browser draws: a mixed export's capture runs, else the marked range.
+ * Video pictures are extracted for these frames only.
+ */
+export const captureFrames = (): { start: number; end: number }[] | undefined =>
+  spliced?.capture ??
+  (rangeFrames && [
+    { start: rangeFrames.startFrame, end: rangeFrames.endFrame },
+  ]);
 
 /** Has a marked export capture only these runs, and take the frames between from `parts`. */
 export function spliceSourceParts(
@@ -263,7 +279,12 @@ export function registerRenderIsolation(
   /** Ramp audio runs the server prepared, by `runId`. */
   rampRuns: Record<string, string> = {},
 ) {
+  sourceOverrides = sources;
   rangeProgress = range?.range ? range.progress : undefined;
+  rangeFrames = range?.range && {
+    startFrame: range.range.frames.start,
+    endFrame: range.range.frames.end,
+  };
   for (const [name, version] of [
     ["@hyperframes/core", "0.9.26"],
     ["@hyperframes/producer", "0.9.26"],
@@ -497,7 +518,7 @@ export function registerRenderIsolation(
           "/@hyperframes/engine/dist/services/videoFrameExtractor.js",
         )
       ) {
-        let source = `import { capturePictures, extractPictures } from ${capturePictures};\nimport { chromeSdrColourFilters as cutroomColour } from ${colour};\n${String(loaded.source)}`;
+        let source = `import { capturePictures, extractPictures } from ${capturePictures};\nimport { captureFrames as cutroomCaptureFrames } from ${JSON.stringify(import.meta.url)};\nimport { chromeSdrColourFilters as cutroomColour } from ${colour};\n${String(loaded.source)}`;
         // The server prunes under an exclusive lock. An age-based sweep during capture can
         // remove files the current render still needs.
         source = replaceOnce(
@@ -535,7 +556,7 @@ export function registerRenderIsolation(
           "            alignClipStartToFirstOutputFrame(video, fps);",
           `            const cutroomPictures = await inExtractionSlot(() => capturePictures(
                 video, videoPath, ${JSON.stringify(range?.projectDir)}, configuredFps,
-                options.timelineEnd, ${JSON.stringify(range?.range?.frames)}, signal), signal);
+                options.timelineEnd, cutroomCaptureFrames(), signal), signal);
             if (cutroomPictures) {
                 video.cutroomPictures = cutroomPictures.lookup;
                 const format = resolveFrameFormat(metadata, options.format);
@@ -549,7 +570,8 @@ export function registerRenderIsolation(
                     video, videoPath, index, metadata, format, sdrToHdrTransfer,
                     hdrToSdrTransformKey: hdrToSdrTransform, cutroomPictures,
                     videoDuration: 1, extractionMediaStart: 0,
-                    dedupeKey: JSON.stringify([videoPath, cutroomPictures.cacheKey, format, sdrToHdrTransfer, hdrToSdrTransform]),
+                    // A span's plan keeps each clip's pictures in a folder named after it, so clips never share one.
+                    dedupeKey: JSON.stringify([videoPath, cutroomPictures.cacheKey, format, sdrToHdrTransfer, hdrToSdrTransform${range?.range ? ", video.id" : ""}]),
                 } };
             }
             alignClipStartToFirstOutputFrame(video, fps);`,
@@ -664,7 +686,7 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { bindPicturePlacement, PictureSlotsSchema } from ${capturePictures};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nimport { AUDIO_SAMPLE_RATE, audioFrameSample, sampleGridAudio } from ${audioClock};\nconst cutroomSources = ${JSON.stringify(sources)};\nconst cutroomRampRuns = ${JSON.stringify(rampRuns)};\n${source}`;
+        source = `import { bindPicturePlacement, PictureSlotsSchema } from ${capturePictures};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime, renderSourceOverride as cutroomSourceOverride } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nimport { AUDIO_SAMPLE_RATE, audioFrameSample, sampleGridAudio } from ${audioClock};\nconst cutroomRampRuns = ${JSON.stringify(rampRuns)};\n${source}`;
         source = replaceOnce(
           source,
           "  const probeStart = Date.now();",
@@ -729,7 +751,7 @@ export function registerRenderIsolation(
         source = replaceOnce(
           source,
           "rebaseDirectEntryAssetPaths(readTextFile(htmlPath), projectDir, htmlPath)",
-          "rebaseDirectEntryAssetPaths(transitionSourceTimes(useFreezeExportSources(cutroomSources[htmlPath] ?? readTextFile(htmlPath))), projectDir, htmlPath)",
+          "rebaseDirectEntryAssetPaths(transitionSourceTimes(useFreezeExportSources(cutroomSourceOverride(htmlPath) ?? readTextFile(htmlPath))), projectDir, htmlPath)",
           url,
         );
         source = replaceOnce(
@@ -895,19 +917,19 @@ export function registerRenderIsolation(
             "const chunkFrameNumbers = Array.from({ length: framesInChunk }, (_, i) => cutroomCapturedFrame(range.startFrame + i));",
             url,
           );
-          if (range.scopedMedia) {
-            // FFmpeg has already mixed the audio. Browser audio requests can occupy every
-            // connection to the capture server before the first frame arrives.
-            const chunkServer = `    const fileServer = await createFileServer({
+          // FFmpeg mixes a span's audio. Browser audio requests can occupy every connection to the
+          // capture server before the first frame arrives, and each loaded sound holds memory.
+          const chunkServer = `    const fileServer = await createFileServer({
       projectDir: compiledDir,
       compiledDir,
       port: 0,`;
-            source = replaceOnce(
-              source,
-              chunkServer,
-              `${chunkServer}\n      cutroomFramesOnly: true,`,
-              url,
-            );
+          source = replaceOnce(
+            source,
+            chunkServer,
+            `${chunkServer}\n      cutroomFramesOnly: true,`,
+            url,
+          );
+          if (range.scopedMedia) {
             // The decoder supplies every visible frame, as in a whole export. Leave the native
             // video elements idle and give visible ones the decoder's intrinsic size.
             source = replaceOnce(
@@ -984,7 +1006,7 @@ export function registerRenderIsolation(
         source = replaceOnce(
           source,
           "const rawSubHtml = normalizeCompositionSrcs(read.text, projectDir);",
-          "const rawSubHtml = normalizeCompositionSrcs(transitionSourceTimes(useFreezeExportSources(cutroomSources[filePath] ?? read.text)), projectDir);",
+          "const rawSubHtml = normalizeCompositionSrcs(transitionSourceTimes(useFreezeExportSources(cutroomSourceOverride(filePath) ?? read.text)), projectDir);",
           url,
         );
         source = replaceOnce(

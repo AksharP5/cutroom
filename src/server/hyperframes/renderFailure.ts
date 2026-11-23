@@ -38,9 +38,16 @@ const stages = {
 } satisfies Record<ExportStage["code"], [string, string]>;
 
 /** Keep browser diagnostics and stacks in the server log, and give the editor a next step. */
-export function renderFailure(stage: ExportStage["code"], cause: string) {
+export function renderFailure(reported: ExportStage["code"], cause: string) {
+  // HyperFrames' chunk renderer fails inside capture, whichever startup step was last reported.
+  const stage = /\[renderChunk\]/.test(cause) ? "capture" : reported;
   console.warn(`Export failed while ${stages[stage][0].toLowerCase()}:`, cause);
   const [label, retry] = stages[stage];
+  const missing = /planDir missing extracted video frames for "([^"]+)"/.exec(
+    cause,
+  )?.[1];
+  if (missing)
+    return `${label} failed. The pictures extracted for clip ${missing} were not where frame capture looked for them. This is a Cutroom bug; try again, and report it if it repeats.`;
   const prefix = `${label} failed.`;
   if (
     /\b(?:ENOSPC|EDQUOT)\b|no space left on device|disk quota exceeded/i.test(

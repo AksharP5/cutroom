@@ -110,7 +110,7 @@ import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { createRenderIndex } from "./renders";
 import { renderCacheConfig } from "./renderCache";
 import type { ExportRequest } from "./jobs";
-import { timedCaptureMedia } from "./captureWorkload";
+import { loadedMedia, timedCaptureMedia } from "./captureWorkload";
 import { measureLoudness } from "../timeline/audio";
 import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
@@ -434,17 +434,17 @@ export function createHyperframesApi(
               );
               return works;
             }),
-    workload: async (id, composition, sourceOverride) => {
+    workload: async (id, composition, sourceOverride, sound) => {
       const { parsed, timeline } = await readComposition(id, composition);
+      // The document the browsers render, which an export may have narrowed.
+      const html = sourceOverride ?? parsed.html;
       return {
-        mediaClips: timeline.clips.filter(
-          (clip) => clip.kind === "video" || isAudioKind(clip.kind),
-        ).length,
+        mediaClips: loadedMedia(html, sound),
         durationFrames: timeline.duration,
         fps: timeline.fps,
         timedMedia:
           composition === "index.html"
-            ? timedCaptureMedia(sourceOverride ?? parsed.html)
+            ? timedCaptureMedia(html, sound)
             : undefined,
       };
     },

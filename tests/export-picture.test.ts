@@ -163,10 +163,10 @@ async function fixture(run: (root: string, render: Render) => Promise<void>) {
   const direct = createRenderWorkers({ scratchDir, workerPath });
   let output = 0;
   try {
-    await run(root, async (html, fps, expected, renderer, range) => {
+    await run(root, async (html, fps, expected, renderer, range, tryDirect) => {
       await writeFile(join(root, "index.html"), html);
       const filename = `output-${++output}.mp4`;
-      const workers = renderer === "direct" ? direct : capture;
+      const workers = tryDirect || renderer !== "capture" ? direct : capture;
       const state = workers.start(
         {
           project: { id: "picture-proof", dir: root },
@@ -212,8 +212,9 @@ type Render = (
   html: string,
   fps: Fps,
   expected: number[],
-  renderer: "capture" | "direct",
+  renderer: "capture" | "direct" | "mixed",
   range?: { start: number; end: number },
+  tryDirect?: boolean,
 ) => Promise<void>;
 
 test.skipIf(!ready)(
@@ -575,7 +576,7 @@ test.skipIf(
         root,
         ntsc,
         video.end,
-        { start: 59, end: 62 },
+        [{ start: 59, end: 62 }],
         undefined,
       );
       if (!plan)
@@ -691,4 +692,64 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
     }
   },
   30_000,
+);
+
+test.skipIf(!ready)(
+  "a cut take with a title exports, marked or whole, extracting only the pictures under the title",
+  async () => {
+    await fixture(async (root, render) => {
+      await source(join(root, "take.mp4"), "30", 120);
+      // Three pieces of one take, and a small title over part of the last. Pieces outside a
+      // marked range once shared one empty extraction, and capture found no folder for the second.
+      const page = html("take.mp4", thirty, 90).replace(
+        /<video id="picture"[^>]*><\/video>/,
+        `<video id="a" src="take.mp4" muted data-start="0" data-duration="0.5" data-media-start="0" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video>
+<video id="c" src="take.mp4" muted data-start="0.5" data-duration="0.5" data-media-start="0.5" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video>
+<video id="b" src="take.mp4" muted data-start="1" data-duration="2" data-media-start="1.5" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video>
+<div id="title" class="clip" data-start="2" data-duration="0.5" data-track-index="1" style="position:absolute;left:0;top:0;width:8px;height:4px;background:#f00"></div>`,
+      );
+      const expected = sequence(90, (frame) =>
+        frame < 30 ? frame : frame + 15,
+      );
+      await render(page, thirty, expected.slice(45, 80), "mixed", {
+        start: 45,
+        end: 80,
+      });
+      await render(page, thirty, expected, "mixed");
+    });
+  },
+  240_000,
+);
+
+test.skipIf(!ready)(
+  "a mixed export that falls back to capture keeps every shot",
+  async () => {
+    await fixture(async (root, render) => {
+      // A different aspect ratio passes the HTML planner and is refused by the media probe.
+      await source(join(root, "tall.mp4"), "30", 30, ["-vf", "scale=96:56"]);
+      await source(join(root, "wide.mp4"), "30", 90);
+      const page = html("tall.mp4", thirty, 90)
+        .replace(
+          '<video id="picture" src="tall.mp4" muted data-start="0" data-duration="3.000000"',
+          '<video id="picture" src="tall.mp4" muted data-start="0" data-duration="1"',
+        )
+        .replace(
+          "</main>",
+          `<video id="wide" src="wide.mp4" muted data-start="1" data-duration="2" data-media-start="1" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video>
+<div id="title" class="clip" data-start="2" data-duration="1" data-track-index="1" style="position:absolute;left:0;top:0;width:8px;height:4px;background:#f00"></div></main>`,
+        );
+      const expected = sequence(90);
+      await render(page, thirty, expected, "capture");
+      await render(page, thirty, expected, "capture", undefined, true);
+      await render(
+        page,
+        thirty,
+        expected.slice(15, 75),
+        "capture",
+        { start: 15, end: 75 },
+        true,
+      );
+    });
+  },
+  120_000,
 );
