@@ -107,6 +107,7 @@ export function editLabel(
         ? (clip.label ??
             (clip.src === null ? undefined : sourceName(clip.src)) ??
             ((clip.title && clip.textPreview) ||
+              (clip.adjustment && clipName(clip)) ||
               `a ${clip.kind === "element" ? "text" : clip.kind} clip`))
         : "a clip";
     });
@@ -224,7 +225,7 @@ export function editLabel(
         }
         return pending
           ? `Add ${name} at ${time(command.at)}${command.mode !== "place" ? ` with ${command.mode}` : ""}`
-          : `Added ${named ? name : command.clip.kind} at ${time(command.at)}`;
+          : `Added ${named || command.clip.kind === "adjustment" ? name : command.clip.kind} at ${time(command.at)}`;
       }
       case "setClip": {
         const parts: string[] = [];

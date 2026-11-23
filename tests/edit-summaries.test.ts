@@ -159,3 +159,36 @@ test("generated Unicode labels fit the command request's existing 120-character 
     await f.close();
   }
 });
+
+test("an adjustment layer goes by its effect in summaries, never by its id", async () => {
+  const f = await setup();
+  try {
+    const insert: CommandInput = {
+      type: "insert",
+      track: 1,
+      at: 0,
+      clip: {
+        kind: "adjustment",
+        duration: 30,
+        region: {
+          effect: "zoom",
+          box: { x: 0.2, y: 0.2, width: 0.4, height: 0.4 },
+        },
+      },
+    };
+    const { timeline } = await f.read();
+    expect(editLabel([CommandSchema.parse(insert)], timeline, "", "past")).toBe(
+      "Added zoom layer at 00:00:00:00",
+    );
+    expect((await f.send([insert])).status).toBe(200);
+    const layer = (await f.read()).timeline.clips.find(
+      (clip) => clip.adjustment,
+    )!;
+    const response = await f.send([{ type: "remove", clipIds: [layer.id] }]);
+    expect(decodeURIComponent(response.headers.get(EDIT_SUMMARY_HEADER)!)).toBe(
+      "Lifted Zoom",
+    );
+  } finally {
+    await f.close();
+  }
+});

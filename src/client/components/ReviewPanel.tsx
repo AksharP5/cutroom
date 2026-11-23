@@ -20,6 +20,7 @@ import type {
 } from "../../shared/review";
 import { unfinishedStatuses } from "../../shared/review";
 import { FpsSchema } from "../../shared/timeline/schema";
+import { clipName } from "../../shared/timeline/labels";
 import { api, frameTimecode } from "../api";
 import { strokePath } from "../edit/notes";
 import { frameCaptureUrl, noteNumbers, toReviewStatuses } from "../review";
@@ -267,7 +268,8 @@ export function ReviewPanel({
           )
         : undefined;
     const name = item.elementId
-      ? (clip?.label ?? elementName(item.elementId))
+      ? (clip?.label ??
+        (clip?.adjustment ? clipName(clip) : elementName(item.elementId)))
       : "Picture";
     const at = queued.findIndex((candidate) => candidate.id === item.id);
     const open =
