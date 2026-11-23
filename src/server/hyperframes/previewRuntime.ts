@@ -62,6 +62,21 @@ export function previewRuntimeScript() {
       "getInferredDurationSeconds:()=>{let A=0;for(let w of s())",
       "getInferredDurationSeconds:(pageAnimations)=>{let A=0;for(let w of s(pageAnimations))",
     ],
+    // Discovery binds each media element to the composition's length, and resolving that
+    // length takes a page-wide getAnimations() snapshot. Once per element, a 1,000-clip
+    // timeline spent about 2 s there before its first frame. Resolve it once per pass.
+    [
+      "$c=(u,p)=>{Si.has(u)||nx(u,e.capturedTimeline,Ke(e.capturedTimeline,0),Si,",
+      "$c=(u,p,duration)=>{Si.has(u)||nx(u,e.capturedTimeline,duration??Ke(e.capturedTimeline,0),Si,",
+    ],
+    [
+      'let u=Array.from(document.querySelectorAll("video, audio")),p=[],h=Uc();for(let b of u){',
+      'let u=Array.from(document.querySelectorAll("video, audio")),p=[],h=Uc(),duration;for(let b of u){',
+    ],
+    [
+      "Jc(b)?p.push(b):Fl(b),$c(b,h)}",
+      "Jc(b)?p.push(b):Fl(b),$c(b,h,Si.has(b)?void 0:(duration??=Ke(e.capturedTimeline,0)))}",
+    ],
     // Studio retains a fully buffered source after its clip leaves the preload window.
     // On a long timeline those sources accumulate even after a jump to a distant clip.
     ["Wy(u,!Yc||window.__HF_RELEASE_PASSED_MEDIA===!0)", "Wy(u,!0)"],
