@@ -40,6 +40,7 @@ import { TextField } from "./TextField";
 import { LayerTextFields } from "./LayerTextFields";
 import { TitleSection } from "./TitleSection";
 import { isTitle } from "../../../shared/timeline/title";
+import { clipName } from "../../../shared/timeline/labels";
 import { StyleSection } from "./StyleSection";
 import { canHaveGrade } from "../../../shared/timeline/grade";
 import { ColorSection } from "./ColorSection";
@@ -459,6 +460,7 @@ export function Inspector({
     (clip.label?.trim() ||
       clip.src?.split("/").at(-1) ||
       (clip.title && clip.textPreview) ||
+      (clip.adjustment && clipName(clip)) ||
       clip.id
         .replaceAll(/[-_]+/g, " ")
         .replace(/^./, (letter) => letter.toUpperCase()));
