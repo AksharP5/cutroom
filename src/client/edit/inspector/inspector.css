@@ -1250,3 +1250,35 @@
 .speed-point[data-on] {
   background: var(--text-primary);
 }
+.speed-presets {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  height: var(--size-field);
+  padding: 0 var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+  white-space: nowrap;
+}
+.speed-ease .inspector-segments {
+  margin-left: 0;
+}
+.speed-ease svg,
+.speed-glyph {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.speed-ease svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+.speed-glyph {
+  width: 32px;
+  height: 14px;
+  color: var(--text-secondary);
+}
+.speed-point[data-ease="hold"] {
+  rotate: 0deg;
+}

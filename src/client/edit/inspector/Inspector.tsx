@@ -1068,10 +1068,10 @@ export function Inspector({
                   <SourceOut clip={clip} fps={timeline.fps} />
                 </FieldRow>
                 <SpeedRows
+                  projectId={projectId}
                   clip={clip}
                   fps={timeline.fps}
                   disabled={track?.track.locked}
-                  onSpeed={(value) => timing("speed", value)}
                 />
               </>
             )}

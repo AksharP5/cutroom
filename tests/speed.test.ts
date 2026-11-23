@@ -11,6 +11,8 @@ import {
 } from "../src/shared/timeline/speed";
 import { countingIds } from "./clip-ids";
 import { agentTimeline } from "../src/server/mcp/timelineReply";
+import { resolveClip } from "../src/shared/timeline/clipTiming";
+import { frames, secondsOf, sourceAt } from "../src/shared/timeline/piece";
 
 const fps = { num: 30, den: 1 };
 /** The agent's Hero ramp from the design spec: 100% to 160% to 25% and back, over 6 s. */
@@ -172,4 +174,143 @@ test("agents read a ramp as speed points and its source Out, and a constant clip
   expect(plain).not.toHaveProperty("speed");
   expect(plain).not.toHaveProperty("sourceOut");
   expect(plain!.playbackRate).toBe(2);
+});
+
+const edit = (state: Timeline, command: object) =>
+  applyAll(state, [CommandSchema.parse({ type: "setSpeed", ...command })], {
+    newId: countingIds,
+  });
+const linked = () =>
+  timeline([
+    clip({ link: "kick", sourceDuration: 20 }),
+    clip({
+      id: "kick-a",
+      kind: "audio",
+      track: 1,
+      link: "kick",
+      hasAudio: true,
+    }),
+  ]);
+const sourceSeconds = (state: Timeline, id: string, frame: number) => {
+  const time = sourceAt(
+    resolveClip(
+      state.clips.find((item) => item.id === id)!,
+      fps,
+    ),
+    frames(frame, fps),
+  );
+  return typeof time === "number" ? time : secondsOf(time);
+};
+
+test("speed points set picture and sound together, keeping length, first frame and eases", () => {
+  const after = edit(linked(), {
+    clipId: "broll",
+    points: [
+      { frame: 0, speed: 1, ease: "ease-in-out" },
+      { frame: 60, speed: 0.25, ease: "hold" },
+      { frame: 120, speed: 2 },
+    ],
+  });
+  for (const id of ["broll", "kick-a"]) {
+    const edited = after.clips.find((item) => item.id === id)!;
+    expect(edited).toMatchObject({ start: 180, duration: 180, mediaStart: 0 });
+    expect(speedPoints(edited, fps)).toEqual([
+      { frame: 0, speed: 1, ease: "ease-in-out" },
+      { frame: 60, speed: 0.25, ease: "hold" },
+      { frame: 120, speed: 2, ease: "linear" },
+    ]);
+  }
+  const broll = after.clips.find((item) => item.id === "broll")!;
+  // Ease in and out is symmetric: halfway in time is halfway on the log scale.
+  expect(speedAtFrame(broll, fps, 30)).toBeCloseTo(0.5, 6);
+  // Hold keeps 25% up to the next point, then changes on that frame.
+  expect(speedAtFrame(broll, fps, 119.9)).toBe(0.25);
+  expect(speedAtFrame(broll, fps, 120)).toBe(2);
+  // A held second at 25% plays exactly a quarter second of source, even across the step.
+  expect(
+    sourceSeconds(after, "broll", 300) - sourceSeconds(after, "broll", 240),
+  ).toBeCloseTo(0.5, 6);
+});
+
+test("a ramp that would run past the source is refused with the frame and the most it can take", () => {
+  const state = timeline([clip({ sourceDuration: 8 })]);
+  const fast = (speed: number) => () =>
+    edit(state, {
+      clipId: "broll",
+      points: [
+        { frame: 0, speed: 1 },
+        { frame: 90, speed },
+        { frame: 180, speed: 1 },
+      ],
+    });
+  expect(fast(4)).toThrow(
+    /runs past the end of its source at frame 2\d\d; the most the point at frame 270 can take is \d+%\./,
+  );
+  const most = Number(/can take is (\d+)%/.exec(String(trial(fast(4))))![1]);
+  // The bound it names fits, and a little more does not.
+  expect(trial(fast(most / 100))).toBeUndefined();
+  expect(trial(fast(most / 100 + 0.05))).toBeInstanceOf(Error);
+});
+
+const trial = (run: () => unknown) => {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+};
+
+test("constant speed resizes a constant clip, and flattens a ramp at its length", () => {
+  const constant = edit(timeline([clip()]), { clipId: "broll", speed: 2 });
+  expect(constant.clips[0]).toMatchObject({ playbackRate: 2, duration: 90 });
+  const flat = edit(timeline([clip({ automation: HERO })]), {
+    clipId: "broll",
+    speed: 1,
+  });
+  expect(flat.clips[0]).toMatchObject({
+    playbackRate: 1,
+    duration: 180,
+    automation: null,
+  });
+});
+
+test("Slow-mo hit keeps the picture at the playhead and slows it to 25%", () => {
+  const state = timeline([clip({ mediaStart: 2 })]);
+  const before = sourceSeconds(state, "broll", 180 + 100);
+  const after = edit(state, {
+    clipId: "broll",
+    preset: "slow-mo-hit",
+    at: 100,
+  });
+  expect(sourceSeconds(after, "broll", 180 + 100)).toBeCloseTo(before, 4);
+  expect(speedAtFrame(after.clips[0]!, fps, 100)).toBe(0.25);
+  expect(after.clips[0]!.duration).toBe(180);
+});
+
+test("two points on one frame are refused, and an omitted ease keeps a custom shape", () => {
+  expect(() =>
+    edit(timeline([clip()]), {
+      clipId: "broll",
+      points: [
+        { frame: 30, speed: 1 },
+        { frame: 30, speed: 2 },
+      ],
+    }),
+  ).toThrow("Two speed points share frame 30. Use Hold");
+  const shaped = JSON.parse(HERO);
+  shaped.lanes[0].points[1].curve = 0.5;
+  const after = edit(timeline([clip({ automation: JSON.stringify(shaped) })]), {
+    clipId: "broll",
+    points: speedPoints(clip({ automation: JSON.stringify(shaped) }), fps)!.map(
+      ({ frame, speed, ease }) =>
+        ease === "custom"
+          ? { frame, speed: speed * 2 }
+          : { frame, speed, ease },
+    ),
+  });
+  expect(speedPoints(after.clips[0]!, fps)![1]).toEqual({
+    frame: 45,
+    speed: 3.2,
+    ease: "custom",
+  });
 });

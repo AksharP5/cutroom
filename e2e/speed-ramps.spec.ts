@@ -34,7 +34,7 @@ async function rampProject(page: Page, request: Page["request"]) {
   );
   await promisify(execFile)("ffmpeg", [
     ...["-v", "error", "-f", "lavfi", "-i"],
-    "testsrc2=s=320x180:r=30:d=12",
+    "testsrc2=s=320x180:r=30:d=10",
     ...["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"],
     join(project.path, "broll.mp4"),
   ]);
@@ -77,4 +77,69 @@ test("a ramp an agent wrote shows on its clip and in Timing", async ({
   await page.locator('[data-clip="plain"]').click();
   await expect(timing.getByLabel("Speed", { exact: true })).toBeEnabled();
   await expect(graph).toHaveCount(0);
+});
+
+test("speed points, eases, presets and reset each edit as one undo step", async ({
+  page,
+  request,
+}) => {
+  await rampProject(page, request);
+  await page.locator('[data-clip="broll"]').click();
+  await seekFrame(page, 180 + 45);
+  const timing = page.locator(".inspector-timing");
+  const speed = timing.getByLabel("Speed", { exact: true });
+  const points = page.locator('[data-clip-speed="broll"] .tl-volume-point');
+
+  // Typing sets the point under the playhead.
+  await speed.fill("200%");
+  await speed.press("Enter");
+  await expect(speed).toHaveValue("200%");
+  await page.keyboard.press("Control+z");
+  await expect(speed).toHaveValue("160%");
+  await page.keyboard.press("Control+Shift+z");
+  await expect(speed).toHaveValue("200%");
+  await page.keyboard.press("Control+z");
+  await expect(speed).toHaveValue("160%");
+
+  // Ease shapes the segment from the point at the playhead.
+  const easeInOut = timing.getByRole("radio", { name: "Ease in and out" });
+  await easeInOut.click();
+  await expect(easeInOut).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Control+z");
+  await expect(easeInOut).toHaveAttribute("aria-checked", "false");
+
+  // The diamond removes the point under the playhead and adds one where there is none.
+  const diamond = timing.getByRole("button", { name: "Speed point" });
+  await diamond.click();
+  await expect(points).toHaveCount(4);
+  await page.keyboard.press("Control+z");
+  await expect(points).toHaveCount(5);
+
+  // A preset replaces the points with its own.
+  await timing.getByRole("button", { name: "Presets" }).click();
+  await page.getByRole("menuitem", { name: "Speed into cut" }).click();
+  await expect(points).toHaveCount(2);
+  await page.keyboard.press("Control+z");
+  await expect(points).toHaveCount(5);
+
+  // Reset speed, from its key and from the clip menu.
+  await page.keyboard.press("Control+Alt+r");
+  await expect(page.locator('[data-clip-speed="broll"]')).toHaveCount(0);
+  await expect(speed).toHaveValue("100%");
+  await page.keyboard.press("Control+z");
+  await expect(points).toHaveCount(5);
+  await page.locator('[data-clip="broll"]').click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Reset speed" }).click();
+  await expect(page.locator('[data-clip-speed="broll"]')).toHaveCount(0);
+  await page.keyboard.press("Control+z");
+  await expect(points).toHaveCount(5);
+
+  // A speed the source can't hold is refused with the most this point can take.
+  await page.locator('[data-clip="broll"]').click();
+  await speed.fill("1000%");
+  await speed.press("Enter");
+  await expect(page.locator(".toast")).toContainText(
+    /runs past the end of its source at 00:00:\d\d:\d\d; the most the point at 00:00:07:15 can take is \d+%/,
+  );
+  await expect(speed).toHaveValue("160%");
 });

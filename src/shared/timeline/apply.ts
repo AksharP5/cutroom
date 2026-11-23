@@ -83,6 +83,14 @@ import { editTransform, hasTransformEdit } from "./transform";
 import { editStyle, takesStyleField } from "./elementStyle";
 import { FREEZE_DIR, localMediaPath, sourceUrl } from "../media";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
+import {
+  hasRamp,
+  mostSpeed,
+  SPEED_PRESETS,
+  speedPoints,
+  withoutSpeedPoints,
+  withSpeedPoints,
+} from "./speed";
 import { canHaveGrade, editGrade } from "./grade";
 import { canRemoveBackground, editBackground } from "./background";
 import {
@@ -797,7 +805,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       if (!replace && targets.some((clip) => parseRateLane(clip.automation)))
         throw new TimelineError(
           "unsupported",
-          "Freeze frame needs a constant playback speed on every clip it cuts.",
+          "Freeze frame can't cut a speed ramp. Reset speed first.",
         );
       const tracks = new Set(linked.map((clip) => clip.track));
       const duration = replace
@@ -1409,6 +1417,116 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         clips: clips.map((clip) => changed.get(clip.id) ?? clip),
       };
     }
+    case "setSpeed": {
+      const target = find(command.clipId);
+      const targets =
+        command.linked === false ? [target] : withPartners(clips, [target]);
+      for (const clip of targets)
+        if (clip.mediaStart === null)
+          throw new TimelineError(
+            "unsupported",
+            `Clip ${clip.id} has no source timing.`,
+          );
+      const { speed } = command;
+      // A constant clip's speed resizes it, as the Speed field always has.
+      if (speed !== undefined && !targets.some(hasRamp))
+        return run(
+          timeline,
+          { type: "setTiming", clipId: target.id, playbackRate: speed },
+          batch,
+        );
+      const local = (frame: number) => Math.round(frame);
+      const at = command.at ?? local(target.duration / 2);
+      const preset = SPEED_PRESETS.find(({ id }) => id === command.preset);
+      const points =
+        command.points ?? preset?.shape(target.duration, at, fps) ?? null;
+      const changed = new Map(
+        targets.map((clip) => {
+          const shift = target.start - clip.start;
+          const edited: Clip = {
+            ...clip,
+            playbackRate: points ? 1 : speed!,
+            speedSpan: undefined,
+            automation: points
+              ? withSpeedPoints(
+                  clip,
+                  points.map((point) => ({
+                    ...point,
+                    frame: point.frame + shift,
+                  })),
+                  fps,
+                )
+              : withoutSpeedPoints(clip.automation),
+          };
+          return [clip.id, edited] as const;
+        }),
+      );
+      if (command.preset === "slow-mo-hit") {
+        // The picture at the hit stays at the hit: slip the source under the new ramp.
+        const hit = frames(target.start + at, fps);
+        const shown = sourceAt(resolveClip(target, fps), hit);
+        for (const [id, clip] of changed) {
+          const moved = sourceAt(resolveClip(clip, fps), hit);
+          const shift =
+            (typeof shown === "number" ? shown : secondsOf(shown)) -
+            (typeof moved === "number" ? moved : secondsOf(moved));
+          const mediaStart = round6(clip.mediaStart! + shift);
+          if (mediaStart < 0)
+            throw new TimelineError(
+              "out_of_bounds",
+              `Not enough source before the hit on clip ${id}: it needs ${round6(-mediaStart)} s more.`,
+            );
+          changed.set(id, { ...clip, mediaStart });
+        }
+      }
+      for (const clip of changed.values()) {
+        if (clip.sourceDuration === null || framesAfterOut(clip, fps) >= 0)
+          continue;
+        const line = resolveClip(clip, fps);
+        const ends =
+          Number(
+            firstFrame(
+              positionAtSource(line, micros(attrMicros(clip.sourceDuration))),
+              fps,
+            ),
+          ) - clip.start;
+        const old = speedPoints(target, fps);
+        // Name the most the edited point can take, or else the fastest point's.
+        const points = command.points;
+        const changedAt =
+          points && old?.length === points.length
+            ? points.findIndex(
+                (point, index) =>
+                  point.frame !== old[index]!.frame ||
+                  point.speed !== old[index]!.speed,
+              )
+            : -1;
+        const edited = !points
+          ? -1
+          : changedAt >= 0
+            ? changedAt
+            : points.reduce(
+                (best, point, index) =>
+                  point.speed > points[best]!.speed ? index : best,
+                0,
+              );
+        const most =
+          edited >= 0 && clip.id === target.id
+            ? mostSpeed(target, points!, edited, fps)
+            : null;
+        throw new TimelineError(
+          "out_of_bounds",
+          `Clip ${clip.id}'s speed runs past the end of its source at frame ${clip.start + ends}` +
+            (most !== null
+              ? `; the most the point at frame ${target.start + points![edited]!.frame} can take is ${Math.round(most * 100)}%.`
+              : ". Lower the speed or slip the source earlier."),
+        );
+      }
+      return {
+        ...timeline,
+        clips: clips.map((clip) => changed.get(clip.id) ?? clip),
+      };
+    }
     case "setTiming": {
       const target = find(command.clipId);
       const targets = withPartners(clips, [target]);
@@ -1421,7 +1539,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         if (command.playbackRate !== undefined && readClipSource(clip).lane)
           throw new TimelineError(
             "unsupported",
-            `Clip ${clip.id} has a speed ramp. Change its rate lane in the composition source.`,
+            `Clip ${clip.id} has a speed ramp. Change it with setSpeed.`,
           );
       }
       const ids = new Set(targets.map(({ id }) => id));
