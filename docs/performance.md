@@ -1313,6 +1313,25 @@ On November 16, 2026, a 60 fps timeline over 60 fps recordings on Matroska's mil
 
 Before, a step left the previous picture up at every other frame (HyperFrames' runtime does not move a paused video for less than 20 ms, and a 60 fps frame is 16.7 ms), and the pipeline and the finished proxy showed the frame before wherever the millisecond clock rounded a frame's start up. A wider matrix through the viewer, against direct exports, matched at every frame after the change: 30 and 29.97 fps sources on 60 and 30 fps timelines, 59.94 fps on 60 (where the two grids drift apart) and on 59.94, 60 fps on 30, a clip starting at 7.123 s, MP4 sources on a millisecond clock through the pipeline, and frames 24,000 to 24,011 of a seven-minute HEVC recording while its proxy was still in pieces, with the pipeline off and on.
 
+## Playback start
+
+On November 23, 2026, Space on a parked playhead could take seconds to show a moving picture on a busy machine with the footage pipeline on. The parked frame is decoded as a seek: the decoder is fed up to it and flushed, and the flush ends its run. The first played frame was then decoded again from its keyframe, up to a GOP of 1080p or 720p frames on the start path. The pipeline now decodes the next frames on from the parked frame while it rests, as it already did with an edit point selected.
+
+Headless Chromium on the real GPU (`CUTROOM_E2E_GPU=1`), the generated dialogue timelines with 720p camera files (a keyframe every 120 frames), four plays per run from different shots, main and the change interleaved. Busy is two pinned cores beside two busy loops. Times are from the Space keydown; the screen column reads the burned-in frame number from a CDP screencast. Median and worst:
+
+| Timeline, machine | Build  | Clock starts | First new frame painted | First new frame on screen | Longest paint gap in the first 2 s |
+| ----------------- | ------ | -----------: | ----------------------: | ------------------------: | ---------------------------------: |
+| 100 clips, idle   | main   |     56 / 158 |                58 / 383 |                  72 / 430 |                           56 / 378 |
+| 100 clips, idle   | change |      46 / 83 |                 46 / 84 |                  60 / 100 |                            44 / 82 |
+| 100 clips, busy   | main   |    138 / 282 |             262 / 1,394 |               347 / 1,569 |                        714 / 1,386 |
+| 100 clips, busy   | change |    121 / 299 |               122 / 303 |                 148 / 366 |                        475 / 1,033 |
+| 1,000 clips, idle | main   |    112 / 156 |               112 / 157 |                 136 / 179 |                          111 / 155 |
+| 1,000 clips, idle | change |     98 / 142 |               100 / 143 |                 120 / 165 |                           98 / 139 |
+
+With the change the first new frame is painted within a few milliseconds of the clock starting. At 1,000 clips the picture already waited on the clock, which starts 100 to 160 ms after the key while the editor's main thread is mostly idle; that wait is unchanged. On a busy machine, decoding can still fall behind the clock later in the first two seconds.
+
+`bun run test:perf --grep 'deep in its GOP'` parks 100 frames past a keyframe on the 100-clip timeline, throttles the CPU four times, presses Space, and times the first pipeline paint of a later frame from the clock's first step. Over two runs each, main's per-play times were 1,513 to 2,721 ms there, with the real GPU and with SwiftShader; the change's were 1.9 to 7.8 ms. The gate allows 200 ms at the median of three plays.
+
 ## Footage lookahead during frame steps
 
 Measured November 17, 2026 against `fba38c8b`, production builds in headless Chromium 155 on Linux, footage pipeline explicitly enabled. Each 400/500-clip workload uses `scripts/timeline-performance.ts`: linked cuts from one 60-second 640 × 360 H.264/AAC source and 20 titles in a 1080p30 composition. The source carries a binary frame number along its top. The viewer was ready and its media warmed before 16 forward and 16 reverse arrow-key steps, 125 ms apart, from timeline frame 3000. Three runs of each build and size were interleaved, with the final pair reversed. Browser and media workloads ran one at a time.
