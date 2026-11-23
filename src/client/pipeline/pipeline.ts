@@ -26,8 +26,14 @@ import type { Appearance, Shown } from "./layers";
 import { sourceCache } from "./sources";
 import { usePipeline } from "./setting";
 import { chromeColourGuess } from "../../shared/videoColour";
-import { FrameGridSchema, frameSeek } from "../../shared/frames";
-import type { FrameGrid } from "../../shared/frames";
+import { pictureAt, secondsOf } from "../../shared/timeline/piece";
+import type { SourceTime } from "../../shared/timeline/piece";
+import {
+  pictureSeek,
+  readPictureSource,
+  timePicture,
+} from "../../shared/timeline/pictureSource";
+import type { PictureSource } from "../../shared/timeline/pictureSource";
 import { useWorkspace } from "../workspace";
 import { clipMatteState, useMatteView, useMattes } from "../edit/mattes";
 import { matteFrameAt } from "../../shared/matte";
@@ -46,13 +52,30 @@ interface Source {
   proxy: SourceDecoder | null;
   askProxy: () => Promise<void> | null;
   intrinsic: { width: number; height: number };
-  /** Where export puts the file's frames, or null to show them at their own times. */
-  grid: FrameGrid;
+  /** The file's pictures as export selects them, or null to show them at their own times. */
+  pictures: PictureSource | null;
+}
+
+/**
+ * Where a decoder finds the picture export writes: at an exact source time when the piece gives
+ * one, else at a time asked with the runtime's lead.
+ */
+function pictureTime(
+  pictures: PictureSource | null,
+  asked: number,
+  source?: SourceTime,
+) {
+  if (!pictures) return asked;
+  const ordinal =
+    source === undefined
+      ? timePicture(pictures.index, asked)
+      : pictureAt(pictures.index, source);
+  return ordinal === null ? asked : pictureSeek(pictures.index, ordinal);
 }
 
 /** The frame a source shows at a media time: the one export writes there. */
-const indexAt = (found: Source, time: number) =>
-  found.playing.indexAt(found.grid ? frameSeek(found.grid, time) : time);
+const indexAt = (found: Source, asked: number, source?: SourceTime) =>
+  found.playing.indexAt(pictureTime(found.pictures, asked, source));
 
 /**
  * The lane drawn from last when it has the frame or is on its way, else the other lane. A jump
@@ -203,14 +226,14 @@ export function attachPipeline(
       preparing.delete(path);
     }
   };
-  // A file the server cannot read a grid for shows its frames at their own times.
-  const grids = sourceCache((path) =>
+  // A file the server cannot index shows its frames at their own times.
+  const pictureSources = sourceCache((path) =>
     fetch(
       `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/frames?path=${encodeURIComponent(path)}`,
       { signal: closing.signal },
     )
       .then(async (response) =>
-        response.ok ? FrameGridSchema.parse(await response.json()) : null,
+        response.ok ? readPictureSource(await response.json()) : null,
       )
       .catch(() => null),
   );
@@ -218,7 +241,7 @@ export function attachPipeline(
     const path = localMediaPath("index.html", src);
     if (path === null)
       throw new Error("Choose footage from the project folder.");
-    const grid = grids.get(path);
+    const pictures = pictureSources.get(path);
     // A file this browser cannot decode or read, such as HEVC, ProRes or Matroska, plays from
     // its editing proxy: the same frames at the same times. HyperFrames draws until it exists.
     const opened = await openSource(mediaUrl(projectId, path), closing.signal, {
@@ -237,7 +260,7 @@ export function attachPipeline(
       if (!response.ok) throw error;
       return openSource(url, closing.signal);
     });
-    return { ...opened, grid: await grid, path };
+    return { ...opened, pictures: await pictures, path };
   });
   const scrubs = sourceCache((path) =>
     openSource(
@@ -247,7 +270,7 @@ export function attachPipeline(
     ),
   );
   const sources = sourceCache(async (src): Promise<Source> => {
-    const { createDecoder, intrinsic, grid, path } = await media.get(src);
+    const { createDecoder, intrinsic, pictures, path } = await media.get(src);
     let askedAt = -Infinity;
     let asking: Promise<void> | null = null;
     const decoder = createDecoder();
@@ -256,7 +279,7 @@ export function attachPipeline(
       playing: decoder,
       proxy: null,
       intrinsic,
-      grid,
+      pictures,
       // A proxy still being made answers 202. Moving seeks use the source until it exists, and
       // a draw that wants it asks again, at most every two seconds.
       askProxy: () => {
@@ -327,7 +350,7 @@ export function attachPipeline(
   type Prepared = {
     decoder: SourceDecoder;
     intrinsic: { width: number; height: number };
-    grid: FrameGrid;
+    pictures: PictureSource | null;
   };
   let audition: {
     key: string;
@@ -353,7 +376,7 @@ export function attachPipeline(
       const path = localMediaPath(view?.composition ?? "index.html", src);
       if (path !== null) {
         scrubs.remove(path);
-        grids.remove(path);
+        pictureSources.remove(path);
       }
       media.remove(src);
       void sources.remove(src)?.then(closeSource, () => {});
@@ -462,10 +485,10 @@ export function attachPipeline(
         continue;
       const prepared = media
         .get(version.src)
-        .then(({ createDecoder, intrinsic, grid }) => ({
+        .then(({ createDecoder, intrinsic, pictures }) => ({
           decoder: createDecoder("audition"),
           intrinsic,
-          grid,
+          pictures,
         }));
       prepared.catch(() => {});
       warming.takes.set(index, prepared);
@@ -480,12 +503,10 @@ export function attachPipeline(
       if (changed && index === selected) continue;
       const version = clip.versions[index]!;
       void pending.then(
-        ({ decoder, grid }) => {
+        ({ decoder, pictures }) => {
           if (warming !== audition) return;
           const seconds = auditionTime(clip, version, warmAt, view);
-          const sourceFrame = decoder.indexAt(
-            grid ? frameSeek(grid, seconds) : seconds,
-          );
+          const sourceFrame = decoder.indexAt(pictureTime(pictures, seconds));
           const end = Math.min(
             decoder.frameCount - 1,
             sourceFrame + decoder.room(5) - 1,
@@ -703,15 +724,17 @@ export function attachPipeline(
         : layer.time;
       const prepare = async () => {
         if (selected?.decoder) {
-          const { decoder, intrinsic, grid } = await selected.decoder;
-          const index = decoder.indexAt(
-            grid ? frameSeek(grid, seconds) : seconds,
-          );
+          const { decoder, intrinsic, pictures } = await selected.decoder;
+          const index = decoder.indexAt(pictureTime(pictures, seconds));
           return { intrinsic, index, lane: decoder, decoder, found: null };
         }
         const found = await source(src);
         if (!found.proxy) void found.askProxy();
-        const index = indexAt(found, seconds);
+        const index = indexAt(
+          found,
+          seconds,
+          selected ? undefined : layer.source,
+        );
         const lane = laneFor(found, index);
         // Moving seeks draw the proxy, whose frame N is the source's frame N.
         const decoder = (moving ? found.proxy : null) ?? lane;
@@ -747,11 +770,12 @@ export function attachPipeline(
           auditionAtDraw.open === useVersions.getState().open &&
           auditionAtDraw.hovered === useVersions.getState().hovered;
         if (path && selected?.changed) {
-          const grid = await grids.get(path);
-          // The scrub encode can rebase timestamps. Align its first frame to the export
-          // grid's start. Without a grid, keep the ordinal from the original's sample index.
-          if (grid && !original?.cached) {
-            const offset = frameSeek(grid, seconds) - grid.start;
+          const pictures = await pictureSources.get(path);
+          // The scrub encode can rebase timestamps. Align its first frame to a constant-rate
+          // file's first picture. Otherwise keep the ordinal from the original's sample index.
+          if (pictures && !("times" in pictures.index) && !original?.cached) {
+            const offset =
+              pictureTime(pictures, seconds) - secondsOf(pictures.index.origin);
             const proxy = await auditionStandIn(
               path,
               (proxy) => proxy.indexAt(proxy.firstTime + offset),
@@ -974,7 +998,7 @@ export function attachPipeline(
       sources.add(src);
       void source(src)
         .then((found) => {
-          const index = indexAt(found, layer.time);
+          const index = indexAt(found, layer.time, layer.source);
           // The playing lane may hold it now, but drops it as the playhead moves on.
           const spare = found.lanes.find((lane) => lane !== found.playing)!;
           if (!spare.has(index) && !spare.reaches(index))

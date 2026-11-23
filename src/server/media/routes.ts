@@ -10,7 +10,7 @@ import { createMediaService } from "./service";
 import type { MediaService } from "./service";
 import { peakRange } from "./range";
 import { piecePlaylist } from "./pieces";
-import { frameGrid } from "./frames";
+import { pictureSourceWire, sourcePictures } from "./pictureIndex";
 import { mediaFileDetails } from "../timeline/media";
 import { mediaKind } from "../../shared/media";
 
@@ -137,7 +137,7 @@ export function createMediaRoutes(
       throw new HttpError(404, "Choose a media file in the project.");
     return c.json(details);
   });
-  // Where export puts the video's frames, which the footage pipeline shows the same way.
+  // The pictures export selects from the video, which the footage pipeline selects the same way.
   api.get("/projects/:id/media/frames", async (c) => {
     c.header("cache-control", "no-store");
     return c.json(
@@ -187,12 +187,18 @@ export function createMediaRoutes(
   return Object.assign(api, { media, dispose: () => media.dispose() });
 }
 
-/** A project video's frame grid; files that are not media answer 422. */
+/**
+ * A project video's picture index and playable end, from which the viewer selects the pictures
+ * export writes. Null for a file with no video; files that are not media answer 422.
+ */
 export async function framesOf(project: Project, path: string | undefined) {
   const file = await projectPath(project, PathSchema.parse(path));
-  return frameGrid(file).catch(() => {
-    throw new HttpError(422, "The file has no readable video.");
-  });
+  const source = await sourcePictures(file, { projectDir: project.path }).catch(
+    () => {
+      throw new HttpError(422, "The file has no readable video.");
+    },
+  );
+  return source && pictureSourceWire(source);
 }
 
 /**

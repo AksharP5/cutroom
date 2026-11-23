@@ -420,7 +420,7 @@ export function regridSourceMap(
   );
 }
 
-type SourceTime = ExactTime | number;
+export type SourceTime = ExactTime | number;
 type Loop =
   | { kind: "exact"; start: ExactTime; length: ExactTime | null }
   | { kind: "ramp"; start: number; length: number | null };

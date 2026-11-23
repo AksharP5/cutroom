@@ -888,6 +888,8 @@ export function connectPreview(
         .object({
           version: z.string(),
           timing: PreviewTimingSchema.nullable(),
+          // The preview reads the table of resting pictures itself.
+          pictures: z.unknown(),
           mix: TrackGainPreviewSchema,
           live: z.boolean(),
         })
@@ -907,6 +909,7 @@ export function connectPreview(
         "timing",
         {
           timing: snapshot.timing,
+          pictures: snapshot.pictures,
           mixSignature: snapshot.mix.signature,
           gains: snapshot.mix.gains,
           expectedRevision: timingRevision,

@@ -1592,6 +1592,14 @@ export function createHyperframesApi(
       eligible && !ramp
         ? await previewDependencies(project.path, activeCompositionPath)
         : null;
+    // Each scene's frame rate is its own file's, which the served document does not carry.
+    const scenes = new Map<string, string>();
+    for (const [, file] of html.matchAll(/data-composition-file="([^"]+)"/g)) {
+      if (scenes.has(file!)) continue;
+      const path = await projectPath(project, file!).catch(() => null);
+      const source = path && (await readFile(path, "utf8").catch(() => null));
+      if (source !== null) scenes.set(file!, source);
+    }
     const document = previewDocument(
       ramp?.html ?? html,
       activeCompositionPath,
@@ -1602,6 +1610,7 @@ export function createHyperframesApi(
         `${prefix}ramp-audio/${key}.wav`,
         window.duration,
       ]),
+      scenes,
     );
     const checkedSourceTiming = async (
       compiled: PreviewTiming,
@@ -1668,6 +1677,7 @@ export function createHyperframesApi(
       return c.json({
         version: sourceBefore.version,
         timing: document.timing,
+        pictures: document.pictures,
         mix,
         live:
           timingDocuments.get(documentId ?? "")?.projectId === projectId &&

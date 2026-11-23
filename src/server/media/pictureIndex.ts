@@ -24,6 +24,8 @@ import {
 } from "../../shared/timeline/piece.ts";
 import type { ExactTime, PictureIndex } from "../../shared/timeline/piece.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
+import { timeText } from "../../shared/timeline/pictureSource.ts";
+import type { PictureSourceWire } from "../../shared/timeline/pictureSource.ts";
 import { localMediaInputOptions } from "./input.ts";
 
 type Packet = { pts: bigint; duration?: bigint; key: boolean };
@@ -431,3 +433,32 @@ export async function sourcePictures(
 
 export const nativeTimestamp = (source: SourcePictures, ordinal: number) =>
   ticks(source.packets[ordinal]!.pts, source.tick);
+
+/** What the viewer reads to select pictures as export does. */
+export function pictureSourceWire({
+  index,
+  packets,
+  tick,
+  end,
+}: SourcePictures): PictureSourceWire {
+  const endText = end ? timeText(end.time) : null;
+  if (!("times" in index))
+    return {
+      index: {
+        origin: timeText(index.origin),
+        rate: index.rate,
+        count: String(index.count),
+      },
+      end: endText,
+    };
+  // Each presented picture's packet time, with the clock offset the index applied to all.
+  const first = packets[0]!.pts;
+  return {
+    index: {
+      tick: timeText(tick),
+      offset: timeText(subtract(index.times[0]!, ticks(first, tick))),
+      ticks: packets.map(({ pts }) => Number(pts)),
+    },
+    end: endText,
+  };
+}

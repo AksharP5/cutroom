@@ -1,4 +1,7 @@
 import { offsetSourceTime } from "../../shared/timeline/time";
+import { resolveClip } from "../../shared/timeline/clipTiming";
+import { frames, sourceAt } from "../../shared/timeline/piece";
+import type { Piece, SourceTime } from "../../shared/timeline/piece";
 import { frameTime, toSeconds } from "../../shared/timeline/apply";
 import { framesAfter, framesBefore } from "../../shared/timeline/transition";
 import { isAudioKind } from "../../shared/timeline/schema";
@@ -13,6 +16,8 @@ export interface Shown {
   fit: Fit;
   /** Source seconds the runtime seeks this clip's media to at the frame. */
   time: number;
+  /** The source time export selects this clip's picture at, exactly. */
+  source: SourceTime;
   /** The clip's own opacity as its transitions animate it. */
   opacity: number;
   brightness: number;
@@ -23,6 +28,14 @@ type ShownAdjustment = {
   /** Apply after this many pictures have been drawn. */
   after: number;
 };
+
+/** Clips are immutable snapshots, so each resolves once per timeline. */
+const pieces = new WeakMap<Clip, Piece>();
+function clipPiece(clip: Clip, fps: Timeline["fps"]) {
+  let piece = pieces.get(clip);
+  if (!piece) pieces.set(clip, (piece = resolveClip(clip, fps)));
+  return piece;
+}
 
 type FrameLayers = {
   pictures: Shown[];
@@ -185,6 +198,7 @@ function layerQuery(
           ) +
           // The runtime seeks just past the frame's start, as HyperFrames does.
           1e-5,
+        source: sourceAt(clipPiece(clip, fps), frames(frame, fps)),
         opacity,
         brightness,
         level,

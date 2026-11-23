@@ -20,8 +20,6 @@ import type { PreviewTiming } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
 import { adjustmentCapture } from "./adjustmentCapture";
 import { spanIndex } from "../../shared/timeline/spanIndex";
-import { frameSeek } from "../../shared/frames";
-import type { FrameGrid } from "../../shared/frames";
 import type { Fps } from "../../shared/timeline/schema";
 import { hostInPointSeconds } from "@hyperframes/core/media-timing";
 import {
@@ -30,6 +28,29 @@ import {
   placedMedia,
   startAtPlayed,
 } from "../../shared/timeline/placedMedia";
+import { pictureTable } from "../../shared/timeline/pictureSource";
+import type { viewerPictures } from "../../shared/timeline/pictureSource";
+import type {
+  PictureSource,
+  PictureTable,
+} from "../../shared/timeline/pictureSource";
+
+// The bridge selects pictures with the same module export uses, bundled once for the browser.
+const pictureBuild = await Bun.build({
+  entrypoints: [new URL("./previewPictures.ts", import.meta.url).pathname],
+  target: "browser",
+  format: "iife",
+  minify: true,
+});
+if (!pictureBuild.success)
+  throw new AggregateError(
+    pictureBuild.logs,
+    "The preview's picture selection did not build.",
+  );
+const pictureScript = await pictureBuild.outputs[0]!.text();
+if (/<\/script|<!--/i.test(pictureScript))
+  throw new Error("The preview's picture selection cannot be inlined.");
+const PICTURES = `(() => { const key = Symbol.for("cutroom.viewerPictures"); const value = Reflect.get(globalThis, key); Reflect.deleteProperty(globalThis, key); return value; })()`;
 
 interface PreviewWindow extends DiagnosticWindow {
   /** HyperFrames' codec facts for the project's media, by root-relative path. */
@@ -184,7 +205,8 @@ export function liveUpdatePlan(
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
 function installPreviewBridge(
   plan: typeof liveUpdatePlan,
-  seekInFrame: typeof frameSeek,
+  /** Export's picture rule, from the bundled `pictureSource` module. */
+  pictures: typeof viewerPictures,
   createAdjustmentCapture: (() => ReturnType<typeof adjustmentCapture>) | null,
   /**
    * The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does, and one
@@ -205,6 +227,8 @@ function installPreviewBridge(
     | null,
   rampPending: boolean,
   rampWindows: [src: string, seconds: number][],
+  /** Every placed video of this document, to select its resting picture as export does. */
+  initialPictures: PictureTable | null,
 ) {
   const adjustment = createAdjustmentCapture?.();
   const adjustmentState = adjustment && { adjustment: true };
@@ -1671,6 +1695,7 @@ function installPreviewBridge(
     for (const frame of editFrames) frame.close();
     editFrames = [];
     for (const [video, preload] of editPreloads) {
+      sourceSeeks.delete(video);
       if (preload === null) video.removeAttribute("preload");
       else video.setAttribute("preload", preload);
       if (pipelineActive && drawnByPipeline(video)) park(video);
@@ -1713,7 +1738,8 @@ function installPreviewBridge(
             );
           }
           // With the runtime's media-element lead, at the place export's frame shows.
-          await loadGrid(element);
+          await loadPictures(element);
+          sourceSeeks.add(element);
           element.currentTime = edge.time + 0.00001;
         }
         return element;
@@ -2158,12 +2184,27 @@ function installPreviewBridge(
   const captureFrames = (
     videos: HTMLVideoElement[],
     samples: Map<HTMLVideoElement, ProxySample>,
+    expected: ReadonlyMap<
+      HTMLVideoElement,
+      { ordinal: bigint; source: PictureSource }
+    >,
+    wrong: Set<HTMLVideoElement>,
   ) => {
     const frames = new Map<HTMLVideoElement, VideoFrame>();
     try {
       for (const video of videos) {
         const frame = new VideoFrame(video);
         frames.set(video, frame);
+        const picture = expected.get(video);
+        if (
+          picture &&
+          pictures.presentedPicture(picture.source.index, frame.timestamp) !==
+            picture.ordinal
+        ) {
+          wrong.add(video);
+          for (const frame of frames.values()) frame.close();
+          return null;
+        }
         // Chromium can settle its seek clock while both APIs still carry the old picture.
         const sample = samples.get(video);
         const decoded = decodedSeeks.get(video);
@@ -2408,6 +2449,7 @@ function installPreviewBridge(
       throw new Error("The preview cannot confirm that it drew the frame.");
     let timer = 0;
     const corrected = new Set<HTMLVideoElement>();
+    const reseated = new Set<HTMLVideoElement>();
     try {
       await Promise.race([
         (async () => {
@@ -2426,10 +2468,10 @@ function installPreviewBridge(
               );
               continue;
             }
-            // Frames are placed by each source's grid, which a new source reads first.
-            await Promise.all(videos.map(loadGrid));
+            // Pictures are selected by each source's index, which a new source reads first.
+            await Promise.all(videos.map(loadPictures));
             if (!current()) return;
-            // The footage pipeline can take a video while its grid loads; it no longer shows
+            // The footage pipeline can take a video while its index loads; it no longer shows
             // natively, so look again at which videos do before checking where they rest.
             const showing = visibleVideos();
             if (
@@ -2437,28 +2479,42 @@ function installPreviewBridge(
               showing.some((video, index) => video !== videos[index])
             )
               continue;
-            // A grid that just came moved its videos; their frames are on the way.
+            // An index that just came moved its videos; their frames are on the way.
             if (videos.some((video) => video.seeking)) continue;
             // A video the runtime has not moved to this time would be held at its old frame,
             // for instance one that came back into view while its seek stalled, or one a step
             // of a frame moved less than the runtime's 20 ms tolerance at 50 fps and above.
             // Move it. Each video is moved at most once for this picture; if it is still off
             // once that seek has settled, the runtime's own placement stands.
+            // A video with a placed piece rests on the picture export writes, whatever time the
+            // runtime gave it; it keeps reporting the runtime's time.
+            // It already rests there when its position is inside that picture, such as at the
+            // end of the file, where the runtime leaves a held tail.
             const stale = videos.flatMap((video) => {
-              const time = expectedMediaTime(video);
+              if (corrected.has(video)) return [];
+              const native = nativeTime.get!.call(video);
+              const rest = editingProxyPath(video)
+                ? null
+                : restingPicture(video);
+              if (rest)
+                return pictures.timePicture(rest.source.index, native) ===
+                  rest.ordinal
+                  ? []
+                  : [{ video, time: mediaTime.get.call(video) }];
+              const expected = expectedMediaTime(video);
+              const time =
+                expected === null
+                  ? restingPicture(video) && mediaTime.get.call(video)
+                  : expected + 1e-5;
               return time !== null &&
-                !corrected.has(video) &&
-                Math.abs(
-                  nativeTime.get!.call(video) -
-                    pausedPosition(video, time + 1e-5),
-                ) > 1e-4
+                Math.abs(native - pausedPosition(video, time)) > 1e-4
                 ? [{ video, time }]
                 : [];
             });
             if (stale.length) {
               for (const { video, time } of stale) {
                 corrected.add(video);
-                mediaTime.set.call(video, time + 1e-5);
+                mediaTime.set.call(video, time);
               }
               const root = document.documentElement;
               root.setAttribute(
@@ -2480,19 +2536,45 @@ function installPreviewBridge(
               videos.map(async (video) => {
                 const sample = await proxySampleAt(
                   video,
-                  framePosition(video, mediaTime.get.call(video)),
+                  pictureTarget(video, mediaTime.get.call(video)),
                 );
                 if (sample) samples.set(video, sample);
               }),
             );
             if (!current()) return;
             if (videos.some((video) => video.seeking)) continue;
-            const frames = captureFrames(videos, samples);
+            // Each source file's own pictures must be the ones export writes. Chromium can show
+            // another picture at a seek, as FFmpeg can before an open-GOP keyframe.
+            const expected = new Map<
+              HTMLVideoElement,
+              NonNullable<ReturnType<typeof restingPicture>>
+            >();
+            for (const video of videos) {
+              const rest = editingProxyPath(video)
+                ? null
+                : restingPicture(video);
+              if (rest) expected.set(video, rest);
+            }
+            const wrong = new Set<HTMLVideoElement>();
+            const frames = captureFrames(videos, samples, expected, wrong);
             if (!frames) {
+              // Seek a video showing another picture again, once; until it shows the right one
+              // the picture is not held, and the seek times out with an error.
+              for (const video of wrong) {
+                if (reseated.has(video)) continue;
+                reseated.add(video);
+                const rest = restingPicture(video);
+                if (rest)
+                  seekMedia(
+                    video,
+                    mediaTime.get.call(video),
+                    clampMediaTime(video, rest.at),
+                  );
+              }
               // An editing proxy playing from its pieces has no frame to give after it loads
               // until it is sought, even to where it is. Seek each such video once.
               for (const video of videos) {
-                if (corrected.has(video)) continue;
+                if (corrected.has(video) || wrong.has(video)) continue;
                 try {
                   new VideoFrame(video).close();
                 } catch {
@@ -2655,34 +2737,22 @@ function installPreviewBridge(
       await new Promise((resolve) => setTimeout(resolve, 10));
     return proxy.readyState >= 2 ? proxy : null;
   };
-  /** Each source's frame grid, by project path, once the server has read it. */
-  const grids = new Map<string, Promise<FrameGrid>>();
-  const known = new Map<string, FrameGrid>();
-  /** Reads a video's frame grid once; null when it has none or the server cannot read it. */
-  const loadGrid = (video: HTMLVideoElement) => {
+  /** Each source's picture index, by project path, once the server has read it. */
+  const pictureSources = new Map<string, Promise<PictureSource | null>>();
+  const knownSources = new Map<string, PictureSource | null>();
+  /** Reads a video's picture index once; null when it has none or the server cannot read it. */
+  const loadPictures = (video: HTMLVideoElement) => {
     const path = scrubPath(video);
     if (!path) return Promise.resolve(null);
-    let grid = grids.get(path);
-    if (!grid) {
-      grid = fetch(`${capability}frames?path=${encodeURIComponent(path)}`)
+    let pending = pictureSources.get(path);
+    if (!pending) {
+      pending = fetch(`${capability}frames?path=${encodeURIComponent(path)}`)
         .then((response) => (response.ok ? response.json() : null))
-        .then((body: unknown) =>
-          body &&
-          typeof body === "object" &&
-          "start" in body &&
-          typeof body.start === "number" &&
-          Number.isFinite(body.start) &&
-          "rate" in body &&
-          typeof body.rate === "number" &&
-          Number.isFinite(body.rate) &&
-          body.rate > 0
-            ? { start: body.start, rate: body.rate }
-            : null,
-        )
+        .then((body: unknown) => pictures.readPictureSource(body))
         .catch(() => null)
         .then((found) => {
-          known.set(path, found);
-          // A paused video the runtime placed before the grid came moves to export's frame.
+          knownSources.set(path, found);
+          // A paused video the runtime placed before the index came moves to export's picture.
           if (found)
             for (const video of document.querySelectorAll("video"))
               if (
@@ -2695,19 +2765,83 @@ function installPreviewBridge(
                 mediaTime.set.call(video, nativeTime.get!.call(video));
           return found;
         });
-      grids.set(path, grid);
+      pictureSources.set(path, pending);
     }
-    return grid;
+    return pending;
+  };
+  let pictureTable = initialPictures;
+  const resolvedSlots = new WeakMap<
+    PictureTable["videos"][string],
+    { source: PictureSource; piece: ReturnType<typeof pictures.slotPiece> }
+  >();
+  /** Seeks to a source time rather than the playhead's picture, such as an edit frame's edge. */
+  const sourceSeeks = new WeakSet<HTMLMediaElement>();
+  /**
+   * The picture export writes at the playhead for a video's piece, and where a paused video
+   * shows it. The runtime's own time only triggers the seek: for a speed ramp or a loop it can
+   * name a different picture. Null when the video has no placed piece or no picture index, or
+   * the playhead is outside its piece.
+   */
+  const restingPicture = (media: HTMLMediaElement) => {
+    if (
+      !(media instanceof HTMLVideoElement) ||
+      !pictureTable ||
+      sourceSeeks.has(media)
+    )
+      return null;
+    const path = scrubPath(media);
+    const source = path ? knownSources.get(path) : null;
+    const id = media.getAttribute("data-hf-render-id") || media.id;
+    const slot = Object.hasOwn(pictureTable.videos, id)
+      ? pictureTable.videos[id]!
+      : null;
+    const time = win.__player?.getTime();
+    if (!source || !slot || time === undefined) return null;
+    const { fps } = pictureTable;
+    let resolved = resolvedSlots.get(slot);
+    if (resolved?.source !== source) {
+      try {
+        resolved = {
+          source,
+          piece: pictures.slotPiece(id, slot, fps, source.end),
+        };
+      } catch (error) {
+        // The runtime's seek goes on; the viewer says why its picture may differ from export.
+        reportFrameFailure(error);
+        return null;
+      }
+      resolvedSlots.set(slot, resolved);
+    }
+    const ordinal = pictures.framePicture(
+      resolved.piece,
+      source.index,
+      Math.round((time * fps.num) / fps.den),
+      fps,
+    );
+    return ordinal === null
+      ? null
+      : {
+          ordinal,
+          source,
+          at: pictures.pictureSeek(source.index, ordinal),
+        };
   };
   /**
-   * Where a paused video is put to show the frame export writes at `time`, which the runtime
-   * asks for with its 10 microsecond lead. Without a grid, the time itself.
+   * Where a paused video is put to show the picture export shows at source `time`, which the
+   * runtime and the edit frames ask for with HyperFrames' 10 microsecond lead. Without an
+   * index, the time itself.
    */
   const framePosition = (media: HTMLMediaElement, time: number) => {
     const path = media instanceof HTMLVideoElement ? scrubPath(media) : null;
-    const grid = path ? known.get(path) : null;
-    return grid ? seekInFrame(grid, time) : time;
+    const source = path ? knownSources.get(path) : null;
+    const ordinal = source && pictures.timePicture(source.index, time);
+    return source && ordinal != null
+      ? pictures.pictureSeek(source.index, ordinal)
+      : time;
   };
+  /** Where a paused seek to `time` goes: the playhead's picture, else `time`'s. */
+  const pictureTarget = (media: HTMLMediaElement, time: number) =>
+    restingPicture(media)?.at ?? framePosition(media, time);
   type ProxySample = { start: number; next?: number };
   type SamplePage = {
     path: string;
@@ -2815,7 +2949,7 @@ function installPreviewBridge(
       Number.isFinite(media.duration) ? media.duration : Infinity,
     );
   const pausedPosition = (video: HTMLVideoElement, time: number) => {
-    const target = framePosition(video, time);
+    const target = pictureTarget(video, time);
     const path = editingProxyPath(video);
     const page = path ? cachedSamples(path, target) : undefined;
     return clampMediaTime(
@@ -2895,14 +3029,22 @@ function installPreviewBridge(
       return entry && Math.abs(at - entry.at) < 1e-6 ? entry.time : at;
     },
     set(this: HTMLMediaElement, time: number) {
-      if (this instanceof HTMLVideoElement) void loadGrid(this);
+      if (this instanceof HTMLVideoElement) void loadPictures(this);
       if (!(this instanceof HTMLVideoElement) || !this.paused) {
         const entry = seekMedia(this, time, clampMediaTime(this, time));
         if (entry.at === time) asked.delete(this);
         return;
       }
-      const target = framePosition(this, time);
       const path = editingProxyPath(this);
+      const rest = path ? null : restingPicture(this);
+      const native = nativeTime.get!.call(this);
+      // A video already inside the picture stays: seeking within it presents no new frame.
+      const target =
+        rest &&
+        !this.seeking &&
+        pictures.timePicture(rest.source.index, native) === rest.ordinal
+          ? native
+          : (rest?.at ?? framePosition(this, time));
       const page = path ? cachedSamples(path, target) : undefined;
       const position = page
         ? samplePosition(sampleAt(page, target), target)
@@ -4067,6 +4209,10 @@ function installPreviewBridge(
             // Let the runtime invalidate its descriptor cache before seeking.
             await Promise.resolve();
             if (inserts.length) await layoutPass(manifest);
+            // The table of the timing just written; without one, the runtime's times stand.
+            pictureTable = pictures.readPictureTable(
+              "pictures" in data ? data.pictures : null,
+            );
             seekRuntime(data.time);
             document
               .querySelector('meta[name="cutroom-mix-signature"]')
@@ -4477,6 +4623,8 @@ export function previewDocument(
   mixSignature?: string,
   rampPending = false,
   rampWindows: [src: string, seconds: number][] = [],
+  /** Scene files by their `data-composition-file`, for each scene's own frame rate. */
+  scenes: ReadonlyMap<string, string> = new Map(),
 ) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
@@ -4631,6 +4779,8 @@ export function previewDocument(
   const normalized = applyPreviewEdits(html, edits);
   const timing =
     dependencies === null ? null : previewTiming(normalized, dependencies);
+  const placed = html.includes("<video") ? placedMedia(html, scenes) : null;
+  const pictures = placed && pictureTable(placed.placed, placed.fps);
   // Escape '<' so authored words cannot terminate the bridge's script element.
   const args = JSON.stringify([
     sourceTexts,
@@ -4653,16 +4803,18 @@ export function previewDocument(
     },
     rampPending,
     rampWindows,
+    pictures,
   ]).replaceAll("<", "\\u003c");
   const createAdjustment = hasAdjustment
     ? `() => (${adjustmentCapture.toString()})(${spanIndex.toString()})`
     : "null";
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${createAdjustment}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE, MAX_AUDIO_GAIN])}, ...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>${pictureScript};(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${PICTURES}, ${createAdjustment}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE, MAX_AUDIO_GAIN])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {
     html: normalized.slice(0, insertion) + bridge + normalized.slice(insertion),
     timing,
+    pictures,
   };
 }
 
