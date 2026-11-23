@@ -740,7 +740,9 @@ test("Q and W at a cut preserve the incoming clip and the rest of the film, incl
     "Nothing to trim: the playhead is at the start of shot-2. Move into the clip to trim its end, or ripple delete the clip.",
   );
   expect(await clips()).toEqual(initial);
-  await page.getByRole("button", { name: "Dismiss" }).click();
+  // The next shortcut answers for itself, so the refusal does not linger over it.
+  await page.keyboard.press("Shift+Z");
+  await expect(page.locator(".toast")).toHaveCount(0);
   await page.keyboard.press("q");
   expect(await clips()).toEqual(initial);
   await page.keyboard.press("Shift+V");
