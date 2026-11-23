@@ -10,7 +10,6 @@ import {
   audioDbToGain,
   audioGainToDb,
 } from "@hyperframes/core/audio-gain";
-import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import { z } from "zod";
 import type { Project } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
@@ -37,6 +36,8 @@ import { projectPath } from "../projects/path";
 
 /** Speech is found at this rate; a word needs no more to be told from a pause. */
 const ANALYSIS_RATE = 16_000;
+/** Seconds of quiet, as the timeline plays it, that count as a pause in speech. */
+const MIN_PAUSE = 0.3;
 
 const clipId = z.string().min(1).max(200);
 
@@ -89,7 +90,11 @@ const ffmpeg = () => {
 };
 
 /** The project file a clip plays, which must exist inside the project. */
-async function sourceOf(project: Project, composition: string, clip: Clip) {
+async function sourceOf(
+  project: Pick<Project, "path">,
+  composition: string,
+  clip: Clip,
+) {
   const path = clip.src && localMediaPath(composition, clip.src);
   if (!path || clip.mediaStart === null)
     throw new HttpError(422, `${clipName(clip)} has no file in the project.`);
@@ -249,24 +254,34 @@ export async function loudnessPlan(
   };
 }
 
-/** Times the voice speaks, in its own seconds: everything but pauses a third of a second or longer. */
-function speech(samples: Float32Array) {
+/**
+ * Times a voice speaks on the bed's clock: everything but pauses a third of a second or longer
+ * as the timeline plays them. `samples` is the voice's source at its own speed, and `toBed`
+ * places a source second, so a pause is measured after the speed is applied, through a ramp too.
+ */
+function speech(
+  samples: Float32Array,
+  slowest: number,
+  toBed: (seconds: number) => number,
+) {
   const signal = { sampleRate: ANALYSIS_RATE, channels: [samples] };
   const duration = samples.length / ANALYSIS_RATE;
   const level = loudness(signal).lufsIntegrated;
   if (level === null) return [];
-  // A pause is well under the voice's own level, whatever level it was recorded at.
+  // A pause is well under the voice's own level, whatever level it was recorded at. The
+  // shortest source a timeline pause can span is found first, then measured where it plays.
   const quiet = silence(signal, {
     thresholdDb: Math.max(-60, Math.min(-30, level - 20)),
-    minMs: 300,
-  });
+    minMs: MIN_PAUSE * 1000 * slowest,
+  }).filter((pause) => toBed(pause.end) - toBed(pause.start) >= MIN_PAUSE);
   const spans: { start: number; end: number }[] = [];
   let from = 0;
   for (const pause of quiet) {
-    if (pause.start > from) spans.push({ start: from, end: pause.start });
+    if (pause.start > from)
+      spans.push({ start: toBed(from), end: toBed(pause.start) });
     from = pause.end;
   }
-  if (from < duration) spans.push({ start: from, end: duration });
+  if (from < duration) spans.push({ start: toBed(from), end: toBed(duration) });
   return spans;
 }
 
@@ -371,7 +386,7 @@ function voicesFor(timeline: Timeline, bed: Clip, request: DuckRequest) {
 
 /** Volume points that duck a bed under its voices, measured from what they play. */
 export async function duckPlan(
-  project: Project,
+  project: Pick<Project, "path">,
   composition: string,
   timeline: Timeline,
   request: DuckRequest,
@@ -387,31 +402,25 @@ export async function duckPlan(
   const spans = (
     await Promise.all(
       voices.map(async (voice) => {
-        if (
-          !parseRateLane(voice.automation) &&
-          (voice.playbackRate < 0.5 || voice.playbackRate > 2)
-        )
-          throw new HttpError(
-            422,
-            `${clipName(voice)} plays at ${voice.playbackRate}x; ducking reads voices from 0.5x to 2x.`,
-          );
         const sound = soundWindow(voice, fps);
         const samples = await decode(
           await sourceOf(project, composition, voice),
           sound,
         );
+        const { curve } = sound.piece;
+        const slowest =
+          typeof curve === "object"
+            ? Math.min(...curve.points.map(({ v }) => v))
+            : Number(curve);
         // On the bed's clock: where the voice's source plays, back through its source map.
-        const at = (seconds: number) =>
+        return speech(samples, slowest, (seconds) =>
           secondsOf(
             subtract(
               positionAtSource(sound.piece, sound.from + seconds),
               frames(bed.start, fps),
             ),
-          );
-        return speech(samples).map(({ start, end }) => ({
-          start: at(start),
-          end: at(end),
-        }));
+          ),
+        );
       }),
     )
   ).flat();

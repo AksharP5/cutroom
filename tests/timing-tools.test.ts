@@ -17,7 +17,7 @@ import { sourcePictures } from "../src/server/media/pictureIndex";
 import { planResolveTimeline } from "../src/server/resolve/plan";
 import type { ClipMedia } from "../src/server/resolve/plan";
 import { probeMedia } from "../src/server/resolve/probe";
-import { soundWindow } from "../src/server/timeline/audio";
+import { duckPlan, soundWindow } from "../src/server/timeline/audio";
 import {
   prepareFrozenFrames,
   saveFrozenFrames,
@@ -97,6 +97,13 @@ async function label(path: string) {
   );
 }
 
+const SPEECH = [
+  [1, 2],
+  [2.45, 3.6],
+  [5, 7],
+] as const;
+const BURSTS = `if(${SPEECH.map(([a, b]) => `between(t,${a},${b})`).join("+")},0.5*sin(2*PI*440*t),0)`;
+
 /** Each fixture of the picture rows, made once. */
 const fixtures = (async () => {
   if (!ready) return null;
@@ -125,6 +132,11 @@ const fixtures = (async () => {
     // P12: Matroska keeps whole milliseconds, so a 60 fps picture starts up to half one late.
     numbered(path("ms.mkv"), "60", 20),
     numbered(path("ramp.mp4"), "30", 160),
+    // Tone where a voice speaks: source seconds 1 to 2, 2.45 to 3.6 and 5 to 7 of 12.
+    ffmpeg(
+      ...["-f", "lavfi", "-i", `aevalsrc='${BURSTS}':s=48000:d=12`],
+      ...["-c:a", "pcm_s16le", path("bursts.wav")],
+    ),
   ]);
   return { dir, path };
 })();
@@ -480,6 +492,27 @@ test("the sync badge reads a ramped pair from their source maps", () => {
   const offsets = syncOffsets(moved);
   expect(offsets.get("snd-2")).toBe(2);
   expect(offsets.get("pic-2")).toBe(-2);
+
+  // S8 by a slip: the sound alone shows 3 frames later along the ramp, so it plays each source
+  // 3 frames early. A slip keeps the map's zero and moves its curve zero.
+  const slipped = syncOffsets(
+    run(trimmed, [{ type: "slip", clipId: "snd-2", by: 3, linked: false }]),
+  );
+  expect(slipped.get("snd-2")).toBe(-3);
+  expect(slipped.get("pic-2")).toBe(3);
+
+  // A pair on one ramp whose in-points differ by hand has different zeros, so neither is the
+  // other shifted: each is compared where it starts. The sound starts 0.1 s into the source,
+  // which the picture reaches at t with 2 / ln 4 * (4^(t/4) - 1) = 0.1, t = 0.1934 s, frame 6.
+  const offset = syncOffsets({
+    fps: thirty,
+    clips: [
+      linked("pic", "video", 0),
+      { ...linked("snd", "audio", 1), mediaStart: 0.1 },
+    ],
+  });
+  expect(offset.get("snd")).toBe(-6);
+  expect(offset.get("pic")).toBe(6);
 });
 
 test.skipIf(!ready)(
@@ -546,6 +579,79 @@ test.skipIf(!ready)(
     expect(await freeze("ramp.mp4", thirty, 120, { automation: RAMP })).toBe(
       129,
     );
+  },
+  60_000,
+);
+
+test.skipIf(!ready)(
+  "a duck lands where each voice plays its speech, at 2x, at 0.5x and through a ramp",
+  async () => {
+    const { dir } = (await fixtures)!;
+    const bed = video({
+      id: "bed",
+      kind: "audio",
+      track: 0,
+      src: "media/bed.wav",
+      duration: 900,
+      hasAudio: true,
+    });
+    // Source seconds to the voice's own seconds, by closed form. P6's ramp is
+    // 2 / ln 4 * (4^(t/4) - 1) to 4 s, where it has covered 6 / ln 4 s, then 2x.
+    const covered = 6 / Math.log(4);
+    const voices = {
+      double: { fields: { playbackRate: 2 }, at: (s: number) => s / 2 },
+      half: { fields: { playbackRate: 0.5 }, at: (s: number) => s * 2 },
+      ramp: {
+        fields: { automation: RAMP },
+        at: (s: number) =>
+          s <= covered
+            ? (4 * Math.log(1 + (s * Math.log(4)) / 2)) / Math.log(4)
+            : 4 + (s - covered) / 2,
+      },
+    };
+    for (const [id, { fields, at }] of Object.entries(voices)) {
+      // The voice starts one second into the bed.
+      const voice = video({
+        id,
+        kind: "audio",
+        track: 1,
+        src: "media/bursts.wav",
+        start: 30,
+        duration: Math.ceil(at(9) * 30),
+        hasAudio: true,
+        ...fields,
+      });
+      const plan = await duckPlan(
+        { path: dir },
+        "index.html",
+        {
+          ...empty(thirty),
+          tracks: [newTrack(0, "audio"), newTrack(1, "audio")],
+          clips: [bed, voice],
+        },
+        { bed: "bed", voices: [id], depth: -12, attack: 0.1, release: 0.1 },
+      );
+      // A pause counts when it lasts 0.3 s on the timeline: 2x plays the 0.45 s gap in 0.225 s.
+      const spans: [number, number][] = [];
+      for (const [a, b] of SPEECH) {
+        const last = spans.at(-1);
+        if (last && 1 + at(a) - last[1] < 0.3) last[1] = 1 + at(b);
+        else spans.push([1 + at(a), 1 + at(b)]);
+      }
+      expect(spans.length).toBe(id === "double" ? 2 : 3);
+      expect(plan.speech).toBe(spans.length);
+      const { volume } = plan.commands[0]!.automation;
+      const floor = Math.min(...volume.map(({ gain }) => gain));
+      const ducked = volume
+        .filter(({ gain }) => gain === floor)
+        .map(({ frame }) => frame);
+      const expected = spans.flat().map((seconds) => seconds * 30);
+      // Speech is found to a few milliseconds of source, a frame or two of timeline at 0.5x.
+      expect(ducked).toHaveLength(expected.length);
+      ducked.forEach((frame, index) =>
+        expect(Math.abs(frame - expected[index]!)).toBeLessThan(1.5),
+      );
+    }
   },
   60_000,
 );

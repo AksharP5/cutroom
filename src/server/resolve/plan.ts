@@ -747,20 +747,18 @@ function isSound(clip: Clip, media: ClipMedia | undefined): media is FileMedia {
   );
 }
 
-/** The native Resolve speed command sets one constant rate per clip. */
-export function sourceClipWithSpeedAutomation(
-  clips: readonly Clip[],
-  media: ReadonlyMap<string, ClipMedia>,
-) {
-  return clips.find((clip) => {
-    const source = media.get(clip.id);
-    return (
-      source?.kind === "file" &&
-      (isPicture(clip, source) || isSound(clip, source)) &&
-      parseRateLane(clip.automation) !== null
-    );
-  });
-}
+/**
+ * The native Resolve speed command sets one constant rate per clip, so a picture or sound on a
+ * speed ramp is refused. Read from the timeline alone, before any media is probed.
+ */
+export const sourceClipWithSpeedAutomation = (clips: readonly Clip[]) =>
+  clips.find(
+    (clip) =>
+      clip.src !== null &&
+      (clip.kind === "video" ||
+        (isAudioKind(clip.kind) && !clip.versionSilent)) &&
+      parseRateLane(clip.automation) !== null,
+  );
 
 /** Resolve a timeline as Cutroom shows it: an FCPXML document and its markers. */
 export function planResolveTimeline(input: PlanInput): Plan {

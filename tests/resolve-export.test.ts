@@ -193,6 +193,16 @@ test.skipIf(!Bun.which("ffprobe"))(
       ).rejects.toMatchObject({
         code: "ENOENT",
       });
+      // The ramp is read from the timeline before any file is probed, even one that is missing.
+      await writeFile(
+        join(project.path, "index.html"),
+        html("missing.wav", [rate]),
+      );
+      const missing = await start({ range: { start: 0, end: 30 } });
+      expect(missing.status).toBe(422);
+      expect(await missing.json()).toEqual({
+        error: expect.stringContaining('"Interview sound"'),
+      });
 
       await writeFile(
         join(project.path, scene),

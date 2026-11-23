@@ -1,6 +1,7 @@
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { z } from "zod";
 import { sourcePictures } from "../media/pictureIndex";
+import { fraction } from "../../shared/timeline/piece";
 import type { PictureIndex } from "../../shared/timeline/piece";
 import { localMediaInputOptions } from "../media/input";
 import { timecodeFrames } from "./fcpxml";
@@ -89,8 +90,20 @@ export async function probeMedia(
   );
   const sound = streams.find((stream) => stream.codec_type === "audio");
   const rate = parseRate(picture?.r_frame_rate);
-  const pictures =
+  const indexed =
     picture && rate ? await sourcePictures(path, { projectDir }) : null;
+  // A file export cannot index still has its pictures, on the grid its rate reports.
+  const pictures: PictureIndex | null =
+    indexed?.index ??
+    (rate && {
+      origin: fraction(0n),
+      rate,
+      count: format.duration
+        ? BigInt(
+            Math.max(1, Math.round((format.duration * rate.num) / rate.den)),
+          )
+        : 2n ** 53n,
+    });
   const timecode =
     picture?.tags?.timecode ??
     streams.find((stream) => stream.tags?.timecode)?.tags?.timecode ??
@@ -103,7 +116,7 @@ export async function probeMedia(
             rate,
             width: picture.width,
             height: picture.height,
-            pictures: pictures.index,
+            pictures,
             timecode: (timecode && timecodeFrames(timecode, rate)) || 0,
           }
         : null,
