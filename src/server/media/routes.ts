@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { extname, relative } from "node:path";
 import { Hono } from "hono";
@@ -10,7 +11,8 @@ import { createMediaService } from "./service";
 import type { MediaService } from "./service";
 import { peakRange } from "./range";
 import { piecePlaylist } from "./pieces";
-import { frameGrid } from "./frames";
+import { pictureSourceWire, sourcePictures } from "./pictureIndex";
+import type { SourcePictures } from "./pictureIndex";
 import { mediaFileDetails } from "../timeline/media";
 import { mediaKind } from "../../shared/media";
 
@@ -137,11 +139,12 @@ export function createMediaRoutes(
       throw new HttpError(404, "Choose a media file in the project.");
     return c.json(details);
   });
-  // Where export puts the video's frames, which the footage pipeline shows the same way.
+  // The pictures export selects from the video, which the footage pipeline selects the same way.
   api.get("/projects/:id/media/frames", async (c) => {
-    c.header("cache-control", "no-store");
-    return c.json(
-      await framesOf(await store.get(c.req.param("id")), c.req.query("path")),
+    return framesOf(
+      await store.get(c.req.param("id")),
+      c.req.query("path"),
+      c.req.header("if-none-match"),
     );
   });
   // The footage pipeline's reads: a project video's own bytes, in ranges. Only video containers
@@ -187,12 +190,43 @@ export function createMediaRoutes(
   return Object.assign(api, { media, dispose: () => media.dispose() });
 }
 
-/** A project video's frame grid; files that are not media answer 422. */
-export async function framesOf(project: Project, path: string | undefined) {
+/** Each index's response body, encoded once while the index is in memory. */
+const wires = new WeakMap<SourcePictures, { body: string; etag: string }>();
+
+/**
+ * A project video's picture index and playable end, from which the viewer selects the pictures
+ * export writes. JSON `null` for a file with no video; files that are not media answer 422. The
+ * body names one file revision, so a document that has it already revalidates for nothing.
+ */
+export async function framesOf(
+  project: Project,
+  path: string | undefined,
+  ifNoneMatch: string | null | undefined,
+) {
   const file = await projectPath(project, PathSchema.parse(path));
-  return frameGrid(file).catch(() => {
-    throw new HttpError(422, "The file has no readable video.");
+  const source = await sourcePictures(file, { projectDir: project.path }).catch(
+    () => {
+      throw new HttpError(422, "The file has no readable video.");
+    },
+  );
+  let wire = source && wires.get(source);
+  if (source && !wire) {
+    const body = JSON.stringify(pictureSourceWire(source));
+    wire = {
+      body,
+      etag: `"${createHash("sha256").update(body).digest("hex").slice(0, 32)}"`,
+    };
+    wires.set(source, wire);
+  }
+  const headers = new Headers({
+    "content-type": "application/json",
+    "cache-control": "private, no-cache",
   });
+  if (!wire) return new Response("null", { headers });
+  headers.set("etag", wire.etag);
+  return ifNoneMatch === wire.etag
+    ? new Response(null, { status: 304, headers })
+    : new Response(wire.body, { headers });
 }
 
 /**

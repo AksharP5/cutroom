@@ -124,7 +124,12 @@ import {
   updatePreviewSourceTiming,
 } from "./previewTiming";
 import type { PreviewTiming, TrackGainPreview } from "../../shared/preview";
-import { previewDocument, withPreviewClipIdentities } from "./previewBridge";
+import {
+  livePictureTable,
+  prepareLivePictures,
+  previewDocument,
+  withPreviewClipIdentities,
+} from "./previewBridge";
 import { readTrackMix, trackMixStamp } from "../timeline/mix";
 import {
   compositionScope,
@@ -281,6 +286,8 @@ export function createHyperframesApi(
     authored: PreviewTiming;
     compiled: PreviewTiming;
     mix: TrackGainPreview;
+    /** The served document, to place its videos again after an update. */
+    served: { html: string; document?: Document };
   };
   const sourceTimings = new Map<string, SourceTiming>();
   const rememberSourceTiming = (id: string, timing: SourceTiming) => {
@@ -288,6 +295,8 @@ export function createHyperframesApi(
     sourceTimings.set(id, timing);
     if (sourceTimings.size > 8)
       sourceTimings.delete(sourceTimings.keys().next().value!);
+    // After the response, off the path of the first live edit.
+    setTimeout(() => prepareLivePictures(timing.served));
   };
   // Keep the compiler's decision outside authored HTML. The upstream cache's write
   // hook supplies the final, stable response bytes, including all augmentations.
@@ -1271,23 +1280,20 @@ export function createHyperframesApi(
       const response = await framesOf(
         await store.get(projectId),
         url.searchParams.get("path") ?? undefined,
-      ).then(
-        (grid) =>
-          Response.json(grid, { headers: { "cache-control": "no-store" } }),
-        (error: unknown) => {
-          if (error instanceof HttpError)
-            return Response.json(
-              { error: error.message },
-              { status: error.status },
-            );
-          if (error instanceof z.ZodError)
-            return Response.json(
-              { error: "Choose a media path." },
-              { status: 400 },
-            );
-          throw error;
-        },
-      );
+        c.req.header("if-none-match"),
+      ).catch((error: unknown) => {
+        if (error instanceof HttpError)
+          return Response.json(
+            { error: error.message },
+            { status: error.status },
+          );
+        if (error instanceof z.ZodError)
+          return Response.json(
+            { error: "Choose a media path." },
+            { status: 400 },
+          );
+        throw error;
+      });
       isolate(response.headers);
       return response;
     }
@@ -1454,6 +1460,7 @@ export function createHyperframesApi(
           return c.json({
             version: sourceBefore.version,
             timing,
+            pictures: livePictureTable(prior.served, timing),
             mix,
             live: true,
           });
@@ -1628,6 +1635,7 @@ export function createHyperframesApi(
         authored,
         compiled,
         mix,
+        served: { html: ramp?.html ?? html },
       };
     };
     if (timingOnly) {
@@ -1646,6 +1654,7 @@ export function createHyperframesApi(
         return c.json({
           version: sourceBefore.version,
           timing: null,
+          pictures: document.pictures,
           mix,
           live: true,
         });
@@ -1668,6 +1677,7 @@ export function createHyperframesApi(
       return c.json({
         version: sourceBefore.version,
         timing: document.timing,
+        pictures: document.pictures,
         mix,
         live:
           timingDocuments.get(documentId ?? "")?.projectId === projectId &&

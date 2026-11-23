@@ -24,6 +24,8 @@ import {
 } from "../../shared/timeline/piece.ts";
 import type { ExactTime, PictureIndex } from "../../shared/timeline/piece.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
+import { encodeTicks, timeText } from "../../shared/timeline/pictureSource.ts";
+import type { PictureSourceWire } from "../../shared/timeline/pictureSource.ts";
 import { localMediaInputOptions } from "./input.ts";
 
 type Packet = { pts: bigint; duration?: bigint; key: boolean };
@@ -34,6 +36,8 @@ export type SourcePictures = {
   packets: readonly Packet[];
   keys: readonly number[];
   tick: ExactTime;
+  /** The stream's nominal frame rate, the grid a variable-rate index is sent on. */
+  rate: Fps | null;
   stream: number;
   end?: PlayableEnd;
   proxy: { timeBase: string; start: number; audio: string | null };
@@ -160,7 +164,13 @@ async function readPictures(
     // can end before a reordered picture's PTS, so it cannot filter this list.
     if (packet.flags?.includes("D")) continue;
     const pts = integer(packet.pts);
-    if (pts === undefined) return null;
+    // An index holds each picture's ticks as a JavaScript number.
+    if (
+      pts === undefined ||
+      pts > BigInt(Number.MAX_SAFE_INTEGER) ||
+      pts < BigInt(Number.MIN_SAFE_INTEGER)
+    )
+      return null;
     presented.push({
       pts,
       duration: integer(packet.duration),
@@ -195,9 +205,9 @@ async function readPictures(
           count: BigInt(presented.length),
         }
       : {
-          times: presented.map(({ pts }) =>
-            add(ticks(pts, tick), packetOffset),
-          ),
+          tick,
+          offset: packetOffset,
+          ticks: presented.map(({ pts }) => Number(pts)),
         };
 
   const streamDuration =
@@ -227,6 +237,7 @@ async function readPictures(
     packets: presented,
     keys,
     tick,
+    rate: fps ?? null,
     stream,
     end: playable,
     proxy: {
@@ -250,7 +261,11 @@ const storedPictures = z
   .object({
     index: z.union([
       z.object({ origin: exactTime, rate: FpsSchema, count: exactInteger }),
-      z.object({ times: z.array(exactTime) }),
+      z.object({
+        tick: exactTime,
+        offset: exactTime,
+        ticks: z.array(z.number().int().safe()),
+      }),
     ]),
     packets: z.array(
       z.object({
@@ -261,6 +276,7 @@ const storedPictures = z
     ),
     keys: z.array(z.number().int().nonnegative()),
     tick: exactTime,
+    rate: FpsSchema.nullable(),
     stream: z.number().int().nonnegative(),
     end: z
       .object({
@@ -386,7 +402,7 @@ export async function sourcePictures(
   const original = await realpath(path);
   const revision = await mediaRevision(original);
   const key = createHash("sha256")
-    .update(`picture-index-v1\0${revision}`)
+    .update(`picture-index-v2\0${revision}`)
     .digest("hex");
   const memoKey = `${projectDir ?? ""}\0${key}`;
   const cached = sources.get(memoKey);
@@ -431,3 +447,34 @@ export async function sourcePictures(
 
 export const nativeTimestamp = (source: SourcePictures, ordinal: number) =>
   ticks(source.packets[ordinal]!.pts, source.tick);
+
+/** What the viewer reads to select pictures as export does. */
+export function pictureSourceWire({
+  index,
+  tick,
+  rate,
+  end,
+}: SourcePictures): PictureSourceWire {
+  const endText = end ? timeText(end.time) : null;
+  if (!("ticks" in index))
+    return {
+      index: {
+        origin: timeText(index.origin),
+        rate: index.rate,
+        count: String(index.count),
+      },
+      end: endText,
+    };
+  // Ticks per picture on the stream's nominal grid, or one tick without one.
+  const step = rate
+    ? fraction(BigInt(rate.den) * tick.d, BigInt(rate.num) * tick.n)
+    : fraction(1n);
+  return {
+    index: {
+      tick: timeText(index.tick),
+      offset: timeText(index.offset),
+      ticks: encodeTicks(index.ticks, step),
+    },
+    end: endText,
+  };
+}

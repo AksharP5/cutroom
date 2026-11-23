@@ -419,12 +419,16 @@ test("a video still off after one correction is accepted instead of waiting out 
 }) => {
   await fixture(request, page);
   await seek(page, 100);
-  // Every read of a clip's window moves its target, so no seek can ever match it.
+  // A video the server placed rests on export's picture whatever the runtime says. One it
+  // did not place follows the runtime's clip window. Every read of that window moves its
+  // target, so no seek can ever match it.
   await page
     .locator("iframe[data-live]")
     .contentFrame()
     .locator("html")
     .evaluate(() => {
+      for (const video of document.querySelectorAll("video"))
+        video.setAttribute("data-hf-render-id", "unplaced");
       const hf = (
         window as unknown as {
           __hf: {
