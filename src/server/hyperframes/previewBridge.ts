@@ -4624,8 +4624,6 @@ export function previewDocument(
   mixSignature?: string,
   rampPending = false,
   rampWindows: [src: string, seconds: number][] = [],
-  /** Scene files by their `data-composition-file`, for each scene's own frame rate. */
-  scenes: ReadonlyMap<string, string> = new Map(),
 ) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
@@ -4761,10 +4759,13 @@ export function previewDocument(
     changes: readonly (readonly [string, string | number])[];
   }[] = [];
   visit(document.childNodes);
+  // Export's placement of the document's media, read once for the loops and the pictures.
+  const placement =
+    loops.length || html.includes("<video") ? placedMedia(html) : null;
   // The runtime counts a loop from the element's own start. Export restarts it where a
   // trimmed mount lets it through, so the served loop starts there.
-  if (loops.length) {
-    const { placed } = placedMedia(html);
+  if (placement && loops.length) {
+    const { placed } = placement;
     for (const { node, changes } of loops) {
       const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
       const item = placed.get(
@@ -4780,8 +4781,10 @@ export function previewDocument(
   const normalized = applyPreviewEdits(html, edits);
   const timing =
     dependencies === null ? null : previewTiming(normalized, dependencies);
-  const placed = html.includes("<video") ? placedMedia(html, scenes) : null;
-  const pictures = placed && pictureTable(placed.placed, placed.fps);
+  const pictures =
+    placement && html.includes("<video")
+      ? pictureTable(placement.placed, placement.fps)
+      : null;
   // Escape '<' so authored words cannot terminate the bridge's script element.
   const args = JSON.stringify([
     sourceTexts,
@@ -4836,7 +4839,6 @@ export function prepareLivePictures(served: {
 export function livePictureTable(
   served: { html: string; document?: Document },
   timing: PreviewTiming,
-  scenes: ReadonlyMap<string, string>,
 ) {
   if (!served.html.includes("<video")) return null;
   const document = (served.document ??= parseHTML(served.html).document);
@@ -4853,7 +4855,7 @@ export function livePictureTable(
       if (value === null) element.removeAttribute(name);
       else element.setAttribute(name, value);
   }
-  const { placed, fps } = placedMedia(document, scenes);
+  const { placed, fps } = placedMedia(document);
   return pictureTable(placed, fps);
 }
 

@@ -286,9 +286,8 @@ export function createHyperframesApi(
     authored: PreviewTiming;
     compiled: PreviewTiming;
     mix: TrackGainPreview;
-    /** The served document and its scene files, to place its videos after an update. */
+    /** The served document, to place its videos again after an update. */
     served: { html: string; document?: Document };
-    scenes: ReadonlyMap<string, string>;
   };
   const sourceTimings = new Map<string, SourceTiming>();
   const rememberSourceTiming = (id: string, timing: SourceTiming) => {
@@ -1464,7 +1463,7 @@ export function createHyperframesApi(
           return c.json({
             version: sourceBefore.version,
             timing,
-            pictures: livePictureTable(prior.served, timing, prior.scenes),
+            pictures: livePictureTable(prior.served, timing),
             mix,
             live: true,
           });
@@ -1603,14 +1602,6 @@ export function createHyperframesApi(
       eligible && !ramp
         ? await previewDependencies(project.path, activeCompositionPath)
         : null;
-    // Each scene's frame rate is its own file's, which the served document does not carry.
-    const scenes = new Map<string, string>();
-    for (const [, file] of html.matchAll(/data-composition-file="([^"]+)"/g)) {
-      if (scenes.has(file!)) continue;
-      const path = await projectPath(project, file!).catch(() => null);
-      const source = path && (await readFile(path, "utf8").catch(() => null));
-      if (source !== null) scenes.set(file!, source);
-    }
     const document = previewDocument(
       ramp?.html ?? html,
       activeCompositionPath,
@@ -1621,7 +1612,6 @@ export function createHyperframesApi(
         `${prefix}ramp-audio/${key}.wav`,
         window.duration,
       ]),
-      scenes,
     );
     const checkedSourceTiming = async (
       compiled: PreviewTiming,
@@ -1649,7 +1639,6 @@ export function createHyperframesApi(
         compiled,
         mix,
         served: { html: ramp?.html ?? html },
-        scenes,
       };
     };
     if (timingOnly) {
