@@ -11,10 +11,11 @@ import {
   frames,
   micros,
   positionAtSource,
+  rampSourceTimes,
   regridSourceMap,
   resolvePiece,
 } from "./piece";
-import type { ExactTime, StoredSource } from "./piece";
+import type { ExactTime, Piece, StoredSource } from "./piece";
 import type { Clip, Fps } from "./schema";
 import { framesAfter, framesBefore, takesTransition } from "./transition";
 
@@ -191,5 +192,35 @@ export function framesBeforeIn(clip: Clip, fps: Fps) {
     clip.start -
     start -
     (encode(line, line.curve, frames(start, fps), fps).mediaStart < 0 ? 1 : 0)
+  );
+}
+
+const rampPieces = new WeakMap<Clip, { fps: Fps; piece: Piece }>();
+
+/**
+ * Source seconds a ramped clip plays at `count` positions `step` timeline seconds apart, from
+ * `from` frames into the clip, on the curve every other consumer reads. Null at a constant
+ * speed, whose source is a straight line from its in-point.
+ */
+export function rampSourceSeconds(
+  clip: Clip,
+  fps: Fps,
+  from: number,
+  step: number,
+  count: number,
+) {
+  if (!clip.automation || !readClipSource(clip).lane) return null;
+  let held = rampPieces.get(clip);
+  if (held?.fps !== fps) {
+    // What a clip plays from its own first frame does not depend on where it sits, and a clip
+    // the timeline is sliding between places can sit between frames.
+    held = { fps, piece: resolveClip({ ...clip, start: 0 }, fps) };
+    rampPieces.set(clip, held);
+  }
+  return rampSourceTimes(
+    held.piece,
+    micros(Math.round(((from * fps.den) / fps.num) * 1e6)),
+    step,
+    count,
   );
 }
