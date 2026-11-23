@@ -328,6 +328,101 @@ for (const pipeline of [false, true]) {
 }
 
 test(
+  "Play from a frame deep in its GOP paints the next frame as the clock starts, on a busy machine",
+  { tag: "@performance" },
+  async ({ page, request }, info) => {
+    test.setTimeout(180_000);
+    const directory = info.outputPath("project");
+    const shots = await makeScaleProject(directory, 100, { cameraMedia: true });
+    const imported = await request.post("/api/cutroom/projects/import", {
+      data: { path: directory, name: "Playback start" },
+    });
+    expect(imported.ok(), await imported.text()).toBe(true);
+    const project = ProjectSchema.parse(await imported.json());
+    await page.addInitScript(() => {
+      if (window === window.top)
+        localStorage.setItem("cutroom.footagePipeline", "true");
+    });
+    await page.goto(`/#project/${project.id}`);
+    await expect(page.locator("[data-clip]")).toHaveCount(100);
+    await expect(page.locator(".edit-stage")).toHaveAttribute(
+      "data-pipeline",
+      "on",
+    );
+    const picture = await pictureReader(page);
+    const cdp = await page.context().newCDPSession(page);
+    const lags: number[] = [];
+    for (let run = 0; run < 3; run++) {
+      const shot = shots[Math.floor(shots.length * (0.26 + 0.13 * run))]!;
+      // The camera files have a keyframe every 120 frames. Park 100 frames past one, so
+      // starting from a cold decoder means decoding that whole stretch again.
+      const at =
+        shot.start + ((100 - ((shot.source + 12) % 120) + 120) % 120) + 12;
+      await seek(page, at);
+      await expect.poll(picture).not.toBeNull();
+      await page.waitForTimeout(1500);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+      await page.evaluate((at) => {
+        const start = { clock: 0, paint: 0 };
+        (window as unknown as { playbackStart: typeof start }).playbackStart =
+          start;
+        const clock = document.querySelector(".edit-now-frames")!;
+        new MutationObserver((_, observer) => {
+          start.clock = performance.now();
+          observer.disconnect();
+        }).observe(clock, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+        const canvas = document.querySelector<HTMLElement>(
+          "canvas.edit-pipeline",
+        )!;
+        new MutationObserver((_, observer) => {
+          if (Number(canvas.dataset.frame) <= at) return;
+          start.paint = performance.now();
+          observer.disconnect();
+        }).observe(canvas, {
+          attributes: true,
+          attributeFilter: ["data-frame"],
+        });
+      }, at);
+      await page.keyboard.press("Space");
+      const started = () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                playbackStart: { clock: number; paint: number };
+              }
+            ).playbackStart,
+        );
+      await expect
+        .poll(
+          async () => {
+            const { clock, paint } = await started();
+            return clock > 0 && paint > 0;
+          },
+          { timeout: 15_000 },
+        )
+        .toBe(true);
+      const { clock, paint } = await started();
+      await page.keyboard.press("k");
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+      lags.push(paint - clock);
+    }
+    lags.sort((a, b) => a - b);
+    console.log(JSON.stringify({ playbackStartLagMs: lags }));
+    // Starting again from the keyframe took 1.5 to 2.7 s at this throttle; frames decoded
+    // while parked paint within a few milliseconds of the clock.
+    expect(
+      lags[1],
+      "median wait for the first played frame after the clock starts, ms",
+    ).toBeLessThan(200);
+  },
+);
+
+test(
   "Undo right after an agent's edit shows at once at 1,000 clips",
   { tag: "@performance" },
   async ({ page, request, baseURL }, info) => {

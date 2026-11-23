@@ -910,9 +910,9 @@ export function attachPipeline(
     for (const { found, lane, index } of frames) {
       if (moving) continue;
       if (found) found.playing = lane;
-      // Repeated keyboard trims can step through this opening at rest.
-      if (playing || selection.editPoint)
-        lane.prefetch(index + 1, index + lane.room(8));
+      // A parked frame was flushed out of the decoder, which ends its run. Decode on from it now,
+      // so Play and repeated keyboard trims start from frames in hand, not from the keyframe.
+      lane.prefetch(index + 1, index + lane.room(8));
     }
     if (playing) prepare(view, frame, LOOKAHEAD, OPENING);
     else if (!moving) prepare(view, frame, NEXT, PREPARED);
