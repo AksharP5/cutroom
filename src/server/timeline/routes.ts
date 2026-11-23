@@ -53,6 +53,7 @@ import {
   emptyTimelineSettings,
 } from "../../shared/timeline/schema";
 import type {
+  Command,
   CommandBatch,
   CommandInput,
   Timeline,
@@ -407,6 +408,7 @@ export function createTimelineRoutes(
       ? [editLabel([format], current.parsed.timeline, "")]
       : [];
     const summaries = [...labels];
+    const applied: Command[] = [];
     const hasScript = [current.parsed, ...snapshots.values()].some((source) =>
       /<script\b/i.test(source.html),
     );
@@ -417,6 +419,20 @@ export function createTimelineRoutes(
           composition,
           onCreate: (id, origin) => origins.set(id, origin),
           onApply: (before, after, command) => {
+            // A title or text clip given versions is lifted and replaced by a scene clip that
+            // plays them. That reads as one change: the versions, not the lift and the insert.
+            const [lift, insert] = applied.slice(-2);
+            if (
+              command.type === "setVersions" &&
+              lift?.type === "remove" &&
+              lift.clipIds.length === 1 &&
+              insert?.type === "insert" &&
+              insert.clip.id === command.clipId
+            ) {
+              labels.splice(-2);
+              summaries.splice(-2);
+            }
+            applied.push(command);
             labels.push(editLabel([command], before, "Edited timeline"));
             summaries.push(
               editLabel([command], before, "Edited timeline", "done"),

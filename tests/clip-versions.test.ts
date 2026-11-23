@@ -8,6 +8,7 @@ import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { SourceSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { ledgerChanges } from "../src/shared/timeline/reviewChanges";
 import { projectFixture } from "./project-fixture";
 
 const scene = (id: string, word: string) => `<template>
@@ -103,6 +104,17 @@ test("an agent gives a title four versions; each edit carries them and only the 
       .object({ clipId: z.string() })
       .parse(await result("clip_versions_set", { clipId: "line", versions }));
     const id = created.clipId;
+    // The owner's Changes list reads it as one change, not as the lift that made room for it.
+    const { clipEdits } = TimelineViewSchema.parse(
+      await (
+        await fixture.request(`/projects/${project.id}/timeline?clipEdits=1`)
+      ).json(),
+    );
+    expect(
+      ledgerChanges(clipEdits!)
+        .filter((change) => change.members.some((edit) => edit.clipId === id))
+        .map(({ label, more }) => [label, more]),
+    ).toEqual([['Gave Welcome back 4 versions, showing "Card fan"', null]]);
     const placed = (await read()).timeline.clips.find((clip) => clip.id === id);
     expect(placed).toMatchObject({
       kind: "composition",
