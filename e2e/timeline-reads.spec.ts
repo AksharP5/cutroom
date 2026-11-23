@@ -307,6 +307,62 @@ test("a held edit survives reloading before keyup", async ({
   await release();
 });
 
+test("leaving with an Undo queued behind a save warns, and the Undo lands once the save does", async ({
+  page,
+  request,
+}) => {
+  const { api, hold, initial, release, sourceFrame, redo } =
+    await openSlipProject({ page, request });
+  const saving = Promise.withResolvers<void>();
+  await page.route(`**${api}/commands`, async (route) => {
+    await saving.promise;
+    await route.continue();
+  });
+  await hold(3);
+  await release();
+  await page.keyboard.press("Control+z");
+  const warnings: string[] = [];
+  page.on("dialog", async (dialog) => {
+    warnings.push(dialog.type());
+    await dialog.dismiss();
+  });
+  await page.close({ runBeforeUnload: true });
+  await expect.poll(() => warnings).toEqual(["beforeunload"]);
+  expect(page.isClosed()).toBe(false);
+  saving.resolve();
+  await expect.poll(sourceFrame).toBe(initial);
+  await expect(redo).toBeEnabled();
+  await page.close({ runBeforeUnload: true });
+  await expect.poll(() => page.isClosed()).toBe(true);
+  expect(warnings).toEqual(["beforeunload"]);
+});
+
+test("an Undo in flight when the page reloads still reaches the server", async ({
+  page,
+  request,
+}) => {
+  const { api, hold, initial, release, sourceFrame, undo } =
+    await openSlipProject({ page, request });
+  await hold(3);
+  await release();
+  await expect.poll(sourceFrame).toBe(initial + 3);
+  await expect(undo).toBeEnabled();
+  // Hold the request across the reload; only a keepalive request outlives its page.
+  const sent = Promise.withResolvers<void>();
+  const reloaded = Promise.withResolvers<void>();
+  await page.route(`**${api}/history/undo`, async (route) => {
+    sent.resolve();
+    await reloaded.promise;
+    await route.continue();
+  });
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.keyboard.press("Control+z");
+  await sent.promise;
+  await page.reload();
+  reloaded.resolve();
+  await expect.poll(sourceFrame).toBe(initial);
+});
+
 test("blur and a project switch save a hold while its key is down", async ({
   page,
   request,

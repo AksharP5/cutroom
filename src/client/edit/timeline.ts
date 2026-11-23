@@ -1451,18 +1451,25 @@ export function stepHistory(
 
         let replay: z.output<typeof HistoryReplaySchema>;
         try {
+          const request = json("POST", {
+            entryId: expectedHistoryId,
+            expectedEntryId:
+              expectedHistoryId === undefined ? target : undefined,
+            requestId: crypto.randomUUID(),
+            composition: here ? open.composition : undefined,
+            withEntries,
+            skip,
+          });
+          // A step already sent finishes if the tab closes; the unload guard covers queued ones.
+          if (
+            typeof request.body === "string" &&
+            new TextEncoder().encode(request.body).length <= 64 * 1024
+          )
+            request.keepalive = true;
           replay = await api(
             `${project(projectId)}/history/${step}`,
             HistoryReplaySchema,
-            json("POST", {
-              entryId: expectedHistoryId,
-              expectedEntryId:
-                expectedHistoryId === undefined ? target : undefined,
-              requestId: crypto.randomUUID(),
-              composition: here ? open.composition : undefined,
-              withEntries,
-              skip,
-            }),
+            request,
           );
         } catch (error) {
           unshow();
