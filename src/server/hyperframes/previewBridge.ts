@@ -2760,26 +2760,35 @@ function installPreviewBridge(
         .catch(() => null)
         .then((found) => {
           knownSources.set(path, found);
-          // A paused video the runtime placed before the index came moves to export's picture.
+          // A paused video placed before the index came moves to export's picture, keeping
+          // the time the runtime asked for.
           let moved = false;
           if (found)
-            for (const video of document.querySelectorAll("video"))
+            for (const video of document.querySelectorAll("video")) {
               if (
-                scrubPath(video) === path &&
-                video.paused &&
-                !asked.has(video) &&
-                !parked.has(video) &&
-                !deferredSeeks.has(video)
+                scrubPath(video) !== path ||
+                !video.paused ||
+                parked.has(video) ||
+                deferredSeeks.has(video)
+              )
+                continue;
+              const rest = restingPicture(video);
+              const native = nativeTime.get!.call(video);
+              if (
+                rest
+                  ? editingProxyPath(video) ||
+                    pictures.timePicture(found.index, native) !== rest.ordinal
+                  : !asked.has(video)
               ) {
-                mediaTime.set.call(video, nativeTime.get!.call(video));
+                mediaTime.set.call(
+                  video,
+                  rest ? mediaTime.get.call(video) : native,
+                );
                 moved = true;
               }
-          // A picture already held without the index is held again on it.
-          if (
-            moved &&
-            exactVersion === pictureVersion &&
-            !win.__player?.isPlaying()
-          )
+            }
+          // A picture held without the index, or on its way, is held again on it.
+          if (moved && !win.__player?.isPlaying())
             void refreshPicture().catch(reportFrameFailure);
           return found;
         });

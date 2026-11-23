@@ -834,3 +834,53 @@ test("a resting picture Chromium decodes wrong is sought once more, then reporte
   await expect(stage).toHaveAttribute("data-preview-ready");
   expect(await shownLabel(page)).toBe(13);
 });
+
+test("a picture held before its source's index arrives moves to export's picture when it does", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Late index", width: WIDTH, height: HEIGHT },
+      })
+    ).json(),
+  );
+  await source(project.path, "p13b.mp4", "30000/1001", 61, [
+    ...["-video_track_timescale", "30000"],
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    composition(
+      ntsc,
+      200,
+      videoTag(
+        "p",
+        "p13b.mp4",
+        "0",
+        seconds(200, ntsc),
+        'data-media-start="0.500500" loop',
+      ),
+    ),
+  );
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  // A long recording's first packet scan, as the preview sees it.
+  let delayed = 0;
+  await page.route(/\/frames\?path=/, async (route) => {
+    delayed++;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+  await page.goto(`/#project/${project.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  // The runtime alone shows picture 60 at the loop's first wrap; export shows 15.
+  await goTo(page, 46, ntsc);
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  await expect.poll(() => shownLabel(page), { timeout: 10_000 }).toBe(15);
+  expect(delayed).toBeGreaterThan(0);
+  await expect(page.locator(".status-error")).toHaveCount(0);
+});
