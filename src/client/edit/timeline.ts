@@ -376,6 +376,12 @@ function clearOutsideNotice() {
   outsideTargetAuthor = undefined;
 }
 
+/** A refusal answers the press that made it. The owner's next shortcut or press answers for itself. */
+export function clearRefusal() {
+  const { toast, toastTone } = useWorkspace.getState();
+  if (toast && toast === lastToast && toastTone === "error") showToast("");
+}
+
 const heldEditRefusal = "An agent changed those clips first.";
 
 function invalidateHeldEdit(hold: HeldEdit | null) {

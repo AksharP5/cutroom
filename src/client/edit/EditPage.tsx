@@ -18,6 +18,7 @@ import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
 import { EditorToolsContext } from "../editor/EditorTools";
 import {
+  actionFor,
   blurPointerButton,
   clearBrowserSelection,
   focusPanel,
@@ -52,6 +53,7 @@ import { SelectMenu } from "../components/SelectMenu";
 import {
   receiveAnimationFeedback,
   editTimeline,
+  clearRefusal,
   finishHeldEdit,
   hasPendingTimelineSaves,
   loadTimeline,
@@ -344,6 +346,19 @@ export function EditPage({
     // Fields cancel first; consume Escape before the window's selection shortcuts.
     document.addEventListener("keydown", closeDrawer);
     return () => document.removeEventListener("keydown", closeDrawer);
+  }, []);
+  useEffect(() => {
+    // Before the action runs, so a press that is refused again shows its own reason.
+    const press = (event: KeyboardEvent) => {
+      if (actionFor(event)) clearRefusal();
+    };
+    const node = page.current;
+    window.addEventListener("keydown", press, true);
+    node?.addEventListener("pointerdown", clearRefusal, true);
+    return () => {
+      window.removeEventListener("keydown", press, true);
+      node?.removeEventListener("pointerdown", clearRefusal, true);
+    };
   }, []);
   useEffect(() => {
     const press = (event: KeyboardEvent) => {
