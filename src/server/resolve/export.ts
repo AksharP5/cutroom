@@ -113,7 +113,7 @@ async function clipMedia(source: ResolveSource) {
       }
       let probe = probes.get(path);
       if (!probe) {
-        probe = probeMedia(path);
+        probe = probeMedia(path, project.path);
         probes.set(path, probe);
       }
       const facts = await probe;

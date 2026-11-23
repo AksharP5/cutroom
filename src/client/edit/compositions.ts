@@ -2,6 +2,8 @@ import { z } from "zod";
 import { localMediaPath } from "../../shared/media";
 import { isTimelinePath } from "../../shared/sourcePaths";
 import { clipEnd, toFrames } from "../../shared/timeline/apply";
+import { resolveClip } from "../../shared/timeline/clipTiming";
+import { frameShowing, frames, sourceAt } from "../../shared/timeline/piece";
 import type { Clip, Fps } from "../../shared/timeline/schema";
 import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
@@ -186,16 +188,18 @@ export function openHost(projectId: string, clip: Clip) {
     !levels.has(level(projectId, path)) &&
     at >= clip.start &&
     at < clipEnd(clip);
-  const mediaStart = clip.mediaStart ?? 0;
+  // The scene's own time the parent shows, read on the scene's grid.
+  const scene = first
+    ? sourceAt(
+        resolveClip(clip, view.timeline.fps),
+        frames(at, view.timeline.fps),
+      )
+    : null;
   go(
     projectId,
     path,
     [...parents, composition],
-    first
-      ? (fps) =>
-          toFrames(mediaStart, fps) +
-          Math.round((at - clip.start) * clip.playbackRate)
-      : undefined,
+    scene === null ? undefined : (fps) => frameShowing(scene, fps),
   );
   return true;
 }

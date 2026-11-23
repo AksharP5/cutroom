@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import { localMediaPath } from "./media.ts";
-import { offsetSourceTime } from "./timeline/time.ts";
+import { resolveClip } from "./timeline/clipTiming.ts";
+import { frames, sourceAt, sourceSeconds } from "./timeline/piece.ts";
 import type { Clip, Fps, Timeline } from "./timeline/schema.ts";
 
 export { MATTES_FOLDER } from "./media.ts";
@@ -225,15 +226,10 @@ export const isRamped = (clip: Pick<Clip, "automation">) =>
 /** The source media times a video clip plays, without handles; null for clips with no source. */
 export function clipSourceRange(clip: Clip, fps: Fps) {
   if (clip.mediaStart === null || !clip.src || isRamped(clip)) return null;
-  return {
-    from: clip.mediaStart,
-    to: offsetSourceTime(
-      clip.mediaStart,
-      clip.duration,
-      fps,
-      clip.playbackRate,
-    ),
-  };
+  const piece = resolveClip(clip, fps);
+  const at = (frame: number) =>
+    sourceSeconds(sourceAt(piece, frames(frame, fps)));
+  return { from: at(clip.start), to: at(clip.start + clip.duration) };
 }
 
 /** What each clip with its background removed needs matted: what it plays and a handle each side. */

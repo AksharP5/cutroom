@@ -423,6 +423,9 @@ export function regridSourceMap(
 }
 
 export type SourceTime = ExactTime | number;
+/** Seconds of a source time, for a consumer that hands it to FFmpeg or the browser. */
+export const sourceSeconds = (time: SourceTime) =>
+  typeof time === "number" ? time : secondsOf(time);
 type Loop =
   | { kind: "exact"; start: ExactTime; length: ExactTime | null }
   | { kind: "ramp"; start: number; length: number | null };
@@ -557,9 +560,20 @@ export function rampSourceTimes(
 }
 
 /** Timeline position at a source time on the unwrapped, monotone line. */
-export function positionAtSource(piece: Piece, source: ExactTime): ExactTime {
-  const elapsed = subtract(source, micros(piece.zero));
+export function positionAtSource(piece: Piece, source: SourceTime): ExactTime {
   const { line } = piece;
+  if (typeof source === "number") {
+    const elapsed = source - piece.zero / Number(MICROS);
+    return add(
+      line.curveZero,
+      decimalFraction(
+        line.kind === "exact"
+          ? (elapsed * Number(line.rate.d)) / Number(line.rate.n)
+          : timeAtSourceTime(line.rate, elapsed),
+      ),
+    );
+  }
+  const elapsed = subtract(source, micros(piece.zero));
   const time =
     line.kind === "exact"
       ? fraction(elapsed.n * line.rate.d, elapsed.d * line.rate.n)
@@ -572,6 +586,19 @@ export function sourceSampleOffset(piece: Piece): bigint | null {
   if (piece.line.kind !== "exact" || piece.line.rate.n !== piece.line.rate.d)
     return null;
   return sampleOf(subtract(micros(piece.zero), piece.line.curveZero));
+}
+
+/**
+ * The source a piece's sound reads from its first output sample to its end, as the mixer reads
+ * it: whole source samples on a 1× line, otherwise the line at those samples.
+ */
+export function soundSource(piece: Piece) {
+  const offset = sourceSampleOffset(piece);
+  const at = (sample: bigint) =>
+    offset === null
+      ? sourceAt(piece, fraction(sample, SAMPLES))
+      : fraction(sample + offset, SAMPLES);
+  return { start: at(piece.samples.start), end: at(piece.samples.end) };
 }
 
 /**
@@ -596,6 +623,13 @@ export const pictureStart = (
 const PICTURE_LEAD_US = attrMicros(MEDIA_ELEMENT_LEAD_SECONDS);
 // The pinned extractor treats a stream starting 1 second away (within 1 µs) as hidden.
 const HIDDEN_LEAD_US = MICROS - 1n;
+
+/**
+ * The frame of an `fps` grid from zero that shows a source time by the picture rule, such as the
+ * source viewer's frame for the picture export shows.
+ */
+export const frameShowing = (time: SourceTime, fps: Fps) =>
+  Number(pictureAt({ origin: ZERO, rate: fps, count: 2n ** 53n }, time) ?? 0n);
 
 /** Last presented picture at or before the source time plus the runtime's picture lead. */
 export function pictureAt(

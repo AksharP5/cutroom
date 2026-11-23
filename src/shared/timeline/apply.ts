@@ -20,6 +20,7 @@ import {
   secondsOf,
   sourceAt,
 } from "./piece";
+import type { SourceTime } from "./piece";
 import {
   activeVersion,
   fitsVersion,
@@ -112,7 +113,8 @@ export type ClipOrigin =
         src: string;
         media: string;
         path: string;
-        time: number;
+        /** The source time export shows at the frozen frame. */
+        time: SourceTime;
       };
     }
   | {
@@ -810,8 +812,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           src,
           media,
           path,
-          time:
-            typeof sourceTime === "number" ? sourceTime : secondsOf(sourceTime),
+          time: sourceTime,
         },
       });
       const transform = replace

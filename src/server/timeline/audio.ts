@@ -10,11 +10,21 @@ import {
   audioDbToGain,
   audioGainToDb,
 } from "@hyperframes/core/audio-gain";
+import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import { z } from "zod";
 import type { Project } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
 import { localMediaPath } from "../../shared/media";
 import { frameTime } from "../../shared/timeline/apply";
+import { resolveClip } from "../../shared/timeline/clipTiming";
+import {
+  frames,
+  positionAtSource,
+  secondsOf,
+  soundSource,
+  sourceSeconds,
+  subtract,
+} from "../../shared/timeline/piece";
 import { clipName } from "../../shared/timeline/labels";
 import { volumePoints } from "../../shared/timeline/mix";
 import type {
@@ -86,11 +96,23 @@ async function sourceOf(project: Project, composition: string, clip: Clip) {
   return projectPath(project, path);
 }
 
-/** What a clip plays of its file: from its source offset for its length, at its speed. */
-function window(clip: Clip, fps: Timeline["fps"]) {
-  const seconds = frameTime(clip.duration, fps) * clip.playbackRate;
-  return ["-ss", String(clip.mediaStart ?? 0), "-t", String(seconds)];
+/**
+ * What a clip's sound reads of its file, in source seconds: from the source the mixer reads at
+ * the clip's first output sample to the source at its last, through a ramp as well.
+ */
+export function soundWindow(clip: Clip, fps: Timeline["fps"]) {
+  const piece = resolveClip(clip, fps);
+  const { start, end } = soundSource(piece);
+  const from = sourceSeconds(start);
+  return { piece, from, seconds: sourceSeconds(end) - from };
 }
+
+const window = ({ from, seconds }: ReturnType<typeof soundWindow>) => [
+  "-ss",
+  String(from),
+  "-t",
+  String(seconds),
+];
 
 async function run(args: string[], output: "stdout" | "stderr") {
   const child = Bun.spawn([ffmpeg(), ...args], {
@@ -113,27 +135,19 @@ async function run(args: string[], output: "stdout" | "stderr") {
 }
 
 /**
- * A clip's sound as heard on the timeline, mono at the analysis rate. Paths and numbers are the
- * only things FFmpeg is given.
+ * The source a clip's sound plays, mono at the analysis rate and at the source's own speed.
+ * Paths and numbers are the only things FFmpeg is given.
  */
-async function decode(path: string, clip: Clip, fps: Timeline["fps"]) {
-  if (clip.playbackRate < 0.5 || clip.playbackRate > 2)
-    throw new HttpError(
-      422,
-      `${clipName(clip)} plays at ${clip.playbackRate}x; ducking reads voices from 0.5x to 2x.`,
-    );
+async function decode(path: string, sound: ReturnType<typeof soundWindow>) {
   const { stdout } = await run(
     [
       "-v",
       "error",
-      ...window(clip, fps),
+      ...window(sound),
       ...localMediaInputOptions,
       "-i",
       path,
       "-vn",
-      ...(clip.playbackRate === 1
-        ? []
-        : ["-af", `atempo=${clip.playbackRate}`]),
       "-ac",
       "1",
       "-ar",
@@ -156,7 +170,7 @@ export async function measureLoudness(
     [
       "-hide_banner",
       "-nostats",
-      ...(part ? window(part.clip, part.fps) : []),
+      ...(part ? window(soundWindow(part.clip, part.fps)) : []),
       ...localMediaInputOptions,
       "-i",
       path,
@@ -373,16 +387,30 @@ export async function duckPlan(
   const spans = (
     await Promise.all(
       voices.map(async (voice) => {
+        if (
+          !parseRateLane(voice.automation) &&
+          (voice.playbackRate < 0.5 || voice.playbackRate > 2)
+        )
+          throw new HttpError(
+            422,
+            `${clipName(voice)} plays at ${voice.playbackRate}x; ducking reads voices from 0.5x to 2x.`,
+          );
+        const sound = soundWindow(voice, fps);
         const samples = await decode(
           await sourceOf(project, composition, voice),
-          voice,
-          fps,
+          sound,
         );
-        // On the bed's clock: the voice's own seconds from where it starts on the bed.
-        const offset = frameTime(voice.start - bed.start, fps);
+        // On the bed's clock: where the voice's source plays, back through its source map.
+        const at = (seconds: number) =>
+          secondsOf(
+            subtract(
+              positionAtSource(sound.piece, sound.from + seconds),
+              frames(bed.start, fps),
+            ),
+          );
         return speech(samples).map(({ start, end }) => ({
-          start: start + offset,
-          end: end + offset,
+          start: at(start),
+          end: at(end),
         }));
       }),
     )
