@@ -203,11 +203,12 @@ test("a faded ramp under a trimmed mount keeps its clip-local fade and lane in t
       prefix,
       { id: "p", name: "p", path: dir, createdAt: "", updatedAt: "" },
       {
-        rampAudio: async () => ({
-          key: "ramp",
+        rampRun: async () => ({
+          key: "0".repeat(64),
           available: true,
           pending: undefined,
         }),
+        rampPins: () => ({ hold() {}, release() {} }),
       },
     );
     // The prepared sound starts where the mount opens, so the viewer's element moves there.

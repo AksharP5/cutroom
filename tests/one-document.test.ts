@@ -11,9 +11,8 @@ import { sourceTimeAt } from "@hyperframes/core/speed-ramp";
 import { sampleGridAudio } from "../src/server/hyperframes/audioClock";
 import { previewDocument } from "../src/server/hyperframes/previewBridge";
 import { prepareRampPreview } from "../src/server/hyperframes/rampPreview";
-import type { RampWindow } from "../src/server/media/protocol";
-import { rampWindow, resolvePiece } from "../src/shared/timeline/piece";
-import { placedMedia } from "../src/shared/timeline/placedMedia";
+import { runSourceTime } from "../src/shared/timeline/rampRuns";
+import type { RampRun } from "../src/shared/timeline/rampRuns";
 
 const RAMP = JSON.stringify({
   version: 1,
@@ -57,21 +56,18 @@ async function exportAudios(dir: string, scenes: string[]) {
   return sampleGridAudio(collectRenderMedia(html).audios, html, files);
 }
 
-/** The sound export hands its mixer for each ramp: source and curve time at the first sample, and its length. */
-async function exportWindows(dir: string, scenes: string[]) {
+/** The run export hands its mixer for each ramp, and the samples of it the piece plays. */
+async function exportRuns(dir: string, scenes: string[]) {
   return new Map(
     (await exportAudios(dir, scenes)).flatMap((audio) =>
-      typeof audio.playbackRate === "object" && audio.samples
+      audio.rampRun
         ? [
             [
               audio.id,
               {
-                start: audio.mediaStart,
-                samples: audio.samples.end - audio.samples.start,
-                lane: {
-                  ...audio.playbackRate,
-                  offset: audio.playbackRate.offset ?? 0,
-                },
+                run: audio.rampRun.run,
+                from: audio.rampRun.from,
+                to: audio.rampRun.to,
               },
             ] as const,
           ]
@@ -80,14 +76,14 @@ async function exportWindows(dir: string, scenes: string[]) {
   );
 }
 
-/** The sound the viewer asks the media service to prepare, by element id. */
-async function viewerWindows(dir: string) {
+/** The run the viewer asks the media service to prepare, and the samples each element plays, by id. */
+async function viewerRuns(dir: string) {
   const prefix = "/api/isolated/key/";
   const html = (await bundleToSingleHtml(dir, PREVIEW_BUNDLE_OPTIONS)).replace(
     "<head>",
     `<head><base href="${prefix}preview/">`,
   );
-  const requested = new Map<string, RampWindow>();
+  const requested = new Map<string, RampRun>();
   const prepared = await prepareRampPreview(
     html,
     new URL(`http://127.0.0.1${prefix}preview`),
@@ -100,26 +96,35 @@ async function viewerWindows(dir: string) {
       updatedAt: "",
     },
     {
-      rampAudio: async (_project, _path, window) => {
-        const key = `ramp-${requested.size}`;
-        requested.set(key, window);
-        return { key, available: true, pending: undefined };
+      rampRun: async (_project, _path, run) => {
+        const key = JSON.stringify(run);
+        const known = [...requested.keys()].indexOf(key);
+        requested.set(key, run);
+        return {
+          key: (known < 0 ? requested.size - 1 : known)
+            .toString(16)
+            .padStart(64, "0"),
+          available: true,
+          pending: undefined,
+        };
       },
+      rampPins: () => ({ hold() {}, release() {} }),
     },
   );
+  const runs = [...requested.values()];
   const { document } = parseHTML(prepared?.html ?? html);
   return new Map(
     Array.from(document.querySelectorAll("audio[src*='ramp-audio/']"), (el) => {
-      const key = /ramp-audio\/([^.]+)\.wav/.exec(el.getAttribute("src")!)![1]!;
-      const window = requested.get(key)!;
-      // The serialized lane leaves out a zero offset.
-      const lane = parseAutomation(window.rate).lanes[0]!;
+      const [, key, from, to] =
+        /ramp-audio\/([a-f0-9]{64})-(\d+)-(\d+)\.wav/.exec(
+          el.getAttribute("src")!,
+        )!;
       return [
         el.getAttribute("data-hf-render-id") ?? el.id,
         {
-          start: window.start,
-          samples: Math.round(window.duration * 48_000),
-          lane: { ...lane, offset: lane.offset ?? 0 },
+          run: runs[Number.parseInt(key!, 16)]!,
+          from: Number(from),
+          to: Number(to),
           element: {
             start: el.getAttribute("data-start"),
             duration: el.getAttribute("data-duration"),
@@ -166,13 +171,13 @@ test("E12: the viewer prepares the same ramp sound as export for references, bot
     ),
   });
   try {
-    const viewer = await viewerWindows(dir);
-    const exported = await exportWindows(dir, ["ended.html", "trimmed.html"]);
+    const viewer = await viewerRuns(dir);
+    const exported = await exportRuns(dir, ["ended.html", "trimmed.html"]);
     // Closed forms: "after" follows the 1 s "prev"; "both" lasts its data-duration; the scene
     // ends at 5.5 s; the trimmed mount plays 5.5 s to 7.5 s.
     expect(
       Object.fromEntries(
-        Array.from(viewer, ([id, { samples }]) => [id, samples]),
+        Array.from(viewer, ([id, { from, to }]) => [id, to - from]),
       ),
     ).toEqual({
       prev: 48_000,
@@ -188,7 +193,8 @@ test("E12: the viewer prepares the same ramp sound as export for references, bot
       start: "0.5",
       duration: "2.5",
     });
-    expect(viewer.get("trimmed-sound")!.lane.offset).toBe(0.5);
+    // Its run still starts at curve zero, the scene clip's own start; the mount cuts 0.5 s off.
+    expect(viewer.get("trimmed-sound")!.from).toBe(24_000);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -216,13 +222,11 @@ test("a 24 fps scene in a 25 fps root at an off-grid host start plays from the s
       ),
     });
     try {
-      const exported = await exportWindows(dir, ["scene.html"]);
-      const viewer = await viewerWindows(dir);
-      const { element, ...window } = viewer.get("nested")!;
-      expect(window).toEqual(exported.get("nested")!);
-      expect(window.samples).toBe(24_000);
-      // Sample 2,500 is just before the in-point of 0; the media worker refuses a negative start.
-      expect(window.start).toBeGreaterThanOrEqual(0);
+      const exported = await exportRuns(dir, ["scene.html"]);
+      const viewer = await viewerRuns(dir);
+      const { element, ...slice } = viewer.get("nested")!;
+      expect(slice).toEqual(exported.get("nested")!);
+      expect(slice.to - slice.from).toBe(24_000);
       const html = await bundleToSingleHtml(dir);
       const audio = sampleGridAudio(
         collectRenderMedia(html).audios,
@@ -294,7 +298,10 @@ test("a ramp off the sample grid plays from its first sample in export", async (
       ({ id }) => id === "late",
     )!;
     expect(audio.samples).toEqual({ start: 49_650, end: 97_698 });
-    expect(audio.playbackRate).toMatchObject({ offset: 1 / 120_000 });
+    const { run, from, to } = audio.rampRun!;
+    expect(to - from).toBe(97_698 - 49_650);
+    // Curve zero is the clip's own start, 0.4 of a sample before sample 49,650.
+    expect(run.phase).toEqual(["3", "5"]);
     const lane = {
       target: "rate",
       points: [
@@ -302,31 +309,13 @@ test("a ramp off the sample grid plays from its first sample in export", async (
         { t: 4, v: 2 },
       ],
     };
-    expect(audio.mediaStart).toBeCloseTo(
+    expect(runSourceTime(run, from)).toBeCloseTo(
       2 + sourceTimeAt(lane, 1 / 120_000),
       12,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
-
-test("a ramp's first sample may round to just before an in-point of 0, and no further", () => {
-  const { fps, placed } = placedMedia(
-    root(
-      "30",
-      ramp("edge", 'data-start="0" data-duration="1" data-track-index="0"'),
-    ),
-  );
-  const item = placed.get("audio:edge");
-  if (item?.kind !== "media") throw new Error("The ramp was not placed.");
-  const piece = resolvePiece(item, fps);
-  const early = (samples: bigint) =>
-    rampWindow({ ...piece, samples: { ...piece.samples, start: -samples } });
-  // At most 2x, half a sample is 1/48000 s of source; one sample at 0.5x is less than that.
-  expect(early(1n)?.start).toBe(0);
-  // Three samples at 0.5x reach 1/32000 s before the file: real silence, not rounding.
-  expect(early(3n)).toBeNull();
 });
 
 test("each mount of a scene, and a trimmed mount inside a trimmed mount, prepares the sound export plays", async () => {
@@ -353,18 +342,22 @@ test("each mount of a scene, and a trimmed mount inside a trimmed mount, prepare
     ),
   });
   try {
-    const viewer = await viewerWindows(dir);
+    const viewer = await viewerRuns(dir);
     const audios = await exportAudios(dir, ["inner.html", "outer.html"]);
-    const exported = await exportWindows(dir, ["inner.html", "outer.html"]);
-    for (const [id, { element: _, ...window }] of viewer)
-      expect({ id, ...window }).toEqual({ id, ...exported.get(id)! });
+    const exported = await exportRuns(dir, ["inner.html", "outer.html"]);
+    for (const [id, { element: _, ...slice }] of viewer)
+      expect({ id, ...slice }).toEqual({ id, ...exported.get(id)! });
     // a: origin -0.5 s, cut to [0, 2). b: origin 1 s, [2, 4). c: the outer scene's origin is
     // 3.5 s and the inner one's 3.75 s, both mounts open at 4 s, and the clip ends at 6.75 s.
     expect(
       Object.fromEntries(
-        Array.from(viewer, ([id, { samples, element }]) => [
+        Array.from(viewer, ([id, { from, to, element }]) => [
           id,
-          { samples, start: element.start, duration: element.duration },
+          {
+            samples: to - from,
+            start: element.start,
+            duration: element.duration,
+          },
         ]),
       ),
     ).toEqual({

@@ -31,6 +31,8 @@ const Input = z.object({
     entryFile: z.string().optional(),
   }),
   sources: z.record(z.string(), z.string()).default({}),
+  /** Ramp audio runs the server prepared, by `runId`. */
+  rampRuns: z.record(z.string(), z.string()).default({}),
   range: ExportRangeSchema.nullish(),
   scopedMedia: z.boolean().default(false),
   scratchDir: z.string(),
@@ -129,6 +131,7 @@ try {
       scopedMedia: input.scopedMedia,
     },
     adjustment,
+    input.rampRuns,
   );
   const {
     createConsoleLogger,

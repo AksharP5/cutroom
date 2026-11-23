@@ -260,6 +260,8 @@ export function registerRenderIsolation(
     scopedMedia?: boolean;
   },
   adjustment = false,
+  /** Ramp audio runs the server prepared, by `runId`. */
+  rampRuns: Record<string, string> = {},
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
   for (const [name, version] of [
@@ -335,7 +337,17 @@ export function registerRenderIsolation(
           source,
           "    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);",
           `    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);
-    if (typeof normalizedPlaybackRate === "object" && !options?.loop && !isHttpUrl(srcPath)) {
+    if (options?.rampRun && !isHttpUrl(srcPath)) {
+        const { sliceLocalRun } = await import(${rampSource});
+        const prepared = await sliceLocalRun(srcPath, outputPath, options.rampRun, signal, ffmpegProcessTimeout)
+            .catch((error) => {
+                if (signal?.aborted) throw error;
+                console.warn("Could not read the ramp audio run:", error);
+                return null;
+            });
+        if (prepared?.success) return prepared;
+    }
+    if (typeof normalizedPlaybackRate === "object" && !options?.rampRun && !options?.loop && !isHttpUrl(srcPath)) {
         const { prepareLocalRamp } = await import(${rampSource});
         const prepared = await prepareLocalRamp(srcPath, outputPath, mediaStart, duration, normalizedPlaybackRate, signal, ffmpegProcessTimeout)
             .catch((error) => {
@@ -354,6 +366,13 @@ export function registerRenderIsolation(
             let audioSrcPath = srcPath;`,
           url,
         );
+        for (const tail of ["audioSidecarUrl", "undefined"])
+          source = replaceOnce(
+            source,
+            `${tail}, { loop: element.loop });`,
+            `${tail}, { loop: element.loop, rampRun: element.rampRun });`,
+            url,
+          );
         for (const stage of ['"extract"', '"prepare"'])
           source = replaceOnce(
             source,
@@ -645,7 +664,7 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { bindPicturePlacement, PictureSlotsSchema } from ${capturePictures};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nimport { AUDIO_SAMPLE_RATE, audioFrameSample, sampleGridAudio } from ${audioClock};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { bindPicturePlacement, PictureSlotsSchema } from ${capturePictures};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nimport { AUDIO_SAMPLE_RATE, audioFrameSample, sampleGridAudio } from ${audioClock};\nconst cutroomSources = ${JSON.stringify(sources)};\nconst cutroomRampRuns = ${JSON.stringify(rampRuns)};\n${source}`;
         source = replaceOnce(
           source,
           "  const probeStart = Date.now();",
@@ -704,7 +723,7 @@ export function registerRenderIsolation(
         source = replaceOnce(
           source,
           "  const browserProbeMs = Date.now() - probeStart;",
-          "  bindPicturePlacement(cutroomAuthoredVideos, composition.videos, compiled.html, input.compiled.subCompositions);\n  composition.audios = sampleGridAudio(composition.audios, compiled.html, input.compiled.subCompositions, cutroomAudioBeforeProbe);\n  const browserProbeMs = Date.now() - probeStart;",
+          "  bindPicturePlacement(cutroomAuthoredVideos, composition.videos, compiled.html, input.compiled.subCompositions);\n  composition.audios = sampleGridAudio(composition.audios, compiled.html, input.compiled.subCompositions, cutroomAudioBeforeProbe, cutroomRampRuns);\n  const browserProbeMs = Date.now() - probeStart;",
           url,
         );
         source = replaceOnce(

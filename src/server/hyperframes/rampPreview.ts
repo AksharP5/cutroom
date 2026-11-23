@@ -15,18 +15,26 @@ import { isPrivateProjectFile } from "@hyperframes/studio-server/safe-path";
 import { HttpError } from "../../shared/errors";
 import { mediaKind } from "../../shared/media";
 import type { Project } from "../../shared/project";
-import { rampWindow, resolvePiece } from "../../shared/timeline/piece";
+import { AUDIO_SAMPLE_RATE, resolvePiece } from "../../shared/timeline/piece";
 import {
   placedKey,
   placedMedia,
   startAtPlayed,
 } from "../../shared/timeline/placedMedia";
+import {
+  documentRampRuns,
+  RUN_MARGIN_SAMPLES,
+} from "../../shared/timeline/rampRuns";
+import type { RampRun } from "../../shared/timeline/rampRuns";
 import { projectPath } from "../projects/store";
-import type { RampWindow } from "../media/protocol";
 import type { MediaService } from "../media/service";
+import { wavHeader } from "./rampAudio";
+
+const WAV_HEADER_BYTES = 44;
+const WAV_FRAME_BYTES = 4;
 
 type Edit = { from: number; to: number; text: string };
-type RampAsset = { path: string; window: RampWindow };
+type RampAsset = { path: string; run: RampRun; frames: number };
 const companionAttrs = [
   "data-start",
   "data-duration",
@@ -138,7 +146,7 @@ export async function prepareRampPreview(
   request: URL,
   prefix: string,
   project: Project,
-  media: Pick<MediaService, "rampAudio">,
+  media: Pick<MediaService, "rampRun" | "rampPins">,
 ) {
   if (!html.includes("data-automation") || !html.includes("rate")) return null;
   const document = parse(html, { sourceCodeLocationInfo: true });
@@ -177,15 +185,22 @@ export async function prepareRampPreview(
   };
   visit(document, false);
   const safe = safeStyles(styles, externalStyle);
-  // Export places the same pieces from the same document. Only a rate lane needs them.
-  let placement: ReturnType<typeof placedMedia> | undefined;
+  // Export places the same pieces from the same document and derives the same runs. Only a
+  // rate lane needs them.
+  let placement:
+    | (ReturnType<typeof placedMedia> & {
+        runs: ReturnType<typeof documentRampRuns>;
+      })
+    | undefined;
   const documentBase = URL.parse(base ?? request.href, request);
   if (!documentBase) return null;
   const edits: Edit[] = [];
   const pending: Promise<boolean>[] = [];
   const assets = new Map<string, RampAsset>();
+  const pieces: [src: string, seconds: number][] = [];
+  const pins = media.rampPins();
   let ramp = false;
-  await Promise.all(
+  const visited = Promise.all(
     entries.map(async (node, index) => {
       if (node.tagName === "audio" ? !safe.audio : !safe.video) return;
       const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
@@ -214,17 +229,18 @@ export async function prepareRampPreview(
       }
       const lane = envelope.lanes.find((entry) => entry.target === RATE_TARGET);
       if (!lane?.points.length) return;
-      placement ??= placedMedia(html);
-      const { fps, placed } = placement;
-      const item = placed.get(
-        placedKey(node.tagName, {
-          getAttribute: (name) => attrs.get(name) ?? null,
-        }),
-      );
-      if (item?.kind !== "media") return;
+      if (!placement) {
+        const placed = placedMedia(html);
+        placement = { ...placed, runs: documentRampRuns(placed) };
+      }
+      const { fps, placed, runs } = placement;
+      const key = placedKey(node.tagName, {
+        getAttribute: (name) => attrs.get(name) ?? null,
+      });
+      const item = placed.get(key);
+      const slice = runs.get(key);
+      if (item?.kind !== "media" || !slice) return;
       const piece = resolvePiece(item, fps);
-      const stretch = rampWindow(piece);
-      if (!stretch || stretch.duration <= 0) return;
       const url = URL.parse(src, documentBase);
       if (
         !url ||
@@ -254,19 +270,11 @@ export async function prepareRampPreview(
       )
         return;
       ramp = true;
-      const window = {
-        start: stretch.start,
-        duration: stretch.duration,
-        rate: serializeAutomation({
-          ...envelope,
-          lanes: [{ ...lane, offset: stretch.lane.offset }],
-        }),
-      };
       const timing = new Map(
         startAtPlayed(piece, (name) => attrs.get(name) ?? null),
       );
       const result = await media
-        .rampAudio(project, path, window)
+        .rampRun(project, path, slice.run, slice.frames, pins)
         .catch((error: unknown) => {
           console.warn("Could not prepare preview ramp audio:", error);
           return null;
@@ -274,8 +282,11 @@ export async function prepareRampPreview(
       if (!result) return;
       if (result.pending) pending.push(result.pending);
       if (!result.available) return;
-      assets.set(result.key, { path, window });
-      const prepared = `${prefix}ramp-audio/${result.key}.wav`;
+      // Every piece of a run asks for the same extent, so any one of them can rebuild it.
+      assets.set(result.key, { path, run: slice.run, frames: slice.frames });
+      // The piece's own samples of the run, served as a WAV of their own.
+      const prepared = `${prefix}ramp-audio/${result.key}-${slice.from}-${slice.to}.wav`;
+      pieces.push([prepared, (slice.to - slice.from) / AUDIO_SAMPLE_RATE]);
       // A trimmed mount re-times the clip-local lanes; the rate lane goes into the prepared sound.
       const mixed = timing.get("data-automation");
       timing.delete("data-automation");
@@ -324,8 +335,89 @@ export async function prepareRampPreview(
       }
     }),
   );
-  if (!ramp) return null;
+  await visited.catch((error: unknown) => {
+    pins.release();
+    throw error;
+  });
+  if (!ramp) {
+    pins.release();
+    return null;
+  }
   for (const { from, to, text } of edits.sort((a, b) => b.from - a.from))
     html = html.slice(0, from) + text + html.slice(to);
-  return { html, assets, pending };
+  return { html, assets, pending, pieces, pins };
+}
+
+/**
+ * Run samples `[from, to)` as a WAV of their own: a header, then that byte range of the run,
+ * streamed. A single HTTP range is honoured, as a browser asks for when it seeks.
+ */
+export async function rampSliceResponse(
+  file: string,
+  from: number,
+  to: number,
+  range: string | undefined,
+) {
+  const run = Bun.file(file);
+  const data = WAV_HEADER_BYTES + from * WAV_FRAME_BYTES;
+  // The run's last margin is the stretcher's flush, which no piece plays.
+  if (
+    to <= from ||
+    WAV_HEADER_BYTES + (to + RUN_MARGIN_SAMPLES) * WAV_FRAME_BYTES > run.size
+  )
+    throw new HttpError(404, "The ramp audio run does not cover this clip.");
+  const header = wavHeader(to - from);
+  const size = header.length + (to - from) * WAV_FRAME_BYTES;
+  const asked = /^bytes=(\d*)-(\d*)$/.exec(range ?? "");
+  let first = 0;
+  let last = size - 1;
+  if (asked && (asked[1] || asked[2])) {
+    if (asked[1]) {
+      first = Number(asked[1]);
+      if (asked[2]) last = Math.min(last, Number(asked[2]));
+    } else first = Math.max(0, size - Number(asked[2]));
+    if (first > last)
+      return new Response(null, {
+        status: 416,
+        headers: { "Content-Range": `bytes */${size}` },
+      });
+  }
+  let pending: Uint8Array | null =
+    first < header.length
+      ? header.subarray(first, Math.min(header.length, last + 1))
+      : null;
+  const reader =
+    last >= header.length
+      ? run
+          .slice(
+            data + Math.max(0, first - header.length),
+            data + last + 1 - header.length,
+          )
+          .stream()
+          .getReader()
+      : null;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (pending) {
+        controller.enqueue(pending);
+        pending = null;
+        return;
+      }
+      const next = await reader?.read();
+      if (!next || next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+    cancel: () => reader?.cancel(),
+  });
+  const headers = new Headers({
+    "Content-Type": "audio/wav",
+    "Accept-Ranges": "bytes",
+    "Content-Length": String(last - first + 1),
+  });
+  if (asked && (asked[1] || asked[2]))
+    headers.set("Content-Range", `bytes ${first}-${last}/${size}`);
+  return new Response(body, {
+    status: headers.has("Content-Range") ? 206 : 200,
+    headers,
+  });
 }

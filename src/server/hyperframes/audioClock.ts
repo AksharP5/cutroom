@@ -3,7 +3,6 @@ import {
   attrMicros,
   frames,
   micros,
-  rampWindow,
   resolvePiece,
   sampleOf,
   secondsOf,
@@ -13,6 +12,8 @@ import {
 import { mixFromHead } from "../../shared/timeline/mix.ts";
 import type { AudioElement } from "@hyperframes/engine";
 import { placedMedia } from "../../shared/timeline/placedMedia.ts";
+import { documentRampRuns, runId } from "../../shared/timeline/rampRuns.ts";
+import type { RunSlice } from "../../shared/timeline/rampRuns.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
 
 export { AUDIO_SAMPLE_RATE };
@@ -21,6 +22,8 @@ export const audioFrameSample = (frame: number, fps: Fps) =>
 
 export type AudioMixElement = AudioElement & {
   samples?: { start: number; end: number };
+  /** A ramp piece's samples of its run, and the run file when the server prepared it. */
+  rampRun?: RunSlice & { file?: string };
 };
 
 const audioKey = (audio: AudioElement) =>
@@ -34,9 +37,16 @@ export function sampleGridAudio(
   html: string,
   subCompositions: ReadonlyMap<string, string> = new Map(),
   beforeProbe?: AudioElement[],
+  runFiles: Readonly<Record<string, string>> = {},
 ): AudioMixElement[] {
   if (!audios.length) return audios;
-  const { fps, placed, knownWindows } = placedMedia(html, subCompositions);
+  const placement = placedMedia(html, subCompositions);
+  const { fps, placed, knownWindows } = placement;
+  const runs: ReturnType<typeof documentRampRuns> = audios.some(
+    ({ playbackRate }) => typeof playbackRate === "object",
+  )
+    ? documentRampRuns(placement)
+    : new Map();
   const staticAudio =
     beforeProbe &&
     new Map(beforeProbe.map((audio) => [audioKey(audio), audio]));
@@ -57,11 +67,12 @@ export function sampleGridAudio(
     const authored =
       !original || Math.abs(audio.mediaStart - original.mediaStart) <= 1e-6;
     const offset = sourceSampleOffset(piece);
-    const ramp = authored && !audio.loop ? rampWindow(piece) : null;
+    const slice =
+      authored && !audio.loop && !measuredEnd ? runs.get(key) : undefined;
     const mediaStart =
       offset !== null && audio.playbackRate === 1 && authored
         ? Number(piece.samples.start + offset) / AUDIO_SAMPLE_RATE
-        : (ramp?.start ?? audio.mediaStart);
+        : audio.mediaStart;
     // The producer starts the track where a trimmed mount opens; its fades and lanes stay clip-local.
     const mix = mixFromHead(
       {
@@ -79,13 +90,21 @@ export function sampleGridAudio(
         start: secondsOf(piece.played.start),
         end: measuredEnd ? audio.end : secondsOf(piece.played.end),
         mediaStart,
-        ...(ramp && { playbackRate: ramp.lane }),
         ...(mix && {
           fadeIn: mix.fadeIn,
           fadeOut: mix.fadeOut,
           automation: mix.automation ?? undefined,
         }),
         samples: { start, end },
+        ...(slice && {
+          rampRun: {
+            run: slice.run,
+            from: slice.from,
+            to: slice.to,
+            frames: slice.frames,
+            file: runFiles[runId(slice.src, slice.run)],
+          },
+        }),
       },
     ];
   });

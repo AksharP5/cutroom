@@ -1,12 +1,5 @@
 import { execFile } from "node:child_process";
-import {
-  mkdir,
-  readdir,
-  readFile,
-  rm,
-  truncate,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Locator } from "@playwright/test";
@@ -282,17 +275,17 @@ for (const mode of [
               ? route.continue()
               : route.abort(),
           );
-        if (truncated) {
-          const cache = join(project.path, ".cutroom/cache");
-          let wrote = 0;
-          for (const key of await readdir(cache)) {
-            const path = join(cache, key, "ramp.wav");
-            if (!(await readFile(path).catch(() => null))) continue;
-            await truncate(path, 44);
-            wrote++;
-          }
-          expect(wrote).toBe(1);
-        }
+        // The server makes a run cut short on disk again, so the viewer's own check of a
+        // short WAV is reached by cutting the response: its header, and nothing after it.
+        if (truncated)
+          await page.route("**/ramp-audio/*.wav", async (route) => {
+            const response = await route.fetch({ headers: {} });
+            await route.fulfill({
+              status: 200,
+              contentType: "audio/wav",
+              body: (await response.body()).subarray(0, 44),
+            });
+          });
         const mediaRequest = page.waitForRequest("**/ramp-audio/*.wav");
         await stop.click();
         const preparedMedia = await mediaRequest;
@@ -351,9 +344,9 @@ for (const mode of [
       expect(media.status()).toBe(206);
       expect(media.headers()["access-control-allow-origin"]).toBe("null");
       expect((await media.body()).subarray(0, 4).toString()).toBe("RIFF");
-      const key = /\/([a-f0-9]{64})\.wav$/.exec(wav!)?.[1];
+      const key = /\/([a-f0-9]{64})-\d+-\d+\.wav$/.exec(wav!)?.[1];
       expect(key).toBeDefined();
-      await rm(join(project.path, ".cutroom/cache", key!, "ramp.wav"));
+      await rm(join(project.path, ".cutroom/cache/ramp-runs", `${key}.wav`));
       // An active document may only request a parked clip once playback reaches it.
       expect(
         (

@@ -230,20 +230,13 @@ try {
     });
     await Bun.write(join(task.directory, "probe.json"), JSON.stringify(info));
   } else if (task.kind === "ramp") {
-    if (!task.ramp) throw new Error("A ramp job needs its source window.");
-    const { parseAutomation, RATE_TARGET } =
-      await import("@hyperframes/core/audio-automation");
-    const { prepareLocalRamp } = await import("../hyperframes/rampSource");
-    const lane = parseAutomation(task.ramp.rate).lanes.find(
-      (lane) => lane.target === RATE_TARGET,
-    );
-    if (!lane?.points.length) throw new Error("A ramp job needs a rate lane.");
-    const result = await prepareLocalRamp(
+    if (!task.ramp) throw new Error("A ramp job needs its run.");
+    const { prepareLocalRun } = await import("../hyperframes/rampSource");
+    const result = await prepareLocalRun(
       task.source,
       join(task.directory, "ramp.wav"),
-      task.ramp.start,
-      task.ramp.duration,
-      lane,
+      task.ramp.run,
+      task.ramp.frames,
       abort.signal,
     );
     if (!result?.success)

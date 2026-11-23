@@ -150,7 +150,8 @@ import {
   isAudioKind,
 } from "../../shared/timeline/schema";
 import { trackGainPreview } from "./trackGainPreview";
-import { prepareRampPreview } from "./rampPreview";
+import { prepareRampExport } from "./rampExport";
+import { prepareRampPreview, rampSliceResponse } from "./rampPreview";
 import { frameTime } from "../../shared/timeline/apply";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { parseFps } from "@hyperframes/core";
@@ -268,17 +269,17 @@ export function createHyperframesApi(
     await next();
   });
   // Bound to a parent-owned navigation, never to a claim made by composition code.
-  const timingDocuments = new Map<
-    string,
-    {
-      projectId: string;
-      allowed: boolean;
-      ramp?: Pick<
-        NonNullable<Awaited<ReturnType<typeof prepareRampPreview>>>,
-        "assets" | "pending"
-      >;
-    }
-  >();
+  type TimingDocument = {
+    projectId: string;
+    allowed: boolean;
+    ramp?: Pick<
+      NonNullable<Awaited<ReturnType<typeof prepareRampPreview>>>,
+      "assets" | "pending" | "pins"
+    >;
+  };
+  const timingDocuments = new Map<string, TimingDocument>();
+  /** Each project's newest preview document, whose ramp runs are pinned. */
+  const rampPreviews = new Map<string, TimingDocument>();
   type SourceTiming = {
     ids: ReadonlySet<string>;
     dependencies: string;
@@ -410,6 +411,14 @@ export function createHyperframesApi(
             ...input,
             project: await store.get(projectId),
             mattes,
+          })
+        : null,
+    prepareRampRuns: async ({ projectId, ...input }) =>
+      media
+        ? prepareRampExport({
+            ...input,
+            project: await store.get(projectId),
+            media,
           })
         : null,
     legacyScratchDir: join(store.dataDir, "scratch"),
@@ -1306,39 +1315,62 @@ export function createHyperframesApi(
       isolate(response.headers);
       return response;
     }
-    const rampFile = /^ramp-audio\/([a-f0-9]{64})\.wav$/.exec(path)?.[1];
-    if (media && rampFile) {
+    const rampSlice = /^ramp-audio\/([a-f0-9]{64})-(\d+)-(\d+)\.wav$/.exec(
+      path,
+    );
+    if (media && rampSlice) {
+      const [, rampFile, from, to] = rampSlice as unknown as [
+        string,
+        string,
+        string,
+        string,
+      ];
       const project = await store.get(projectId);
-      const file = await media
-        .rampArtifact(project, rampFile)
-        .catch(async (error: unknown) => {
-          if (!(error instanceof HttpError) || error.status !== 404)
-            throw error;
-          for (const record of timingDocuments.values()) {
-            const asset =
-              record.projectId === projectId &&
-              record.ramp?.assets.get(rampFile);
-            if (!asset) continue;
-            const prepared = await media.rampAudio(
-              project,
-              asset.path,
-              asset.window,
-            );
-            if (
-              prepared.key === rampFile &&
-              (prepared.available || (await prepared.pending))
-            )
-              return media.rampArtifact(project, rampFile);
-            break;
-          }
+      // A run evicted before its clip played, or cut short on disk, is made again for the
+      // document that uses it.
+      const present = await media
+        .rampRunFile(project, rampFile)
+        .catch((error: unknown) => {
+          if (error instanceof HttpError && error.status === 404) return null;
           throw error;
         });
-      const headers = new Headers({
-        "Content-Type": "audio/wav",
-        "Cache-Control": "private, max-age=31536000, immutable",
-      });
-      isolate(headers);
-      return new Response(Bun.file(file), { headers });
+      const rebuild = async () => {
+        for (const record of timingDocuments.values()) {
+          const asset =
+            record.projectId === projectId && record.ramp?.assets.get(rampFile);
+          if (!asset) continue;
+          const prepared = await media.rampRun(
+            project,
+            asset.path,
+            asset.run,
+            asset.frames,
+            record.ramp?.pins,
+          );
+          if (
+            prepared.key === rampFile &&
+            (prepared.available || (await prepared.pending))
+          )
+            return media.rampRunFile(project, rampFile);
+          break;
+        }
+        throw new HttpError(404, "The ramp audio is no longer prepared.");
+      };
+      const file =
+        present && (await media.rampRunCovers(present, Number(to)))
+          ? present
+          : await rebuild();
+      const response = await rampSliceResponse(
+        file,
+        Number(from),
+        Number(to),
+        c.req.header("range"),
+      );
+      response.headers.set(
+        "Cache-Control",
+        "private, max-age=31536000, immutable",
+      );
+      isolate(response.headers);
+      return response;
     }
     if (media && (path === "scrub" || path.startsWith("scrub/"))) {
       // Returned as built, so Bun answers the video's byte-range requests from the file.
@@ -1586,6 +1618,7 @@ export function createHyperframesApi(
       Boolean(audition),
     );
     if (url.searchParams.get("cutroom-mix") === "1") {
+      ramp?.pins.release();
       headers.set("Content-Type", "application/json");
       return new Response(JSON.stringify(mix), {
         status: response.status,
@@ -1605,10 +1638,7 @@ export function createHyperframesApi(
       dependencies,
       mix.signature,
       Boolean(ramp?.pending.length),
-      Array.from(ramp?.assets ?? [], ([key, { window }]) => [
-        `${prefix}ramp-audio/${key}.wav`,
-        window.duration,
-      ]),
+      ramp?.pieces ?? [],
     );
     const checkedSourceTiming = async (
       compiled: PreviewTiming,
@@ -1684,6 +1714,7 @@ export function createHyperframesApi(
           timingDocuments.get(documentId ?? "")?.allowed === true,
       });
     }
+    let recorded = false;
     if (navigation && documentId && !timingDocuments.has(documentId)) {
       const compiled = document.timing;
       const checked =
@@ -1699,17 +1730,23 @@ export function createHyperframesApi(
           projectId,
           allowed: compiled !== null,
           ramp: ramp
-            ? { assets: ramp.assets, pending: ramp.pending }
+            ? { assets: ramp.assets, pending: ramp.pending, pins: ramp.pins }
             : undefined,
         });
+        // The project's newest preview is the open one: its runs stay through cache eviction.
+        rampPreviews.get(projectId)?.ramp?.pins.release();
+        rampPreviews.set(projectId, timingDocuments.get(documentId)!);
         if (timingDocuments.size > 64) {
           const oldest = timingDocuments.keys().next().value!;
           timingDocuments.delete(oldest);
           sourceTimings.delete(oldest);
         }
+        recorded = true;
         if (checked) rememberSourceTiming(documentId, checked);
       }
     }
+    // A document no record owns is not the open preview; its runs are only recently used.
+    if (!recorded) ramp?.pins.release();
     return new Response(document.html, {
       status: response.status,
       headers,

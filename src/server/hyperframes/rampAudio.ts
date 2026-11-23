@@ -2,18 +2,20 @@ import { mkdtemp, open, rm } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { sourceTimeAt } from "@hyperframes/core";
-import type { RateSpec } from "@hyperframes/core";
 import { MAX_PLAYBACK_RATE } from "@hyperframes/parsers/media-duration";
+import {
+  MAX_WAV_FRAMES,
+  RUN_MARGIN_SAMPLES,
+  runBuildFrames,
+  runSourceTime,
+} from "../../shared/timeline/rampRuns.ts";
+import type { RampRun } from "../../shared/timeline/rampRuns.ts";
 
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const FRAME_BYTES = CHANNELS * 2;
 const BLOCK = SAMPLE_RATE * 0.03;
 const INTERVAL = SAMPLE_RATE * 0.005;
-const MAX_WAV_FRAMES = Math.floor((0xffffffff - 36) / FRAME_BYTES);
-
-type RateLane = Exclude<RateSpec, number>;
 type Stretch = {
   HEAP8: Int8Array;
   _configure(
@@ -53,7 +55,7 @@ async function pcmData(file: FileHandle) {
   throw new Error("Decoded ramp audio has no PCM data.");
 }
 
-function wavHeader(frames: number) {
+export function wavHeader(frames: number) {
   const bytes = frames * FRAME_BYTES;
   const header = Buffer.alloc(44);
   header.write("RIFF", 0);
@@ -71,25 +73,34 @@ function wavHeader(frames: number) {
   return header;
 }
 
+/**
+ * Stretch `frames` output samples whose source sample at output sample `j` is `sourceAt(j)`
+ * (absolute source seconds). `pcm` holds the source from `origin`, a whole source sample. Source
+ * before 0 or past what was decoded is silence. The stretcher reads and writes in fixed blocks.
+ */
 async function stretchAudio(
-  source: string,
+  pcmPath: string | null,
+  origin: number,
   destination: string,
-  lane: RateLane,
   frames: number,
+  sourceAt: (frame: number) => number,
   signal?: AbortSignal,
 ) {
   const createStretch =
     require("./vendor/signalsmith-stretch.cjs") as (options: {
       crypto: { getRandomValues: (bytes: Uint8Array) => Uint8Array };
     }) => Promise<Stretch>;
-  // The library randomizes phase at slow speeds. Seed every clip identically
-  // so the same clip is rendered the same way in whole and marked exports.
+  // The library randomizes phase at slow speeds. Seed every run identically
+  // so the same run is rendered the same way for the viewer and every export.
   const stretch = await createStretch({
     crypto: { getRandomValues: (bytes) => bytes.fill(0x51) },
   });
   stretch._configure(CHANNELS, BLOCK, INTERVAL, 0);
   const inputLatency = stretch._inputLatency();
   const outputLatency = stretch._outputLatency();
+  // A run file's last margin is the flush; everything before it must be settled output.
+  if (outputLatency + INTERVAL > RUN_MARGIN_SAMPLES)
+    throw new Error("The stretcher's latency exceeds a run's margin.");
   // The extra frame covers rounding the two source endpoints.
   const capacity = Math.max(
     INTERVAL * MAX_PLAYBACK_RATE + 1,
@@ -114,29 +125,37 @@ async function stretchAudio(
   ];
   const input = Buffer.alloc(capacity * FRAME_BYTES);
   const output = Buffer.alloc(Math.max(INTERVAL, outputLatency) * FRAME_BYTES);
+  const begin = Math.round(sourceAt(0) * SAMPLE_RATE);
   const sourceFrame = (frame: number) =>
-    Math.round(sourceTimeAt(lane, frame / SAMPLE_RATE) * SAMPLE_RATE);
+    Math.round(sourceAt(frame) * SAMPLE_RATE) - begin;
 
-  const reader = await open(source, "r");
+  const reader = pcmPath ? await open(pcmPath, "r") : null;
   try {
-    const pcm = await pcmData(reader);
+    const pcm = reader ? await pcmData(reader) : { offset: 0, bytes: 0 };
     const writer = await open(destination, "w");
     try {
       await writer.writeFile(wavHeader(frames));
       const feed = async (start: number, count: number) => {
         signal?.throwIfAborted();
-        const position = start * FRAME_BYTES;
+        const absolute = begin + start;
+        // Source before its first sample is silence.
+        const silent = Math.min(count, Math.max(0, -absolute));
+        const position = (absolute + silent - origin) * FRAME_BYTES;
         const length = Math.max(
           0,
-          Math.min(count * FRAME_BYTES, pcm.bytes - position),
+          Math.min((count - silent) * FRAME_BYTES, pcm.bytes - position),
         );
-        const { bytesRead } = await reader.read(
-          input,
-          0,
-          length,
-          pcm.offset + position,
-        );
-        input.fill(0, bytesRead, count * FRAME_BYTES);
+        input.fill(0, 0, silent * FRAME_BYTES);
+        const { bytesRead } =
+          reader && length
+            ? await reader.read(
+                input,
+                silent * FRAME_BYTES,
+                length,
+                pcm.offset + position,
+              )
+            : { bytesRead: 0 };
+        input.fill(0, silent * FRAME_BYTES + bytesRead, count * FRAME_BYTES);
         for (let index = 0; index < count; index++) {
           leftIn[index] = input.readInt16LE(index * FRAME_BYTES) / 32768;
           rightIn[index] = input.readInt16LE(index * FRAME_BYTES + 2) / 32768;
@@ -185,35 +204,114 @@ async function stretchAudio(
       await writer.close();
     }
   } finally {
-    await reader.close();
+    await reader?.close();
   }
 }
 
-/** Decode on HyperFrames' source clock, then stretch once before its clip and bus effects. */
-export async function prepareRampAudio<
+type Decode<Result> = (
+  path: string,
+  start: number,
+  seconds: number,
+) => Promise<Result>;
+
+/**
+ * Decode on HyperFrames' source clock, then stretch once before clip and bus effects. `sourceAt`
+ * gives the absolute source seconds at each of `frames` output samples. Undefined when the
+ * output or its source would not fit in a WAV.
+ */
+export async function prepareStretch<
   Result extends { success: boolean; outputPath: string },
 >(
   destination: string,
-  duration: number,
-  lane: RateLane,
-  decode: (path: string, seconds: number) => Promise<Result>,
+  frames: number,
+  sourceAt: (frame: number) => number,
+  decode: Decode<Result>,
   signal?: AbortSignal,
 ): Promise<Result | undefined> {
-  const frames = Math.round(duration * SAMPLE_RATE);
-  const sourceFrames = Math.round(
-    sourceTimeAt(lane, frames / SAMPLE_RATE) * SAMPLE_RATE,
-  );
-  if (frames < 1 || frames > MAX_WAV_FRAMES || sourceFrames > MAX_WAV_FRAMES)
+  const begin = Math.round(sourceAt(0) * SAMPLE_RATE);
+  const last = Math.round(sourceAt(frames) * SAMPLE_RATE);
+  if (frames < 1 || frames > MAX_WAV_FRAMES || last - begin > MAX_WAV_FRAMES)
     return;
+  // The stretcher reads ahead of the source sample it is at. Decoding a second further means
+  // what it reads near the end is the source, as it would be in a longer stretch.
+  const end = last + SAMPLE_RATE;
   signal?.throwIfAborted();
+  const origin = Math.max(0, begin);
   const directory = await mkdtemp(join(dirname(destination), ".audio-ramp-"));
   try {
+    // A run that lies wholly before the source starts is silence.
+    if (end <= origin) {
+      await stretchAudio(null, origin, destination, frames, sourceAt, signal);
+      return { success: true, outputPath: destination } as Result;
+    }
     const source = join(directory, "source.wav");
-    const result = await decode(source, sourceFrames / SAMPLE_RATE);
+    const result = await decode(
+      source,
+      origin / SAMPLE_RATE,
+      (end - origin) / SAMPLE_RATE,
+    );
     if (result.success)
-      await stretchAudio(source, destination, lane, frames, signal);
+      await stretchAudio(source, origin, destination, frames, sourceAt, signal);
     return { ...result, outputPath: destination };
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/**
+ * A run's samples, stretched from its first sample so every piece that slices it joins
+ * seamlessly, made long enough to cover `frames`.
+ */
+export const prepareRampRun = <
+  Result extends { success: boolean; outputPath: string },
+>(
+  destination: string,
+  run: RampRun,
+  frames: number,
+  decode: Decode<Result>,
+  signal?: AbortSignal,
+) =>
+  prepareStretch(
+    destination,
+    runBuildFrames(frames),
+    (frame) => runSourceTime(run, frame),
+    decode,
+    signal,
+  );
+
+/** Copy run samples `[from, to)` into a WAV of their own, a block at a time. */
+export async function sliceRun(
+  run: string,
+  destination: string,
+  from: number,
+  to: number,
+) {
+  const reader = await open(run, "r");
+  try {
+    const pcm = await pcmData(reader);
+    if (from < 0 || to <= from || to * FRAME_BYTES > pcm.bytes)
+      throw new Error("The ramp audio run does not cover this clip.");
+    const writer = await open(destination, "w");
+    try {
+      await writer.writeFile(wavHeader(to - from));
+      const buffer = Buffer.alloc(INTERVAL * 64 * FRAME_BYTES);
+      for (let at = from * FRAME_BYTES; at < to * FRAME_BYTES;) {
+        const length = Math.min(buffer.length, to * FRAME_BYTES - at);
+        const { bytesRead } = await reader.read(
+          buffer,
+          0,
+          length,
+          pcm.offset + at,
+        );
+        if (bytesRead !== length)
+          throw new Error("The ramp audio run ended early.");
+        await writer.writeFile(buffer.subarray(0, length));
+        at += length;
+      }
+    } finally {
+      await writer.close();
+    }
+  } finally {
+    await reader.close();
   }
 }

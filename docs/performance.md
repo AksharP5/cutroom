@@ -1426,3 +1426,18 @@ The 100-cut headed comparison used `e95f5eba` as the baseline. The menu was open
 | GPU      |                1,070 / 1,431 / 1,302 |               1,018 / 1,272 / 1,277 |                     361 → 254 MiB |                   29.7 → 39.8 ms |
 
 Browser PSS includes Chromium's playback and compositor allocations. The GPU run still held 1,277 MiB at the closed sample. The bounded build releases its audition decoders on close, and this measurement does not establish when Chromium returns the remaining memory to the OS.
+
+## Ramp audio runs
+
+Measured on November 23, 2026, on the desktop while other work ran (load average 6 to 11 on 16 cores), main and this change alternating. The server's own path: `prepareRampPreview` on the bundled preview document of a 1,000-clip, 15-minute, 30 fps project, with the real media service, from a cold cache until every piece's sound is ready. The edit is then prepared the same way. "Pieces with sound" counts the ramp elements the next preview document actually plays from prepared audio. Jobs count cache entries written; on `main` its own evictions hide most of them, so its montage row gives the November 22 count, taken from the jobs it queued. Disk is `.cutroom/cache` afterwards.
+
+| Project                                                         | Build           | Preparation  | Pieces with sound | Edit to sound  | Jobs for the edit | Disk   |
+| --------------------------------------------------------------- | --------------- | ------------ | ----------------- | -------------- | ----------------- | ------ |
+| 1,000 separate 0.9 s ramps; edit trims one by 5 frames          | `main`          | 408 s, 401 s | 256               | 326 s, 285 s   | 744 on Nov 22     | 42 MB  |
+|                                                                 | this change     | 394 s, 430 s | 1,000             | 0.27 s, 0.34 s | 0                 | 183 MB |
+| One 15-minute ramp cut into 1,000 pieces; edit splits piece 500 | `main` (Nov 22) | 350 s        | 256               | 261 s          | 745               | 42 MB  |
+|                                                                 | this change     | 32 s, 26 s   | 1,000             | 0.32 s, 0.29 s | 0                 | 165 MB |
+
+`main` stretched each piece on its own and kept ramp files under the cache's 256-entry limit, so a 1,000-piece document evicted three quarters of its own sound while preparing it, and the next document queued that work again. Runs have their own byte budget. A cut ramp is one run (15 minutes, 165 MB) built once. A separate short ramp is a run of about one second: a run starts on a 10 s block but reaches only as far as its pieces need, rounded up to a whole second. Preparing 1,000 of them costs about what `main` spent; each job is dominated by starting the media worker process (about 215 ms) and probing the file (about 55 ms), with the stretch itself under 100 ms. An earlier version of this change rounded every run up to a whole 10 s block: 628 s and 656 s, and 1,831 MB pinned past the 1 GiB budget. An edit costs nothing when it keeps its run.
+
+A 30-minute run (330 MB) took 47 s to build, 38 times real time, and the process grew by 20 MB at most: the decoder writes to disk and the stretcher reads and writes fixed blocks.
