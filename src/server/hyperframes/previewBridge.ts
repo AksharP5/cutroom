@@ -4824,6 +4824,15 @@ export function previewDocument(
  * with the update's timing values written in, placed again. Every update writes every clip's
  * values, so the document is parsed once and rewritten in place.
  */
+/** Parse the served document for later live updates, so the first edit does not wait for it. */
+export function prepareLivePictures(served: {
+  html: string;
+  document?: Document;
+}) {
+  if (served.html.includes("<video"))
+    served.document ??= parseHTML(served.html).document;
+}
+
 export function livePictureTable(
   served: { html: string; document?: Document },
   timing: PreviewTiming,

@@ -126,6 +126,7 @@ import {
 import type { PreviewTiming, TrackGainPreview } from "../../shared/preview";
 import {
   livePictureTable,
+  prepareLivePictures,
   previewDocument,
   withPreviewClipIdentities,
 } from "./previewBridge";
@@ -295,6 +296,8 @@ export function createHyperframesApi(
     sourceTimings.set(id, timing);
     if (sourceTimings.size > 8)
       sourceTimings.delete(sourceTimings.keys().next().value!);
+    // After the response, off the path of the first live edit.
+    setTimeout(() => prepareLivePictures(timing.served));
   };
   // Keep the compiler's decision outside authored HTML. The upstream cache's write
   // hook supplies the final, stable response bytes, including all augmentations.
