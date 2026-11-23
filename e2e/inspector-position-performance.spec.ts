@@ -438,9 +438,16 @@ test(
       await waitFrames(page, 2);
       await page.mouse.up();
       await expect(positionField(page)).not.toHaveValue("0 px");
-      // The next run starts from the same picture.
+      // The next run starts from the same picture. The field shows the undo before it is
+      // saved, and the next run's reload would drop an undo still waiting behind the move's save.
+      const undone = page.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" &&
+          response.url().endsWith(`/projects/${project.id}/history/undo`),
+      );
       await page.getByRole("button", { name: "Undo", exact: true }).click();
       await expect(positionField(page)).toHaveValue("0 px");
+      expect((await undone).ok()).toBe(true);
       const samples = await delays.jsonValue();
       runs.push({
         run,
