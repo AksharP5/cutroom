@@ -122,6 +122,13 @@ export function previewRuntimeScript() {
       '(!L.isConnected||V.source==="attribute"&&!F.has(L))',
       '(!L.isConnected||window.__cutroomParkedMedia?.has(L)||V.source==="attribute"&&!F.has(L))',
     ],
+    // A clip's window is capped at its source's natural length after the in-point, so a loop
+    // stopped at its first wrap. Export plays a loop for its whole data-duration, or until its
+    // scene ends; a loop has no natural end.
+    [
+      "_=Number.isFinite(p.duration)?on(p,p.duration):null",
+      "_=!p.loop&&Number.isFinite(p.duration)?on(p,p.duration):null",
+    ],
   ] as const;
   for (const [before] of runtimeChanges)
     if (source.split(before).length !== 2)
