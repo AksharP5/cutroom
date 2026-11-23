@@ -14,12 +14,45 @@ import {
   resolveSubCompositionContent,
 } from "@hyperframes/parsers";
 import { parseHTML } from "linkedom";
-import { attrMicros, place } from "./piece.ts";
-import type { Composition } from "./piece.ts";
+import { attrMicros, place, secondsOf, subtract } from "./piece.ts";
+import type { Composition, PlacedElement, Start } from "./piece.ts";
 import type { Fps } from "./schema.ts";
 
-const HOST =
-  "[data-composition-id], [data-composition-src], [data-composition-file]";
+export const HOST_ATTRIBUTES = [
+  "data-composition-id",
+  "data-composition-src",
+  "data-composition-file",
+];
+const HOST = HOST_ATTRIBUTES.map((name) => `[${name}]`).join(", ");
+
+type Attributes = Pick<Element, "getAttribute">;
+
+/** An element's own timing as authored, read the way export reads it: `data-duration` wins. */
+export function authoredWindow(
+  element: Attributes,
+  idOf: (refId: string) => string = (refId) => refId,
+) {
+  const read = readClipTiming(element);
+  const expression = read.startExpression;
+  const start: Start =
+    expression?.kind === "reference"
+      ? {
+          ref: idOf(expression.refId),
+          offsetUs: attrMicros(expression.offset),
+        }
+      : { us: attrMicros(expression?.value ?? 0) };
+  return {
+    start,
+    ...(read.durationSource === "duration" &&
+      read.duration !== null && { durationUs: attrMicros(read.duration) }),
+    ...(read.durationSource === "legacy-end" &&
+      read.end !== null && { endUs: attrMicros(read.end) }),
+  };
+}
+
+/** The key `placedMedia` files a media element under. */
+export const placedKey = (tagName: string, element: Attributes) =>
+  `${tagName}:${element.getAttribute(MEDIA_RENDER_ID_ATTR) || element.getAttribute("id")}`;
 
 function documentFps(root: Element | null): Fps {
   const parsed = parseFpsWithDefault(
@@ -43,7 +76,13 @@ export function placedMedia(
   function childFps(host: Element): Fps {
     const file = host.getAttribute("data-composition-file");
     const source = file ? subCompositions.get(file) : undefined;
-    if (!file || source === undefined) return documentFps(host);
+    // A served preview keeps the scene file's own root inside the host.
+    if (!file || source === undefined)
+      return documentFps(
+        Array.from(host.children).find((child) =>
+          child.hasAttribute("data-hf-inner-root"),
+        ) ?? host,
+      );
     const cached = childRates.get(file);
     if (cached) return cached;
     const { contentHtml } = resolveSubCompositionContent(
@@ -63,7 +102,10 @@ export function placedMedia(
     function walk(parent: ParentNode) {
       for (const element of parent.children) {
         if (element.localName === "template") continue;
-        const host = element !== root && element.matches(HOST);
+        // `matches` would compile the selector again for every element.
+        const host =
+          element !== root &&
+          HOST_ATTRIBUTES.some((name) => element.hasAttribute(name));
         const authoredId = element.getAttribute("id");
         const renderId =
           element.getAttribute(MEDIA_RENDER_ID_ATTR) || authoredId;
@@ -89,25 +131,9 @@ export function placedMedia(
     return {
       fps: ownFps,
       elements: entries.map(({ element, id, host }) => {
-        const read = readClipTiming(element);
-        const expression = read.startExpression;
         const window = {
           id,
-          start:
-            expression?.kind === "reference"
-              ? {
-                  ref: byId.get(expression.refId) ?? "",
-                  offsetUs: attrMicros(expression.offset),
-                }
-              : { us: attrMicros(expression?.value ?? 0) },
-          ...(read.durationSource === "duration" &&
-            read.duration !== null && {
-              durationUs: attrMicros(read.duration),
-            }),
-          ...(read.durationSource === "legacy-end" &&
-            read.end !== null && {
-              endUs: attrMicros(read.end),
-            }),
+          ...authoredWindow(element, (refId) => byId.get(refId) ?? ""),
         };
         if (host)
           return {
@@ -151,4 +177,30 @@ export function placedMedia(
     place(composition(document, fps)).map((item) => [item.id, item]),
   );
   return { fps, placed, knownWindows };
+}
+
+/**
+ * Export plays a piece that a trimmed mount cuts from where the mount lets it through: a loop
+ * restarts at its in-point there. These attributes give the browser runtime the same start in
+ * the piece's own composition, and keep its end. Empty when nothing is cut. A piece needs a
+ * length to be placed at all, so a loop written without one is left as written.
+ */
+export function startAtPlayed(
+  {
+    played,
+    edge,
+    origin,
+    local,
+  }: Pick<PlacedElement, "played" | "edge" | "origin" | "local">,
+  has: (name: string) => boolean,
+): [name: string, value: string][] {
+  if (subtract(played.start, edge.start).n === 0n) return [];
+  const start = subtract(played.start, origin);
+  return [
+    ["data-start", String(secondsOf(start))],
+    ["data-duration", String(secondsOf(subtract(local.end, start)))],
+    ...(has("data-end")
+      ? [["data-end", String(secondsOf(local.end))] as [string, string]]
+      : []),
+  ];
 }

@@ -514,11 +514,11 @@ for (const mode of [
         );
         await expect(live).not.toHaveAttribute("src", ready!);
         await expect(stage).toHaveAttribute("data-preview-ready");
-        await expect(audio).toHaveCount(0);
-        await expect(frame.locator("#sound")).toHaveAttribute(
-          "data-automation",
-          ramp,
-        );
+        // The trimmed mount lets the ramp through 2 s in. Export starts its sound there,
+        // so the viewer prepares it from there and plays it from the mount's first frame.
+        await expect(audio).toHaveCount(1);
+        await expect(audio).toHaveAttribute("data-start", "2");
+        await expect(audio).toHaveAttribute("data-duration", "4");
       }
     } finally {
       releasePipeline?.resolve();

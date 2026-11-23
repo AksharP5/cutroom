@@ -3,6 +3,7 @@ import {
   attrMicros,
   frames,
   micros,
+  rampWindow,
   resolvePiece,
   sampleOf,
   secondsOf,
@@ -51,19 +52,21 @@ export function sampleGridAudio(
       ? Number(sampleOf(micros(attrMicros(audio.end))))
       : Number(piece.samples.end);
     if (end <= start) return [];
+    const authored =
+      !original || Math.abs(audio.mediaStart - original.mediaStart) <= 1e-6;
     const offset = sourceSampleOffset(piece);
+    const ramp = authored && !audio.loop ? rampWindow(piece) : null;
     const mediaStart =
-      offset !== null &&
-      audio.playbackRate === 1 &&
-      (!original || Math.abs(audio.mediaStart - original.mediaStart) <= 1e-6)
+      offset !== null && audio.playbackRate === 1 && authored
         ? Number(piece.samples.start + offset) / AUDIO_SAMPLE_RATE
-        : audio.mediaStart;
+        : (ramp?.start ?? audio.mediaStart);
     return [
       {
         ...audio,
         start: secondsOf(piece.played.start),
         end: measuredEnd ? audio.end : secondsOf(piece.played.end),
         mediaStart,
+        ...(ramp && { playbackRate: ramp.lane }),
         samples: { start, end },
       },
     ];
