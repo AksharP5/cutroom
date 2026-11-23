@@ -350,7 +350,7 @@ export function EditPage({
   useEffect(() => {
     // Before the action runs, so a press that is refused again shows its own reason.
     const press = (event: KeyboardEvent) => {
-      if (actionFor(event)) clearRefusal();
+      if (actionFor(event)) clearRefusal(event);
     };
     const node = page.current;
     window.addEventListener("keydown", press, true);

@@ -376,10 +376,26 @@ function clearOutsideNotice() {
   outsideTargetAuthor = undefined;
 }
 
-/** A refusal answers the press that made it. The owner's next shortcut or press answers for itself. */
-export function clearRefusal() {
+let refusedAt = 0;
+
+function showRefusal() {
+  refusedAt = performance.now();
+  showToast(lastToast);
+}
+
+/**
+ * A refusal answers the press that made it. The owner's next shortcut or press answers for itself,
+ * so it clears one shown before that event began, even when a control's own listener ran first.
+ */
+export function clearRefusal(event: Event) {
   const { toast, toastTone } = useWorkspace.getState();
-  if (toast && toast === lastToast && toastTone === "error") showToast("");
+  if (
+    toast &&
+    toast === lastToast &&
+    toastTone === "error" &&
+    refusedAt < event.timeStamp
+  )
+    showToast("");
 }
 
 const heldEditRefusal = "An agent changed those clips first.";
@@ -388,7 +404,7 @@ function invalidateHeldEdit(hold: HeldEdit | null) {
   if (!hold) return;
   hold.invalidated = true;
   lastToast = heldEditRefusal;
-  showToast(lastToast);
+  showRefusal();
 }
 
 function noticeOutside(
@@ -1378,7 +1394,7 @@ export async function editTimeline(
       view.timeline,
     );
     if (!draft?.invalidated || useWorkspace.getState().toast !== lastToast)
-      showToast(lastToast);
+      showRefusal();
     return accepted;
   } finally {
     saved.resolve();
