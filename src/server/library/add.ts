@@ -183,7 +183,15 @@ function placement(
   src: string,
   label: string,
 ) {
-  const id = input.start
+  const start = input.start ?? 0;
+  const sourceEnd = toFrames(item.duration ?? COMPONENT_SECONDS, timeline.fps);
+  const duration = input.duration ?? sourceEnd - start;
+  if (start >= sourceEnd || duration > sourceEnd - start)
+    throw new HttpError(
+      422,
+      `Choose a source range within ${label}'s ${sourceEnd} frames.`,
+    );
+  const id = start
     ? randomClipId(
         item.name,
         null,
@@ -203,14 +211,11 @@ function placement(
         ...(id && { id }),
         kind: "composition",
         src,
-        duration:
-          input.duration ??
-          toFrames(item.duration ?? COMPONENT_SECONDS, timeline.fps) -
-            (input.start ?? 0),
+        duration,
         label,
       },
     },
-    ...(id ? [{ type: "slip", clipId: id, by: input.start }] : []),
+    ...(id ? [{ type: "slip", clipId: id, by: start }] : []),
   ]);
 }
 
