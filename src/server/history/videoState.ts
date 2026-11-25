@@ -111,7 +111,7 @@ function readState(dir: string): VideoState {
 
 async function updateState(
   dir: string,
-  update: (state: VideoState) => void,
+  update: (state: VideoState) => boolean,
 ): Promise<void> {
   const lock = pinProjectRecord(dir, ".hyperframes/video-state-lock");
   if (!lock) throw new Error("Video state lock must stay inside the project.");
@@ -125,7 +125,7 @@ async function updateState(
       renameSync(statePath(dir), `${statePath(dir)}.invalid-${randomUUID()}`);
       state = emptyState();
     }
-    update(state);
+    if (!update(state)) return;
     replaceFileAtomically(
       statePath(dir),
       JSON.stringify(state, null, 2) + "\n",
@@ -149,27 +149,39 @@ export async function writeHistoryState(
       ? null
       : resolve(historyDirectory, "blobs", hash.slice(0, 2), hash);
   await updateState(projectDir, (state) => {
-    if (state.historyId && state.historyId !== historyId) {
-      state.checks = collection();
-      state.snapshots = collection();
-    }
-    state.historyId = historyId;
-    state.currentRevision = entries.at(-1)?.id ?? null;
-    state.pendingChanges =
+    const currentRevision = entries.at(-1)?.id ?? null;
+    const pendingChanges =
       currentFiles.size !== committedFiles.size ||
       [...currentFiles].some(
         ([path, hash]) => committedFiles.get(path) !== hash,
       );
-    state.files = Object.fromEntries(
+    const files = Object.fromEntries(
       [...currentFiles].map(([path, hash]) => [
         path,
         { hash, content: blob(hash)! },
       ]),
     );
-    state.revisions = Object.fromEntries(
+    const revisions = Object.fromEntries(
       entries.map((entry) => [entry.id, revisionState(entry, blob)]),
     );
-    dropArtifactsOfGoneRevisions(state);
+    const changed =
+      state.historyId !== historyId ||
+      state.currentRevision !== currentRevision ||
+      state.pendingChanges !== pendingChanges ||
+      !Bun.deepEquals(state.files, files) ||
+      !Bun.deepEquals(state.revisions, revisions);
+    if (state.historyId && state.historyId !== historyId) {
+      state.checks = collection();
+      state.snapshots = collection();
+    }
+    Object.assign(state, {
+      historyId,
+      currentRevision,
+      pendingChanges,
+      files,
+      revisions,
+    });
+    return dropArtifactsOfGoneRevisions(state) || changed;
   });
 }
 
@@ -197,18 +209,25 @@ function revisionState(
   };
 }
 
-function dropArtifactsOfGoneRevisions(state: VideoState): void {
+function dropArtifactsOfGoneRevisions(state: VideoState): boolean {
+  let dropped = false;
   const kept = (revision: string) =>
     Boolean(state.revisions[revision]) ||
     Boolean(state.renders?.retainedRevisions?.includes(revision));
   for (const artifacts of [state.checks, state.snapshots]) {
     for (const revision of Object.keys(artifacts.revisions)) {
-      if (!kept(revision)) delete artifacts.revisions[revision];
+      if (!kept(revision)) {
+        delete artifacts.revisions[revision];
+        dropped = true;
+      }
     }
     if (
       artifacts.latest?.revision &&
       !state.revisions[artifacts.latest.revision]
-    )
+    ) {
       artifacts.latest = null;
+      dropped = true;
+    }
   }
+  return dropped;
 }
