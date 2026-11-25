@@ -1,3 +1,4 @@
+import type { RippleCut } from "./schema";
 import { rateLabel } from "../projectFormat";
 import { activeVersion, mediaVersions } from "./versions";
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
@@ -68,6 +69,12 @@ export function clipName(
 /** Percentages keep every digit the engine stores (six decimals of the fraction). */
 export const formatPercent = (value: number) =>
   `${Number((value * 100).toFixed(4))}%`;
+
+export function rippleCutSuffix(cuts: readonly RippleCut[] = []) {
+  return cuts.length
+    ? `, also cut ${cuts.map(({ name, count }) => `${name} in ${count} ${count === 1 ? "place" : "places"}`).join(", ")}`
+    : "";
+}
 
 export const EDIT_LABEL_LIMIT = 120;
 

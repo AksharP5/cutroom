@@ -826,7 +826,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       ids: pieceIds,
     })
     .describe(
-      "Trim one edge of each named clip at the playhead. Equal ripple trims close time on all unlocked auto-select tracks.",
+      "Trim one edge of each named clip at the playhead. Equal ripple trims close time on participating tracks.",
     ),
   z
     .object({
@@ -1208,7 +1208,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       mediaStart: z.number().nonnegative().optional(),
     })
     .describe(
-      "Set the constant speed or source in (seconds) of a clip and its linked partners. Speed preserves the source span to the nearest timeline frame, resizes the clips, and ripples following time on unlocked auto-select tracks. A source in edit alone keeps duration. Edit a speed ramp in the composition source. Refuses non-media clips or insufficient source media.",
+      "Set the constant speed or source in (seconds) of a clip and its linked partners. Speed preserves the source span to the nearest timeline frame, resizes the clips, and ripples following time on participating tracks. A source in edit alone keeps duration. Edit a speed ramp in the composition source. Refuses non-media clips or insufficient source media.",
     ),
   z
     .object({
@@ -1456,7 +1456,18 @@ export const AnimationFeedbackSchema = z.object({
 
 export type AnimationFeedback = z.infer<typeof AnimationFeedbackSchema>;
 
+export const RippleCutsSchema = z.array(
+  z.object({
+    track: z.number().int().nonnegative(),
+    name: z.string(),
+    count: z.number().int().positive(),
+    framesRemoved: z.number().int().nonnegative(),
+  }),
+);
+export type RippleCut = z.infer<typeof RippleCutsSchema>[number];
+
 export const TimelineViewSchema = z.object({
+  rippleCuts: RippleCutsSchema.optional(),
   skippedClips: z
     .array(z.object({ clipId, label: label.nullable(), reason: z.string() }))
     .optional(),

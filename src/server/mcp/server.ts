@@ -37,9 +37,11 @@ import {
 import {
   EDIT_HISTORY_HEADER,
   EDIT_SUMMARY_HEADER,
+  RippleCutsSchema,
 } from "../../shared/timeline/schema";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
 import type { MediaFileDetails } from "../../shared/media";
+import { rippleCutSuffix } from "../../shared/timeline/labels";
 import { animationEvents } from "./animationFollowup";
 import { registerTimelineTools } from "./timelineTools";
 import { registerExportTools } from "./exportTools";
@@ -167,6 +169,9 @@ export function createMcpServer(options: McpOptions = {}) {
         }
         const result = await reply(first.value.result);
         const summary = response.headers.get(EDIT_SUMMARY_HEADER);
+        const { rippleCuts } = z
+          .object({ rippleCuts: RippleCutsSchema.optional() })
+          .parse(first.value.result);
         setTimeout(() => {
           void (async () => {
             for await (const event of events)
@@ -187,7 +192,9 @@ export function createMcpServer(options: McpOptions = {}) {
               ? [
                   {
                     type: "text" as const,
-                    text: decodeURIComponent(summary).replace(/\s+/g, " "),
+                    text: (
+                      decodeURIComponent(summary) + rippleCutSuffix(rippleCuts)
+                    ).replace(/\s+/g, " "),
                   },
                 ]
               : []),

@@ -348,6 +348,7 @@ export function editReply(
     composition: after.composition,
     changes,
     ...(after.skippedClips?.length && { skippedClips: after.skippedClips }),
+    ...(after.rippleCuts?.length && { rippleCuts: after.rippleCuts }),
     ...(warnings.length && { warnings }),
     ...(fullTimeline && {
       timeline:

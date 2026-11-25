@@ -56,6 +56,7 @@ import type {
   Command,
   CommandBatch,
   CommandInput,
+  RippleCut,
   Timeline,
   TimelineSettings,
   TimelineView,
@@ -71,7 +72,11 @@ import {
   localMediaPath,
   sourceUrl,
 } from "../../shared/media";
-import { editLabel, joinEditLabels } from "../../shared/timeline/labels";
+import {
+  editLabel,
+  joinEditLabels,
+  rippleCutSuffix,
+} from "../../shared/timeline/labels";
 import {
   canonicalAssetPath,
   canonicalProjectPath,
@@ -408,6 +413,7 @@ export function createTimelineRoutes(
       ? [editLabel([format], current.parsed.timeline, "")]
       : [];
     const summaries = [...labels];
+    const cuts = new Map<number, RippleCut>();
     const applied: Command[] = [];
     const hasScript = [current.parsed, ...snapshots.values()].some((source) =>
       /<script\b/i.test(source.html),
@@ -418,6 +424,17 @@ export function createTimelineRoutes(
         applyAll(current.parsed.timeline, batch.commands, {
           composition,
           onCreate: (id, origin) => origins.set(id, origin),
+          onRippleCut: agent
+            ? (track, name, framesRemoved) => {
+                const previous = cuts.get(track);
+                cuts.set(track, {
+                  track,
+                  name,
+                  count: (previous?.count ?? 0) + 1,
+                  framesRemoved: (previous?.framesRemoved ?? 0) + framesRemoved,
+                });
+              }
+            : undefined,
           onApply: (before, after, command) => {
             // A title or text clip given versions is lifted and replaced by a scene clip that
             // plays them. That reads as one change: the versions, not the lift and the insert.
@@ -619,9 +636,12 @@ export function createTimelineRoutes(
     const label = agent
       ? joinEditLabels(labels, "Edited timeline") + agentLabel
       : (batch.label ?? joinEditLabels(labels, "Edited timeline"));
-    const summary = joinEditLabels(summaries, "Edited timeline") + agentLabel;
+    const rippleCuts = [...cuts.values()].sort((a, b) => a.track - b.track);
+    const cutSuffix = rippleCutSuffix(rippleCuts);
+    const factual = joinEditLabels(summaries, "Edited timeline");
+    const summary = factual + cutSuffix + agentLabel;
     // Encode before any project write or history window. A label failure cannot follow a saved edit.
-    const encodedSummary = encodeURIComponent(summary);
+    const encodedSummary = encodeURIComponent(factual + agentLabel);
     const markers =
       html === current.source.content &&
       batch.commands.every(
@@ -657,7 +677,9 @@ export function createTimelineRoutes(
       formatPreview: plan?.preview,
       batchLabels:
         summaries.length > 1 || summaries.some((item) => item.includes("; "))
-          ? summaries
+          ? summaries.map((item, index) =>
+              index === 0 ? item + cutSuffix : item,
+            )
           : undefined,
       save: async () => {
         // Preparation precedes the store queue; preserve other metadata saved while it waited.
@@ -729,6 +751,7 @@ export function createTimelineRoutes(
         );
         return {
           composition,
+          ...(rippleCuts.length > 0 && { rippleCuts }),
           revision: revisionOf(
             fileContentVersion(html),
             timelines[composition] ?? emptyTimelineSettings(),

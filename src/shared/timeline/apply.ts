@@ -131,6 +131,12 @@ export type NewId = (
   from: string | null,
   taken: ReadonlySet<string>,
 ) => string;
+type RippleCutObserver = (
+  track: number,
+  name: string,
+  framesRemoved: number,
+) => void;
+
 /** Ids are never reused within a batch, so every created clip has one unambiguous origin. */
 interface Batch {
   composition: string;
@@ -147,6 +153,7 @@ interface Batch {
   mediaFiles?: ReadonlySet<string>;
   newId: NewId;
   onSkip: (clip: Clip, reason: string) => void;
+  onRippleCut?: RippleCutObserver;
 }
 /**
  * Options for applying commands; `mediaLengths` holds measured source lengths by `src`, and
@@ -159,6 +166,8 @@ interface ApplyOptions {
   onApply?: (before: Timeline, after: Timeline, command: Command) => void;
   /** Source-restricted auto-select razor targets left whole by this batch. */
   onSkip?: Batch["onSkip"];
+  /** Agent ripples cover every unlocked track. Observe cuts outside the command target. */
+  onRippleCut?: RippleCutObserver;
   onCreate?: OnCreate;
   mediaLengths?: ReadonlyMap<string, number>;
   silentMedia?: ReadonlySet<string>;
@@ -328,6 +337,7 @@ export function apply(
     composition = "index.html",
     clipboards = new Map(),
     onSkip = () => {},
+    onRippleCut,
     onCreate = () => {},
     mediaLengths = new Map(),
     silentMedia = new Set(),
@@ -343,6 +353,7 @@ export function apply(
     reserved: usedNames(timeline, retired),
     retired,
     onSkip,
+    onRippleCut,
     onCreate,
     mediaLengths,
     silentMedia,
@@ -362,6 +373,7 @@ export function applyAll(
     clipboards = new Map(),
     onApply,
     onSkip = () => {},
+    onRippleCut,
     onCreate = () => {},
     mediaLengths = new Map(),
     silentMedia = new Set(),
@@ -378,6 +390,7 @@ export function applyAll(
     reserved: usedNames(timeline, retired),
     retired,
     onSkip,
+    onRippleCut,
     mediaLengths,
     silentMedia,
     mediaRates,
@@ -591,6 +604,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           fixed: ids,
           mint,
           copies,
+          onRippleCut: batch.onRippleCut,
         }),
       };
     }
@@ -661,6 +675,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               fixed: new Set(deltas.keys()),
               mint,
               copies,
+              onRippleCut: batch.onRippleCut,
             })
           : next,
       };
@@ -888,14 +903,31 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const tracks = rippleTracks(
         timeline,
         removing.map((clip) => clip.track),
+        !!batch.onRippleCut,
+      );
+      const report = rippleObserver(
+        timeline,
+        command.clipIds.map((id) => find(id).track),
+        batch.onRippleCut,
       );
       // Close the selected intervals once on every participating track. Working right to left
       // keeps earlier ranges in the original timeline's coordinates.
       let next = remaining;
       for (const [from, to] of mergeRanges(
         removing.map((clip) => [clip.start, clipEnd(clip)] as const),
-      ).toReversed())
-        next = removeTime(next, tracks, () => from, to - from, timeline, mint);
+      ).toReversed()) {
+        reportRemovedTime(clips, tracks, () => from, to - from, report);
+        next = removeTime(
+          next,
+          tracks,
+          () => from,
+          to - from,
+          timeline,
+          mint,
+          undefined,
+          !!report,
+        );
+      }
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
@@ -924,7 +956,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             : `Nothing follows frame ${command.at} on ${name}, so there is no gap to close.`,
         );
       }
-      const tracks = rippleTracks(timeline, [track.index]);
+      const tracks = rippleTracks(timeline, [track.index], !!batch.onRippleCut);
       // Resolve closes a gap only when the time is empty on every track it ripples.
       const blocking = clips.find(
         (clip) =>
@@ -936,7 +968,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         const other = trackLabel(timeline, blocking.track);
         throw new TimelineError(
           "unsupported",
-          `${clipName(blocking)} on ${other} is in the gap. Turn off auto-select on ${other} to close the gap without it.`,
+          `${clipName(blocking)} on ${other} is in the gap. ${batch.onRippleCut ? "Lock" : "Turn off auto-select on"} ${other} to close the gap without it.`,
         );
       }
       const next = removeTime(
@@ -1075,17 +1107,20 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       if (mode === "overwrite")
         next = clearRange(next, track, at, end, fps, mint);
       if (mode === "insert") {
-        const tracks = rippleTracks(timeline, [
-          track,
-          ...(soundTrack === undefined ? [] : [soundTrack]),
-        ]);
+        const own = soundTrack === undefined ? [track] : [track, soundTrack];
+        const tracks = rippleTracks(timeline, own, !!batch.onRippleCut);
         const spans = (clip: Clip) => clip.start < at && at < clipEnd(clip);
         const targets = withPartners(
           next,
           next.filter((clip) => tracks.has(clip.track) && spans(clip)),
         ).filter(spans);
         for (const clip of targets)
-          if (clip.sourceRestrictions?.copy) refuseRippleCut(clip, timeline);
+          if (clip.sourceRestrictions?.copy)
+            refuseRippleCut(clip, timeline, !!batch.onRippleCut);
+        const report = rippleObserver(timeline, own, batch.onRippleCut);
+        if (report)
+          for (const track of new Set(targets.map((clip) => clip.track)))
+            report(track, 0);
         next = splitClips(next, targets, at, fps, mint);
         next = shiftAfter(next, tracks, () => at, input.duration);
       }
@@ -1337,10 +1372,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         }
         return { ...timeline, tracks, clips: [...next, ...placed] };
       }
-      const tracks = rippleTracks(
-        timeline,
-        source.map((clip) => clip.track),
-      );
+      const own = source.map((clip) => clip.track);
+      const tracks = rippleTracks(timeline, own, !!batch.onRippleCut);
       const spans = (clip: Clip) =>
         clip.start < command.at && command.at < clipEnd(clip);
       const targets = withPartners(
@@ -1348,7 +1381,12 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         next.filter((clip) => tracks.has(clip.track) && spans(clip)),
       ).filter(spans);
       for (const clip of targets)
-        if (clip.sourceRestrictions?.copy) refuseRippleCut(clip, timeline);
+        if (clip.sourceRestrictions?.copy)
+          refuseRippleCut(clip, timeline, !!batch.onRippleCut);
+      const report = rippleObserver(timeline, own, batch.onRippleCut);
+      if (report)
+        for (const track of new Set(targets.map((clip) => clip.track)))
+          report(track, 0);
       next = splitClips(next, targets, command.at, fps, mint);
       next = shiftAfter(next, tracks, () => command.at, duration);
       assertRippleSync(timeline, next, tracks, copies);
@@ -1586,7 +1624,17 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
 
       const edges = new Map(targets.map((clip) => [clip.track, clipEnd(clip)]));
       const editPoint = (track: number) => edges.get(track) ?? clipEnd(target);
-      const tracks = rippleTracks(timeline, [...edges.keys()]);
+      const own = [...edges.keys()];
+      const tracks = rippleTracks(timeline, own, !!batch.onRippleCut);
+      const report = rippleObserver(timeline, own, batch.onRippleCut);
+      if (change < 0)
+        reportRemovedTime(
+          retimed,
+          tracks,
+          (track) => editPoint(track) + change,
+          -change,
+          report,
+        );
       const next =
         change < 0
           ? removeTime(
@@ -1597,8 +1645,18 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               timeline,
               mint,
               ids,
+              !!report,
             )
-          : insertTime(retimed, tracks, editPoint, change, timeline, mint, ids);
+          : insertTime(
+              retimed,
+              tracks,
+              editPoint,
+              change,
+              timeline,
+              mint,
+              ids,
+              report,
+            );
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
@@ -2633,8 +2691,12 @@ function skipAutoClips(
   return skipped;
 }
 
-/** Ripple edits reach the edited tracks and every auto-select track, never a locked one. */
-function rippleTracks(timeline: Timeline, own: number[]): Set<number> {
+/** Owner edits follow auto-select. Agent ripples reach all unlocked tracks. */
+function rippleTracks(
+  timeline: Timeline,
+  own: number[],
+  allUnlocked = false,
+): Set<number> {
   const locked = new Set(
     timeline.tracks.filter((track) => track.locked).map((track) => track.index),
   );
@@ -2642,10 +2704,56 @@ function rippleTracks(timeline: Timeline, own: number[]): Set<number> {
     [
       ...own,
       ...timeline.tracks
-        .filter((track) => track.autoSelect)
+        .filter((track) => allUnlocked || track.autoSelect)
         .map((track) => track.index),
     ].filter((index) => !locked.has(index)),
   );
+}
+
+type ReportCut = (track: number, framesRemoved: number) => void;
+
+function rippleObserver(
+  timeline: Timeline,
+  own: number[],
+  observe?: RippleCutObserver,
+): ReportCut | undefined {
+  if (!observe) return;
+  const targets = new Set(own);
+  return (index, framesRemoved) => {
+    const track = timeline.tracks.find((track) => track.index === index);
+    if (track && !track.locked && !targets.has(index))
+      observe(index, track.name || trackLabel(timeline, index), framesRemoved);
+  };
+}
+
+/** A place is one interval on a track, including when it crosses an existing edit point. */
+function reportRemovedTime(
+  clips: Clip[],
+  tracks: ReadonlySet<number>,
+  from: (track: number) => number,
+  duration: number,
+  report?: ReportCut,
+) {
+  if (!report) return;
+  const removed = new Map<number, [number, number][]>();
+  for (const clip of clips) {
+    if (!tracks.has(clip.track)) continue;
+    const start = from(clip.track);
+    const first = Math.max(start, clip.start);
+    const last = Math.min(start + duration, clipEnd(clip));
+    if (last <= first) continue;
+    const intervals = removed.get(clip.track);
+    if (intervals) intervals.push([first, last]);
+    else removed.set(clip.track, [[first, last]]);
+  }
+  for (const [track, intervals] of removed)
+    report(
+      track,
+      mergeRanges(intervals).reduce(
+        (sum, [start, end]) => sum + end - start,
+        0,
+      ),
+    );
 }
 
 /**
@@ -2940,12 +3048,16 @@ export function slideRange(timeline: Timeline, clips: Clip[]) {
   }
 }
 
-function refuseRippleCut(clip: Clip, timeline: Timeline): never {
+function refuseRippleCut(
+  clip: Clip,
+  timeline: Timeline,
+  allUnlocked = false,
+): never {
   const track = trackLabel(timeline, clip.track);
   const name = clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
   throw new TimelineError(
     "unsupported",
-    `${name} on ${track} can't be cut here. Turn off auto-select on ${track} to ripple without it.`,
+    `${name} on ${track} can't be cut here. ${allUnlocked ? "Lock" : "Turn off auto-select on"} ${track} to ripple without it.`,
   );
 }
 
@@ -2965,6 +3077,7 @@ function rippleTrim(
     fixed,
     mint,
     copies,
+    onRippleCut,
   }: {
     edge: "start" | "end";
     at: number;
@@ -2972,9 +3085,12 @@ function rippleTrim(
     fixed: ReadonlySet<string>;
     mint: Minting;
     copies: ReadonlyMap<string, string>;
+    onRippleCut?: RippleCutObserver;
   },
 ): Clip[] {
-  const tracks = rippleTracks(timeline, [...edits.keys()]);
+  const own = [...edits.keys()];
+  const tracks = rippleTracks(timeline, own, !!onRippleCut);
+  const report = rippleObserver(timeline, own, onRippleCut);
   const groups = new Map<number, Set<number>>();
   for (const [track, { change }] of edits) {
     const group = groups.get(change) ?? new Set<number>();
@@ -3007,6 +3123,14 @@ function rippleTrim(
     const participating = mixed ? group : tracks;
     const editPoint = (track: number) => edits.get(track) ?? { at, change };
     const before = next;
+    if (change < 0)
+      reportRemovedTime(
+        next,
+        participating,
+        (track) => cutStart(editPoint(track)),
+        -change,
+        report,
+      );
     next =
       change < 0
         ? removeTime(
@@ -3017,6 +3141,7 @@ function rippleTrim(
             timeline,
             mint,
             fixed,
+            !!report,
           )
         : insertTime(
             next,
@@ -3026,6 +3151,7 @@ function rippleTrim(
             timeline,
             mint,
             fixed,
+            report,
           );
     if (mixed)
       assertRippleSync(
@@ -3049,6 +3175,7 @@ function removeTime(
   timeline: Timeline,
   mint: Minting,
   fixed: ReadonlySet<string> = new Set(),
+  allUnlocked = false,
 ): Clip[] {
   const shortened = new Set<string>();
   for (const clip of clips) {
@@ -3077,7 +3204,7 @@ function removeTime(
       : clip.start >= start && clipEnd(clip) <= end
         ? clip.sourceRestrictions?.remove
         : undefined;
-    if (reason) refuseRippleCut(clip, timeline);
+    if (reason) refuseRippleCut(clip, timeline, allUnlocked);
   }
   const fixedClips = clips.filter((clip) => fixed.has(clip.id));
   let next = clips.filter((clip) => !fixed.has(clip.id));
@@ -3119,6 +3246,7 @@ function insertTime(
   timeline: Timeline,
   mint: Minting,
   fixed: ReadonlySet<string>,
+  report?: ReportCut,
 ): Clip[] {
   for (const clip of clips)
     if (
@@ -3128,22 +3256,19 @@ function insertTime(
       at(clip.track) < clipEnd(clip) &&
       clip.sourceRestrictions?.copy
     )
-      refuseRippleCut(clip, timeline);
+      refuseRippleCut(clip, timeline, !!report);
   let next = clips;
-  for (const track of tracks)
-    next = splitClips(
-      next,
-      next.filter(
-        (clip) =>
-          !fixed.has(clip.id) &&
-          clip.track === track &&
-          clip.start < at(track) &&
-          at(track) < clipEnd(clip),
-      ),
-      at(track),
-      timeline.fps,
-      mint,
+  for (const track of tracks) {
+    const targets = next.filter(
+      (clip) =>
+        !fixed.has(clip.id) &&
+        clip.track === track &&
+        clip.start < at(track) &&
+        at(track) < clipEnd(clip),
     );
+    if (targets.length) report?.(track, 0);
+    next = splitClips(next, targets, at(track), timeline.fps, mint);
+  }
   return next.map((clip) =>
     !fixed.has(clip.id) &&
     tracks.has(clip.track) &&
