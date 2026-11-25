@@ -7,8 +7,12 @@ import {
   sourceOutFrame,
   speedAtFrame,
   speedLevel,
+  limitSpeedPoint,
   SPEED_PRESETS,
+  speedAtLevel,
   speedPoints,
+  speedProjection,
+  withSpeedPoints,
 } from "../../../shared/timeline/speed";
 import type { SpeedInput, SpeedPoint } from "../../../shared/timeline/speed";
 import { CaretDown } from "@phosphor-icons/react";
@@ -18,13 +22,15 @@ import type {
   KeyframeEase,
 } from "../../../shared/timeline/schema";
 import { openContextMenu } from "../../components/ContextMenu";
-import { editTimeline } from "../timeline";
+import { useTimeline, editTimeline } from "../timeline";
 import { resettable } from "../keys";
 import { TimecodeText } from "../../components/TimecodeText";
 import { formatTimecode } from "../../../shared/timeline/timecode";
 import { speedPath } from "../../timeline/ClipSpeed";
 import { useTransport } from "../transport";
 import { ValueField } from "./ValueField";
+import { useEffect, useRef, useState } from "react";
+import type { PointerEvent } from "react";
 
 const GRID = [4, 2, 1, 0.5, 0.25];
 
@@ -111,6 +117,26 @@ export function SpeedRows({
   disabled: boolean | undefined;
 }) {
   const points = speedPoints(clip, fps);
+  const [chosen, setChosen] = useState<number | null>(null);
+  useEffect(() => {
+    if (chosen === null) return;
+    const clear = (event: globalThis.PointerEvent) => {
+      if (
+        event.target instanceof Element &&
+        !event.target.closest(".speed-point, .speed-ease")
+      )
+        setChosen(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setChosen(null);
+    };
+    document.addEventListener("pointerdown", clear, true);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", clear, true);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [chosen]);
   // A constant clip renders only when the playhead crosses its edges, never per frame.
   const local = useTransport(({ frame }) => {
     const at = frame - clip.start;
@@ -223,7 +249,11 @@ export function SpeedRows({
       <CaretDown size={10} aria-hidden />
     </button>
   );
-  const eased = points && points[easePoint(points, frame)];
+  // A selected point outranks the playhead for Ease.
+  const easeIndex =
+    points &&
+    (chosen !== null && points[chosen] ? chosen : easePoint(points, frame));
+  const eased = points && easeIndex !== null && points[easeIndex];
   return (
     <>
       <ValueField
@@ -244,7 +274,17 @@ export function SpeedRows({
         onCommit={(value) => value !== null && setSpeed(value)}
       />
       {points && (
-        <SpeedGraph clip={clip} fps={fps} points={points} playhead={playhead} />
+        <SpeedGraph
+          key={clip.id}
+          clip={clip}
+          fps={fps}
+          points={points}
+          playhead={playhead}
+          disabled={disabled}
+          selected={chosen}
+          onSelect={setChosen}
+          onPoints={setPoints}
+        />
       )}
       {points && eased && (
         <div className="inspector-field speed-ease">
@@ -271,7 +311,7 @@ export function SpeedRows({
                   disabled={disabled}
                   onClick={() => {
                     const next = inputs(points);
-                    const at = easePoint(points, frame);
+                    const at = easeIndex!;
                     next[at] = { ...next[at]!, ease };
                     setPoints(`Ease ${EASE_NAMES[ease].toLowerCase()}`, next);
                   }}
@@ -289,65 +329,301 @@ export function SpeedRows({
   );
 }
 
-/** The clip's whole length, speed on a log scale from 10% to 1000%, whatever the timeline zoom. */
+/** Up and Down step a focused point through these speeds; Shift steps by 1%. */
+const STEPS = [0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 10];
+const nextStep = (speed: number, up: boolean) =>
+  up
+    ? (STEPS.find((step) => step > speed + 1e-9) ?? speed)
+    : (STEPS.findLast((step) => step < speed - 1e-9) ?? speed);
+
+/**
+ * The clip's whole length, speed on a log scale from 10% to 1000%, whatever the timeline zoom.
+ * A press on the line adds a point there at the line's speed, so nothing changes until a drag.
+ * Points drag sideways in whole frames between their neighbours and up and down in speed,
+ * take the arrow keys when focused, and are removed by a double-click or Delete. A right-click
+ * offers the eases. Each change is one undo step; Esc during a drag puts the point back.
+ */
 function SpeedGraph({
   clip,
   fps,
   points,
   playhead,
+  disabled,
+  selected,
+  onSelect,
+  onPoints,
 }: {
   clip: Clip;
   fps: Fps;
   points: readonly SpeedPoint[];
   playhead: number | null;
+  disabled: boolean | undefined;
+  selected: number | null;
+  onSelect(index: number | null): void;
+  onPoints(label: string, points: SpeedInput[]): void;
 }) {
+  const plot = useRef<HTMLDivElement>(null);
+  const [draft, setDraft] = useState<{
+    points: SpeedInput[];
+    hint: string | null;
+  } | null>(null);
+  const shown = draft
+    ? {
+        ...clip,
+        automation: withSpeedPoints(clip, draft.points, fps),
+      }
+    : clip;
+  const drawn = draft ? (speedPoints(shown, fps) ?? []) : points;
   const at = (frame: number) => `${(frame / clip.duration) * 100}%`;
   const level = (speed: number) => `${speedLevel(speed) * 100}%`;
+  const fromPointer = (clientX: number, clientY: number) => {
+    const box = plot.current!.getBoundingClientRect();
+    const fraction = Math.min(1, Math.max(0, (clientY - box.top) / box.height));
+    return {
+      frame: Math.round(((clientX - box.left) / box.width) * clip.duration),
+      speed: speedAtLevel(fraction),
+      height: box.height,
+    };
+  };
+  /** Keeps a moved point between its neighbours and inside what the source can play. */
+  const place = (index: number, frame: number, speed: number) => {
+    const next = inputs(points);
+    const before = points[index - 1];
+    const after = points[index + 1];
+    const low = before ? Math.floor(before.frame) + 1 : Math.min(0, frame);
+    const high = after
+      ? Math.ceil(after.frame) - 1
+      : Math.max(clip.duration, frame);
+    const clamped = {
+      ...next[index]!,
+      frame: Math.max(low, Math.min(high, frame)),
+      speed: Math.round(speed * 1e4) / 1e4,
+    };
+    next[index] = clamped;
+    const project = speedProjection(
+      clip,
+      useTimeline.getState().view?.timeline.clips ?? [clip],
+      fps,
+    );
+    return (
+      limitSpeedPoint(project, next, index, points[index]!, fps) ?? {
+        points: next,
+        hint: null,
+      }
+    );
+  };
+  const press = (event: PointerEvent<HTMLElement>, index: number) => {
+    if (event.button !== 0 || disabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect(index);
+    const target = event.currentTarget;
+    target.focus();
+    target.setPointerCapture(event.pointerId);
+    const start = points[index]!;
+    let latest: ReturnType<typeof place> | null = null;
+    const move = (moved: globalThis.PointerEvent) => {
+      const { frame, speed } = fromPointer(moved.clientX, moved.clientY);
+      latest = place(index, frame, speed);
+      setDraft(latest);
+    };
+    const stop = (commit: boolean) => {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+      target.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", escape, true);
+      setDraft(null);
+      if (!commit) {
+        onSelect(null);
+        target.blur();
+        if (target.hasPointerCapture(event.pointerId))
+          target.releasePointerCapture(event.pointerId);
+        return;
+      }
+      const moved = latest?.points[index];
+      if (
+        latest &&
+        moved &&
+        (moved.frame !== start.frame || moved.speed !== start.speed)
+      )
+        onPoints("Move speed point", latest.points);
+    };
+    const up = () => stop(true);
+    const cancel = () => stop(false);
+    const escape = (key: KeyboardEvent) => {
+      if (key.key !== "Escape") return;
+      key.preventDefault();
+      key.stopPropagation();
+      stop(false);
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+    target.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", escape, true);
+  };
+  const remove = (index: number) => {
+    onSelect(null);
+    onPoints(
+      "Remove speed point",
+      inputs(points).filter((_, other) => other !== index),
+    );
+  };
   return (
-    <div className="speed-graph" role="img" aria-label="Speed over the clip">
-      {GRID.map((speed) => (
-        <span
-          key={speed}
-          className="speed-label"
-          style={{ "--level-fraction": speedLevel(speed) }}
+    <>
+      <div
+        className="speed-graph"
+        role="group"
+        aria-label="Speed over the clip"
+        aria-disabled={disabled}
+      >
+        {GRID.map((speed) => (
+          <span
+            key={speed}
+            className="speed-label"
+            aria-hidden="true"
+            style={{ "--level-fraction": speedLevel(speed) }}
+          >
+            {speed * 100}
+          </span>
+        ))}
+        <div
+          className="speed-plot"
+          ref={plot}
+          onPointerDown={(event) => {
+            // A press on the line adds a point at the line's speed there.
+            if (
+              event.button !== 0 ||
+              disabled ||
+              (event.target !== event.currentTarget &&
+                !(event.target instanceof SVGElement))
+            )
+              return;
+            const { frame, height } = fromPointer(event.clientX, event.clientY);
+            if (frame < 0 || frame > clip.duration) return;
+            const line = speedAtFrame(clip, fps, frame);
+            const box = plot.current!.getBoundingClientRect();
+            const y = box.top + speedLevel(line) * height;
+            if (Math.abs(event.clientY - y) > 4) return onSelect(null);
+            if (points.some((point) => Math.round(point.frame) === frame))
+              return;
+            event.preventDefault();
+            onPoints("Add speed point", [
+              ...inputs(points),
+              { frame, speed: Math.round(line * 1e4) / 1e4 },
+            ]);
+          }}
         >
-          {speed * 100}
-        </span>
-      ))}
-      <div className="speed-plot">
-        <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
-          {GRID.map((speed) => (
-            <line
-              key={speed}
-              className={speed === 1 ? "unity" : undefined}
-              x1="0"
-              x2="100"
-              y1={speedLevel(speed) * 100}
-              y2={speedLevel(speed) * 100}
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
+            {GRID.map((speed) => (
+              <line
+                key={speed}
+                className={speed === 1 ? "unity" : undefined}
+                x1="0"
+                x2="100"
+                y1={speedLevel(speed) * 100}
+                y2={speedLevel(speed) * 100}
+              />
+            ))}
+            <path className="speed-line" d={speedPath(shown, fps)} />
+            {playhead !== null && (
+              <line
+                className="speed-playhead"
+                x1={(playhead / clip.duration) * 100}
+                x2={(playhead / clip.duration) * 100}
+                y1="-6"
+                y2="106"
+              />
+            )}
+          </svg>
+          {drawn.map((point, index) => (
+            <button
+              key={index}
+              type="button"
+              className="speed-point"
+              data-ease={point.ease}
+              data-on={point.frame === playhead ? "" : undefined}
+              aria-pressed={selected === index}
+              aria-label={`Speed point at ${formatTimecode(clip.start + Math.round(point.frame), fps)}, ${Math.round(point.speed * 100)}%`}
+              disabled={disabled}
+              hidden={point.frame < 0 || point.frame > clip.duration}
+              style={{ "--at": at(point.frame), "--level": level(point.speed) }}
+              onPointerDown={(event) => press(event, index)}
+              onDoubleClick={() => remove(index)}
+              onContextMenu={(event) => {
+                onSelect(index);
+                openContextMenu(
+                  event,
+                  "Speed point",
+                  [
+                    ...KEYFRAME_EASES.map((ease) => ({
+                      label: EASE_NAMES[ease],
+                      checked: point.ease === ease,
+                      radio: true,
+                      run: () => {
+                        const next = inputs(points);
+                        next[index] = { ...next[index]!, ease };
+                        onPoints(
+                          `Ease ${EASE_NAMES[ease].toLowerCase()}`,
+                          next,
+                        );
+                      },
+                    })),
+                    "separator",
+                    { label: "Delete", run: () => remove(index) },
+                  ],
+                  event.currentTarget,
+                );
+              }}
+              onKeyDown={(event) => {
+                const by = event.shiftKey ? 10 : 1;
+                const point = points[index]!;
+                const moves: Record<string, () => ReturnType<typeof place>> = {
+                  ArrowLeft: () => place(index, point.frame - by, point.speed),
+                  ArrowRight: () => place(index, point.frame + by, point.speed),
+                  ArrowUp: () =>
+                    place(
+                      index,
+                      point.frame,
+                      event.shiftKey
+                        ? point.speed + 0.01
+                        : nextStep(point.speed, true),
+                    ),
+                  ArrowDown: () =>
+                    place(
+                      index,
+                      point.frame,
+                      event.shiftKey
+                        ? Math.max(0.1, point.speed - 0.01)
+                        : nextStep(point.speed, false),
+                    ),
+                };
+                if (event.key === "Delete" || event.key === "Backspace") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return remove(index);
+                }
+                if (event.key === "Escape") {
+                  event.stopPropagation();
+                  onSelect(null);
+                  event.currentTarget.blur();
+                  return;
+                }
+                const step = moves[event.key];
+                if (!step) return;
+                // The timeline's arrow keys never see a focused point's.
+                event.preventDefault();
+                event.stopPropagation();
+                const next = step();
+                const moved = next.points[index]!;
+                if (moved.frame !== point.frame || moved.speed !== point.speed)
+                  onPoints("Move speed point", next.points);
+              }}
+              onFocus={() => onSelect(index)}
             />
           ))}
-          <path className="speed-line" d={speedPath(clip, fps)} />
-          {playhead !== null && (
-            <line
-              className="speed-playhead"
-              x1={(playhead / clip.duration) * 100}
-              x2={(playhead / clip.duration) * 100}
-              y1="-6"
-              y2="106"
-            />
-          )}
-        </svg>
-        {points.map((point, index) => (
-          <i
-            key={index}
-            className="speed-point"
-            data-ease={point.ease}
-            data-on={point.frame === playhead ? "" : undefined}
-            hidden={point.frame < 0 || point.frame > clip.duration}
-            style={{ "--at": at(point.frame), "--level": level(point.speed) }}
-          />
-        ))}
+        </div>
       </div>
-    </div>
+      {draft?.hint && <p className="speed-hint">{draft.hint}</p>}
+    </>
   );
 }
