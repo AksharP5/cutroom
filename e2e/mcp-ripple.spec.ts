@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -20,8 +21,7 @@ test("MCP ripple names every other track it cuts in the reply and Changes row", 
     ).json(),
   );
   const projectApi = `/api/cutroom/projects/${project.id}`;
-  const wav = Bun.spawnSync([
-    "ffmpeg",
+  const wav = spawnSync("ffmpeg", [
     "-v",
     "error",
     "-f",
@@ -32,7 +32,7 @@ test("MCP ripple names every other track it cuts in the reply and Changes row", 
     "8",
     join(project.path, "silent.wav"),
   ]);
-  expect(wav.exitCode, wav.stderr.toString()).toBe(0);
+  expect(wav.status, wav.stderr?.toString() ?? wav.error?.message).toBe(0);
   await writeFile(
     join(project.path, "index.html"),
     `<!doctype html><main data-composition-id="main" data-fps="30" data-width="320" data-height="240" data-duration="8">
