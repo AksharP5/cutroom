@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants, createWriteStream, readFileSync } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -18,7 +19,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname, isAbsolute, join, posix, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -33,6 +34,11 @@ import { createJobMachine } from "../../shared/jobs";
 import { MEDIA_TRASH } from "../../shared/media";
 import type { DuplicateJob, Project } from "../../shared/project";
 import { AGENT_HEADER, REVIEW_STATE_PATH } from "../../shared/review";
+import {
+  MATTE_MANIFEST,
+  matchesMatteSource,
+  readMatteManifest,
+} from "../matte/manifest";
 import { projectMutationGuard } from "./authorization";
 import { onCopyQueue, stagedName } from "./mediaImport";
 import { reviewNotesOnly } from "./review";
@@ -96,6 +102,7 @@ type FileEntry = {
   path: string;
   identity: string;
   size: bigint;
+  mtimeMs: number;
   mode: number;
 };
 type Entry =
@@ -128,55 +135,132 @@ const bootId = () => {
 };
 
 /**
- * Lists what the copy takes, never following a link: each folder is opened without following
- * one and read through that open handle, so a folder swapped for a link mid-walk is refused.
+ * Walks real directories through open handles, refusing a folder swapped for a link mid-walk.
  */
+async function* walk(
+  directory: string,
+  skip?: (path: string, parent: string, name: string) => boolean,
+  parent = "",
+): AsyncGenerator<{ path: string; absolute: string; info: BigIntStats }> {
+  const handle = await open(directory, directoryFlags);
+  try {
+    const pinned = pinnedDirectory(directory, handle.fd);
+    for (const raw of await readdir(pinned, { encoding: "buffer" })) {
+      const name = raw.toString("utf8");
+      const path = parent ? `${parent}/${name}` : name;
+      if (!Buffer.from(name, "utf8").equals(raw))
+        throw new HttpError(
+          422,
+          `"${path}" has a name that is not valid UTF-8. Rename it, then duplicate the project.`,
+        );
+      if (skip?.(path, parent, name)) continue;
+      const absolute = join(pinned, name);
+      const info = await lstat(absolute, { bigint: true });
+      yield { path, absolute, info };
+      if (info.isDirectory()) yield* walk(absolute, skip, path);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 async function snapshot(root: string) {
   const entries: Entry[] = [];
-  const visit = async (directory: string, parent: string) => {
-    const handle = await open(directory, directoryFlags);
-    try {
-      const pinned = pinnedDirectory(directory, handle.fd);
-      for (const raw of await readdir(pinned, { encoding: "buffer" })) {
-        const name = raw.toString("utf8");
-        const path = parent ? `${parent}/${name}` : name;
-        if (!Buffer.from(name, "utf8").equals(raw))
-          throw new HttpError(
-            422,
-            `"${path}" has a name that is not valid UTF-8. Rename it, then duplicate the project.`,
-          );
-        if (LEFT_BEHIND.has(path) || stagedName.test(name)) continue;
-        // Atomic writes in progress.
-        if (parent === ".cutroom" && name.endsWith(".tmp")) continue;
-        const absolute = join(pinned, name);
-        const info = await lstat(absolute, { bigint: true });
-        const mode = Number(info.mode & 0o777n);
-        if (info.isDirectory()) {
-          entries.push({ kind: "directory", path, mode });
-          await visit(absolute, path);
-        } else if (info.isFile())
-          entries.push({
-            kind: "file",
-            path,
-            identity: sourceIdentity(info),
-            size: info.size,
-            mode,
-          });
-        else if (info.isSymbolicLink()) {
-          // Kept only when it resolves inside the project, through every link along the way.
-          const target = await readlink(absolute);
-          if (isAbsolute(target)) continue;
-          const resolved = await realpath(join(root, path)).catch(() => null);
-          if (resolved && inside(root, resolved))
-            entries.push({ kind: "link", path, target });
-        }
-      }
-    } finally {
-      await handle.close();
+  const skip = (path: string, parent: string, name: string) =>
+    LEFT_BEHIND.has(path) ||
+    stagedName.test(name) ||
+    // Atomic writes in progress.
+    (parent === ".cutroom" && name.endsWith(".tmp"));
+  for await (const { path, absolute, info } of walk(root, skip)) {
+    const mode = Number(info.mode & 0o777n);
+    if (info.isDirectory()) entries.push({ kind: "directory", path, mode });
+    else if (info.isFile())
+      entries.push({
+        kind: "file",
+        path,
+        identity: sourceIdentity(info),
+        size: info.size,
+        mtimeMs:
+          Number(info.mtimeNs / 1_000_000n) +
+          Number(info.mtimeNs % 1_000_000n) / 1_000_000,
+        mode,
+      });
+    else if (info.isSymbolicLink()) {
+      if (isAbsolute(await readlink(absolute))) continue;
+      const resolved = await realpath(absolute).catch(() => null);
+      if (resolved && inside(root, resolved))
+        entries.push({ kind: "link", path, target: relative(root, resolved) });
     }
-  };
-  await visit(root, "");
-  return entries;
+  }
+  const copied = new Set(
+    entries.filter(({ kind }) => kind !== "link").map(({ path }) => path),
+  );
+  return entries.filter(
+    (entry) =>
+      entry.kind !== "link" || !entry.target || copied.has(entry.target),
+  );
+}
+
+async function verifyCopyLinks(root: string) {
+  for await (const { path, absolute, info } of walk(root)) {
+    if (!info.isSymbolicLink()) continue;
+    const resolved = await realpath(absolute).catch(() => null);
+    if (!resolved || !inside(root, resolved))
+      throw new HttpError(
+        422,
+        `"${path}" does not point inside the project copy.`,
+      );
+  }
+}
+
+/** Keep matte fingerprints for the source versions that actually went into the copy. */
+async function rebaseMatteManifest(stage: string, entries: Entry[]) {
+  const manifest = entries.find(
+    (entry) => entry.kind === "file" && entry.path === MATTE_MANIFEST,
+  );
+  if (manifest?.kind !== "file") return;
+  const list = await readMatteManifest(stage);
+  if (!list?.mattes.length) return;
+  const files = new Map(
+    entries.flatMap((entry) =>
+      entry.kind === "file" ? [[entry.path, entry] as const] : [],
+    ),
+  );
+  const times = new Map<string, number>();
+  const mattes = [];
+  for (const matte of list.mattes) {
+    const source = files.get(matte.src);
+    if (
+      !source ||
+      !matchesMatteSource(matte, {
+        size: Number(source.size),
+        mtimeMs: source.mtimeMs,
+      }) ||
+      (matte.file && !files.has(matte.file))
+    ) {
+      // Left as it was: it stays stale for the copy's newer file, and the
+      // matte service removes it and its mask as it does any stale entry.
+      mattes.push(matte);
+      continue;
+    }
+    let mtimeMs = times.get(matte.src);
+    if (mtimeMs === undefined) {
+      mtimeMs = (await lstat(join(stage, source.path))).mtimeMs;
+      times.set(matte.src, mtimeMs);
+    }
+    mattes.push({ ...matte, mtimeMs });
+  }
+  const path = join(stage, MATTE_MANIFEST);
+  const partial = `${path}.${randomUUID()}.part`;
+  await writeFile(
+    partial,
+    `${JSON.stringify({ version: list.version, mattes }, null, 2)}\n`,
+    {
+      flag: "wx",
+      mode: manifest.mode,
+    },
+  );
+  await rename(partial, path);
 }
 
 const changed = (entry: FileEntry) =>
@@ -448,7 +532,7 @@ export function createDuplicateRoutes(
         await rm(staging, { recursive: true, force: true });
     };
     let root: string;
-    let large: FileEntry[];
+    let snapshotCopy: { entries: Entry[]; large: FileEntry[] };
     try {
       root = await realpath(project.path);
       const parent = dirname(root);
@@ -476,7 +560,7 @@ export function createDuplicateRoutes(
         { flag: "wx", mode: 0o600 },
       );
       const source = root;
-      large = await store.serializeMutation(project, async () => {
+      snapshotCopy = await store.serializeMutation(project, async () => {
         const reason = busy(project, native);
         if (reason) throw new HttpError(409, reason);
         await (await store.history(project)).checkpoint();
@@ -489,12 +573,16 @@ export function createDuplicateRoutes(
           const to = join(stage, entry.path);
           if (entry.kind === "directory")
             await mkdir(to, { mode: entry.mode | 0o700 });
-          else if (entry.kind === "link") await symlink(entry.target, to);
+          else if (entry.kind === "link")
+            await symlink(
+              relative(dirname(entry.path), entry.target) || ".",
+              to,
+            );
           else if (entry.size <= SMALL_BYTES || UNPINNED.has(entry.path))
             await cloneFile(source, stage, entry, "copy");
           else later.push(entry);
         }
-        return later;
+        return { entries, large: later };
       });
       machine.transition({ status: "running", progress: 0 });
     } catch (error) {
@@ -507,14 +595,22 @@ export function createDuplicateRoutes(
     void (async () => {
       try {
         await onCopyQueue(() =>
-          copyLarge(root, stage, large, signal, (copied, total) => {
-            if (machine.state.status === "running")
-              machine.transition({
-                status: "running",
-                progress: copied / total,
-              });
-          }),
+          copyLarge(
+            root,
+            stage,
+            snapshotCopy.large,
+            signal,
+            (copied, total) => {
+              if (machine.state.status === "running")
+                machine.transition({
+                  status: "running",
+                  progress: copied / total,
+                });
+            },
+          ),
         );
+        signal.throwIfAborted();
+        await rebaseMatteManifest(stage, snapshotCopy.entries);
         signal.throwIfAborted();
         // From here the copy is complete, so Cancel no longer applies.
         job.publishing = true;
@@ -541,17 +637,22 @@ export function createDuplicateRoutes(
           throw error;
         });
         // Listed only once complete and named. The marker stays until then.
-        const copy = await store
-          .importProject({ path: destination, name: view.name })
-          .catch(async (error: unknown) => {
-            await rename(destination, staging!).catch((undo: unknown) =>
-              console.warn(
-                `Could not move the unlisted copy ${destination} back to ${staging}:`,
-                undo,
-              ),
-            );
-            throw error;
+        let copy: Project;
+        try {
+          await verifyCopyLinks(destination);
+          copy = await store.importProject({
+            path: destination,
+            name: view.name,
           });
+        } catch (error) {
+          await rename(destination, staging!).catch((undo: unknown) =>
+            console.warn(
+              `Could not move the unlisted copy ${destination} back to ${staging}:`,
+              undo,
+            ),
+          );
+          throw error;
+        }
         published = true;
         await unlink(join(destination, MARKER)).catch((error: unknown) =>
           console.warn(

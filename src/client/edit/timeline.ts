@@ -1278,6 +1278,8 @@ export async function editTimeline(
           );
           report = `${count ? `${verb} ${count} clip${count === 1 ? "" : "s"}. ` : ""}${names.join(", ")} left whole.`;
         }
+        if (result?.notices?.length)
+          report = [report, ...result.notices].filter(Boolean).join(" ");
         accepted = true;
       } catch (error) {
         made.failure = humanReason(

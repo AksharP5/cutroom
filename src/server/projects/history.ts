@@ -29,6 +29,7 @@ import {
 import type { Project } from "../../shared/project";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { protectedPath } from "../../shared/sourcePaths";
+import { reverseComposition } from "../timeline/composition";
 import { ownerWho } from "./historyActor";
 import type { historyActor } from "./historyActor";
 import { reverseDocument } from "./historyDocument";
@@ -590,17 +591,43 @@ function replayPlan(
           if (!merged.structural) checkedReferences.add(file.path);
         } else if (standing !== file.after) {
           conflict.add(file.path);
-        } else if (
-          /\.html?$/i.test(file.path) &&
-          later.some(
-            ({ entry, files }) =>
-              files.some(({ path }) => path === file.path) &&
-              !entry.undoes &&
-              entry.who.kind !== "outside",
-          )
-        ) {
-          // A later write may have returned the file to the same bytes. It still owns that write.
-          conflict.add(file.path);
+        } else if (/\.html?$/i.test(file.path)) {
+          // Later writes can return the same bytes. Compare their versions with
+          // the authored inverse so a write to another clip does not claim it.
+          for (const { entry, files } of later) {
+            if (entry.undoes || entry.who.kind === "outside") continue;
+            const newer = files.find(({ path }) => path === file.path);
+            if (!newer) continue;
+            if (
+              movingMedia ||
+              entry.incomplete ||
+              !file.before ||
+              !file.after ||
+              !newer.before ||
+              !newer.after
+            ) {
+              conflict.add(file.path);
+              break;
+            }
+            const [before, after, ...versions] = await Promise.all(
+              [file.before, file.after, newer.before, newer.after].map(
+                async (hash) =>
+                  cache.timeline.structure(file.path, await text(hash)),
+              ),
+            );
+            if (
+              !before ||
+              !after ||
+              versions.some(
+                (version) =>
+                  !version ||
+                  !reverseComposition(before, after, version, () => false),
+              )
+            ) {
+              conflict.add(file.path);
+              break;
+            }
+          }
         }
         if (restored !== standing)
           changes.push({ path: file.path, before: standing, after: restored });

@@ -118,7 +118,7 @@ export const LibraryAddSchema = z.object({
     .max(10_000_000)
     .optional()
     .describe(
-      "Frames on the timeline; a block's own length, or 3 seconds for a component, when omitted",
+      "Frames on the timeline; when omitted, the rest of the item from `start` (a block's own length, or 3 seconds for a component)",
     ),
   variables: VariableValuesSchema.optional().describe(
     "Values for the item's variables on this clip; the rest keep their defaults",

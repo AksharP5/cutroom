@@ -617,20 +617,37 @@ function resolveElementTimings(
   return { byId, lengthOf, timings };
 }
 
-/** The resolved authored windows, keyed by each element's opening tag offset. */
+/** The windows known without probing media, keyed by each element's opening tag offset. */
 export function compositionWindows(html: string, scope: CompositionScope) {
   const { all } = compositionMarkup(html, scope);
   const root = compositionRoot(all, scope);
-  const { timings } = resolveElementTimings(
+  const { byId, timings } = resolveElementTimings(
     all,
     compositionFps(root.attrs["data-fps"]),
     new Map(),
   );
+  const knownStarts = new Map<SourceElement, boolean>();
+  function hasKnownStart(element: SourceElement): boolean {
+    const cached = knownStarts.get(element);
+    if (cached !== undefined) return cached;
+    // A cycle cannot establish a start, either.
+    knownStarts.set(element, false);
+    const expression = timings.get(element)?.startExpression;
+    const target =
+      expression?.kind === "reference" && byId.get(expression.refId);
+    const known =
+      expression?.kind !== "reference" ||
+      (!!target && !!timings.get(target)?.finish && hasKnownStart(target));
+    knownStarts.set(element, known);
+    return known;
+  }
   return new Map(
-    Array.from(timings, ([element, { begin, finish }]) => [
-      element.start,
-      { start: begin, end: finish },
-    ]),
+    Array.from(timings)
+      .filter(([element]) => hasKnownStart(element))
+      .map(([element, { begin, finish }]) => [
+        element.start,
+        { start: begin, end: finish },
+      ]),
   );
 }
 
@@ -1196,6 +1213,8 @@ export function projectTimeline(
       ...(speedSpan && { speedSpan }),
       src,
       sourceDuration: lengthOf(element),
+      ...((kind === "video" || isAudioKind(kind)) &&
+        element.attrs.loop !== undefined && { loop: true }),
       hasAudio,
       link: element.attrs["data-link"] || null,
       label:

@@ -1,3 +1,4 @@
+import { resettable } from "./keys";
 import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
 import type { MenuItem } from "../components/menu";
@@ -112,6 +113,14 @@ export function clipMenuItems({
             disabled:
               !freeze.src || frame <= freeze.start || frame >= clipEnd(freeze),
             run: () => onFreeze(freeze, frame),
+          },
+        ]
+      : []),
+    ...(pictures.length || sound.length
+      ? [
+          {
+            action: "clipResetRetime" as const,
+            disabled: !resettable(clips).length,
           },
         ]
       : []),

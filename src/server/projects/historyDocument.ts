@@ -13,20 +13,28 @@ const object = (value: Value): value is RecordValue =>
   typeof value === "object" &&
   !Array.isArray(value);
 
-function keyed(value: Value) {
-  if (value === undefined) return new Map<string, Json>();
+function keyed(value: Value, key: "id" | "index") {
+  const rows = new Map<string | number, Json>();
+  if (value === undefined) return rows;
   if (!Array.isArray(value)) return;
-  const rows = new Map<string, Json>();
   for (const row of value) {
-    if (!object(row) || typeof row.id !== "string" || rows.has(row.id)) return;
-    rows.set(row.id, row);
+    if (!object(row)) return;
+    const id = row[key];
+    if (typeof id !== "number" && typeof id !== "string") return;
+    if (rows.has(id)) return;
+    rows.set(id, row);
   }
   return rows;
 }
 
 class Overlap extends Error {}
 
-function reverse(before: Value, after: Value, current: Value): Value {
+function reverse(
+  before: Value,
+  after: Value,
+  current: Value,
+  field?: string,
+): Value {
   if (Bun.deepEquals(before, after)) return current;
   if (Bun.deepEquals(current, after)) return before;
 
@@ -45,15 +53,16 @@ function reverse(before: Value, after: Value, current: Value): Value {
     ])) {
       const get = (value: RecordValue | undefined) =>
         value && Object.hasOwn(value, key) ? value[key] : undefined;
-      const value = reverse(get(before), get(after), get(current));
+      const value = reverse(get(before), get(after), get(current), key);
       if (value !== undefined) entries.push([key, value]);
     }
     return !before && !entries.length ? undefined : Object.fromEntries(entries);
   }
 
-  const b = keyed(before);
-  const a = keyed(after);
-  const c = keyed(current);
+  const key = field === "tracks" ? "index" : "id";
+  const b = keyed(before, key);
+  const a = keyed(after, key);
+  const c = keyed(current, key);
   if (!b || !a || !c || current === undefined) throw new Overlap();
   for (const id of new Set([...b.keys(), ...a.keys()])) {
     const value = reverse(b.get(id), a.get(id), c.get(id));

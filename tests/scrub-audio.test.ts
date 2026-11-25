@@ -442,6 +442,19 @@ test("a read for a chunk that leaves the window is cancelled", async () => {
   cache.close();
 });
 
+test("a window across a loop asks for both ends without fetching the middle", () => {
+  const end = 4 * CHUNK_SAMPLES;
+  const looping = {
+    ...segment(),
+    samples: { start: 0, end: 2 * end },
+    loop: { start: 0, length: end },
+  };
+  expect(chunksNear([looping], end - 240, end + 240, end)).toEqual([
+    { source, index: 0 },
+    { source, index: 3 },
+  ]);
+});
+
 test("the chunks a window needs follow each clip's source map, nearest the playhead first", () => {
   const near = chunksNear(
     [

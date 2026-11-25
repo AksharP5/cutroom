@@ -1,5 +1,10 @@
 import { CHUNK_SAMPLES } from "./render";
-import { RAMP_STEP, sourceId, sourcePosition } from "./segment";
+import {
+  RAMP_STEP,
+  sourceId,
+  sourcePosition,
+  unwrappedSourcePosition,
+} from "./segment";
 import type { Segment, SourceKey } from "./segment";
 
 /** One chunk of one source's PCM file. */
@@ -15,6 +20,37 @@ const CHUNK_BYTES = CHUNK_SAMPLES * 2;
 const CACHE_BYTES = 64 * 1024 * 1024;
 
 const chunkId = ({ source, index }: Chunk) => `${sourceId(source)}#${index}`;
+
+/** A window spanning a wrap needs the end and the beginning of the source. */
+function sourceRanges(
+  segment: Segment,
+  first: number,
+  last: number,
+): [number, number][] {
+  const low = sourcePosition(segment, first);
+  const high = sourcePosition(segment, last);
+  const { loop } = segment;
+  if (loop) {
+    const end = loop.start + loop.length;
+    const through = unwrappedSourcePosition(segment, last);
+    const span = through - unwrappedSourcePosition(segment, first);
+    if (through >= end && span >= loop.length)
+      return [[Math.min(low, loop.start), Math.ceil(end) - 1]];
+    if (through >= end && span >= end - low)
+      return [
+        [low, Math.ceil(end) - 1],
+        [loop.start, high],
+      ];
+  }
+  if (segment.map.kind !== "table" || loop) return [[low, high]];
+  // Include the intermediate ramp entries that bound this window's source reads.
+  const positions = [low, high];
+  const start = segment.samples.start;
+  const firstStep = start + Math.ceil((first - start) / RAMP_STEP) * RAMP_STEP;
+  for (let n = firstStep; n < last; n += RAMP_STEP)
+    positions.push(sourcePosition(segment, n));
+  return [[Math.min(...positions), Math.max(...positions)]];
+}
 
 /**
  * The chunks the segments read over output samples `[from, to)`, nearest the output sample
@@ -33,29 +69,28 @@ export function chunksNear(
       const first = Math.max(start, from);
       const last = Math.min(end, to) - 1;
       const at = Math.min(Math.max(near, first), last);
-      // A ramp's table can turn back; its entries in the window bound what it reads.
-      const positions = [first, last, at].map((n) =>
-        sourcePosition(segment, n),
-      );
-      if (segment.map.kind === "table")
-        for (let n = first; n < last; n += RAMP_STEP)
-          positions.push(sourcePosition(segment, n));
       return {
         segment,
         distance: Math.abs(at - near),
-        low: Math.floor(Math.min(...positions) / CHUNK_SAMPLES),
-        high: Math.floor(Math.max(...positions) / CHUNK_SAMPLES),
+        ranges: sourceRanges(segment, first, last),
         middle: sourcePosition(segment, at) / CHUNK_SAMPLES,
       };
     })
     .sort((a, b) => a.distance - b.distance);
   const chunks = new Map<string, Chunk>();
-  for (const { segment, low, high, middle } of reads) {
-    const indices = Array.from(
-      { length: high - Math.max(0, low) + 1 },
-      (_, k) => Math.max(0, low) + k,
-    ).sort((a, b) => Math.abs(a + 0.5 - middle) - Math.abs(b + 0.5 - middle));
-    for (const index of indices) {
+  for (const { segment, ranges, middle } of reads) {
+    const indices = new Set<number>();
+    for (const [low, high] of ranges) {
+      for (
+        let index = Math.max(0, Math.floor(low / CHUNK_SAMPLES));
+        index <= Math.floor(high / CHUNK_SAMPLES);
+        index++
+      )
+        indices.add(index);
+    }
+    for (const index of [...indices].sort(
+      (a, b) => Math.abs(a + 0.5 - middle) - Math.abs(b + 0.5 - middle),
+    )) {
       const chunk = { source: segment.source, index };
       chunks.set(chunkId(chunk), chunk);
     }

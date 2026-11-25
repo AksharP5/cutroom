@@ -611,14 +611,7 @@ class Engine {
     if (this.whereFolder() === "replaced") throw this.replaced();
   }
 
-  async start(): Promise<void> {
-    const log = readLog(this.logFile, (line) =>
-      this.options.onError?.(
-        new Error(
-          `History log line ${line} could not be read and was skipped.`,
-        ),
-      ),
-    );
+  async start(log: HistoryLog | null): Promise<void> {
     if (!log) return this.firstOpen();
     this.log = withoutHiddenPaths(log);
     if (log.unterminated) this.persistLog();
@@ -2061,8 +2054,15 @@ export async function openProjectHistory(
     const closedWindow =
       options.closedWindowAfterOwnership?.() ?? options.closedWindow;
     const engine = new Engine({ ...options, closedWindow }, projectId, blobs);
+    const log = readLog(engine.logFile, (line) =>
+      options.onError?.(
+        new Error(
+          `History log line ${line} could not be read and was skipped.`,
+        ),
+      ),
+    );
     await engine.queue(async () => {
-      await engine.start();
+      await engine.start(log);
       engine.hearWrites();
     });
     pruneGoneProjectHistoriesDaily(options.historyRoot, engine.now(), {

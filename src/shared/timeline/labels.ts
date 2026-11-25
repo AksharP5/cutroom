@@ -4,6 +4,7 @@ import { activeVersion, mediaVersions } from "./versions";
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
 import { localMediaPath } from "../media";
 import { gapAt, toFrames } from "./apply";
+import { SPEED_PRESETS } from "./speed";
 import { firstTextLine, isAudioKind } from "./schema";
 import type { Clip, Command, Timeline } from "./schema";
 import { formatTimecode } from "./timecode";
@@ -503,6 +504,17 @@ export function editLabel(
             `Set source in to ${timeline ? time(toFrames(command.mediaStart, timeline.fps)) : `${command.mediaStart}s`}`,
           );
         return `${parts.join("; ") || (pending ? fallback : "")}${named && (pending || parts.length) ? ` for ${target([command.clipId])}` : ""}`;
+      }
+      case "setSpeed": {
+        const preset = SPEED_PRESETS.find(({ id }) => id === command.preset);
+        const what = preset
+          ? `${pending ? "Apply" : "Applied"} ${preset.label}`
+          : command.points
+            ? `Set ${command.points.length} speed ${command.points.length === 1 ? "point" : "points"}`
+            : command.speed === 1
+              ? `${pending ? "Reset" : "Reset"} speed`
+              : `Set speed to ${formatPercent(command.speed!)}`;
+        return `${what}${named ? ` for ${target([command.clipId])}` : ""}`;
       }
       case "setTrack": {
         const creating =

@@ -83,6 +83,15 @@ import { editTransform, hasTransformEdit } from "./transform";
 import { editStyle, takesStyleField } from "./elementStyle";
 import { FREEZE_DIR, localMediaPath, sourceUrl } from "../media";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
+import {
+  fitSlowMoHit,
+  hasRamp,
+  mostSpeed,
+  SPEED_PRESETS,
+  speedPoints,
+  speedProjection,
+  speedSourceLimit,
+} from "./speed";
 import { canHaveGrade, editGrade } from "./grade";
 import { canRemoveBackground, editBackground } from "./background";
 import {
@@ -153,6 +162,7 @@ interface Batch {
   mediaFiles?: ReadonlySet<string>;
   newId: NewId;
   onSkip: (clip: Clip, reason: string) => void;
+  onNotice: (notice: string) => void;
   onRippleCut?: RippleCutObserver;
 }
 /**
@@ -166,6 +176,8 @@ interface ApplyOptions {
   onApply?: (before: Timeline, after: Timeline, command: Command) => void;
   /** Source-restricted auto-select razor targets left whole by this batch. */
   onSkip?: Batch["onSkip"];
+  /** Feedback when an edit fits within source limits at a different speed. */
+  onNotice?: Batch["onNotice"];
   /** Agent ripples cover every unlocked track. Observe cuts outside the command target. */
   onRippleCut?: RippleCutObserver;
   onCreate?: OnCreate;
@@ -337,6 +349,7 @@ export function apply(
     composition = "index.html",
     clipboards = new Map(),
     onSkip = () => {},
+    onNotice = () => {},
     onRippleCut,
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -353,6 +366,7 @@ export function apply(
     reserved: usedNames(timeline, retired),
     retired,
     onSkip,
+    onNotice,
     onRippleCut,
     onCreate,
     mediaLengths,
@@ -373,6 +387,7 @@ export function applyAll(
     clipboards = new Map(),
     onApply,
     onSkip = () => {},
+    onNotice = () => {},
     onRippleCut,
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -390,6 +405,7 @@ export function applyAll(
     reserved: usedNames(timeline, retired),
     retired,
     onSkip,
+    onNotice,
     onRippleCut,
     mediaLengths,
     silentMedia,
@@ -812,7 +828,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       if (!replace && targets.some((clip) => parseRateLane(clip.automation)))
         throw new TimelineError(
           "unsupported",
-          "Freeze frame needs a constant playback speed on every clip it cuts.",
+          "Freeze frame can't cut a speed ramp. Reset speed first.",
         );
       const tracks = new Set(linked.map((clip) => clip.track));
       const duration = replace
@@ -1447,9 +1463,120 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         clips: clips.map((clip) => changed.get(clip.id) ?? clip),
       };
     }
+    case "setSpeed": {
+      const target = find(command.clipId);
+      const targets =
+        command.linked === false ? [target] : withPartners(clips, [target]);
+      for (const clip of targets)
+        if (clip.mediaStart === null)
+          throw new TimelineError(
+            "unsupported",
+            `Clip ${clip.id} has no source timing.`,
+          );
+      const at = command.at ?? Math.floor(target.duration / 2);
+      if (command.preset === "slow-mo-hit" && (at < 0 || at >= target.duration))
+        throw new TimelineError(
+          "out_of_bounds",
+          `Clip ${target.id}'s hit frame ${at} is outside the clip. Choose 0 to ${target.duration - 1}.`,
+        );
+      const { speed } = command;
+      // A constant clip's speed resizes it, as the Speed field always has.
+      if (speed !== undefined && !targets.some(hasRamp))
+        return run(
+          timeline,
+          {
+            type: "setTiming",
+            clipId: target.id,
+            playbackRate: speed,
+            linked: command.linked,
+          },
+          batch,
+        );
+      const preset = SPEED_PRESETS.find(({ id }) => id === command.preset);
+      const presetPoints = preset?.shape(target.duration, at, fps);
+      if (
+        preset &&
+        presetPoints?.some(
+          ({ frame }, index) =>
+            index > 0 && frame <= presetPoints[index - 1]!.frame,
+        )
+      )
+        throw new TimelineError(
+          "unsupported",
+          `Clip ${target.id} is too short for the ${preset.label} preset.`,
+        );
+      const points = command.points ?? presetPoints;
+      const matte = points && targets.find((clip) => clip.background);
+      if (matte)
+        throw new TimelineError(
+          "unsupported",
+          `Clip ${matte.id}'s background is removed. Keep its background before adding a speed ramp.`,
+        );
+      const hit = preset?.id === "slow-mo-hit" ? target.start + at : undefined;
+      const project = speedProjection(target, targets, fps, hit);
+      const fitted =
+        hit === undefined
+          ? { clips: project(points ?? speed!) }
+          : fitSlowMoHit(project, points!, at, fps);
+      if (fitted.notice) batch.onNotice(fitted.notice);
+      for (const clip of fitted.clips) {
+        const limit = speedSourceLimit(clip, fps);
+        if (limit === "before")
+          throw new TimelineError(
+            "out_of_bounds",
+            `Clip ${clip.id}'s speed would start it before its source media. Slip the source later.`,
+          );
+        if (limit === null || clip.sourceDuration === null) continue;
+        const line = resolveClip(clip, fps);
+        const ends =
+          Number(
+            firstFrame(
+              positionAtSource(line, micros(attrMicros(clip.sourceDuration))),
+              fps,
+            ),
+          ) - clip.start;
+        const old = speedPoints(target, fps);
+        // Name the most the edited point can take, or else the fastest point's.
+        const points = command.points;
+        const changedAt =
+          points && old?.length === points.length
+            ? points.findIndex(
+                (point, index) =>
+                  point.frame !== old[index]!.frame ||
+                  point.speed !== old[index]!.speed,
+              )
+            : -1;
+        const edited = !points
+          ? -1
+          : changedAt >= 0
+            ? changedAt
+            : points.reduce(
+                (best, point, index) =>
+                  point.speed > points[best]!.speed ? index : best,
+                0,
+              );
+        const most =
+          edited >= 0 && clip.id === target.id
+            ? mostSpeed(target, points!, edited, fps)
+            : null;
+        throw new TimelineError(
+          "out_of_bounds",
+          `Clip ${clip.id}'s speed runs past the end of its source at frame ${clip.start + ends}` +
+            (most !== null
+              ? `; the most the point at frame ${target.start + points![edited]!.frame} can take is ${Math.round(most * 100)}%.`
+              : ". Lower the speed or slip the source earlier."),
+        );
+      }
+      const changed = new Map(fitted.clips.map((clip) => [clip.id, clip]));
+      return {
+        ...timeline,
+        clips: clips.map((clip) => changed.get(clip.id) ?? clip),
+      };
+    }
     case "setTiming": {
       const target = find(command.clipId);
-      const targets = withPartners(clips, [target]);
+      const group = withPartners(clips, [target]);
+      const targets = command.linked === false ? [target] : group;
       for (const clip of targets) {
         if (clip.mediaStart === null)
           throw new TimelineError(
@@ -1459,10 +1586,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         if (command.playbackRate !== undefined && readClipSource(clip).lane)
           throw new TimelineError(
             "unsupported",
-            `Clip ${clip.id} has a speed ramp. Change its rate lane in the composition source.`,
+            `Clip ${clip.id} has a speed ramp. Change it with setSpeed.`,
           );
       }
-      const ids = new Set(targets.map(({ id }) => id));
+      const fixed = new Set(group.map(({ id }) => id));
       const groupStart = Math.min(...targets.map(({ start }) => start));
       const rate = command.playbackRate ?? target.playbackRate;
       const startFor = (clip: Clip) =>
@@ -1634,6 +1761,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           (track) => editPoint(track) + change,
           -change,
           report,
+          fixed,
         );
       const next =
         change < 0
@@ -1644,7 +1772,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               -change,
               timeline,
               mint,
-              ids,
+              fixed,
               !!report,
             )
           : insertTime(
@@ -1654,10 +1782,17 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               change,
               timeline,
               mint,
-              ids,
+              fixed,
               report,
             );
-      assertRippleSync(timeline, next, tracks, copies);
+      assertRippleSync(
+        timeline,
+        next,
+        tracks,
+        copies,
+        undefined,
+        command.linked === false ? target.id : undefined,
+      );
       return { ...timeline, clips: next };
     }
     case "setClip": {
@@ -2733,11 +2868,12 @@ function reportRemovedTime(
   from: (track: number) => number,
   duration: number,
   report?: ReportCut,
+  fixed?: ReadonlySet<string>,
 ) {
   if (!report) return;
   const removed = new Map<number, [number, number][]>();
   for (const clip of clips) {
-    if (!tracks.has(clip.track)) continue;
+    if (!tracks.has(clip.track) || fixed?.has(clip.id)) continue;
     const start = from(clip.track);
     const first = Math.max(start, clip.start);
     const last = Math.min(start + duration, clipEnd(clip));
@@ -3130,6 +3266,7 @@ function rippleTrim(
         (track) => cutStart(editPoint(track)),
         -change,
         report,
+        fixed,
       );
     next =
       change < 0
@@ -3285,6 +3422,7 @@ function assertRippleSync(
   tracks: ReadonlySet<number>,
   copies: ReadonlyMap<string, string>,
   mode?: "independent trims",
+  independentClipId?: string,
 ) {
   const protectedTracks = new Map(
     before.tracks
@@ -3297,7 +3435,7 @@ function assertRippleSync(
   const shifted = new Map<string, Clip[]>();
   for (const clip of clips) {
     const old = previous.get(copies.get(clip.id) ?? clip.id);
-    if (!old?.link) continue;
+    if (!old?.link || old.id === independentClipId) continue;
     const { fps } = before;
     if (old.mediaStart === null && clip.mediaStart === null) continue;
     const line = resolveClip(old, fps);
