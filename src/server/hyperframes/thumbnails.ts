@@ -13,7 +13,7 @@ import { isolateCapturePage } from "./isolation";
 import { launchCaptureBrowser } from "./captureBrowser";
 
 // Change this when old cached renderer output should be invalidated.
-export const thumbnailRendererVersion = "capture-provenance-v4";
+export const thumbnailRendererVersion = "capture-provenance-v5";
 
 type ThumbnailOptions = Parameters<
   NonNullable<StudioApiAdapter["generateThumbnail"]>

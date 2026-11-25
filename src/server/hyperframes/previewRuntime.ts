@@ -43,6 +43,12 @@ export function previewRuntimeScript() {
       "Cutroom's scene variable adapter no longer matches HyperFrames 0.9.26. Review the runtime adapter before upgrading.",
     );
   const runtimeChanges = [
+    // Capture reads one exact source picture at a time. Only the live editor needs an
+    // editing proxy of the full recording.
+    [
+      'function Aa(e,t=null,n="reactive",r){if(Vt.has(e)',
+      'function Aa(e,t=null,n="reactive",r){if(rl(document)&&t?.browserHostile)return;if(Vt.has(e)',
+    ],
     // At rest the bridge polls for duration changes. Each element.getAnimations() can
     // flush style across the composition, even when the element is far from the playhead.
     // Take one animation snapshot for both adapters, then look up effects by their target.

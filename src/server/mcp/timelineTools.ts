@@ -568,7 +568,7 @@ export function registerTimelineTools(
   server.registerTool(
     "timeline_view",
     {
-      description: `Render timeline frames as JPEG images, each followed by its frame number and time. Pass frame for one, or frames for up to ${MAX_VIEW_FRAMES} in one call. width scales each image down, keeping its aspect ratio; omit it for the composition's full size. A few hundred pixels is enough to check layout and timing, and costs far less context. Composition script and load failures return an error naming the file and message instead of a misleading static frame.`,
+      description: `Render timeline frames as JPEG images, each followed by its frame number and time. Pass frame for one, or frames for up to ${MAX_VIEW_FRAMES} in one call. width scales each image down, keeping its aspect ratio; omit it for the composition's full size. A few hundred pixels is enough to check layout and timing. Captures use saved source pictures and work while editing proxies are still being made. Composition script and load failures return an error naming the file and message instead of a misleading static frame.`,
       inputSchema: {
         ...input,
         frame: z.number().int().nonnegative().optional(),
