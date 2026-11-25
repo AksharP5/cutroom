@@ -8,6 +8,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -1382,6 +1383,34 @@ describe("openProjectHistory", () => {
     const copied = await open(copy, historyRoot);
     expect(copied.projectId).not.toBe(history.projectId);
     expect(copied.list()).toEqual([]);
+  });
+
+  it("keeps the original project's Undo history when opening a hard-linked backup", async () => {
+    const { history, write, projectDir, historyRoot } = await project({
+      "index.html": "v1",
+    });
+    const edit = await change(history, you, "Second", () =>
+      write("index.html", "v2"),
+    );
+    await history.close();
+
+    const backup = tempDir("hf-history-backup-");
+    const idFile = join(".hyperframes", "history-id");
+    mkdirSync(dirname(join(backup, idFile)), { recursive: true });
+    linkSync(join(projectDir, idFile), join(backup, idFile));
+    linkSync(join(projectDir, "index.html"), join(backup, "index.html"));
+
+    const copy = await open(backup, historyRoot);
+    expect(copy.projectId).not.toBe(history.projectId);
+    expect(copy.list()).toEqual([]);
+    expect(inside(projectDir, idFile).trim()).toBe(history.projectId);
+    expect(inside(backup, idFile).trim()).toBe(copy.projectId);
+
+    const original = await open(projectDir, historyRoot);
+    expect(original.list().map(({ id }) => id)).toEqual([edit.id]);
+    await original.undo(edit.id, { who: you });
+    expect(inside(projectDir, "index.html")).toBe("v1");
+    expect(inside(backup, "index.html")).toBe("v2");
   });
 
   it("lets one process at a time hold a project's history, so a second opener cannot fork its log", async () => {
