@@ -144,9 +144,9 @@ export function captureDocument(
         .filter(defaultTreeAdapter.isTextNode)
         .map(({ value }) => value)
         .join("");
-      // A stylesheet can observe the source attribute or override a timed clip's visibility.
+      // CSS can observe the source attribute or override the clip's fixed size and placement.
       if (
-        !/\\|@import|\[\s*(?:[\w*-]*\|\s*)?(?:src|data-cutroom-idle-src)\b|(?:display|visibility|opacity)\s*:[^;}]+!\s*important/i.test(
+        !/\\|@import|\[\s*(?:[\w*-]*\|\s*)?(?:src|data-cutroom-idle-src)\b|(?:display|visibility|opacity|position|width|height|all)\s*:[^;}]+!\s*important/i.test(
           css,
         )
       )

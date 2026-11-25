@@ -9,6 +9,7 @@ import type { Fps } from "../src/shared/timeline/schema";
 import { defaultTitle } from "../src/shared/timeline/title";
 import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
 import { planDirectExport } from "../src/server/hyperframes/directPlan";
+import { captureDocument } from "../src/server/hyperframes/captureWorkload";
 import {
   parseComposition,
   patchComposition,
@@ -876,6 +877,72 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   45_000,
 );
 
+test.skipIf(!browserExecutable() || !Bun.which("node"))(
+  "a capture seek resolves the inferred duration once for its ended videos",
+  async () => {
+    const { default: puppeteer } = await import("puppeteer-core");
+    const browser = await puppeteer.launch({
+      executablePath: browserExecutable(),
+      headless: true,
+      args: ["--no-sandbox", "--mute-audio"],
+    });
+    try {
+      const page = await browser.newPage();
+      const videos = Array.from(
+        { length: 80 },
+        (_, start) =>
+          `<video id="v${start}" muted data-start="${start}" data-duration="1"></video>`,
+      ).join("");
+      await page.setContent(
+        `<!doctype html><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-duration="0">${videos}</main>`,
+      );
+      const runtime = await command([
+        "node",
+        "--experimental-strip-types",
+        "--input-type=module",
+        "-e",
+        `import { readFileSync } from "node:fs";
+         import { renderCaptureRuntime } from ${JSON.stringify(
+           new URL(
+             "../src/server/hyperframes/renderIsolation.ts",
+             import.meta.url,
+           ).href,
+         )};
+         const runtime = new URL("hyperframe.runtime.iife.js", import.meta.resolve("@hyperframes/producer"));
+         process.stdout.write(renderCaptureRuntime(readFileSync(runtime, "utf8")));`,
+      ]);
+      await page.addScriptTag({ content: runtime.toString() });
+      await page.waitForFunction("window.__renderReady === true");
+      const scans = await page.evaluate(() => {
+        let count = 0;
+        const query = document.querySelectorAll;
+        document.querySelectorAll = new Proxy(query, {
+          apply(target, receiver, args) {
+            if (args[0] === "video[data-start], audio[data-start]") count++;
+            return Reflect.apply(target, receiver, args);
+          },
+        });
+        try {
+          const { __player: player } = window as Window & {
+            __player?: { renderSeek(time: number): void };
+          };
+          if (!player) throw new Error("Capture player did not start.");
+          player.renderSeek(79.5);
+          return count;
+        } finally {
+          document.querySelectorAll = query;
+        }
+      });
+      // The runtime checks for timed media before scanning it to derive the
+      // duration. Allow other seek work to do the same without a per-clip scan.
+      expect(scans).toBeLessThan(12);
+    } finally {
+      await browser.close();
+    }
+  },
+  15_000,
+);
+
 test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   "marked and mixed exports keep off-range elements in the page",
   async () => {
@@ -895,27 +962,11 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       ${clip}
       <div id="title" class="clip" data-start="2" data-duration="1" data-track-index="1"></div>
       ${script}</main></body></html>`;
-    const logo =
-      '<img id="logo" class="clip" src="logo.png" data-start="0" data-duration="1" data-track-index="0">';
     const video =
       '<video id="v1" muted src="shot.mp4" data-start="0" data-duration="1" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video>';
     let output = 0;
     try {
       await source(join(root, "shot.mp4"), "640x360", "30", BT709);
-      await command([
-        "ffmpeg",
-        "-v",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        "color=white:s=16x16",
-        "-frames:v",
-        "1",
-        "-threads",
-        "1",
-        join(root, "logo.png"),
-      ]);
       const render = async (
         html: string,
         renderer: "mixed" | "capture",
@@ -967,24 +1018,26 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       const nextVideo = video
         .replace('id="v1"', 'id="v2"')
         .replace('data-start="0"', 'data-start="1"');
-      for (const [name, html, renderer, range, format] of [
+      for (const [name, html, renderer, range, format, detaches] of [
         [
           "marked CSS",
-          page(logo, "#main > :nth-child(2){background:#f00}"),
+          page(video, "#title:nth-child(n+2){background:#f00}"),
           "capture",
           section,
           "mp4",
+          true,
         ],
         [
           "marked script",
           page(
-            logo,
+            video,
             "",
-            '<script>if (document.getElementById("logo").getAttribute("src") === "logo.png") document.getElementById("title").style.background = "#f00";</script>',
+            '<script>if (document.getElementById("v1").getAttribute("src") === "shot.mp4") document.getElementById("title").style.background = "#f00";</script>',
           ),
           "capture",
           section,
           "mp4",
+          false,
         ],
         [
           "mixed CSS",
@@ -992,15 +1045,23 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
           "mixed",
           null,
           "mp4",
+          true,
         ],
         [
           "marked ProRes",
-          page(logo, "#main > :nth-child(2){background:#f00}"),
+          page(video, "#title:nth-child(n+2){background:#f00}"),
           "capture",
           section,
           "mov",
+          true,
         ],
       ] as const) {
+        expect(
+          captureDocument(html, [section], fps).includes(
+            'id="v1" muted data-cutroom-idle-src',
+          ),
+          name,
+        ).toBe(detaches);
         const whole = await render(html, "capture", null, format);
         expect(whole, name).toEqual(expected);
         expect(await render(html, renderer, range, format), name).toEqual(

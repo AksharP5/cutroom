@@ -86,6 +86,18 @@ test("a capture document keeps its elements and detaches only idle video sources
   expect(kept).toContain(
     '<div id="title" class="clip" data-start="intro + 10"',
   );
+  for (const layout of ["position:static", "width:auto", "height:auto"]) {
+    const styled = html.replace(
+      "</head>",
+      `<style>#early{${layout} !important}</style></head>`,
+    );
+    expect(
+      captureDocument(styled, [{ start: 1080, end: 1170 }], {
+        num: 60,
+        den: 1,
+      }),
+    ).toBe(styled);
+  }
 });
 
 test("capture browsers are charged for the media they load, not disabled clips or refused sound", () => {

@@ -244,13 +244,22 @@ function replaceOnce(
   return source.replace(before, after);
 }
 
-/** Frame injection supplies the decoded pixels. The source element still owns opacity. */
-export function renderGradeRuntime(source: string, adjustment = false) {
-  const adapted = replaceOnce(
+/** Render-only changes to the pinned HyperFrames browser runtime. */
+export function renderCaptureRuntime(source: string, adjustment = false) {
+  // Frame injection supplies the decoded pixels. The source still owns opacity.
+  const graded = replaceOnce(
     rampRuntime(source),
     'i=r&&!n;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=a.opacity||"1"',
     'i=r;i&&oG(e);let a=window.getComputedStyle(n?t:e.element);e.sourceOpacityForCanvas=(n?window.getComputedStyle(e.element):a).opacity||"1"',
     "the colour grading runtime",
+  );
+  // The last-frame check can ask for the duration once per ended video. Deriving
+  // it scans all timed media on each call, so share it within this sync pass.
+  const adapted = replaceOnce(
+    graded,
+    "getCompositionDuration:()=>Ke(e.capturedTimeline,0,u),",
+    "getCompositionDuration:(()=>{let duration;return()=>duration??=Ke(e.capturedTimeline,0,u)})(),",
+    "the media sync runtime",
   );
   // Composite the graded canvas once. The image still supplies the decoded pixels
   // and can paint as a fallback until the grading canvas takes over.
@@ -686,7 +695,7 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { bindPicturePlacement, PictureSlotsSchema } from ${capturePictures};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderGradeRuntime as cutroomGradeRuntime, renderSourceOverride as cutroomSourceOverride } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nimport { AUDIO_SAMPLE_RATE, audioFrameSample, sampleGridAudio } from ${audioClock};\nconst cutroomRampRuns = ${JSON.stringify(rampRuns)};\n${source}`;
+        source = `import { bindPicturePlacement, PictureSlotsSchema } from ${capturePictures};\nimport { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage, renderCaptureRuntime as cutroomCaptureRuntime, renderSourceOverride as cutroomSourceOverride } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nimport { AUDIO_SAMPLE_RATE, audioFrameSample, sampleGridAudio } from ${audioClock};\nconst cutroomRampRuns = ${JSON.stringify(rampRuns)};\n${source}`;
         source = replaceOnce(
           source,
           "  const probeStart = Date.now();",
@@ -720,7 +729,7 @@ export function registerRenderIsolation(
         source = replaceOnce(
           source,
           "return resolveVerifiedHyperframeRuntime().runtimeSource;",
-          `return cutroomGradeRuntime(resolveVerifiedHyperframeRuntime().runtimeSource, ${adjustment});`,
+          `return cutroomCaptureRuntime(resolveVerifiedHyperframeRuntime().runtimeSource, ${adjustment});`,
           url,
         );
         source = replaceOnce(
