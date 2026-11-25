@@ -11,6 +11,7 @@ import {
   versionShortReason,
 } from "../../shared/timeline/versions";
 import { syncOffsets } from "../../shared/timeline/sync";
+import { sourceOutFrame, speedPoints } from "../../shared/timeline/speed";
 import type {
   Fps,
   Timeline,
@@ -77,8 +78,10 @@ export function agentTimeline(
       ...track,
       fx: track.fx.map(compactFxNode),
     })),
-    clips: timeline.clips.map(({ automation, versions, ...rest }) => {
+    clips: timeline.clips.map((original) => {
+      const { automation, versions, ...rest } = original;
       const offset = offsets.get(rest.id);
+      const ramp = speedPoints(original, timeline.fps);
       const clip = {
         ...rest,
         background: rest.background
@@ -92,6 +95,10 @@ export function agentTimeline(
         }),
         fx: rest.fx.map(compactFxNode),
         ...(offset && { syncOffset: offset }),
+        ...(ramp && {
+          speed: { points: ramp },
+          sourceOut: sourceOutFrame(original, timeline.fps),
+        }),
       };
       if (!automation) return { ...clip, automation: null };
       const volume = volumePoints(automation, timeline.fps);
