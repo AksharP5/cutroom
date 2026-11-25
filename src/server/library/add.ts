@@ -186,10 +186,10 @@ function placement(
   const start = input.start ?? 0;
   const sourceEnd = toFrames(item.duration ?? COMPONENT_SECONDS, timeline.fps);
   const duration = input.duration ?? sourceEnd - start;
-  if (start >= sourceEnd || duration > sourceEnd - start)
+  if (start >= sourceEnd)
     throw new HttpError(
       422,
-      `Choose a source range within ${label}'s ${sourceEnd} frames.`,
+      `Choose an In point within ${label}'s ${sourceEnd} frames.`,
     );
   const id = start
     ? randomClipId(

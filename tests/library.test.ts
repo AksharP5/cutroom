@@ -693,7 +693,7 @@ test("a part marked from an In point keeps its place and length and plays from t
   }
 });
 
-test("an overwrite outside a Library item's source range leaves the destination alone", async () => {
+test("an overwrite from an In point past a Library item's end leaves the destination alone", async () => {
   const { fixture, project, call, ok, read, timelineView } =
     await libraryFixture();
   try {
@@ -712,11 +712,7 @@ test("an overwrite outside a Library item's source range leaves the destination 
         mode: "overwrite",
         ...range,
       });
-    for (const range of [
-      { start: 300, duration: 60 },
-      { start: 90 },
-      { start: 60, duration: 31 },
-    ]) {
+    for (const range of [{ start: 300, duration: 60 }, { start: 90 }]) {
       const refused = await add(range);
       expect(refused.status).toBe(422);
     }
@@ -724,12 +720,14 @@ test("an overwrite outside a Library item's source range leaves the destination 
     expect(await ok(history)).toEqual(before);
     expect(existsSync(join(project.path, "compositions"))).toBe(false);
 
-    expect((await add({ start: 60, duration: 30 })).status).toBe(200);
+    // A component's 3 seconds is only its default length; a title can hold
+    // longer, as dragging its end on the timeline allows.
+    expect((await add({ start: 60, duration: 60 })).status).toBe(200);
     expect((await timelineView()).timeline.clips).toContainEqual(
       expect.objectContaining({
         kind: "composition",
         mediaStart: 2,
-        duration: 30,
+        duration: 60,
       }),
     );
   } finally {
