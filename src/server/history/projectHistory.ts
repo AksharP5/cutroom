@@ -613,6 +613,7 @@ class Engine {
 
   async start(log: HistoryLog | null): Promise<void> {
     if (!log) return this.firstOpen();
+    const left = this.readAdopting();
     this.log = withoutHiddenPaths(log);
     if (log.unterminated) this.persistLog();
     await this.reclaimUncopied();
@@ -627,7 +628,6 @@ class Engine {
       });
     }
     await this.recoverReplay();
-    const left = this.readAdopting();
     const unadopted = (file: { path: string }) =>
       left.has(file.path) && !this.tracked.has(file.path);
     this.adoptMediaInBackground(
@@ -824,15 +824,14 @@ class Engine {
   }
 
   readAdopting(): Set<string> {
+    let raw: string;
     try {
-      return new Set(
-        JSON.parse(
-          readFileSync(join(this.home, "adopting.json"), "utf-8"),
-        ) as string[],
-      );
-    } catch {
-      return new Set();
+      raw = readFileSync(join(this.home, "adopting.json"), "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+      throw error;
     }
+    return new Set(z.array(z.string()).parse(JSON.parse(raw)));
   }
 
   saveStatCache(): void {

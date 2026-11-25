@@ -390,6 +390,34 @@ describe("openProjectHistory", () => {
     expect(reopened.list()).toEqual([]);
   });
 
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "keeps pending media adoption when its list cannot be read",
+    async () => {
+      const { history, write, projectDir, historyRoot } = await project({
+        "index.html": "A",
+      });
+      await history.close();
+      write("clip.bin", Buffer.alloc(2 * 1024 ** 2, 7));
+      const adopting = join(historyRoot, history.projectId, "adopting.json");
+      const pending = '["clip.bin"]';
+      writeFileSync(adopting, pending);
+      chmodSync(adopting, 0o000);
+      try {
+        await expect(open(projectDir, historyRoot)).rejects.toThrow(
+          /EACCES.*adopting.json/,
+        );
+      } finally {
+        if (existsSync(adopting)) chmodSync(adopting, 0o644);
+      }
+      expect(readFileSync(adopting, "utf8")).toBe(pending);
+      const reopened = await open(projectDir, historyRoot);
+      await waitFor(() =>
+        expect(reopened.peek(START)).toHaveProperty(["clip.bin"]),
+      );
+      expect(reopened.list()).toEqual([]);
+    },
+  );
+
   it("a log 0.8.123 wrote without a ledger takes none in, and one made later while closed is a change", async () => {
     const { history, write, projectDir, historyRoot } = await project(
       { "index.html": "A" },
