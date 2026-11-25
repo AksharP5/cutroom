@@ -44,6 +44,9 @@ const Input = z.object({
     .object({
       plan: DirectPlanSchema,
       html: z.string(),
+      /** The entry document with idle video sources detached. */
+      captureSource: z.string().optional(),
+      captureBrowsers: z.int().positive().optional(),
       /** Why frame capture would not fit in memory; a fallback fails with it instead of starting. */
       captureRefusal: z.string().optional(),
     })
@@ -146,14 +149,39 @@ try {
   const { encodeSourceParts, exportDirect, prepareDirectExport } =
     await import("./directExport.ts");
   verifyIsolation();
-  const engineConfig = resolveConfig(
-    adjustment
-      ? {
-          forceScreenshot: true,
-          useDrawElement: false,
-        }
-      : undefined,
-  );
+  const direct =
+    input.direct &&
+    (await prepareDirectExport(
+      input.direct.plan,
+      input.projectDir,
+      input.options.entryFile ?? "index.html",
+      join(input.scratchDir, "direct"),
+      input.options.fps,
+      abort.signal,
+    ));
+  if (direct && "reason" in direct) {
+    if (input.direct?.captureRefusal)
+      throw new Error(input.direct.captureRefusal);
+    console.warn(`Exporting with frame capture: ${direct.reason}.`);
+  }
+  const pieces = direct && "pieces" in direct ? direct.pieces : undefined;
+  if (pieces && input.direct?.captureSource !== undefined)
+    input.sources[entryPath] = input.direct.captureSource;
+  const browsers = pieces && capture?.length && input.direct?.captureBrowsers;
+  // The local span's chunk resolves its worker count from the environment.
+  // Keep the fallback budget until the direct sources have passed verification.
+  if (browsers) {
+    process.env.PRODUCER_MAX_WORKERS = String(browsers);
+    process.env.PRODUCER_MIN_PARALLEL_FRAMES = String(Number.MAX_SAFE_INTEGER);
+  }
+  const engineConfig = resolveConfig({
+    ...(adjustment && { forceScreenshot: true, useDrawElement: false }),
+    ...(browsers && {
+      concurrency: browsers,
+      // HyperFrames otherwise starts two browsers for 120 frames or more, whatever the limit.
+      minParallelFrames: Number.MAX_SAFE_INTEGER,
+    }),
+  });
   // A GIF is made from a ProRes 4444 render, which keeps its alpha. HyperFrames' own GIF builds
   // its palette from frame differences, which turns a title that appears and stays black.
   const { gifLoop, ...options } = input.options;
@@ -177,22 +205,6 @@ try {
   const logger = createConsoleLogger("warn");
   let audioLoweredDb: number | undefined;
   let encoder: VideoEncoder | undefined;
-  const direct =
-    input.direct &&
-    (await prepareDirectExport(
-      input.direct.plan,
-      input.projectDir,
-      entryFile,
-      join(input.scratchDir, "direct"),
-      request.options.fps,
-      abort.signal,
-    ));
-  if (direct && "reason" in direct) {
-    if (input.direct?.captureRefusal)
-      throw new Error(input.direct.captureRefusal);
-    console.warn(`Exporting with frame capture: ${direct.reason}.`);
-  }
-  const pieces = direct && "pieces" in direct ? direct.pieces : undefined;
   const encoding = input.direct &&
     pieces && {
       plan: input.direct.plan,

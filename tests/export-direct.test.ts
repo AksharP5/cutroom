@@ -9,6 +9,7 @@ import type { Fps } from "../src/shared/timeline/schema";
 import { defaultTitle } from "../src/shared/timeline/title";
 import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
 import { planDirectExport } from "../src/server/hyperframes/directPlan";
+import { captureDocument } from "../src/server/hyperframes/captureWorkload";
 import {
   parseComposition,
   patchComposition,
@@ -874,4 +875,204 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
     }
   },
   45_000,
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("node"))(
+  "a capture seek resolves the inferred duration once for its ended videos",
+  async () => {
+    const { default: puppeteer } = await import("puppeteer-core");
+    const browser = await puppeteer.launch({
+      executablePath: browserExecutable(),
+      headless: true,
+      args: ["--no-sandbox", "--mute-audio"],
+    });
+    try {
+      const page = await browser.newPage();
+      const videos = Array.from(
+        { length: 80 },
+        (_, start) =>
+          `<video id="v${start}" muted data-start="${start}" data-duration="1"></video>`,
+      ).join("");
+      await page.setContent(
+        `<!doctype html><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-duration="0">${videos}</main>`,
+      );
+      const runtime = await command([
+        "node",
+        "--experimental-strip-types",
+        "--input-type=module",
+        "-e",
+        `import { readFileSync } from "node:fs";
+         import { renderCaptureRuntime } from ${JSON.stringify(
+           new URL(
+             "../src/server/hyperframes/renderIsolation.ts",
+             import.meta.url,
+           ).href,
+         )};
+         const runtime = new URL("hyperframe.runtime.iife.js", import.meta.resolve("@hyperframes/producer"));
+         process.stdout.write(renderCaptureRuntime(readFileSync(runtime, "utf8")));`,
+      ]);
+      await page.addScriptTag({ content: runtime.toString() });
+      await page.waitForFunction("window.__renderReady === true");
+      const scans = await page.evaluate(() => {
+        let count = 0;
+        const query = document.querySelectorAll;
+        document.querySelectorAll = new Proxy(query, {
+          apply(target, receiver, args) {
+            if (args[0] === "video[data-start], audio[data-start]") count++;
+            return Reflect.apply(target, receiver, args);
+          },
+        });
+        try {
+          const { __player: player } = window as Window & {
+            __player?: { renderSeek(time: number): void };
+          };
+          if (!player) throw new Error("Capture player did not start.");
+          player.renderSeek(79.5);
+          return count;
+        } finally {
+          document.querySelectorAll = query;
+        }
+      });
+      // The runtime checks for timed media before scanning it to derive the
+      // duration. Allow other seek work to do the same without a per-clip scan.
+      expect(scans).toBeLessThan(12);
+    } finally {
+      await browser.close();
+    }
+  },
+  15_000,
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "marked and mixed exports keep off-range elements in the page",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-dom-"));
+    const scratchDir = root + "-scratch";
+    const capture = createRenderWorkers({ scratchDir, directExport: false });
+    const direct = createRenderWorkers({ scratchDir });
+    const fps = { num: 30, den: 1 };
+    const section = { start: 60, end: 90 };
+    const page = (clip: string, css: string, script = "") =>
+      `<!doctype html><html><head><style>
+      html,body{margin:0;width:100%;height:100%;overflow:hidden}
+      .stage{position:relative;width:100%;height:100%;overflow:hidden}
+      #title{position:absolute;inset:0;background:#00f}
+      ${css}
+      </style></head><body><main id="main" class="stage" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-duration="3">
+      ${clip}
+      <div id="title" class="clip" data-start="2" data-duration="1" data-track-index="1"></div>
+      ${script}</main></body></html>`;
+    const video =
+      '<video id="v1" muted src="shot.mp4" data-start="0" data-duration="1" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video>';
+    let output = 0;
+    try {
+      await source(join(root, "shot.mp4"), "640x360", "30", BT709);
+      const render = async (
+        html: string,
+        renderer: "mixed" | "capture",
+        range: typeof section | null,
+        format: "mp4" | "mov" = "mp4",
+      ) => {
+        await writeFile(join(root, "index.html"), html);
+        const filename = `output-${++output}.${format}`;
+        const workers = renderer === "mixed" ? direct : capture;
+        const state = workers.start(
+          {
+            project: { id: "export-dom", dir: root },
+            outputPath: join(root, filename),
+            format,
+            fps,
+            quality: "draft",
+            jobId: filename,
+          },
+          { filename, directory: root, range },
+        );
+        const deadline = Date.now() + 45_000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(50);
+        expect(state.error).toBeUndefined();
+        expect(state.status).toBe("complete");
+        expect(state.renderer).toBe(renderer);
+        const bytes = await command([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-i",
+          state.outputPath,
+          "-vf",
+          "format=rgba,crop=1:1:320:180",
+          "-pix_fmt",
+          "rgba",
+          "-f",
+          "rawvideo",
+          "pipe:1",
+        ]);
+        expect(bytes.length / 4).toBe(range ? 30 : 90);
+        return Array.from({ length: 30 }, (_, index) => {
+          const offset = (bytes.length / 4 - 30 + index) * 4;
+          const [red, green, blue, alpha] = bytes.subarray(offset, offset + 4);
+          return red! > 240 && green! < 16 && blue! < 16 && alpha === 255;
+        });
+      };
+      const expected = Array.from({ length: 30 }, () => true);
+      const nextVideo = video
+        .replace('id="v1"', 'id="v2"')
+        .replace('data-start="0"', 'data-start="1"');
+      for (const [name, html, renderer, range, format, detaches] of [
+        [
+          "marked CSS",
+          page(video, "#title:nth-child(n+2){background:#f00}"),
+          "capture",
+          section,
+          "mp4",
+          true,
+        ],
+        [
+          "marked script",
+          page(
+            video,
+            "",
+            '<script>if (document.getElementById("v1").getAttribute("src") === "shot.mp4") document.getElementById("title").style.background = "#f00";</script>',
+          ),
+          "capture",
+          section,
+          "mp4",
+          false,
+        ],
+        [
+          "mixed CSS",
+          page(video + nextVideo, "#v1 ~ #title{background:#f00}"),
+          "mixed",
+          null,
+          "mp4",
+          true,
+        ],
+        [
+          "marked ProRes",
+          page(video, "#title:nth-child(n+2){background:#f00}"),
+          "capture",
+          section,
+          "mov",
+          true,
+        ],
+      ] as const) {
+        expect(
+          captureDocument(html, [section], fps).includes(
+            'id="v1" muted data-cutroom-idle-src',
+          ),
+          name,
+        ).toBe(detaches);
+        const whole = await render(html, "capture", null, format);
+        expect(whole, name).toEqual(expected);
+        expect(await render(html, renderer, range, format), name).toEqual(
+          whole,
+        );
+      }
+    } finally {
+      await Promise.all([direct.cancelAll(), capture.cancelAll()]);
+      await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
+    }
+  },
+  180_000,
 );
