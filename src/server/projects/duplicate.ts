@@ -34,6 +34,11 @@ import { createJobMachine } from "../../shared/jobs";
 import { MEDIA_TRASH } from "../../shared/media";
 import type { DuplicateJob, Project } from "../../shared/project";
 import { AGENT_HEADER, REVIEW_STATE_PATH } from "../../shared/review";
+import {
+  MATTE_MANIFEST,
+  matchesMatteSource,
+  readMatteManifest,
+} from "../matte/manifest";
 import { projectMutationGuard } from "./authorization";
 import { onCopyQueue, stagedName } from "./mediaImport";
 import { reviewNotesOnly } from "./review";
@@ -97,6 +102,7 @@ type FileEntry = {
   path: string;
   identity: string;
   size: bigint;
+  mtimeMs: number;
   mode: number;
 };
 type Entry =
@@ -174,6 +180,9 @@ async function snapshot(root: string) {
         path,
         identity: sourceIdentity(info),
         size: info.size,
+        mtimeMs:
+          Number(info.mtimeNs / 1_000_000n) +
+          Number(info.mtimeNs % 1_000_000n) / 1_000_000,
         mode,
       });
     else if (info.isSymbolicLink()) {
@@ -202,6 +211,52 @@ async function verifyCopyLinks(root: string) {
         `"${path}" does not point inside the project copy.`,
       );
   }
+}
+
+/** Keep matte fingerprints for the source versions that actually went into the copy. */
+async function rebaseMatteManifest(stage: string, entries: Entry[]) {
+  const manifest = entries.find(
+    (entry) => entry.kind === "file" && entry.path === MATTE_MANIFEST,
+  );
+  if (manifest?.kind !== "file") return;
+  const list = await readMatteManifest(stage);
+  if (!list?.mattes.length) return;
+  const files = new Map(
+    entries.flatMap((entry) =>
+      entry.kind === "file" ? [[entry.path, entry] as const] : [],
+    ),
+  );
+  const times = new Map<string, number>();
+  const mattes = [];
+  for (const matte of list.mattes) {
+    const source = files.get(matte.src);
+    if (
+      !source ||
+      !matchesMatteSource(matte, {
+        size: Number(source.size),
+        mtimeMs: source.mtimeMs,
+      }) ||
+      (matte.file && !files.has(matte.file))
+    )
+      continue;
+    let mtimeMs = times.get(matte.src);
+    if (mtimeMs === undefined) {
+      mtimeMs = (await lstat(join(stage, source.path))).mtimeMs;
+      times.set(matte.src, mtimeMs);
+    }
+    mattes.push({ ...matte, mtimeMs });
+  }
+  const path = join(stage, MATTE_MANIFEST);
+  const partial = `${path}.${randomUUID()}.part`;
+  await writeFile(
+    partial,
+    `${JSON.stringify({ version: list.version, mattes }, null, 2)}\n`,
+    {
+      flag: "wx",
+      mode: manifest.mode,
+    },
+  );
+  await rename(partial, path);
 }
 
 const changed = (entry: FileEntry) =>
@@ -473,7 +528,7 @@ export function createDuplicateRoutes(
         await rm(staging, { recursive: true, force: true });
     };
     let root: string;
-    let large: FileEntry[];
+    let snapshotCopy: { entries: Entry[]; large: FileEntry[] };
     try {
       root = await realpath(project.path);
       const parent = dirname(root);
@@ -501,7 +556,7 @@ export function createDuplicateRoutes(
         { flag: "wx", mode: 0o600 },
       );
       const source = root;
-      large = await store.serializeMutation(project, async () => {
+      snapshotCopy = await store.serializeMutation(project, async () => {
         const reason = busy(project, native);
         if (reason) throw new HttpError(409, reason);
         await (await store.history(project)).checkpoint();
@@ -523,7 +578,7 @@ export function createDuplicateRoutes(
             await cloneFile(source, stage, entry, "copy");
           else later.push(entry);
         }
-        return later;
+        return { entries, large: later };
       });
       machine.transition({ status: "running", progress: 0 });
     } catch (error) {
@@ -536,14 +591,22 @@ export function createDuplicateRoutes(
     void (async () => {
       try {
         await onCopyQueue(() =>
-          copyLarge(root, stage, large, signal, (copied, total) => {
-            if (machine.state.status === "running")
-              machine.transition({
-                status: "running",
-                progress: copied / total,
-              });
-          }),
+          copyLarge(
+            root,
+            stage,
+            snapshotCopy.large,
+            signal,
+            (copied, total) => {
+              if (machine.state.status === "running")
+                machine.transition({
+                  status: "running",
+                  progress: copied / total,
+                });
+            },
+          ),
         );
+        signal.throwIfAborted();
+        await rebaseMatteManifest(stage, snapshotCopy.entries);
         signal.throwIfAborted();
         // From here the copy is complete, so Cancel no longer applies.
         job.publishing = true;

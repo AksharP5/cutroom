@@ -3,7 +3,6 @@ import {
   lstat,
   mkdir,
   open,
-  readFile,
   rename,
   rm,
   stat,
@@ -22,7 +21,6 @@ import { mediaKind } from "../../shared/media.ts";
 import {
   MATTE_MODEL,
   MATTES_FOLDER,
-  MatteManifestSchema,
   matteFrameAt,
 } from "../../shared/matte.ts";
 import type {
@@ -36,6 +34,11 @@ import { frameGrid } from "../media/frames.ts";
 import { localMediaInputOptions } from "../media/input.ts";
 import { z } from "zod";
 import { projectPath, resolveProjectPath } from "../projects/path.ts";
+import {
+  MATTE_MANIFEST,
+  matchesMatteSource,
+  readMatteManifest,
+} from "./manifest.ts";
 import { MatteEventSchema } from "./protocol.ts";
 import type { MatteTask } from "./protocol.ts";
 import {
@@ -55,7 +58,6 @@ export interface MatteRequest {
   retry?: boolean;
   composition?: string;
 }
-const MANIFEST = `${MATTES_FOLDER}/mattes.json`;
 /** Status events are coalesced to at most four a second. */
 const EVENT_INTERVAL_MS = 250;
 const STOP_TIMEOUT_MS = 5000;
@@ -244,7 +246,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
     );
     return mattes.filter((entry) => {
       const info = sources.get(entry.src);
-      return info?.size === entry.size && info.mtimeMs === entry.mtimeMs;
+      return !!info && matchesMatteSource(entry, info);
     });
   };
 
@@ -288,24 +290,8 @@ export function createMatteService(options: MatteServiceOptions = {}) {
         );
   };
 
-  const readManifest = async (
-    project: MatteProject,
-  ): Promise<MatteManifest> => {
-    const path = join(project.path, MANIFEST);
-    const text = await readFile(path, "utf8").catch(() => null);
-    if (text === null) return { version: 1, mattes: [] };
-    const parsed = MatteManifestSchema.safeParse(
-      (() => {
-        try {
-          return JSON.parse(text);
-        } catch {
-          return null;
-        }
-      })(),
-    );
-    // A damaged list only costs remaking mattes; the files stay for anyone who wants them.
-    return parsed.success ? parsed.data : { version: 1, mattes: [] };
-  };
+  const readManifest = async (project: MatteProject): Promise<MatteManifest> =>
+    (await readMatteManifest(project.path)) ?? { version: 1, mattes: [] };
   /** Serialised per project, written whole and renamed into place. */
   const updateManifest = (
     project: MatteProject,
@@ -315,7 +301,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
       .catch(() => {})
       .then(async () => {
         const next = change(await readManifest(project));
-        const path = await projectPath(project, MANIFEST, true);
+        const path = await projectPath(project, MATTE_MANIFEST, true);
         const partial = `${path}.${randomUUID()}.part`;
         await writeFile(partial, `${JSON.stringify(next, null, 2)}\n`);
         await rename(partial, path);
@@ -371,8 +357,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
     manifest.mattes.filter(
       (entry) =>
         entry.src === source.path &&
-        entry.size === source.size &&
-        entry.mtimeMs === source.mtimeMs &&
+        matchesMatteSource(entry, source) &&
         entry.rate === source.rate &&
         entry.start === source.start,
     );
@@ -575,8 +560,7 @@ export function createMatteService(options: MatteServiceOptions = {}) {
     await updateManifest(project, (manifest) => {
       // Mattes of an older version of the source are stale.
       const stale = (entry: MatteEntry) =>
-        entry.src === source.path &&
-        (entry.size !== source.size || entry.mtimeMs !== source.mtimeMs);
+        entry.src === source.path && !matchesMatteSource(entry, source);
       dropped.push(
         ...manifest.mattes
           .filter(stale)
