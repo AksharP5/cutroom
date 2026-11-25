@@ -13,7 +13,10 @@ export function historyCache(open: (projectDir: string) => Opened) {
   const get = async (projectDir: string): Promise<ProjectHistory | null> => {
     let cached = histories.get(projectDir);
     if (!cached) histories.set(projectDir, (cached = open(projectDir)));
-    const opened = await cached;
+    const opened = await cached.catch((error: unknown) => {
+      if (histories.get(projectDir) === cached) histories.delete(projectDir);
+      throw error;
+    });
     if (!opened?.replacedAtPath()) return opened;
     const reopen = () => open(projectDir);
     if (histories.get(projectDir) === cached)
