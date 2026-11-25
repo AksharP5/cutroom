@@ -104,6 +104,65 @@ test("undo and redo restore a ripple while keeping a later opacity edit on the s
   }
 });
 
+test("owner Undo and Redo keep an agent's rename on a different track", async () => {
+  const { fixture, agent, edit, read, step } = await projectWithHistory();
+  const trackNames = async () =>
+    (await read()).timeline.tracks.map(({ index, name }) => [index, name]);
+  try {
+    await edit([
+      { type: "setTrack", index: 0, name: "Picture" },
+      { type: "setTrack", index: 1, kind: "audio", name: "Sound" },
+    ]);
+    await edit([{ type: "setTrack", index: 0, name: "Interview" }]);
+    await edit([{ type: "setTrack", index: 1, name: "Dialogue" }], agent);
+
+    expect(await step("undo")).toMatchObject({ status: 200 });
+    expect(await trackNames()).toEqual([
+      [0, "Picture"],
+      [1, "Dialogue"],
+    ]);
+    expect(await step("redo")).toMatchObject({ status: 200 });
+    expect(await trackNames()).toEqual([
+      [0, "Interview"],
+      [1, "Dialogue"],
+    ]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test.each([
+  { agentClip: "t1", standing: "Title 1", status: 200 },
+  { agentClip: "t0", standing: "Owner", status: 409 },
+])(
+  "Undo after later edits return the file to the same bytes ($agentClip)",
+  async ({ agentClip, standing, status }) => {
+    const { fixture, file, agent, edit, step, clip } =
+      await projectWithHistory();
+    try {
+      await edit([{ type: "setClip", clipId: "t0", text: "Owner" }]);
+      const ownerBytes = await readFile(file, "utf8");
+      await edit(
+        [{ type: "setClip", clipId: agentClip, text: "Agent" }],
+        agent,
+      );
+      await edit(
+        [{ type: "setClip", clipId: agentClip, text: standing }],
+        agent,
+      );
+      expect(await readFile(file, "utf8")).toBe(ownerBytes);
+
+      expect(await step("undo")).toMatchObject({ status });
+      expect((await clip("t0"))?.text).toBe(
+        status === 200 ? "Title 0" : "Owner",
+      );
+      expect((await clip("t1"))?.text).toBe("Title 1");
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
 test("an agent cannot undo a clip the owner deliberately moved", async () => {
   const { fixture, agent, edit, clip, step } = await projectWithHistory();
   try {
