@@ -116,6 +116,17 @@ test("MCP ripple names every other track it cuts in the reply and Changes row", 
     await expect(row).toContainText("also cut Voiceover in 2 places");
     await expect(row).toContainText("Music in 2 places");
     expect(await row.count()).toBe(1);
+
+    await page.locator('[data-clip="voice"]').click();
+    const inspectorRow = page
+      .getByRole("complementary", { name: "Inspector" })
+      .locator(".inspector-change")
+      .filter({ hasText: "Ripple" });
+    await expect(inspectorRow).toContainText("also cut Voiceover in 2 places");
+    await expect(inspectorRow).toHaveAttribute(
+      "title",
+      /also cut Voiceover in 2 places, Music in 2 places/,
+    );
   } finally {
     await client.close();
   }

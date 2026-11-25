@@ -676,7 +676,9 @@ export function createTimelineRoutes(
       encodedSummary,
       formatPreview: plan?.preview,
       batchLabels:
-        summaries.length > 1 || summaries.some((item) => item.includes("; "))
+        cutSuffix ||
+        summaries.length > 1 ||
+        summaries.some((item) => item.includes("; "))
           ? summaries.map((item, index) =>
               index === 0 ? item + cutSuffix : item,
             )
