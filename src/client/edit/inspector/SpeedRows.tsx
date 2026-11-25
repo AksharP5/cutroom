@@ -126,7 +126,7 @@ export function SpeedRows({
   const playhead = points ? local : null;
   const frame = playhead ?? 0;
   const speed = points ? speedAtFrame(clip, fps, frame) : clip.playbackRate;
-  const index = points?.findIndex((point) => point.frame === frame) ?? -1;
+  const index = points?.findIndex((point) => point.frame === playhead) ?? -1;
   const send = (label: string, command: CommandInput) =>
     void editTimeline(projectId, label, () => [command]);
   const setPoints = (label: string, next: SpeedInput[]) =>
@@ -154,7 +154,7 @@ export function SpeedRows({
   const diamond = (
     <button
       type="button"
-      className="inspector-keyframe"
+      className="inspector-keyframe speed-diamond"
       data-state={index >= 0 ? "on" : points ? "keyed" : "off"}
       aria-label="Speed point"
       aria-pressed={index >= 0}
@@ -229,7 +229,7 @@ export function SpeedRows({
       <ValueField
         key={`${clip.id}:speed`}
         label="Speed"
-        value={Math.round(speed * 1e4) / 1e4}
+        value={Math.round(speed * 100) / 100}
         initial={points ? undefined : 1}
         unit="percent"
         min={MIN_PLAYBACK_RATE}

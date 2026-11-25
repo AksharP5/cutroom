@@ -113,12 +113,34 @@ type CurveSample = { frame: number; speed: number };
 export function speedCurve(clip: Clip, fps: Fps): readonly CurveSample[] {
   const cached = curves.get(clip);
   if (cached?.fps === fps) return cached.curve;
-  const points = speedPoints(clip, fps) ?? [];
+  const piece = resolveClip(clip, fps);
+  const start = frames(clip.start, fps);
+  const points =
+    typeof piece.curve === "object"
+      ? piece.curve.points.map((point) => ({
+          frame:
+            (secondsOf(subtract(curvePosition(piece, point.t), start)) *
+              fps.num) /
+            fps.den,
+          speed: point.v,
+          ease: easeOf(point),
+        }))
+      : [];
   const at = new Set([0, clip.duration]);
+  const knots = new Map<number, number>();
+  const held = new Map<number, number>();
   points.forEach((point, index) => {
-    if (point.frame > 0 && point.frame < clip.duration) at.add(point.frame);
+    if (point.frame >= 0 && point.frame <= clip.duration) {
+      at.add(point.frame);
+      knots.set(point.frame, point.speed);
+    }
     const next = points[index + 1];
-    if (point.ease === "linear" || point.ease === "hold" || !next) return;
+    if (!next || point.ease === "linear") return;
+    if (point.ease === "hold") {
+      if (next.frame > 0 && next.frame <= clip.duration)
+        held.set(next.frame, point.speed);
+      return;
+    }
     for (let step = 1; step < SHAPED_SAMPLES; step++) {
       const frame =
         point.frame + ((next.frame - point.frame) * step) / SHAPED_SAMPLES;
@@ -127,14 +149,16 @@ export function speedCurve(clip: Clip, fps: Fps): readonly CurveSample[] {
   });
   const sorted = [...at].sort((a, b) => a - b);
   const speeds = speedsAt(
-    resolveClip(clip, fps),
-    frames(clip.start, fps),
+    piece,
+    start,
     sorted.map((frame) => (frame * fps.den) / fps.num),
   );
-  const curve = sorted.map((frame, index) => ({
-    frame,
-    speed: speeds[index]!,
-  }));
+  const curve = sorted.flatMap((frame, index) => {
+    const sample = { frame, speed: knots.get(frame) ?? speeds[index]! };
+    const hold = held.get(frame);
+    // Both sides of the step share an X position.
+    return hold === undefined ? [sample] : [{ frame, speed: hold }, sample];
+  });
   curves.set(clip, { fps, curve });
   return curve;
 }
@@ -210,7 +234,7 @@ export function speedProjection(
   target: Clip,
   clips: readonly Clip[],
   fps: Fps,
-  anchorFrame = Math.min(...clips.map(({ start }) => start)),
+  anchorFrame = target.start,
 ) {
   const anchor = frames(anchorFrame, fps);
   const previous = clips.map((clip) => ({
@@ -302,11 +326,14 @@ export function fitSlowMoHit(
       clips = trial;
     }
   }
-  const speed = points.find(({ frame }) => frame === at)!.speed;
-  return {
-    clips,
-    notice: `Not enough source ${side} the hit. Slowed to ${Math.min(Math.round(speed * 100), low)}%.`,
-  };
+  const hitPercent = Math.round(
+    points.find(({ frame }) => frame === at)!.speed * 100,
+  );
+  const change =
+    low < hitPercent
+      ? `Slowed to ${low}%.`
+      : `Surrounding speeds capped at ${low}%.`;
+  return { clips, notice: `Not enough source ${side} the hit. ${change}` };
 }
 
 type PresetShape = (duration: number, at: number, fps: Fps) => SpeedInput[];

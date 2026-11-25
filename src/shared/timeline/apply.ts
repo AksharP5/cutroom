@@ -1436,7 +1436,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             `Clip ${clip.id} has no source timing.`,
           );
       const at = command.at ?? Math.floor(target.duration / 2);
-      if (at < 0 || at >= target.duration)
+      if (command.preset === "slow-mo-hit" && (at < 0 || at >= target.duration))
         throw new TimelineError(
           "out_of_bounds",
           `Clip ${target.id}'s hit frame ${at} is outside the clip. Choose 0 to ${target.duration - 1}.`,
@@ -1455,7 +1455,19 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           batch,
         );
       const preset = SPEED_PRESETS.find(({ id }) => id === command.preset);
-      const points = command.points ?? preset?.shape(target.duration, at, fps);
+      const presetPoints = preset?.shape(target.duration, at, fps);
+      if (
+        preset &&
+        presetPoints?.some(
+          ({ frame }, index) =>
+            index > 0 && frame <= presetPoints[index - 1]!.frame,
+        )
+      )
+        throw new TimelineError(
+          "unsupported",
+          `Clip ${target.id} is too short for the ${preset.label} preset.`,
+        );
+      const points = command.points ?? presetPoints;
       const matte = points && targets.find((clip) => clip.background);
       if (matte)
         throw new TimelineError(

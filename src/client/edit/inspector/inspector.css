@@ -1191,6 +1191,12 @@
 }
 
 /* Speed: the clip's whole length on a log scale, on the curve well's surface. */
+.clip-inspector .speed-diamond[data-state="keyed"]::before {
+  border-color: var(--text-primary);
+}
+.clip-inspector .speed-diamond[data-state="off"]:not(:hover)::before {
+  opacity: 0.55;
+}
 .speed-graph {
   position: relative;
   height: 112px;

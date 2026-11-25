@@ -77,6 +77,17 @@ test("a ramp an agent wrote shows on its clip and in Timing", async ({
   await expect(timing.getByLabel("Speed", { exact: true })).toHaveValue("100%");
   await expect(graph.locator(".speed-playhead")).toHaveCount(0);
 
+  const diamond = timing.getByRole("button", {
+    name: "Speed point",
+    exact: true,
+  });
+  await expect(diamond).toBeDisabled();
+  await expect(diamond).toHaveAttribute("aria-pressed", "false");
+  await expect(diamond).toHaveAttribute("data-state", "keyed");
+
+  await seekFrame(page, 180 + 15);
+  await expect(timing.getByLabel("Speed", { exact: true })).toHaveValue("117%");
+
   // A constant clip keeps its typed Speed field and draws nothing.
   await page.locator('[data-clip="plain"]').click();
   await expect(timing.getByLabel("Speed", { exact: true })).toBeEnabled();

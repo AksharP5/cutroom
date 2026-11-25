@@ -232,6 +232,72 @@ test("speed points set picture and sound together, keeping length, first frame a
   ).toBeCloseTo(0.5, 6);
 });
 
+test("Hold draws a horizontal segment and steps at the next point", () => {
+  const ramp = edit(timeline([clip()]), {
+    clipId: "broll",
+    points: [
+      { frame: 0, speed: 1, ease: "hold" },
+      { frame: 90, speed: 4 },
+    ],
+  }).clips[0]!;
+  expect(speedCurve(ramp, fps)).toEqual([
+    { frame: 0, speed: 1 },
+    { frame: 90, speed: 1 },
+    { frame: 90, speed: 4 },
+    { frame: 180, speed: 4 },
+  ]);
+  expect(speedAtFrame(ramp, fps, 89)).toBe(1);
+  expect(speedAtFrame(ramp, fps, 90)).toBe(4);
+});
+
+test.each([0.5, 2])(
+  "a J-cut keeps the edited picture's first source frame at %s speed",
+  (speed) => {
+    const state = timeline([
+      clip({ start: 60, mediaStart: 5, link: "take" }),
+      clip({
+        id: "kick-a",
+        kind: "audio",
+        track: 1,
+        start: 0,
+        duration: 240,
+        mediaStart: 3,
+        link: "take",
+      }),
+    ]);
+    const after = edit(state, {
+      clipId: "broll",
+      points: [{ frame: 0, speed }],
+    });
+    expect(sourceSeconds(after, "broll", 60)).toBe(5);
+    for (const frame of [60, 90, 239])
+      expect(sourceSeconds(after, "kick-a", frame)).toBeCloseTo(
+        sourceSeconds(after, "broll", frame),
+        6,
+      );
+  },
+);
+
+test("a preset with overlapping points names the short clip", () => {
+  expect(() =>
+    edit(timeline([clip({ duration: 5 })]), {
+      clipId: "broll",
+      preset: "speed-through",
+    }),
+  ).toThrow("Clip broll is too short for the Speed through preset.");
+});
+
+test("setSpeed ignores the hit frame for explicit points and presets that do not use it", () => {
+  const state = timeline([clip()]);
+  const points = [{ frame: 0, speed: 1 }];
+  expect(edit(state, { clipId: "broll", points, at: 500 })).toEqual(
+    edit(state, { clipId: "broll", points }),
+  );
+  expect(
+    edit(state, { clipId: "broll", preset: "speed-through", at: 500 }),
+  ).toEqual(edit(state, { clipId: "broll", preset: "speed-through" }));
+});
+
 test("a ramp that would run past the source is refused with the frame and the most it can take", () => {
   const state = timeline([clip({ sourceDuration: 8 })]);
   const fast = (speed: number) => () =>
@@ -367,6 +433,26 @@ test("Slow-mo hit still lands when the source has too little tail for its defaul
   expect(sourceSeconds(after, "broll", hit)).toBeCloseTo(4.8, 5);
   expect(sourceOutFrame(after.clips[0]!, fps)).toBeLessThan(156);
   expect(notices).toEqual(["Not enough source after the hit. Slowed to 20%."]);
+});
+
+test("Slow-mo hit names a surrounding speed cap when the hit itself stays at 25%", () => {
+  const state = timeline([
+    clip({ mediaStart: 4, playbackRate: 0.2, sourceDuration: 5.8 }),
+  ]);
+  const notices: string[] = [];
+  const after = applyAll(
+    state,
+    [{ type: "setSpeed", clipId: "broll", preset: "slow-mo-hit", at: 120 }],
+    { onNotice: (notice) => notices.push(notice) },
+  );
+  const ramp = after.clips[0]!;
+  const cap = Math.round(speedAtFrame(ramp, fps, 0) * 100);
+  expect(cap).toBeGreaterThan(25);
+  expect(cap).toBeLessThan(100);
+  expect(speedAtFrame(ramp, fps, 120)).toBe(0.25);
+  expect(notices).toEqual([
+    `Not enough source after the hit. Surrounding speeds capped at ${cap}%.`,
+  ]);
 });
 
 test("constant speed with linked false leaves even a following linked partner in place", () => {
