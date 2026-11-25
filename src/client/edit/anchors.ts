@@ -77,6 +77,7 @@ export function editAnchors(
         type === "slip" ||
         type === "swap" ||
         type === "setTiming" ||
+        type === "setSpeed" ||
         type === "insert" ||
         type === "split" ||
         type === "freeze" ||

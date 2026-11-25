@@ -273,8 +273,12 @@ diff --git a/package.json b/package.json
 diff --git a/dist/audioAutomation.d.ts b/dist/audioAutomation.d.ts
 --- a/dist/audioAutomation.d.ts
 +++ b/dist/audioAutomation.d.ts
-@@ -53,6 +53,8 @@
+@@ -51,8 +51,12 @@
+      */
+     viaX?: number;
      viaY?: number;
++    /** A named ease for the segment leaving this point. It wins over `curve` and `via`. */
++    ease?: HfAutomationEase;
  }
  export interface HfAutomationLane {
 +    /** In a rate lane, clip-local zero on the original point curve. */
@@ -282,10 +286,38 @@ diff --git a/dist/audioAutomation.d.ts b/dist/audioAutomation.d.ts
      /** `volume`, or `fx.<nodeId>.<paramKey>`. */
      target: string;
      points: HfAutomationPoint[];
+@@ -179,6 +183,11 @@
+  * envelope handle covers before the segment stops reading as a curve.
+  */
+ export declare function applyCurve(x: number, curve: number | undefined): number;
++/** Named eases a point can give its outgoing segment. They win over `curve` and `via`. */
++export declare const AUTOMATION_EASES: readonly ["in", "out", "in-out", "hold"];
++export type HfAutomationEase = (typeof AUTOMATION_EASES)[number];
++/** Progress through a segment leaving a point with a named ease. Self-contained. */
++export declare function automationEaseProgress(x: number, ease: HfAutomationEase): number;
+ /**
+  * The progress a segment leaving `point` has reached at normalised `x`.
+  *
+@@ -187,6 +196,7 @@
+  * `curve` and takes the exponent path unchanged.
+  */
+ export declare function shapeProgress(x: number, point: {
++    ease?: HfAutomationEase | undefined;
+     curve?: number | undefined;
+     viaX?: number | undefined;
+     viaY?: number | undefined;
 diff --git a/dist/audioAutomation.js b/dist/audioAutomation.js
 --- a/dist/audioAutomation.js
 +++ b/dist/audioAutomation.js
-@@ -295,6 +295,11 @@
+@@ -257,6 +257,7 @@
+     const curve = clampCurve(p?.curve);
+     const via = clampVia(p?.viaX, p?.viaY);
+     return {
++        ...(AUTOMATION_EASES.includes(p?.ease) ? { ease: p.ease } : {}),
+         ...(curve ? { curve } : {}),
+         ...(via ? { viaX: via.x, viaY: via.y } : {}),
+     };
+@@ -295,6 +296,11 @@
      }
      return out.slice(0, MAX_AUTOMATION_POINTS);
  }
@@ -297,7 +329,7 @@ diff --git a/dist/audioAutomation.js b/dist/audioAutomation.js
  /**
   * Structural normalisation, with no knowledge of the chain: sort and clean the
   * points of every lane and drop lanes that carry none. Range clamping and
-@@ -312,7 +317,7 @@
+@@ -312,7 +318,7 @@
                  : null;
          const points = normalizePoints(lane.points ?? [], range);
          if (points.length > 0)
@@ -306,7 +338,7 @@ diff --git a/dist/audioAutomation.js b/dist/audioAutomation.js
      }
      return { version: HF_AUDIO_AUTOMATION_VERSION, lanes };
  }
-@@ -332,7 +337,7 @@
+@@ -332,7 +338,7 @@
              continue;
          const points = normalizePoints(lane.points, range);
          if (points.length > 0)
@@ -315,7 +347,7 @@ diff --git a/dist/audioAutomation.js b/dist/audioAutomation.js
      }
      return { version: HF_AUDIO_AUTOMATION_VERSION, lanes };
  }
-@@ -372,7 +377,9 @@
+@@ -372,7 +378,9 @@
          if (!Array.isArray(lane.points)) {
              throw new AudioAutomationError(`Lane ${i} is missing a \`points\` array.`);
          }
@@ -326,7 +358,7 @@ diff --git a/dist/audioAutomation.js b/dist/audioAutomation.js
      });
      return normalizeAutomation({ version: HF_AUDIO_AUTOMATION_VERSION, lanes });
  }
-@@ -382,6 +389,7 @@
+@@ -382,9 +390,11 @@
          version: HF_AUDIO_AUTOMATION_VERSION,
          lanes: automation.lanes.map((lane) => ({
              target: lane.target,
@@ -334,6 +366,64 @@ diff --git a/dist/audioAutomation.js b/dist/audioAutomation.js
              points: lane.points.map((p) => ({
                  t: p.t,
                  v: p.v,
++                ...(p.ease ? { ease: p.ease } : {}),
+                 ...(p.curve ? { curve: p.curve } : {}),
+                 ...(p.viaX !== undefined && p.viaY !== undefined ? { viaX: p.viaX, viaY: p.viaY } : {}),
+             })),
+@@ -398,6 +408,44 @@
+  * quarter-power and a fourth-power bend, which is about the range a DAW's
+  * envelope handle covers before the segment stops reading as a curve.
+  */
++/** Named eases a point can give its outgoing segment. They win over `curve` and `via`. */
++export const AUTOMATION_EASES = ["in", "out", "in-out", "hold"];
++/**
++ * Progress through a segment leaving a point with a named ease: the CSS `ease-in`, `ease-out` and
++ * `ease-in-out` curves, solved as browsers solve `cubic-bezier`, or a hold that keeps the value
++ * until the next point. Self-contained, so a runtime bundle can carry the same function.
++ */
++export function automationEaseProgress(x, ease) {
++    if (ease === "hold")
++        return x >= 1 ? 1 : 0;
++    const bezier = ease === "in" ? [0.42, 0, 1, 1] : ease === "out" ? [0, 0, 0.58, 1] : ease === "in-out" ? [0.42, 0, 0.58, 1] : null;
++    if (!bezier)
++        return x;
++    const [x1, y1, x2, y2] = bezier;
++    const at = (a, b, s) => 3 * a * s * (1 - s) ** 2 + 3 * b * s ** 2 * (1 - s) + s ** 3;
++    const slope = (a, b, s) => 3 * a * (1 - s) ** 2 + 6 * (b - a) * s * (1 - s) + 3 * (1 - b) * s ** 2;
++    let s = x;
++    for (let step = 0; step < 8; step++) {
++        const error = at(x1, x2, s) - x;
++        if (Math.abs(error) < 1e-7)
++            return at(y1, y2, s);
++        const d = slope(x1, x2, s);
++        if (Math.abs(d) < 1e-6)
++            break;
++        s -= error / d;
++    }
++    let low = 0;
++    let high = 1;
++    s = x;
++    while (high - low > 1e-7) {
++        if (at(x1, x2, s) < x)
++            low = s;
++        else
++            high = s;
++        s = (low + high) / 2;
++    }
++    return at(y1, y2, s);
++}
+ export function applyCurve(x, curve) {
+     if (!curve)
+         return x;
+@@ -489,6 +537,8 @@
+  * `curve` and takes the exponent path unchanged.
+  */
+ export function shapeProgress(x, point) {
++    if (point.ease)
++        return automationEaseProgress(x, point.ease);
+     const via = clampVia(point.viaX, point.viaY);
+     if (via)
+         return shapeVia(Math.min(1, Math.max(0, x)), via.x, via.y);
 diff --git a/dist/speedRamp.d.ts b/dist/speedRamp.d.ts
 index 83f011954c1a689d4885d509bc4f5024638ae4f9..438e776c326ba7ab6b764cba0d7b7245e2e9ad5c 100644
 --- a/dist/speedRamp.d.ts
@@ -382,7 +472,20 @@ diff --git a/dist/speedRamp.js b/dist/speedRamp.js
  }
  const CELLS_PER_SEGMENT = 48;
  const tables = new WeakMap();
-@@ -50,10 +37,10 @@
+@@ -44,16 +31,21 @@
+         const b = pts[i].t;
+         if (b <= 0)
+             continue;
+-        for (let k = 1; k <= CELLS_PER_SEGMENT; k += 1)
+-            push(Math.max(a, 0) + ((b - a) * k) / CELLS_PER_SEGMENT);
++        for (let k = 1; k <= CELLS_PER_SEGMENT; k += 1) {
++            const t = Math.max(a, 0) + ((b - a) * k) / CELLS_PER_SEGMENT;
++            // A hold changes speed on its next point: close the cell just before it.
++            if (k === CELLS_PER_SEGMENT && pts[i - 1].ease === "hold")
++                push(t - 1e-9);
++            push(t);
++        }
+     }
      return { ts: Float64Array.from(ts), ss: Float64Array.from(ss), firstRate, lastRate };
  }
  function tableFor(lane) {
@@ -395,7 +498,7 @@ diff --git a/dist/speedRamp.js b/dist/speedRamp.js
      }
      return table;
  }
-@@ -64,7 +51,7 @@
+@@ -64,7 +56,7 @@
  export function rateAt(spec, t) {
      if (typeof spec === "number")
          return spec;
@@ -404,7 +507,7 @@ diff --git a/dist/speedRamp.js b/dist/speedRamp.js
  }
  /** Piecewise-linear lookup of `x` in the ascending `xs`, read off `ys`; caller keeps `x` inside `xs`. */
  function interpolate(xs, ys, x) {
-@@ -79,13 +66,8 @@
+@@ -79,13 +71,8 @@
      }
      return ys[lo] + ((ys[hi] - ys[lo]) * (x - xs[lo])) / (xs[hi] - xs[lo]);
  }
@@ -420,7 +523,7 @@ diff --git a/dist/speedRamp.js b/dist/speedRamp.js
      const last = ts.length - 1;
      if (t <= 0)
          return t * firstRate;
-@@ -93,19 +75,32 @@
+@@ -93,19 +80,32 @@
          return ss[last] + (t - ts[last]) * lastRate;
      return interpolate(ts, ss, t);
  }

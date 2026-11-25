@@ -7,11 +7,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import {
+  lstat,
   mkdir,
   mkdtemp,
   open,
   readFile,
   readdir,
+  readlink,
   rm,
   stat,
   symlink,
@@ -20,12 +22,13 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 import { createApp } from "../src/server/app";
 import { browserExecutable } from "../src/server/hyperframes/render";
 import { copyName } from "../src/server/projects/duplicate";
 import { onCopyQueue } from "../src/server/projects/mediaImport";
+import { MatteStatusSchema } from "../src/shared/matte";
 import {
   DuplicateJobSchema,
   ProjectSchema,
@@ -232,7 +235,14 @@ describe.each(disks)("on $base", ({ base, clones }) => {
       ".thumbnails/index.jpg",
     ])
       await write(left, "the original's");
-    await symlink("footage.zip", at("assets/alias.zip"));
+    await symlink("./footage.zip", at("assets/alias.zip"));
+    // Resolves inside the original only through its folder's own name, so a
+    // verbatim copy would point back at the original from the sibling copy.
+    await symlink(
+      `../../${basename(original.path)}/assets/footage.zip`,
+      at("assets/through-parent.zip"),
+    );
+    await symlink("../.cutroom/renders/Sidecars.mp4", at("assets/render.mp4"));
     await symlink("/etc/hostname", at("assets/absolute.txt"));
     await symlink("../../outside.txt", at("assets/escape.txt"));
     // Each link alone stays inside; followed together they leave the project.
@@ -258,6 +268,17 @@ describe.each(disks)("on $base", ({ base, clones }) => {
     expect(new Uint8Array(await readFile(copied("assets/alias.zip")))).toEqual(
       archive,
     );
+    await expect(lstat(copied("assets/render.mp4"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await readlink(copied("assets/alias.zip"))).toBe("footage.zip");
+    expect(await readlink(copied("assets/through-parent.zip"))).toBe(
+      "footage.zip",
+    );
+    await writeFile(copied("assets/through-parent.zip"), "the copy's");
+    expect(new Uint8Array(await readFile(at("assets/footage.zip")))).toEqual(
+      archive,
+    );
     expect(await exists(copied("p/q/s"))).toBe(true);
     // Rows for the original's ledger stay behind with it.
     expect(
@@ -280,6 +301,67 @@ describe.each(disks)("on $base", ({ base, clones }) => {
       expect(await exists(copied(left))).toBe(false);
     expect(await staging()).toEqual([]);
   });
+
+  test.skipIf(!Bun.which("ffmpeg"))(
+    "a duplicate can use the original's completed mattes without reviving stale ones",
+    async () => {
+      const original = await runtime.projects.create({ name: "Cutout" });
+      const src = "assets/clip.mp4";
+      const file = "mattes/clip.mp4";
+      const path = join(original.path, src);
+      await mkdir(join(original.path, "mattes"));
+      expect(
+        await Bun.spawn([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "color=white:s=64x64:r=30:d=1",
+          "-pix_fmt",
+          "yuv420p",
+          path,
+        ]).exited,
+      ).toBe(0);
+      const mask = await readFile(path);
+      await writeFile(join(original.path, file), mask);
+      const time = 1_700_000_000.123456;
+      await utimes(path, time, time);
+      const { size, mtimeMs } = await stat(path);
+      const matte = {
+        src,
+        file,
+        size,
+        mtimeMs,
+        start: 0,
+        rate: 30,
+        count: 30,
+        first: 0,
+        frames: 15,
+        model: "test",
+        subject: true,
+      };
+      const manifest = "mattes/mattes.json";
+      const text = JSON.stringify({
+        version: 1,
+        mattes: [matte, { ...matte, first: 15, mtimeMs: mtimeMs - 1000 }],
+      });
+      await writeFile(join(original.path, manifest), text);
+      const ready = async (project: Project) =>
+        MatteStatusSchema.parse(
+          await (await request(`/projects/${project.id}/mattes`)).json(),
+        ).mattes;
+      expect(await ready(original)).toMatchObject([matte]);
+
+      const copy = await copyOf(await duplicate(original));
+      expect(await ready(copy)).toMatchObject([
+        { ...matte, mtimeMs: (await stat(join(copy.path, src))).mtimeMs },
+      ]);
+      expect(await readFile(join(copy.path, file))).toEqual(mask);
+      expect(await readFile(join(original.path, manifest), "utf8")).toBe(text);
+    },
+  );
 
   test("copies are named after the original and never take a name in use", async () => {
     const original = await runtime.projects.create({ name: "Promo" });

@@ -93,8 +93,12 @@ export function readLog(
   let text: string;
   try {
     text = readFileSync(file, "utf-8");
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not read the project history log: ${detail}`, {
+      cause: error,
+    });
   }
   const log: HistoryLog = { baseline: new Map(), entries: [], pins: new Set() };
   const lines = text.split("\n");

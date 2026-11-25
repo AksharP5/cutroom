@@ -18,27 +18,38 @@ async function peakOver(page: Page, ms: number) {
   return (await probe(page))!.peak;
 }
 
-/** A 20 s, 30 fps timeline of one 440 Hz tone from 0, so output sample `n` is source sample `n`. */
+/** A 30 fps timeline of one 440 Hz tone from 0, looped when the clip is longer than the source. */
 async function openTone(
   page: Page,
   request: APIRequestContext,
   name: string,
-  more?: (directory: string) => Promise<void>,
+  {
+    duration = 20,
+    sourceDuration = duration,
+    more,
+  }: {
+    duration?: number;
+    sourceDuration?: number;
+    more?: (directory: string) => Promise<void>;
+  } = {},
 ) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
-        data: { name, duration: 20 },
+        data: { name, duration },
       })
     ).json(),
   );
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><body><main data-composition-id="main" data-no-timeline data-width="320" data-height="240" data-fps="30" data-duration="20"><audio id="tone" src="tone.wav" data-start="0" data-duration="20" data-track-index="1"></audio></main></body></html>`,
+    `<!doctype html><html><body><main data-composition-id="main" data-no-timeline data-width="320" data-height="240" data-fps="30" data-duration="${duration}"><audio id="tone" src="tone.wav" data-start="0" data-duration="${duration}" data-track-index="1"${sourceDuration < duration ? " loop" : ""}></audio></main></body></html>`,
   );
   await promisify(execFile)("ffmpeg", [
     ...["-v", "error", "-f", "lavfi"],
-    ...["-i", "sine=frequency=440:sample_rate=48000:duration=20"],
+    ...[
+      "-i",
+      `sine=frequency=440:sample_rate=48000:duration=${sourceDuration}`,
+    ],
     join(project.path, "tone.wav"),
   ]);
   await more?.(project.path);
@@ -50,6 +61,32 @@ async function openTone(
 
 const context = (page: Page) =>
   page.evaluate(() => window.cutroomScrubAudio!.context());
+
+test("frame steps hear the same source frame on every loop", async ({
+  page,
+  request,
+}) => {
+  await openTone(page, request, "Looped tone", {
+    duration: 4,
+    sourceDuration: 1,
+  });
+  const step = async (frame: number) => {
+    await seekFrame(page, frame - 1);
+    await page.getByRole("region", { name: "Viewer" }).click();
+    await probe(page);
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(120);
+    return probe(page);
+  };
+  await expect
+    .poll(async () => (await step(8))?.peak ?? 0)
+    .toBeGreaterThan(0.05);
+  for (const frame of [38, 68, 98]) {
+    const result = await step(frame);
+    expect(result?.peak).toBeGreaterThan(0.05);
+    expect([result?.low, result?.high]).toEqual([12_800, 14_399]);
+  }
+});
 
 test("J and L shuttle sounds through the audio worklet, backwards in reverse and silent when muted", async ({
   page,
@@ -407,18 +444,20 @@ test("the source viewer sounds its own file: shuttle, drags, steps and K with L,
 }) => {
   test.setTimeout(120_000);
   const exec = promisify(execFile);
-  await openTone(page, request, "Source sound", async (directory) => {
-    await exec("ffmpeg", [
-      ...["-v", "error", "-f", "lavfi"],
-      ...["-i", "sine=frequency=1000:sample_rate=48000:duration=20"],
-      join(directory, "voice.wav"),
-    ]);
-    await exec("ffmpeg", [
-      ...["-v", "error", "-f", "lavfi"],
-      ...["-i", "testsrc=size=160x120:rate=30:duration=4", "-an"],
-      ...["-c:v", "libx264", "-pix_fmt", "yuv420p"],
-      join(directory, "mute.mp4"),
-    ]);
+  await openTone(page, request, "Source sound", {
+    more: async (directory) => {
+      await exec("ffmpeg", [
+        ...["-v", "error", "-f", "lavfi"],
+        ...["-i", "sine=frequency=1000:sample_rate=48000:duration=20"],
+        join(directory, "voice.wav"),
+      ]);
+      await exec("ffmpeg", [
+        ...["-v", "error", "-f", "lavfi"],
+        ...["-i", "testsrc=size=160x120:rate=30:duration=4", "-an"],
+        ...["-c:v", "libx264", "-pix_fmt", "yuv420p"],
+        join(directory, "mute.mp4"),
+      ]);
+    },
   });
   const source = page.getByRole("group", { name: "Source" });
   const viewer = page.getByRole("region", { name: "Viewer" });

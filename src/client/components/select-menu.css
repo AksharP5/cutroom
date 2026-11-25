@@ -131,6 +131,11 @@
 .context-menu[data-checks] button > span:nth-child(2) {
   margin-left: calc(var(--space-2) - var(--space-5));
 }
+/* Rows that picture what they do, such as speed presets: the glyph, then the name. */
+.context-menu[data-glyphs] button {
+  grid-template-columns: 32px 1fr auto;
+  column-gap: var(--space-2);
+}
 .context-menu-check {
   display: grid;
   place-items: center;

@@ -117,6 +117,22 @@ test("a 2x clip reads every second source sample", () => {
   ]);
 });
 
+test("a loop at 2x restarts at its source In point", () => {
+  const { timeline } = parseComposition(
+    page(
+      "30",
+      '<audio id="talk" src="talk.wav" data-start="1" data-duration="4" data-media-start="0.6" data-playback-rate="2" data-track-index="1" loop></audio>',
+    ),
+    emptyTimelineSettings(),
+    { mediaLengths: new Map([["talk.wav", 2]]) },
+  );
+  const talk = segment(plan(timeline), "talk");
+  // From 0.6 to 2 seconds of source takes 0.7 seconds at 2x.
+  expect(
+    [48_000, 81_599, 81_600, 81_601, 115_200].map((n) => heard(talk, n)),
+  ).toEqual([28_800, 95_998, 28_800, 28_802, 28_800]);
+});
+
 test("a muted track and a track soloed out give zero gain", () => {
   const html = page(
     "30",

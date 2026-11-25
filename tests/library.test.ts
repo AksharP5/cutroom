@@ -693,6 +693,48 @@ test("a part marked from an In point keeps its place and length and plays from t
   }
 });
 
+test("an overwrite from an In point past a Library item's end leaves the destination alone", async () => {
+  const { fixture, project, call, ok, read, timelineView } =
+    await libraryFixture();
+  try {
+    const source = index.replace(
+      "</main>",
+      '<div id="title" data-start="0" data-duration="2" data-track-index="0">Keep me</div></main>',
+    );
+    await writeFile(join(project.path, "index.html"), source);
+    const history = `/projects/${project.id}/history`;
+    const before = await ok(history);
+    const add = (range: { start: number; duration?: number }) =>
+      call(`/projects/${project.id}/library`, "POST", {
+        name: "blur-in",
+        track: 0,
+        at: 0,
+        mode: "overwrite",
+        ...range,
+      });
+    for (const range of [{ start: 300, duration: 60 }, { start: 90 }]) {
+      const refused = await add(range);
+      expect(refused.status).toBe(422);
+    }
+    expect(await read("index.html")).toBe(source);
+    expect(await ok(history)).toEqual(before);
+    expect(existsSync(join(project.path, "compositions"))).toBe(false);
+
+    // A component's 3 seconds is only its default length; a title can hold
+    // longer, as dragging its end on the timeline allows.
+    expect((await add({ start: 60, duration: 60 })).status).toBe(200);
+    expect((await timelineView()).timeline.clips).toContainEqual(
+      expect.objectContaining({
+        kind: "composition",
+        mediaStart: 2,
+        duration: 60,
+      }),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("search gives lengths in the timeline's frames, as library_add takes them", async () => {
   const { fixture, project, ok } = await libraryFixture();
   try {

@@ -9,6 +9,7 @@ import {
   rmSync,
   writeFileSync,
   symlinkSync,
+  statSync,
   readdirSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -74,6 +75,18 @@ async function fixture(options = {}) {
 }
 
 describe("video state", () => {
+  it("keeps the published revision sidecar on an unchanged checkpoint", async () => {
+    const f = await fixture();
+    const revision = await f.edit("first");
+    const path = join(f.projectDir, ".hyperframes/video-state.json");
+    const before = statSync(path);
+
+    await f.history.checkpoint();
+
+    expect(statSync(path).ino).toBe(before.ino);
+    expect(read(f.projectDir).currentRevision).toBe(revision);
+  });
+
   it("projects real committed history and blob paths, pending writes, undo and redo", async () => {
     const f = await fixture();
     expect(read(f.projectDir).currentRevision).toBeNull();

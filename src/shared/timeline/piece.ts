@@ -1,5 +1,6 @@
 import { MEDIA_ELEMENT_LEAD_SECONDS } from "@hyperframes/core/runtime/media-clock";
 import {
+  rateAt,
   sourceTimeAt,
   timeAtSourceTime,
   type RateSpec,
@@ -522,11 +523,15 @@ function wrapExact(time: ExactTime, start: ExactTime, length: ExactTime) {
   return add(start, fraction(numerator % divisor, elapsed.d * length.d));
 }
 
+/** The floating-point form of the source loop, in seconds or samples. */
+export function wrapSource(time: number, start: number, length: number) {
+  const elapsed = time - start;
+  return elapsed >= length ? start + (elapsed % length) : time;
+}
+
 function wrapRamp(loop: Loop | null, time: number) {
-  return loop?.kind === "ramp" &&
-    loop.length !== null &&
-    time - loop.start >= loop.length
-    ? loop.start + ((time - loop.start) % loop.length)
+  return loop?.kind === "ramp" && loop.length !== null
+    ? wrapSource(time, loop.start, loop.length)
     : time;
 }
 
@@ -558,6 +563,25 @@ export function rampSourceTimes(
     wrapRamp(piece.loop, zero + sourceTimeAt(rate, elapsed + index * step)),
   );
 }
+
+/**
+ * The speed at each of `seconds` after `from`: the constant rate, or the ramp's rate at that curve
+ * time, which is what `sourceAt` integrates.
+ */
+export function speedsAt(
+  piece: Piece,
+  from: ExactTime,
+  seconds: readonly number[],
+) {
+  const { line } = piece;
+  if (line.kind === "exact") return seconds.map(() => secondsOf(line.rate));
+  const elapsed = secondsOf(subtract(from, line.curveZero));
+  return seconds.map((offset) => rateAt(line.rate, elapsed + offset));
+}
+
+/** Where a ramp point's curve time falls on the timeline. */
+export const curvePosition = (piece: Piece, curveTime: number) =>
+  add(piece.line.curveZero, decimalFraction(curveTime));
 
 /** Timeline position at a source time on the unwrapped, monotone line. */
 export function positionAtSource(piece: Piece, source: SourceTime): ExactTime {

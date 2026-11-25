@@ -1,4 +1,12 @@
-/** Keep the pinned browser integrator's original grid when a clip starts inside a rate lane. */
+import {
+  AUTOMATION_EASES,
+  automationEaseProgress,
+} from "@hyperframes/core/audio-automation";
+
+/**
+ * Keep the pinned browser integrator's original grid when a clip starts inside a rate lane, and
+ * read a point's named ease with the same function the core patch adds.
+ */
 export function rampRuntime(source: string): string {
   const offset = (lane: string) =>
     `...(${lane}.target===yl&&${lane}.offset?{offset:${lane}.offset}:{})`;
@@ -30,6 +38,18 @@ export function rampRuntime(source: string): string {
     [
       "function _n(e,t){",
       "function _n(e,t){const o=e.offset??0;return o?cutroomRateInverse(e,t+cutroomRateIntegral(e,o))-o:cutroomRateInverse(e,t)}function cutroomRateInverse(e,t){",
+    ],
+    [
+      "function _k(e){let t=wk(e?.curve),n=zb(e?.viaX,e?.viaY);return{",
+      `function _k(e){let t=wk(e?.curve),n=zb(e?.viaX,e?.viaY);return{...${JSON.stringify(AUTOMATION_EASES)}.includes(e?.ease)?{ease:e.ease}:{},`,
+    ],
+    [
+      "function Fk(e,t){",
+      `${automationEaseProgress.toString()}function Fk(e,t){if(t.ease)return automationEaseProgress(e,t.ease);`,
+    ],
+    [
+      "for(let f=1;f<=Qb;f+=1)a(Math.max(c,0)+(d-c)*f/Qb)",
+      'for(let f=1;f<=Qb;f+=1){let u=Math.max(c,0)+(d-c)*f/Qb;f===Qb&&t[s-1].ease==="hold"&&a(u-1e-9);a(u)}',
     ],
   ] as const;
   for (const [before, after] of changes) {

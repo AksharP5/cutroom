@@ -85,6 +85,15 @@ export const KEYFRAME_PROPERTIES = [
   "crop",
   "opacity",
 ] as const;
+/** Cutroom's speed presets, as the Inspector's Presets menu lists them. */
+export const SPEED_PRESET_IDS = [
+  "speed-into-cut",
+  "speed-out-of-cut",
+  "slow-mo-hit",
+  "speed-through",
+  "ease-in-out",
+] as const;
+export type SpeedPresetId = (typeof SPEED_PRESET_IDS)[number];
 export const KEYFRAME_EASES = [
   "linear",
   "ease-in",
@@ -367,6 +376,8 @@ export const ClipSchema = z.object({
   src: z.string().nullable(),
   /** Length of the source media in seconds when it could be probed; video and audio only. */
   sourceDuration: z.number().positive().nullable(),
+  /** The source restarts at the clip's In point when it reaches its end. */
+  loop: z.literal(true).optional(),
   /** Whether the clip plays sound: audio, and video that is neither muted nor declared silent. */
   hasAudio: z.boolean(),
   authoredAudioGroupId: z
@@ -738,6 +749,12 @@ export const InsertAdjustmentSchema = z.object({
 });
 
 const clipIds = z.array(clipId).min(1).max(10_000);
+/** A speed multiplier, 10% to 1000%, to six decimals. */
+const playbackRate = z
+  .number()
+  .min(MIN_PLAYBACK_RATE)
+  .max(MAX_PLAYBACK_RATE)
+  .overwrite((value) => Math.round(value * 1e6) / 1e6);
 /** Ids for the pieces a command cuts off, so a caller knows a new clip's id before it exists. */
 const pieceIds = z
   .record(clipId, z.array(clipId).min(1).max(10_000))
@@ -1199,16 +1216,68 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("setTiming"),
       clipId,
-      playbackRate: z
-        .number()
-        .min(MIN_PLAYBACK_RATE)
-        .max(MAX_PLAYBACK_RATE)
-        .overwrite((value) => Math.round(value * 1e6) / 1e6)
-        .optional(),
+      playbackRate: playbackRate.optional(),
       mediaStart: z.number().nonnegative().optional(),
+      linked: z
+        .boolean()
+        .optional()
+        .describe("false leaves linked partners as they are"),
     })
     .describe(
-      "Set the constant speed or source in (seconds) of a clip and its linked partners. Speed preserves the source span to the nearest timeline frame, resizes the clips, and ripples following time on unlocked auto-select tracks. A source in edit alone keeps duration. Edit a speed ramp in the composition source. Refuses non-media clips or insufficient source media.",
+      "Set the constant speed or source in (seconds) of a clip and its linked partners. Speed preserves the source span to the nearest timeline frame, resizes the clips, and ripples following time on unlocked auto-select tracks. A source in edit alone keeps duration. A speed ramp takes setSpeed. Refuses non-media clips or insufficient source media.",
+    ),
+  z
+    .object({
+      type: z.literal("setSpeed"),
+      clipId,
+      speed: playbackRate
+        .optional()
+        .describe(
+          "A constant speed with no points. On a constant clip it is setTiming.playbackRate, which resizes and ripples; on a ramp it replaces the points and keeps the clip's length",
+        ),
+      points: z
+        .array(
+          z.object({
+            frame: z
+              .number()
+              .min(-1_000_000)
+              .max(1_000_000)
+              .overwrite((value) => Math.round(value * 1e3) / 1e3)
+              .describe("Clip-local frame, 0 is the clip's first frame"),
+            speed: playbackRate,
+            ease: z
+              .enum(KEYFRAME_EASES)
+              .optional()
+              .describe(
+                "Shapes the change to the next point. Omitted keeps a custom shape already on a point at this frame, else linear",
+              ),
+          }),
+        )
+        .min(1)
+        .max(MAX_AUTOMATION_POINTS)
+        .optional()
+        .describe("Replaces every point"),
+      preset: z.enum(SPEED_PRESET_IDS).optional(),
+      at: z
+        .number()
+        .int()
+        .optional()
+        .describe(
+          "The clip-local frame slow-mo-hit aims at, from 0 to the clip's last frame. Defaults to the clip's middle. The picture stays at that frame, slowed",
+        ),
+      linked: z
+        .boolean()
+        .optional()
+        .describe("false leaves linked partners as they are"),
+    })
+    .refine(
+      ({ speed, points, preset }) =>
+        [speed, points, preset].filter((value) => value !== undefined)
+          .length === 1,
+      "Give one of speed, points or preset.",
+    )
+    .describe(
+      "Set a clip's speed: a constant, ramp points, or a preset, with its linked partners in one undo step. A ramp keeps the clip's length and first frame, so the source Out moves. Refuses a ramp that would run past the end of the source, naming the frame and the most speed the edited point can take",
     ),
   z
     .object({
@@ -1457,6 +1526,7 @@ export const AnimationFeedbackSchema = z.object({
 export type AnimationFeedback = z.infer<typeof AnimationFeedbackSchema>;
 
 export const TimelineViewSchema = z.object({
+  notices: z.array(z.string()).optional(),
   skippedClips: z
     .array(z.object({ clipId, label: label.nullable(), reason: z.string() }))
     .optional(),
