@@ -74,12 +74,47 @@ export function previewRuntimeScript() {
       'let u=Array.from(document.querySelectorAll("video, audio")),p=[],h=Uc(),duration;for(let b of u){',
     ],
     [
-      "Jc(b)?p.push(b):Fl(b),$c(b,h)}",
+      "qE(b),Jc(b)?p.push(b):Fl(b),$c(b,h)}",
       "Jc(b)?p.push(b):Fl(b),$c(b,h,Si.has(b)?void 0:(duration??=Ke(e.capturedTimeline,0)))}",
+    ],
+    // Proxy discovery belongs to the runtime's preload pass. A proxy swap calls load()
+    // itself, so starting it at discovery bypasses the window even with preload="none".
+    [
+      'function Fl(e){if(Ll(e))return;e.preload!=="auto"&&(e.preload="auto");',
+      'function Fl(e){if(Ll(e))return;e.preload!=="auto"&&(e.preload="auto");Vt.has(e)?zE(e):qE(e);',
+    ],
+    // Cutroom's editing proxies are requested without a size box. The viewer's display
+    // scale goes to the adjustment layer, so waiting for it would delay each fallback swap.
+    ["d=nP().then(g=>pP(e,c,g))", "d=pP(e,c,null)"],
+    // The clip can leave the window or be parked by the footage pipeline while a proxy
+    // request is pending. Use the same preload hint for initial swaps and quality changes.
+    [
+      'function Aa(e,t=null,n="reactive",r){if(Vt.has(e)',
+      'function cutroomCanProxy(e){return e.preload!=="none"&&!window.__cutroomParkedMedia?.has(e)}function Aa(e,t=null,n="reactive",r){if(!cutroomCanProxy(e)||Vt.has(e)',
+    ],
+    [
+      'live:()=>e.isConnected&&e.getAttribute("src")===a&&(!r||cn===l)',
+      'live:()=>e.isConnected&&cutroomCanProxy(e)&&e.getAttribute("src")===a&&(!r||cn===l)',
+    ],
+    [
+      "function zE(e){if(!(dr(e)||!ve(e)))",
+      "function zE(e){if(cutroomCanProxy(e)&&!(dr(e)||!ve(e)))",
+    ],
+    [
+      "function du(e,t){let n=cr.get(e);",
+      "function du(e,t){if(!cutroomCanProxy(e))return;let n=cr.get(e);",
+    ],
+    [
+      'lr.get(e)===r&&e.isConnected&&e.getAttribute("src")===t.href',
+      'lr.get(e)===r&&e.isConnected&&cutroomCanProxy(e)&&e.getAttribute("src")===t.href',
     ],
     // Studio retains a fully buffered source after its clip leaves the preload window.
     // On a long timeline those sources accumulate even after a jump to a distant clip.
-    ["Wy(u,!Yc||window.__HF_RELEASE_PASSED_MEDIA===!0)", "Wy(u,!0)"],
+    // A parked element has already given its decoder back.
+    [
+      "Wy(u,!Yc||window.__HF_RELEASE_PASSED_MEDIA===!0)",
+      "window.__cutroomParkedMedia?.has(u)||Wy(u,!0)",
+    ],
     // Video frame callbacks already redraw while playing. timeupdate would upload and shade
     // the same picture again, including the copy back from WebGL to the clip canvas.
     [

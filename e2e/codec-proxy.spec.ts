@@ -3,7 +3,7 @@ import { copyFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { expect, test } from "./fixtures";
 
@@ -54,6 +54,242 @@ async function seekFrame(page: Page, frame: number) {
   );
   await time.press("Enter");
 }
+
+async function proxyTimeline(
+  request: APIRequestContext,
+  name: string,
+  count: number,
+  length: number,
+  inPoint: (clip: number) => number,
+) {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: {
+          name,
+          width: 640,
+          height: 360,
+          duration: count * length,
+        },
+      })
+    ).json(),
+  );
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=white:size=640x360:rate=30:duration=3",
+    "-vf",
+    "drawbox=x=320:y=0:w=320:h=360:color=black:t=fill:enable='gte(t,1)'",
+    "-c:v",
+    "libx265",
+    "-preset",
+    "ultrafast",
+    "-x265-params",
+    "log-level=error:pools=2:frame-threads=2",
+    join(project.path, "recording.mkv"),
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><head><style>html,body{margin:0;background:#111}</style></head><body>
+<main data-composition-id="main" data-width="640" data-height="360" data-duration="${count * length}" data-fps="30">
+${Array.from(
+  { length: count },
+  (_, i) =>
+    `<video id="clip-${i}" src="recording.mkv" muted data-start="${i * length}" data-duration="${length}" data-media-start="${inPoint(i)}" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video>`,
+).join("\n")}
+</main></body></html>`,
+  );
+  return project;
+}
+
+test("the fallback only loads nearby HEVC clips while the footage plan is pending", async ({
+  page,
+  request,
+}) => {
+  const project = await proxyTimeline(
+    request,
+    "Proxy preload window",
+    40,
+    2,
+    (clip) => (clip === 39 ? 1 : 0),
+  );
+  const requested = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  await page.route(
+    (url) => url.pathname === `/api/cutroom/projects/${project.id}/pipeline`,
+    async (route) => {
+      requested.resolve();
+      await release.promise;
+      await route.continue();
+    },
+  );
+  try {
+    await page.goto(`/#project/${project.id}`);
+    await requested.promise;
+    const preview = page.frameLocator('iframe[title="Composition preview"]');
+    const first = preview.locator("#clip-0");
+    const last = preview.locator("#clip-39");
+    const stage = page.locator(".edit-stage");
+    await expect(first).toHaveAttribute("src", /hf-proxy=h264/);
+    await expect(first).not.toHaveAttribute("src", /hf-proxy-box=/);
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    await expect.poll(() => shownFrame(page)).toBe(255);
+    expect(
+      await preview
+        .locator("video")
+        .evaluateAll((videos) =>
+          videos
+            .slice(10)
+            .flatMap((video) =>
+              video instanceof HTMLVideoElement &&
+              (video.src.includes("hf-proxy=") ||
+                video.networkState === HTMLMediaElement.NETWORK_LOADING ||
+                video.readyState !== HTMLMediaElement.HAVE_NOTHING)
+                ? [video.id]
+                : [],
+            ),
+        ),
+    ).toEqual([]);
+    await seekFrame(page, 39 * 2 * 30);
+    await expect(last).toHaveAttribute("src", /hf-proxy=h264/);
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    await expect.poll(() => shownFrame(page)).toBe(15);
+  } finally {
+    release.resolve();
+  }
+});
+
+// Read the displayed video's picture in the middle of each clip. This avoids sampling
+// a frame at the boundary and catches both blank or stale pictures while the clock advances.
+async function watchCuts(page: Page, first: number, count: number) {
+  return page
+    .frameLocator('iframe[title="Composition preview"]')
+    .locator("video")
+    .evaluateAll(
+      (elements, { first, count }) => {
+        const player = (window as Window & { __player?: { getTime(): number } })
+          .__player;
+        const canvas = new OffscreenCanvas(2, 1);
+        const context = canvas.getContext("2d")!;
+        const videos = new Map(
+          elements
+            .filter((video) => video instanceof HTMLVideoElement)
+            .map((video) => [video.id, video]),
+        );
+        const pictures = new Set<number>();
+        let started: number | undefined;
+        return new Promise<{ elapsed: number; pictures: number[] }>(
+          (resolve) => {
+            const deadline = performance.now() + 7_000;
+            const sample = (now: number) => {
+              const time = player?.getTime() ?? 0;
+              const clip = Math.floor(time * 2);
+              if (time > first / 2 - 0.2) started ??= now;
+              if (
+                clip >= first &&
+                clip < first + count &&
+                time * 2 - clip > 0.2
+              ) {
+                const video = videos.get(`clip-${clip}`);
+                const hold = video?.nextElementSibling;
+                const picture =
+                  hold instanceof HTMLCanvasElement &&
+                  hold.hasAttribute("data-cutroom-video-hold")
+                    ? hold
+                    : video &&
+                        video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+                      ? video
+                      : null;
+                if (picture?.checkVisibility({ visibilityProperty: true })) {
+                  context.drawImage(picture, 0, 0, 2, 1);
+                  const pixels = context.getImageData(0, 0, 2, 1).data;
+                  if (
+                    pixels[0]! > 200 &&
+                    (clip % 2 ? pixels[4]! < 50 : pixels[4]! > 200)
+                  )
+                    pictures.add(clip);
+                }
+              }
+              if (time >= (first + count) / 2 || now >= deadline) {
+                resolve({
+                  elapsed: now - (started ?? now),
+                  pictures: [...pictures],
+                });
+              } else requestAnimationFrame(sample);
+            };
+            requestAnimationFrame(sample);
+          },
+        );
+      },
+      { first, count },
+    );
+}
+
+test("fallback playback shows rapid HEVC cuts at 2x without stalling", async ({
+  page,
+  request,
+}) => {
+  const project = await proxyTimeline(
+    request,
+    "Fast HEVC cuts",
+    120,
+    0.5,
+    (clip) => clip % 2,
+  );
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-preview-ready",
+  );
+  await expect.poll(() => shownFrame(page)).toBe(255);
+  const played = watchCuts(page, 2, 12);
+  await page.keyboard.press("l");
+  await page.keyboard.press("l");
+  await expect(page.getByLabel("Shuttle speed")).toHaveText("2x");
+  const result = await played;
+  expect(result.pictures).toEqual(Array.from({ length: 12 }, (_, i) => i + 2));
+  expect(result.elapsed).toBeLessThan(3_800);
+});
+
+test("turning GPU footage off after a distant seek primes the next HEVC cut", async ({
+  page,
+  request,
+}) => {
+  const project = await proxyTimeline(
+    request,
+    "HEVC playback handback",
+    40,
+    0.5,
+    (clip) => clip % 2,
+  );
+  await page.goto(`/#project/${project.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-pipeline", "on", {
+    timeout: 30_000,
+  });
+  await seekFrame(page, 30 * 15);
+  await expect(page.locator(".edit-pipeline")).toHaveAttribute(
+    "data-frame",
+    "450",
+  );
+  await expect.poll(() => shownFrame(page)).toBe(255);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("checkbox", { name: "GPU footage playback" }).uncheck();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(stage).not.toHaveAttribute("data-pipeline", "on");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  const played = watchCuts(page, 31, 2);
+  await page.keyboard.press("l");
+  const result = await played;
+  expect(result.pictures).toEqual([31, 32]);
+  expect(result.elapsed).toBeLessThan(1_650);
+});
 
 for (const { name, duration, videoDuration, gap, mp4, frames } of [
   {
