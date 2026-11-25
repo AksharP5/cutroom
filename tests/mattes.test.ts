@@ -14,7 +14,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMatteService } from "../src/server/matte/service";
-import { prepareMatteExport } from "../src/server/matte/export";
+import { mattedVideos, prepareMatteExport } from "../src/server/matte/export";
 import type { MatteStatus } from "../src/shared/matte";
 import { MatteManifestSchema } from "../src/shared/matte";
 
@@ -460,6 +460,25 @@ test.skipIf(!tools)(
     expect((await service.status(project)).jobs).toEqual([]);
   },
 );
+
+test("an unknown end in a timing reference chain cannot rule out a cutout", () => {
+  const html = `<main data-composition-id="main">
+    <video id="intro" src="intro.mp4" data-start="0"></video>
+    <video id="direct" src="one.mp4" data-start="intro" data-duration="1" data-cutroom-matte="shrink:0;soften:0"></video>
+    <video id="chained" src="two.mp4" data-start="direct" data-duration="1" data-cutroom-matte="shrink:0;soften:0"></video>
+    <video id="early" src="three.mp4" data-start="0" data-duration="1" data-cutroom-matte="shrink:0;soften:0"></video>
+  </main>`;
+  const range = { start: 10, end: 12 };
+  expect(mattedVideos(html, range).map(({ src }) => src)).toEqual([
+    "one.mp4",
+    "two.mp4",
+  ]);
+  const fixedLength = html.replace(
+    'src="intro.mp4"',
+    'src="intro.mp4" data-duration="3"',
+  );
+  expect(mattedVideos(fixedLength, range)).toEqual([]);
+});
 
 test.skipIf(!tools)(
   "a marked export's relatively timed cutout carries each source frame's own matte as alpha, and the clip points at it",
