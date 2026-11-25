@@ -31,6 +31,7 @@ import {
   fileContentVersion,
 } from "@hyperframes/studio-server";
 import type { FileMutationInput } from "@hyperframes/studio-server";
+import { HistoryLogReadError } from "../history/historyLog";
 import type { HistoryEntry, HistoryWho } from "../history/historyLog";
 import { z } from "zod";
 import {
@@ -51,6 +52,9 @@ import { guardFreezeHistory } from "./freezeHistory";
 import { rememberTimelineWrite } from "../timeline/watch";
 import { guardSceneRemoval } from "./historyDependencies";
 import { isMissing, projectPath, projectWritePath } from "./path";
+
+export const HISTORY_UNAVAILABLE =
+  "Undo is unavailable because Cutroom could not read the project history log.";
 
 export { isMissing, projectPath } from "./path";
 
@@ -265,9 +269,16 @@ export async function createProjectStore(options: {
     });
     return project;
   };
+  const historyForDir = (dir: string) =>
+    histories.get(dir).catch((error: unknown) => {
+      if (!(error instanceof HistoryLogReadError)) throw error;
+      console.warn("Cutroom history:", error.message);
+      return null;
+    });
+  const historyIfAvailable = (project: Project) => historyForDir(project.path);
   const history = async (project: Project) => {
-    const opened = await histories.get(project.path);
-    if (!opened) throw new HttpError(503, "Project history is unavailable.");
+    const opened = await historyIfAvailable(project);
+    if (!opened) throw new HttpError(503, HISTORY_UNAVAILABLE);
     return opened;
   };
   const serializeMutation = <T>(project: Project, change: () => Promise<T>) =>
@@ -345,13 +356,13 @@ export async function createProjectStore(options: {
     },
   ) =>
     serializeMutation(project, async () => {
-      const ledger = await history(project);
+      const ledger = await historyIfAvailable(project);
       const scope: NonNullable<ReturnType<typeof ownWrites.getStore>> = {
         root: await realpath(project.path),
         changes: new Map(),
       };
       let finished = false;
-      const window = await ledger.beginWindow(who, label, {
+      const window = await ledger?.beginWindow(who, label, {
         idleMs: Infinity,
         accepts: (path, before, after) => {
           if (options?.moves?.has(path)) return true;
@@ -385,26 +396,30 @@ export async function createProjectStore(options: {
       let value: T;
       let entry: HistoryEntry | null;
       try {
-        value = await ownWrites.run(scope, change);
+        value = await (window ? ownWrites.run(scope, change) : change());
         finished = true;
       } finally {
-        entry = await window.close().catch((error: unknown) => {
-          const recorded = ledger.list().find(({ id }) => id === window.id);
-          if (finished) {
-            reportEditWarning(
-              recorded
-                ? "Saved, but Cutroom could not finish maintaining Undo history."
-                : "Saved, but this edit could not be recorded in Undo history.",
-              error,
-            );
-          } else {
-            console.warn(
-              "Cutroom could not close the edit's history window:",
-              error,
-            );
-          }
-          return recorded ?? null;
-        });
+        entry = !window
+          ? null
+          : await window.close().catch((error: unknown) => {
+              const recorded = ledger
+                ?.list()
+                .find(({ id }) => id === window.id);
+              if (finished) {
+                reportEditWarning(
+                  recorded
+                    ? "Saved, but Cutroom could not finish maintaining Undo history."
+                    : "Saved, but this edit could not be recorded in Undo history.",
+                  error,
+                );
+              } else {
+                console.warn(
+                  "Cutroom could not close the edit's history window:",
+                  error,
+                );
+              }
+              return recorded ?? null;
+            });
       }
       project.updatedAt = new Date().toISOString();
       await saveRegistry().catch((error: unknown) =>
@@ -545,12 +560,19 @@ export async function createProjectStore(options: {
     },
     get,
     history,
-    readHistory: (project: Project) =>
-      readProjectHistory({
-        projectDir: project.path,
-        historyRoot: join(dataDir, "history"),
-      }),
-    historyForDir: (dir: string) => histories.get(dir),
+    historyIfAvailable,
+    readHistory: (project: Project) => {
+      try {
+        return readProjectHistory({
+          projectDir: project.path,
+          historyRoot: join(dataDir, "history"),
+        });
+      } catch (error) {
+        if (!(error instanceof HistoryLogReadError)) throw error;
+        return null;
+      }
+    },
+    historyForDir,
     mutate,
     mutateWithEntry,
     captureHistoryCreation,

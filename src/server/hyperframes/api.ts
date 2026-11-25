@@ -2019,17 +2019,18 @@ export function createHyperframesApi(
   });
   api.get("/projects/:id/history", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const history = await store.history(project);
+    const history = await store.historyIfAvailable(project);
     const {
       nextUndo: back,
       nextRedo: forward,
       entries,
+      historyUnavailable,
     } = await historySummary(
       project,
-      history.list(),
+      history?.list(),
       historyActor(reviews, c, project).who,
     );
-    return c.json({ entries, back, forward });
+    return c.json({ entries, back, forward, historyUnavailable });
   });
   api.post("/projects/:id/history/checkpoint", async (c) => {
     const project = await store.get(c.req.param("id"));

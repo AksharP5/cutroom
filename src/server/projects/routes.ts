@@ -600,8 +600,8 @@ export function createProjectRoutes(
   api.get("/projects/:id/history", async (c) => {
     const project = await store.get(c.req.param("id"));
     const { who } = historyActor(reviews, c, project);
-    const history = await store.history(project);
-    return c.json(await historySummary(project, history.list(), who));
+    const history = await store.historyIfAvailable(project);
+    return c.json(await historySummary(project, history?.list(), who));
   });
   for (const direction of ["undo", "redo"] as const) {
     api.post(`/projects/:id/history/${direction}`, async (c) => {
