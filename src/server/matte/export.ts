@@ -6,6 +6,7 @@ import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { z } from "zod";
 import { localMediaPath } from "../../shared/media.ts";
+import { chromeColourGuess } from "../../shared/videoColour.ts";
 import { MATTES_FOLDER, clipMatte } from "../../shared/matte.ts";
 import type { MatteEntry, MatteStatus } from "../../shared/matte.ts";
 import {
@@ -103,9 +104,11 @@ const SizeSchema = z.object({
     z.object({
       width: z.number().int().positive(),
       height: z.number().int().positive(),
+      codec_name: z.string(),
       color_space: z.string().optional(),
       color_primaries: z.string().optional(),
       color_transfer: z.string().optional(),
+      color_range: z.string().optional(),
       side_data_list: z
         .array(z.object({ rotation: z.number().optional() }).loose())
         .optional(),
@@ -135,15 +138,30 @@ async function picture(ffprobe: string, path: string) {
       stream.side_data_list?.find((entry) => entry.rotation !== undefined)
         ?.rotation ?? 0,
     ) % 180;
-  const known = (tag: string | undefined) =>
-    tag && tag !== "unknown" && tag !== "reserved" ? tag : "bt709";
+  const guess = chromeColourGuess(stream.height, stream.codec_name);
+  const known = (tag: string | undefined, fallback: string) =>
+    tag && /^[a-z0-9-]+$/.test(tag) && tag !== "unknown" && tag !== "reserved"
+      ? tag
+      : fallback;
+  const matrix = known(stream.color_space, guess);
+  const fallback = matrix === "bt709" ? "bt709" : guess;
+  const primaries = known(stream.color_primaries, fallback);
+  const transfer = known(stream.color_transfer, fallback);
+  const range = stream.color_range === "pc" ? "pc" : "tv";
   return {
     width: turn === 90 ? stream.height : stream.width,
     height: turn === 90 ? stream.width : stream.height,
+    // alphamerge can negotiate a pixel format conversion. Supply the source's
+    // colour before that happens, and convert full-range samples for ProRes.
+    colourFilter: [
+      `setparams=colorspace=${matrix}:color_primaries=${primaries}:color_trc=${transfer}:range=${range}`,
+      ...(range === "pc" ? ["scale=in_range=pc:out_range=tv"] : []),
+    ].join(","),
     colour: [
-      ...["-colorspace", known(stream.color_space)],
-      ...["-color_primaries", known(stream.color_primaries)],
-      ...["-color_trc", known(stream.color_transfer)],
+      ...["-colorspace", matrix],
+      ...["-color_primaries", primaries],
+      ...["-color_trc", transfer],
+      ...["-color_range", "tv"],
     ],
   };
 }
@@ -186,7 +204,7 @@ async function renderCutout(options: {
 }) {
   const { ffmpeg, first, end, rate } = options;
   const frames = end - first;
-  const { width, height, colour } = await picture(
+  const { width, height, colour, colourFilter } = await picture(
     options.ffprobe,
     options.source,
   );
@@ -217,7 +235,7 @@ async function renderCutout(options: {
       ...["-r", String(rate), "-i", "pipe:0"],
       "-filter_complex",
       [
-        `[0:v]${options.variable ? `fps=${rate},` : ""}setpts=N/(${rate})/TB[c]`,
+        `[0:v]${options.variable ? `fps=${rate},` : ""}setpts=N/(${rate})/TB,${colourFilter}[c]`,
         `[1:v]setpts=N/(${rate})/TB,${refineFilter(options.background, width, height)}[m]`,
         "[c][m]alphamerge,format=yuva444p10le[o]",
       ].join(";"),
