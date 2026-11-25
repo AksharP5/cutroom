@@ -392,12 +392,11 @@ export function editReply(
 
 export function boundedEditReply(result: ReturnType<typeof editReply>) {
   if (fitsEditBudget(result)) return result;
-  const { clips, tracks, markers, authoredAudioGroups, ...values } =
-    result.changes;
+  const { changes, skippedClips, warnings, ...metadata } = result;
+  const { clips, tracks, markers, authoredAudioGroups, ...values } = changes;
   const shifted = clips && "shifted" in clips ? clips.shifted : undefined;
   const summary = {
-    revision: result.revision,
-    composition: result.composition,
+    ...metadata,
     ...values,
     changeCounts: {
       clips: {
@@ -409,8 +408,8 @@ export function boundedEditReply(result: ReturnType<typeof editReply>) {
       tracks: counts(tracks),
       markers: counts(markers),
       authoredAudioGroups: counts(authoredAudioGroups),
-      skippedClips: result.skippedClips?.length ?? 0,
-      warnings: result.warnings?.length ?? 0,
+      skippedClips: skippedClips?.length ?? 0,
+      warnings: warnings?.length ?? 0,
     },
     guidance:
       "Read affected frame windows or tracks with timeline_read for the saved values and clip IDs.",
@@ -418,8 +417,8 @@ export function boundedEditReply(result: ReturnType<typeof editReply>) {
   const addedClipIds = clips?.added?.map(({ id }) => id);
   const withFeedback = {
     ...summary,
-    skippedClips: result.skippedClips,
-    warnings: result.warnings,
+    skippedClips,
+    warnings,
   };
   const bounded = fitsEditBudget(withFeedback) ? withFeedback : summary;
   const withIds = { ...bounded, addedClipIds };
