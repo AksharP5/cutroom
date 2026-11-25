@@ -143,9 +143,12 @@ export function SpeedRows({
         clipId: clip.id,
         speed: value,
       });
+    const at = now();
+    if (at === null) return;
     const next = inputs(points);
-    if (index >= 0) next[index] = { ...next[index]!, speed: value };
-    else next.push({ frame, speed: value });
+    const point = points.findIndex(({ frame }) => frame === at);
+    if (point >= 0) next[point] = { ...next[point]!, speed: value };
+    else next.push({ frame: at, speed: value });
     setPoints("Edit speed point", next);
   };
   const diamond = (

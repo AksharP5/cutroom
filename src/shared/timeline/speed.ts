@@ -10,15 +10,19 @@ import {
 } from "@hyperframes/core/audio-automation";
 import type {
   HfAutomationEase,
+  HfAutomationLane,
   HfAutomationPoint,
 } from "@hyperframes/core/audio-automation";
 import { framesAfterOut, readClipSource, resolveClip } from "./clipTiming";
 import { TimelineError } from "./errors.ts";
 import {
+  attrMicros,
   curvePosition,
+  encode,
   frames,
   secondsOf,
   sourceAt,
+  sourceSeconds,
   speedsAt,
   subtract,
 } from "./piece";
@@ -189,24 +193,120 @@ export function withSpeedPoints(
     }),
     ...(base && { offset: seconds(-base, fps) }),
   };
-  const parsed = clip.automation
-    ? parseAutomation(clip.automation)
-    : { version: HF_AUDIO_AUTOMATION_VERSION, lanes: [] };
-  return serializeAutomation({
-    ...parsed,
-    lanes: [
-      ...parsed.lanes.filter(({ target }) => target !== RATE_TARGET),
-      rate,
-    ],
-  });
+  return withRateLane(clip.automation, rate)!;
 }
 
-/** The clip's automation without its rate lane, or null when nothing else is left. */
-export function withoutSpeedPoints(automation: string | null) {
-  if (!automation) return null;
-  const parsed = parseAutomation(automation);
+function withRateLane(automation: string | null, rate?: HfAutomationLane) {
+  const parsed = automation
+    ? parseAutomation(automation)
+    : { version: HF_AUDIO_AUTOMATION_VERSION, lanes: [] };
   const lanes = parsed.lanes.filter(({ target }) => target !== RATE_TARGET);
+  if (rate) lanes.push(rate);
   return lanes.length ? serializeAutomation({ ...parsed, lanes }) : null;
+}
+
+/** Put one speed curve on the timeline clock, keeping each file's source time at the anchor. */
+export function speedProjection(
+  target: Clip,
+  clips: readonly Clip[],
+  fps: Fps,
+  anchorFrame = Math.min(...clips.map(({ start }) => start)),
+) {
+  const anchor = frames(anchorFrame, fps);
+  const previous = clips.map((clip) => ({
+    clip,
+    start: frames(clip.start, fps),
+    source: Number(
+      attrMicros(sourceSeconds(sourceAt(resolveClip(clip, fps), anchor))),
+    ),
+  }));
+  return (edit: number | readonly SpeedInput[]) => {
+    const playbackRate = typeof edit === "number" ? edit : 1;
+    const draft = resolveClip(
+      {
+        ...target,
+        playbackRate,
+        mediaStart: 0,
+        automation:
+          typeof edit === "number" ? null : withSpeedPoints(target, edit, fps),
+      },
+      fps,
+    );
+    const { curve } = draft;
+    const elapsed =
+      Number(attrMicros(sourceSeconds(sourceAt(draft, anchor)))) - draft.zero;
+    return previous.map(({ clip, start, source }) => {
+      const { mediaStart, offset } = encode(
+        { c: draft.c, tau: draft.tau, zero: source - elapsed },
+        curve,
+        start,
+        fps,
+      );
+      return {
+        ...clip,
+        mediaStart: mediaStart / 1e6,
+        playbackRate,
+        speedSpan: undefined,
+        automation: withRateLane(
+          clip.automation,
+          typeof curve === "object"
+            ? {
+                ...curve,
+                ...(offset && { offset: offset / 1e6 }),
+              }
+            : undefined,
+        ),
+      };
+    });
+  };
+}
+
+export function speedSourceLimit(clip: Clip, fps: Fps) {
+  if (clip.mediaStart !== null && clip.mediaStart < 0) return "before";
+  if (framesAfterOut(clip, fps) < 0) return "after";
+  return null;
+}
+
+/** Keep the hit pinned and lower the surrounding speeds until every linked source fits. */
+export function fitSlowMoHit(
+  project: ReturnType<typeof speedProjection>,
+  points: readonly SpeedInput[],
+  at: number,
+  fps: Fps,
+) {
+  const def = project(points);
+  const limited = def.find((clip) => speedSourceLimit(clip, fps));
+  if (!limited) return { clips: def };
+  const side = speedSourceLimit(limited, fps);
+  const cap = (percent: number) =>
+    project(
+      points.map((point) => ({
+        ...point,
+        speed: Math.min(point.speed, percent / 100),
+      })),
+    );
+  let low = Math.round(MIN_PLAYBACK_RATE * 100);
+  let high = 100;
+  let clips = cap(low);
+  if (clips.some((clip) => speedSourceLimit(clip, fps)))
+    throw new TimelineError(
+      "out_of_bounds",
+      `Not enough source ${side} the hit on clip ${limited.id}, even at ${low}%.`,
+    );
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    const trial = cap(middle);
+    if (trial.some((clip) => speedSourceLimit(clip, fps))) high = middle;
+    else {
+      low = middle;
+      clips = trial;
+    }
+  }
+  const speed = points.find(({ frame }) => frame === at)!.speed;
+  return {
+    clips,
+    notice: `Not enough source ${side} the hit. Slowed to ${Math.min(Math.round(speed * 100), low)}%.`,
+  };
 }
 
 type PresetShape = (duration: number, at: number, fps: Fps) => SpeedInput[];

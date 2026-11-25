@@ -287,6 +287,130 @@ test("Slow-mo hit keeps the picture at the playhead and slows it to 25%", () => 
   expect(after.clips[0]!.duration).toBe(180);
 });
 
+test("a ramp keeps staggered picture and sound on the same source time", () => {
+  const state = timeline([
+    clip({ start: 0, link: "take" }),
+    clip({
+      id: "kick-a",
+      kind: "audio",
+      track: 1,
+      start: 60,
+      duration: 120,
+      mediaStart: 2,
+      link: "take",
+    }),
+  ]);
+  const after = edit(state, {
+    clipId: "broll",
+    points: [
+      { frame: 0, speed: 0.5 },
+      { frame: 179, speed: 0.5 },
+    ],
+  });
+  expect(sourceSeconds(after, "broll", 0)).toBe(0);
+  for (const frame of [60, 90, 179]) {
+    expect(sourceSeconds(after, "broll", frame)).toBeCloseTo(frame / 60, 6);
+    expect(sourceSeconds(after, "kick-a", frame)).toBeCloseTo(frame / 60, 6);
+  }
+  const flat = edit(after, { clipId: "broll", speed: 1 });
+  expect(sourceSeconds(flat, "kick-a", 90)).toBeCloseTo(3, 6);
+});
+
+test("Slow-mo hit keeps each linked file's own source time at the hit", () => {
+  const state = timeline([
+    clip({ link: "take", mediaStart: 2 }),
+    clip({
+      id: "kick-a",
+      kind: "audio",
+      track: 1,
+      src: "external.wav",
+      start: 210,
+      duration: 150,
+      mediaStart: 5,
+      link: "take",
+    }),
+  ]);
+  const hit = 280;
+  const after = edit(state, {
+    clipId: "broll",
+    preset: "slow-mo-hit",
+    at: 100,
+  });
+  for (const id of ["broll", "kick-a"])
+    expect(sourceSeconds(after, id, hit)).toBeCloseTo(
+      sourceSeconds(state, id, hit),
+      5,
+    );
+  expect(
+    sourceSeconds(after, "kick-a", 310) - sourceSeconds(after, "broll", 310),
+  ).toBeCloseTo(2, 5);
+});
+
+test("Slow-mo hit still lands when the source has too little tail for its default shape", () => {
+  const state = timeline([
+    clip({ mediaStart: 4, playbackRate: 0.2, sourceDuration: 5.2 }),
+  ]);
+  const hit = 300;
+  const notices: string[] = [];
+  const after = applyAll(
+    state,
+    [
+      CommandSchema.parse({
+        type: "setSpeed",
+        clipId: "broll",
+        preset: "slow-mo-hit",
+        at: 120,
+      }),
+    ],
+    { onNotice: (notice: string) => notices.push(notice) },
+  );
+  expect(sourceSeconds(after, "broll", hit)).toBeCloseTo(4.8, 5);
+  expect(sourceOutFrame(after.clips[0]!, fps)).toBeLessThan(156);
+  expect(notices).toEqual(["Not enough source after the hit. Slowed to 20%."]);
+});
+
+test("constant speed with linked false leaves even a following linked partner in place", () => {
+  const base = linked();
+  const partner = { ...base.clips[1]!, start: 360 };
+  const state = timeline([base.clips[0]!, partner]);
+  const after = edit(state, { clipId: "broll", speed: 2, linked: false });
+  expect(after.clips[0]).toMatchObject({ playbackRate: 2, duration: 90 });
+  expect(after.clips[1]).toEqual(partner);
+});
+
+test("a ramp edit refuses a background-removed linked picture", () => {
+  const base = linked();
+  const state = timeline([
+    { ...base.clips[0]!, background: { shrink: 1, soften: 1 } },
+    base.clips[1]!,
+  ]);
+  expect(() =>
+    edit(state, {
+      clipId: "kick-a",
+      points: [{ frame: 0, speed: 0.5 }],
+    }),
+  ).toThrow(/background is removed/);
+  expect(
+    edit(state, {
+      clipId: "kick-a",
+      points: [{ frame: 0, speed: 0.5 }],
+      linked: false,
+    }).clips[0]!.background,
+  ).toEqual({ shrink: 1, soften: 1 });
+});
+
+test("Slow-mo hit must aim at an actual clip frame", () => {
+  const state = timeline([clip()]);
+  for (const at of [-1, 180, 10_000])
+    expect(() =>
+      edit(state, { clipId: "broll", preset: "slow-mo-hit", at }),
+    ).toThrow(/hit frame .* outside .* 0 to 179/);
+  expect(
+    edit(state, { clipId: "broll", preset: "slow-mo-hit", at: 179 }).clips[0]!
+      .duration,
+  ).toBe(180);
+});
+
 test("two points on one frame are refused, and an omitted ease keeps a custom shape", () => {
   expect(() =>
     edit(timeline([clip()]), {

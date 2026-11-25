@@ -1218,6 +1218,10 @@ export const CommandSchema = z.discriminatedUnion("type", [
       clipId,
       playbackRate: playbackRate.optional(),
       mediaStart: z.number().nonnegative().optional(),
+      linked: z
+        .boolean()
+        .optional()
+        .describe("false leaves linked partners as they are"),
     })
     .describe(
       "Set the constant speed or source in (seconds) of a clip and its linked partners. Speed preserves the source span to the nearest timeline frame, resizes the clips, and ripples following time on unlocked auto-select tracks. A source in edit alone keeps duration. A speed ramp takes setSpeed. Refuses non-media clips or insufficient source media.",
@@ -1259,7 +1263,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .int()
         .optional()
         .describe(
-          "The clip-local frame slow-mo-hit aims at: the picture there stays there, slowed. Defaults to the clip's middle",
+          "The clip-local frame slow-mo-hit aims at, from 0 to the clip's last frame. Defaults to the clip's middle. The picture stays at that frame, slowed",
         ),
       linked: z
         .boolean()
@@ -1522,6 +1526,7 @@ export const AnimationFeedbackSchema = z.object({
 export type AnimationFeedback = z.infer<typeof AnimationFeedbackSchema>;
 
 export const TimelineViewSchema = z.object({
+  notices: z.array(z.string()).optional(),
   skippedClips: z
     .array(z.object({ clipId, label: label.nullable(), reason: z.string() }))
     .optional(),

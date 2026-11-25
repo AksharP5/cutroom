@@ -335,6 +335,7 @@ export function createTimelineRoutes(
           undeclaredFontReason(missing, declared),
         );
     }
+    const notices = new Set<string>();
     const skippedClips = new Map<
       string,
       NonNullable<TimelineView["skippedClips"]>[number]
@@ -462,6 +463,7 @@ export function createTimelineRoutes(
                 );
             }
           },
+          onNotice: (notice) => notices.add(notice),
           onSkip: (clip, reason) =>
             skippedClips.set(clip.id, {
               clipId: clip.id,
@@ -736,6 +738,7 @@ export function createTimelineRoutes(
           timeline: written,
           size: compositionSize(writtenSource.root),
           detectAnimation,
+          ...(notices.size && { notices: [...notices] }),
           ...(skippedClips.size && {
             skippedClips: [...skippedClips.values()],
           }),
