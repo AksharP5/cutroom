@@ -202,6 +202,9 @@ test("Source and Media place the video span when it starts late and the audio ru
     "anullsrc=r=48000:cl=stereo:d=12.02",
     "-vf",
     "drawbox=color=black:t=fill:enable='between(n,1,2)',drawbox=color=lime:t=fill:enable='gte(n,60)',drawbox=color=blue:t=fill:enable='eq(n,180)',setpts=PTS+2/TB",
+    // Older FFmpeg builds can default to 25 fps after setpts.
+    "-r",
+    "60",
     "-c:v",
     "libx265",
     "-preset",
