@@ -36,11 +36,7 @@ import { fileContentVersion } from "@hyperframes/studio-server";
 import { recordFileWriteReceipt } from "@hyperframes/studio-server/history-host";
 import { hashOfVersion } from "../../src/server/history/fileVersion";
 import { HistoryBusyError } from "../../src/server/history/ownerLock";
-import {
-  HistoryIdError,
-  ID_PATH,
-  readId,
-} from "../../src/server/history/historyId";
+import { HistoryIdError } from "../../src/server/history/historyId";
 import {
   HistoryClosedError,
   HistoryRefusedError,
@@ -1398,15 +1394,16 @@ describe("openProjectHistory", () => {
     await history.close();
 
     const backup = tempDir("hf-history-backup-");
-    mkdirSync(dirname(join(backup, ID_PATH)), { recursive: true });
-    linkSync(join(projectDir, ID_PATH), join(backup, ID_PATH));
+    const idFile = join(".hyperframes", "history-id");
+    mkdirSync(dirname(join(backup, idFile)), { recursive: true });
+    linkSync(join(projectDir, idFile), join(backup, idFile));
     linkSync(join(projectDir, "index.html"), join(backup, "index.html"));
 
     const copy = await open(backup, historyRoot);
     expect(copy.projectId).not.toBe(history.projectId);
     expect(copy.list()).toEqual([]);
-    expect(readId(projectDir)).toBe(history.projectId);
-    expect(readId(backup)).toBe(copy.projectId);
+    expect(inside(projectDir, idFile).trim()).toBe(history.projectId);
+    expect(inside(backup, idFile).trim()).toBe(copy.projectId);
 
     const original = await open(projectDir, historyRoot);
     expect(original.list().map(({ id }) => id)).toEqual([edit.id]);
