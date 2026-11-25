@@ -28,6 +28,7 @@ import { createApp } from "../src/server/app";
 import { browserExecutable } from "../src/server/hyperframes/render";
 import { copyName } from "../src/server/projects/duplicate";
 import { onCopyQueue } from "../src/server/projects/mediaImport";
+import { MatteStatusSchema } from "../src/shared/matte";
 import {
   DuplicateJobSchema,
   ProjectSchema,
@@ -300,6 +301,67 @@ describe.each(disks)("on $base", ({ base, clones }) => {
       expect(await exists(copied(left))).toBe(false);
     expect(await staging()).toEqual([]);
   });
+
+  test.skipIf(!Bun.which("ffmpeg"))(
+    "a duplicate can use the original's completed mattes without reviving stale ones",
+    async () => {
+      const original = await runtime.projects.create({ name: "Cutout" });
+      const src = "assets/clip.mp4";
+      const file = "mattes/clip.mp4";
+      const path = join(original.path, src);
+      await mkdir(join(original.path, "mattes"));
+      expect(
+        await Bun.spawn([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "color=white:s=64x64:r=30:d=1",
+          "-pix_fmt",
+          "yuv420p",
+          path,
+        ]).exited,
+      ).toBe(0);
+      const mask = await readFile(path);
+      await writeFile(join(original.path, file), mask);
+      const time = 1_700_000_000.123456;
+      await utimes(path, time, time);
+      const { size, mtimeMs } = await stat(path);
+      const matte = {
+        src,
+        file,
+        size,
+        mtimeMs,
+        start: 0,
+        rate: 30,
+        count: 30,
+        first: 0,
+        frames: 15,
+        model: "test",
+        subject: true,
+      };
+      const manifest = "mattes/mattes.json";
+      const text = JSON.stringify({
+        version: 1,
+        mattes: [matte, { ...matte, first: 15, mtimeMs: mtimeMs - 1000 }],
+      });
+      await writeFile(join(original.path, manifest), text);
+      const ready = async (project: Project) =>
+        MatteStatusSchema.parse(
+          await (await request(`/projects/${project.id}/mattes`)).json(),
+        ).mattes;
+      expect(await ready(original)).toMatchObject([matte]);
+
+      const copy = await copyOf(await duplicate(original));
+      expect(await ready(copy)).toMatchObject([
+        { ...matte, mtimeMs: (await stat(join(copy.path, src))).mtimeMs },
+      ]);
+      expect(await readFile(join(copy.path, file))).toEqual(mask);
+      expect(await readFile(join(original.path, manifest), "utf8")).toBe(text);
+    },
+  );
 
   test("copies are named after the original and never take a name in use", async () => {
     const original = await runtime.projects.create({ name: "Promo" });
