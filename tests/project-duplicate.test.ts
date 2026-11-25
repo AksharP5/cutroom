@@ -22,7 +22,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 import { createApp } from "../src/server/app";
 import { browserExecutable } from "../src/server/hyperframes/render";
@@ -235,6 +235,12 @@ describe.each(disks)("on $base", ({ base, clones }) => {
     ])
       await write(left, "the original's");
     await symlink("./footage.zip", at("assets/alias.zip"));
+    // Resolves inside the original only through its folder's own name, so a
+    // verbatim copy would point back at the original from the sibling copy.
+    await symlink(
+      `../../${basename(original.path)}/assets/footage.zip`,
+      at("assets/through-parent.zip"),
+    );
     await symlink("../.cutroom/renders/Sidecars.mp4", at("assets/render.mp4"));
     await symlink("/etc/hostname", at("assets/absolute.txt"));
     await symlink("../../outside.txt", at("assets/escape.txt"));
@@ -265,6 +271,13 @@ describe.each(disks)("on $base", ({ base, clones }) => {
       code: "ENOENT",
     });
     expect(await readlink(copied("assets/alias.zip"))).toBe("footage.zip");
+    expect(await readlink(copied("assets/through-parent.zip"))).toBe(
+      "footage.zip",
+    );
+    await writeFile(copied("assets/through-parent.zip"), "the copy's");
+    expect(new Uint8Array(await readFile(at("assets/footage.zip")))).toEqual(
+      archive,
+    );
     expect(await exists(copied("p/q/s"))).toBe(true);
     // Rows for the original's ledger stay behind with it.
     expect(
