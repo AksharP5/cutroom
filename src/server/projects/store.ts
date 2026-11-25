@@ -381,11 +381,16 @@ export async function createProjectStore(options: {
       try {
         value = await ownWrites.run(scope, change);
         finished = true;
-        project.updatedAt = new Date().toISOString();
-        await saveRegistry();
       } finally {
         entry = await window.close();
       }
+      project.updatedAt = new Date().toISOString();
+      await saveRegistry().catch((error: unknown) =>
+        console.warn(
+          "Cutroom could not update the project registry after saving an edit:",
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
       return { value, entry };
     }).then((result) => {
       const committed = committedEntries.getStore();

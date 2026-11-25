@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -125,6 +125,50 @@ test("removing a project keeps its folder and history, and importing the folder 
     await fixture.close();
   }
 });
+
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "a committed source save succeeds when the registry directory is unwritable",
+  async () => {
+    const fixture = await projectFixture();
+    try {
+      const project = await fixture.store.create({
+        name: "Save without registry",
+      });
+      await addStarterClips(project);
+      const history = await fixture.store.history(project);
+      const path = `/projects/${project.id}/source`;
+      const original = SourceSchema.parse(
+        await (await fixture.request(path)).json(),
+      );
+      const content = original.content.replace(
+        "Drop media in, or ask your agent to start.",
+        "The edit has landed.",
+      );
+
+      const mode = (await stat(fixture.store.dataDir)).mode & 0o777;
+      await chmod(fixture.store.dataDir, 0o555);
+      try {
+        const response = await fixture.request(path, "PUT", {
+          content,
+          expectedVersion: original.version,
+        });
+        expect(await readFile(join(project.path, "index.html"), "utf8")).toBe(
+          content,
+        );
+        const entry = history.list().at(-1);
+        expect(entry?.label).toBe("Edit index.html");
+        expect(response.status, await response.clone().text()).toBe(200);
+        const saved = SourceSchema.parse(await response.json());
+        expect(saved).toMatchObject({ content, version: expect.any(String) });
+        expect(saved.version).not.toBe(original.version);
+      } finally {
+        await chmod(fixture.store.dataDir, mode);
+      }
+    } finally {
+      await fixture.close();
+    }
+  },
+);
 
 test("agents cannot remove a project", async () => {
   const fixture = await projectFixture();
