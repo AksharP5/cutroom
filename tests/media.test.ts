@@ -608,7 +608,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
   30000,
 );
 
-test("the footage pipeline reads a project's videos in byte ranges, and nothing else", async () => {
+test("footage and editing proxy routes stay inside the project's visible video files", async () => {
   const fixture = await projectFixture();
   fixture.app.route("/api/cutroom", createMediaRoutes(fixture.store));
   const server = Bun.serve({ port: 0, fetch: fixture.app.fetch });
@@ -618,16 +618,19 @@ test("the footage pipeline reads a project's videos in byte ranges, and nothing 
     await writeFile(join(project.path, "clip.mp4"), bytes);
     await mkdir(join(project.path, "folder.mov"));
     await writeFile(join(project.path, "notes.txt"), "private");
-    await writeFile(join(project.path, ".env"), "private");
-    await symlink(join(project.path, ".env"), join(project.path, "env.mp4"));
+    await writeFile(join(project.path, ".hidden.mp4"), "private");
+    await symlink(
+      join(project.path, ".hidden.mp4"),
+      join(project.path, "hidden-link.mp4"),
+    );
     await writeFile(join(fixture.directory, "outside.mp4"), "private");
     await symlink(
       join(fixture.directory, "outside.mp4"),
       join(project.path, "link.mp4"),
     );
-    const url = (path: string) =>
-      `http://127.0.0.1:${server.port}/api/cutroom/projects/${project.id}/media/source?path=${encodeURIComponent(path)}`;
-    const ranged = await fetch(url("clip.mp4"), {
+    const url = (kind: string, path: string) =>
+      `http://127.0.0.1:${server.port}/api/cutroom/projects/${project.id}/media/${kind}?path=${encodeURIComponent(path)}`;
+    const ranged = await fetch(url("source", "clip.mp4"), {
       headers: { range: "bytes=100-199" },
     });
     expect(ranged.status).toBe(206);
@@ -637,16 +640,18 @@ test("the footage pipeline reads a project's videos in byte ranges, and nothing 
     );
     for (const path of [
       "notes.txt",
-      ".env",
-      "env.mp4",
+      ".hidden.mp4",
+      "hidden-link.mp4",
       "link.mp4",
       "../../outside.mp4",
       "folder.mov",
       "missing.mp4",
     ]) {
-      const response = await fetch(url(path));
-      expect(response.ok, path).toBe(false);
-      expect(await response.text()).not.toContain("private");
+      for (const kind of ["source", "editing-proxy"]) {
+        const response = await fetch(url(kind, path));
+        expect(response.ok, `${kind}: ${path}`).toBe(false);
+        expect(await response.text()).not.toContain("private");
+      }
     }
   } finally {
     await server.stop(true);

@@ -7,7 +7,6 @@ import { encodePeaks, peakSampleRate } from "./peaks";
 import {
   FilmstripSchema,
   MediaEventSchema,
-  MediaInfoSchema,
   MediaTaskSchema,
   PiecesSchema,
 } from "./protocol";
@@ -20,7 +19,7 @@ import {
   proxySamplesFile,
   streamBoxes,
 } from "./pieces";
-import { mediaSettings } from "../../shared/media";
+import { MediaInfoSchema, mediaSettings } from "../../shared/media";
 import { proxyFilter, scaleFilter, scrubFilter, tileWidth } from "./settings";
 import { chromeColourGuess } from "../hyperframes/videoColour";
 import { localMediaInputOptions } from "./input";
@@ -214,7 +213,10 @@ try {
     const reportedFps =
       rational(video?.avg_frame_rate, "/") ||
       rational(video?.r_frame_rate, "/");
+    const duration = Number(probe.format.duration);
     const info = MediaInfoSchema.parse({
+      duration:
+        Number.isFinite(duration) && duration > 0 ? duration : undefined,
       channels: audio?.channels,
       video: video && {
         width: rotated ? video.height : video.width,

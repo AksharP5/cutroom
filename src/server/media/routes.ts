@@ -3,7 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { extname, relative } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
-import { projectPath } from "../projects/path";
+import { projectPath, resolveProjectPath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import type { Project } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
@@ -41,6 +41,18 @@ const sourceType = (path: string) => {
   if (parts.some((part) => part.startsWith(".") && part !== ".")) return null;
   return SOURCE_TYPES.get(extname(path).toLowerCase()) ?? null;
 };
+/** Both names must describe a visible video in this project, including through a link. */
+export async function projectVideo(project: Project, path: string) {
+  const isVideo = (path: string) =>
+    mediaKind(path)?.kind === "video" &&
+    !path.split(/[\\/]/).some((part) => part.startsWith("."));
+  if (!isVideo(path))
+    throw new HttpError(404, "Choose a video in the project.");
+  const source = await resolveProjectPath(project, path);
+  if (!isVideo(source.path))
+    throw new HttpError(404, "Choose a video in the project.");
+  return source.path;
+}
 function headers(etag: string, type: string) {
   return {
     "content-type": type,
@@ -125,6 +137,25 @@ export function createMediaRoutes(
         { headers: h },
       );
     });
+  // The source viewer uses the preview's on-demand pieces until their MP4 is assembled.
+  api.get("/projects/:id/media/editing-proxy", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const path = PathSchema.parse(c.req.query("path"));
+    const source = await projectVideo(project, path);
+    const query = new URLSearchParams({ path });
+    const version = c.req.query("v");
+    if (version) query.set("v", version);
+    return (
+      (await proxyPreview(media, project, source, {
+        piece: c.req.query(PROXY_PIECE_PARAM) ?? null,
+        pieceUri(piece) {
+          query.set(PROXY_PIECE_PARAM, String(piece));
+          return `?${query}`;
+        },
+        signal: c.req.raw.signal,
+      })) ?? new Response(null, { status: 422 })
+    );
+  });
   // Length, size, picture and sound of one media file, so an agent can plan a cut without probing it.
   api.get("/projects/:id/media/details", async (c) => {
     const path = PathSchema.refine(
@@ -318,17 +349,21 @@ const PieceSchema = z.union([
  * HLS playlist of them, which the preview's `<video>` plays as it would the file: each piece is
  * fetched as the playhead needs it and made first. Then the MP4, with byte ranges. 202 with
  * progress until either exists. Null for a video Cutroom makes no proxy of, which HyperFrames' own
- * transcoder keeps. `name` is the asset's file name as the request spelled it, for the playlist.
+ * transcoder keeps.
  */
 export async function proxyPreview(
   media: MediaService,
   project: Project,
   path: string,
   {
-    name,
+    pieceUri,
     piece,
     signal,
-  }: { name: string; piece: string | null; signal: AbortSignal },
+  }: {
+    pieceUri: (piece: number | "init") => string;
+    piece: string | null;
+    signal: AbortSignal;
+  },
 ): Promise<Response | null> {
   const headers = { "cache-control": "no-store" };
   if (piece !== null) {
@@ -363,18 +398,9 @@ export async function proxyPreview(
   if (result.state.status === "failed")
     return new Response(result.state.error, { status: 502, headers });
   if (result.pieces?.cuts.length)
-    return new Response(
-      piecePlaylist(
-        result.pieces,
-        (piece) => `${name}?hf-proxy=h264&${PROXY_PIECE_PARAM}=${piece}`,
-      ),
-      {
-        headers: {
-          ...headers,
-          "content-type": "application/vnd.apple.mpegurl",
-        },
-      },
-    );
+    return new Response(piecePlaylist(result.pieces, pieceUri), {
+      headers: { ...headers, "content-type": "application/vnd.apple.mpegurl" },
+    });
   return new Response(null, {
     status: 202,
     headers: {

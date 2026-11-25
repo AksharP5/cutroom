@@ -10,14 +10,18 @@ import {
   utimes,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { fileFingerprint } from "../../shared/media";
+import {
+  MediaInfoSchema,
+  fileFingerprint,
+  makesProxy,
+} from "../../shared/media";
 import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
 import type { JobState } from "../../shared/jobs";
 import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
 import { projectStatePath } from "../projects/path";
-import { FilmstripSchema, MediaInfoSchema, PiecesSchema } from "./protocol";
+import { FilmstripSchema, PiecesSchema } from "./protocol";
 import type { MediaKind, MediaTask, Pieces, RampTask } from "./protocol";
 import { RUN_MARGIN_SAMPLES } from "../../shared/timeline/rampRuns";
 import type { RampRun } from "../../shared/timeline/rampRuns";
@@ -28,7 +32,6 @@ import {
   proxySamplesFile,
 } from "./pieces";
 import { startMediaWorker } from "./process";
-import { makesProxy } from "./settings";
 import { probeNvenc } from "../hyperframes/nvenc";
 import type { z } from "zod";
 
@@ -106,7 +109,7 @@ const priority = {
 } satisfies Record<MediaKind, number>;
 /** Each kind's recipe; a new one keys new cache entries. */
 const recipe = {
-  probe: "media-v9",
+  probe: "media-v10",
   peaks: "media-v6",
   filmstrip: "media-v6",
   frame: "media-v6",

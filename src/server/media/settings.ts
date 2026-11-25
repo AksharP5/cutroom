@@ -42,16 +42,3 @@ export const scrubFilter = (video: Parameters<typeof capped>[0]) =>
  */
 export const proxyFilter = (video: Parameters<typeof capped>[0]) =>
   capped(video, 1080);
-
-/** Codecs Chromium decodes in software on every platform it ships on. */
-const browserCodecs = new Set(["h264", "vp8", "vp9", "av1"]);
-/**
- * Whether the preview plays this video from Cutroom's editing proxy: an opaque SDR video in a
- * codec Chromium cannot decode, such as HEVC, ProRes or DNxHR. HyperFrames' own transcoder keeps
- * transparent and HDR video, since its proxies keep alpha and tone-map as export does.
- */
-export const makesProxy = (video: {
-  codec: string;
-  alpha: boolean;
-  hdr: boolean;
-}) => !browserCodecs.has(video.codec) && !video.alpha && !video.hdr;

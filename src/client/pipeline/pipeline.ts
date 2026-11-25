@@ -1,3 +1,4 @@
+import { fetchPictureSource, mediaAssetUrl } from "../mediaAsset";
 import {
   FOOTAGE_PIXEL_LIMIT,
   PipelineResponseSchema,
@@ -28,11 +29,7 @@ import { usePipeline } from "./setting";
 import { chromeColourGuess } from "../../shared/videoColour";
 import { pictureAt, secondsOf } from "../../shared/timeline/piece";
 import type { SourceTime } from "../../shared/timeline/piece";
-import {
-  pictureSeek,
-  readPictureSource,
-  timePicture,
-} from "../../shared/timeline/pictureSource";
+import { pictureSeek, timePicture } from "../../shared/timeline/pictureSource";
 import type { PictureSource } from "../../shared/timeline/pictureSource";
 import { useWorkspace } from "../workspace";
 import { clipMatteState, useMatteView, useMattes } from "../edit/mattes";
@@ -228,14 +225,10 @@ export function attachPipeline(
   };
   // A file the server cannot index shows its frames at their own times.
   const pictureSources = sourceCache((path) =>
-    fetch(
-      `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/frames?path=${encodeURIComponent(path)}`,
-      { signal: closing.signal },
-    )
-      .then(async (response) =>
-        response.ok ? readPictureSource(await response.json()) : null,
-      )
-      .catch(() => null),
+    fetchPictureSource(
+      mediaAssetUrl(projectId, "frames", path),
+      closing.signal,
+    ),
   );
   const media = sourceCache(async (src) => {
     const path = localMediaPath("index.html", src);

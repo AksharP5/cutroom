@@ -4,11 +4,25 @@ import { X } from "@phosphor-icons/react";
 import { z } from "zod";
 import { libraryTitle } from "../../shared/library";
 import type { LibraryItem } from "../../shared/library";
-import { mediaSettings, peakLevels } from "../../shared/media";
+import {
+  makesProxy,
+  mediaSettings,
+  needsVideoProxy,
+  peakLevels,
+} from "../../shared/media";
 import { RuntimeStateSchema } from "../../shared/preview";
+import { pictureAt } from "../../shared/timeline/piece";
+import { pictureSeek } from "../../shared/timeline/pictureSource";
+import type { PictureSource } from "../../shared/timeline/pictureSource";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { TimecodeText } from "../components/TimecodeText";
 import { mediaUrl } from "../api";
+import {
+  fetchMediaProbe,
+  fetchMediaReady,
+  fetchPictureSource,
+  mediaAssetUrl,
+} from "../mediaAsset";
 import { openContextMenu } from "../components/ContextMenu";
 import { blurPointerButton, hint, keymap } from "../keymap";
 import { PEAK_CHUNK, createTimelineMedia } from "../timeline/media";
@@ -55,7 +69,10 @@ const PRESENT_MS = 100;
  * the newest one asked for waits its turn: Chromium can present the frame of a paused seek after
  * a later seek has finished, which leaves the earlier frame on screen.
  */
-function mediaPlayer(element: HTMLMediaElement): RuntimePlayer {
+function mediaPlayer(
+  element: HTMLMediaElement,
+  seekPosition: (seconds: number) => number,
+): RuntimePlayer {
   let waiting: number | null = null;
   let turn = 0;
   let busy = false;
@@ -78,19 +95,26 @@ function mediaPlayer(element: HTMLMediaElement): RuntimePlayer {
       () => (video ? setTimeout(shown, PRESENT_MS) : shown()),
       { once: true },
     );
-    element.currentTime = seconds;
+    element.currentTime = Math.min(seekPosition(seconds), element.duration);
   }
   return {
-    play: () =>
+    play() {
+      // The playhead may start playing while a paused seek is still painting.
+      if (waiting !== null) {
+        const next = waiting;
+        waiting = null;
+        go(next);
+      }
       void element.play().catch((error: unknown) => {
         // A pause before playback starts rejects the play it interrupted.
         if (!(error instanceof DOMException && error.name === "AbortError"))
           reportEditorError("viewer", error);
-      }),
+      });
+    },
     pause: () => element.pause(),
     seek(seconds) {
-      if (busy) waiting = seconds + INSIDE_FRAME;
-      else go(seconds + INSIDE_FRAME);
+      if (busy) waiting = seconds;
+      else go(seconds);
     },
     time: () => waiting ?? element.currentTime,
     clock: () => null,
@@ -211,36 +235,97 @@ function SourceMedia({
   const hold = (element: HTMLMediaElement | null) => {
     media.current = element;
   };
-  useEffect(() => {
-    const element = media.current;
-    if (!element) {
-      sourcePlayer.attach(stillPlayer());
-      return () => sourcePlayer.attach(null);
-    }
-    const ready = () => {
-      // A file replaced since Media measured it plays at its new length.
-      if (
-        Number.isFinite(element.duration) &&
-        element.duration !== file.seconds
-      )
-        useSource.setState({ file: { ...file, seconds: element.duration } });
-      sourcePlayer.attach(mediaPlayer(element));
-    };
-    if (element.readyState >= element.HAVE_METADATA) ready();
-    else element.addEventListener("loadedmetadata", ready, { once: true });
-    return () => {
-      element.removeEventListener("loadedmetadata", ready);
-      sourcePlayer.attach(null);
-    };
-  }, []);
   /** Width over height, once the file says; a picture fills the stage at that shape. */
   const [shape, setShape] = useState(16 / 9);
+  const [preparing, setPreparing] = useState(false);
   const src = mediaUrl(projectId, file.path, version);
   const name = file.path.split("/").at(-1);
   const failed = () => {
     closeSource();
     showToast(`${name} could not be opened.`);
   };
+  useEffect(() => {
+    const element = media.current;
+    if (!element) {
+      sourcePlayer.attach(stillPlayer());
+      return () => sourcePlayer.attach(null);
+    }
+    const controller = new AbortController();
+    const { signal } = controller;
+    const video = element instanceof HTMLVideoElement ? element : null;
+    let proxy = false;
+    let pictures: PictureSource | null = null;
+    let attached = false;
+    const ready = () => {
+      // The proxy's stream length can round differently. Marks stay on the source's clock.
+      if (
+        !proxy &&
+        Number.isFinite(element.duration) &&
+        element.duration !== file.seconds
+      )
+        useSource.setState({ file: { ...file, seconds: element.duration } });
+      if (video?.videoWidth) setShape(video.videoWidth / video.videoHeight);
+      attached = true;
+      sourcePlayer.attach(
+        mediaPlayer(element, (seconds) => {
+          if (!pictures || sourcePlayer.use.getState().state.kind === "playing")
+            return seconds + INSIDE_FRAME;
+          const ordinal = pictureAt(pictures.index, seconds);
+          return ordinal === null
+            ? seconds + INSIDE_FRAME
+            : Math.max(0, pictureSeek(pictures.index, ordinal));
+        }),
+      );
+    };
+    if (element.readyState >= element.HAVE_METADATA) ready();
+    else
+      element.addEventListener("loadedmetadata", ready, { once: true, signal });
+
+    if (video) {
+      const asset = (kind: string) =>
+        mediaAssetUrl(projectId, kind, file.path, version);
+      const prepare = async () => {
+        const probe = await fetchMediaProbe(asset("probe"), signal);
+        signal.throwIfAborted();
+        if (!probe?.video || !needsVideoProxy(probe.video.codec)) {
+          video.src = src;
+          return;
+        }
+        proxy = true;
+        setPreparing(true);
+        const seconds = probe.duration ?? probe.video.duration;
+        if (seconds > 0 && seconds !== file.seconds)
+          useSource.setState({ file: { ...file, seconds } });
+        void fetchPictureSource(asset("frames"), signal).then((index) => {
+          if (!index || signal.aborted) return;
+          pictures = index;
+          const { state, frame } = sourcePlayer.use.getState();
+          if (attached && state.kind === "stopped") sourcePlayer.seek(frame);
+        });
+        const url = makesProxy(probe.video)
+          ? asset(
+              video.canPlayType("application/vnd.apple.mpegurl")
+                ? "editing-proxy"
+                : "proxy",
+            )
+          : `/api/projects/${encodeURIComponent(projectId)}/isolated-preview?${new URLSearchParams({ source: file.path, v: version ?? "" })}`;
+        if (!(await fetchMediaReady(url, signal, 250, "HEAD"))) {
+          if (!signal.aborted) failed();
+          return;
+        }
+        if (!signal.aborted) video.src = url;
+      };
+      void prepare().catch((error: unknown) => {
+        if (signal.aborted) return;
+        console.warn("Source footage could not be prepared", error);
+        failed();
+      });
+    }
+    return () => {
+      controller.abort();
+      sourcePlayer.attach(null);
+    };
+  }, []);
   const pictured = file.kind === "video" || file.kind === "image";
   return (
     <>
@@ -296,16 +381,20 @@ function SourceMedia({
           />
         )}
         {file.kind === "video" && (
-          <video
-            ref={hold}
-            src={src}
-            preload="auto"
-            playsInline
-            onLoadedMetadata={({ currentTarget: video }) =>
-              setShape(video.videoWidth / video.videoHeight)
-            }
-            onError={failed}
-          />
+          <>
+            <video
+              ref={hold}
+              preload="auto"
+              playsInline
+              onLoadedData={() => setPreparing(false)}
+              onError={failed}
+            />
+            {preparing && (
+              <div className="edit-preparing" role="status">
+                Preparing footage
+              </div>
+            )}
+          </>
         )}
         {!pictured && (
           <>

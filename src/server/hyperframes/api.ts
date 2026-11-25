@@ -158,6 +158,7 @@ import { parseFps } from "@hyperframes/core";
 import {
   PROXY_PIECE_PARAM,
   framesOf,
+  projectVideo,
   proxyExposedHeaders,
   proxyPreview,
   proxySamplesPreview,
@@ -1235,6 +1236,15 @@ export function createHyperframesApi(
     const id = c.req.param("id");
     if (!(await resolveProject(id))) return c.notFound();
     const url = new URL(c.req.url);
+    // Source uses HyperFrames' copy for files Cutroom leaves to its HDR and alpha handling.
+    const source = url.searchParams.get("source");
+    if (source !== null) {
+      const path = await projectVideo(await store.get(id), source);
+      url.pathname = `/api/projects/${encodeURIComponent(id)}/preview/${path.split("/").map(encodeURIComponent).join("/")}`;
+      url.searchParams.delete("source");
+      url.searchParams.set("hf-proxy", "auto");
+      return c.redirect(isolatedPreview(id, url.href));
+    }
     // A sub-composition previews as its own document, as Studio's drill-in does.
     const requested = url.searchParams.get("composition");
     url.searchParams.delete("composition");
@@ -1537,7 +1547,8 @@ export function createHyperframesApi(
                 project,
                 relative(project.path, canonical),
                 {
-                  name: url.pathname.slice(url.pathname.lastIndexOf("/") + 1),
+                  pieceUri: (piece) =>
+                    `${url.pathname.slice(url.pathname.lastIndexOf("/") + 1)}?hf-proxy=h264&${PROXY_PIECE_PARAM}=${piece}`,
                   piece: url.searchParams.get(PROXY_PIECE_PARAM),
                   signal: c.req.raw.signal,
                 },
