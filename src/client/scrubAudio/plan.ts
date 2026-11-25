@@ -15,6 +15,7 @@ import { resolveClip } from "../../shared/timeline/clipTiming";
 import { elementClip } from "../../shared/timeline/element";
 import {
   AUDIO_SAMPLE_RATE,
+  decimalFraction,
   fraction,
   rampSourceTimes,
   sourceAt,
@@ -70,7 +71,11 @@ export function scrubPlan(
     const source = sourceOf(clip.src);
     if (!source) continue;
 
-    const piece = resolveClip(clip, timeline.fps, true);
+    const playableEnd =
+      clip.loop && clip.sourceDuration !== null
+        ? decimalFraction(clip.sourceDuration)
+        : undefined;
+    const piece = resolveClip(clip, timeline.fps, true, playableEnd);
     const samples = {
       start: Number(piece.samples.start),
       end: Number(piece.samples.end),
@@ -90,6 +95,12 @@ export function scrubPlan(
       source,
       samples,
       map: sourceMap(piece, samples),
+      ...(piece.loop?.length != null && {
+        loop: {
+          start: samplesOf(piece.loop.start),
+          length: samplesOf(piece.loop.length),
+        },
+      }),
       gain: silent
         ? [{ at: samples.start, gain: 0 }]
         : envelope(clip, timeline, samples.start, stage * main),
@@ -108,15 +119,17 @@ function sourceMap(piece: Piece, samples: Segment["samples"]): SourceMap {
   const offset = sourceSampleOffset(piece);
   if (offset !== null) return { kind: "line", offset: Number(offset) };
   const start = fraction(BigInt(samples.start), BigInt(AUDIO_SAMPLE_RATE));
+  // Wrap after interpolation so the last ramp entry never interpolates back to the first.
+  const line = piece.loop ? { ...piece, loop: null } : piece;
   if (piece.line.kind === "exact")
     return {
       kind: "rate",
-      start: samplesOf(sourceAt(piece, start)),
+      start: samplesOf(sourceAt(line, start)),
       rate: Number(piece.line.rate.n) / Number(piece.line.rate.d),
     };
   const steps = Math.ceil((samples.end - samples.start) / RAMP_STEP);
   const times = rampSourceTimes(
-    piece,
+    line,
     start,
     RAMP_STEP / AUDIO_SAMPLE_RATE,
     steps + 1,

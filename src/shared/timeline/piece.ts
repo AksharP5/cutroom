@@ -522,11 +522,15 @@ function wrapExact(time: ExactTime, start: ExactTime, length: ExactTime) {
   return add(start, fraction(numerator % divisor, elapsed.d * length.d));
 }
 
+/** The floating-point form of the source loop, in seconds or samples. */
+export function wrapSource(time: number, start: number, length: number) {
+  const elapsed = time - start;
+  return elapsed >= length ? start + (elapsed % length) : time;
+}
+
 function wrapRamp(loop: Loop | null, time: number) {
-  return loop?.kind === "ramp" &&
-    loop.length !== null &&
-    time - loop.start >= loop.length
-    ? loop.start + ((time - loop.start) % loop.length)
+  return loop?.kind === "ramp" && loop.length !== null
+    ? wrapSource(time, loop.start, loop.length)
     : time;
 }
 

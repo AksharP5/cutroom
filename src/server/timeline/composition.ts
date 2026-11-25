@@ -1196,6 +1196,8 @@ export function projectTimeline(
       ...(speedSpan && { speedSpan }),
       src,
       sourceDuration: lengthOf(element),
+      ...((kind === "video" || isAudioKind(kind)) &&
+        element.attrs.loop !== undefined && { loop: true }),
       hasAudio,
       link: element.attrs["data-link"] || null,
       label:
