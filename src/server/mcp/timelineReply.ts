@@ -356,6 +356,7 @@ export function editReply(
     changes,
     ...(after.skippedClips?.length && { skippedClips: after.skippedClips }),
     ...(warnings.length && { warnings }),
+    ...(after.notices?.length && { notices: after.notices }),
     ...(fullTimeline && {
       timeline:
         format === "compact"

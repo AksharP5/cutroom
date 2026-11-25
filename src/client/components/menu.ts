@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { keymap } from "../keymap";
 import type { Action } from "../keymap";
 
@@ -15,6 +16,8 @@ export type MenuEntry = (
   checked?: boolean;
   /** A checked row that is one choice among its neighbours. */
   radio?: boolean;
+  /** A small picture of what the row does, before its label. */
+  glyph?: ReactNode;
 };
 export type MenuItem = MenuEntry | "separator";
 

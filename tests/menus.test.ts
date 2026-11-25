@@ -153,6 +153,7 @@ test("the clip menu offers an edit only when its key would act on the selection"
       [
         keymap.editM2SplitClip.label,
         "Freeze frame",
+        keymap.clipResetRetime.label,
         keymap.editLink.label,
         "Paste style",
         "Paste grade",
@@ -183,7 +184,11 @@ test("the clip menu offers an edit only when its key would act on the selection"
         onReveal() {},
       }),
     ),
-  ).toEqual([keymap.editLink.label, "Paste style"]);
+  ).toEqual([
+    keymap.clipResetRetime.label,
+    keymap.editLink.label,
+    "Paste style",
+  ]);
   expect(
     disabled(
       rows({
@@ -195,7 +200,7 @@ test("the clip menu offers an edit only when its key would act on the selection"
         onReveal() {},
       }),
     ),
-  ).toEqual([keymap.editLink.label]);
+  ).toEqual([keymap.clipResetRetime.label, keymap.editLink.label]);
 });
 
 test("the clip menu removes a video's background, keeps it once removed, and offers neither for sound", () => {

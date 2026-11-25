@@ -126,6 +126,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
       window.removeEventListener("resize", leave);
     };
   }, []);
+  const glyphs = menu.items.some((item) => item !== "separator" && item.glyph);
   const checks = menu.items.some(
     (item) => item !== "separator" && item.checked !== undefined,
   );
@@ -138,6 +139,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
       popover="manual"
       tabIndex={-1}
       data-checks={checks || undefined}
+      data-glyphs={glyphs || undefined}
       onContextMenu={(event) => event.preventDefault()}
       onKeyDown={(event) => {
         // The menu takes every key while it is open; none reaches the editor's shortcuts.
@@ -195,6 +197,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
                 {item.checked && <Check size={12} weight="bold" />}
               </span>
             )}
+            {glyphs && (item.glyph ?? <span aria-hidden="true" />)}
             <span>{label}</span>
             {keys && <kbd aria-hidden="true">{keys}</kbd>}
           </button>

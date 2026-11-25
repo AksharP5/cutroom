@@ -10,6 +10,7 @@ import { resolveClip } from "../../shared/timeline/clipTiming";
 import { frameShowing, frames, sourceAt } from "../../shared/timeline/piece";
 import { TimelineError } from "../../shared/timeline/errors";
 import { activeVersion } from "../../shared/timeline/versions";
+import { hasRamp } from "../../shared/timeline/speed";
 import type {
   Clip,
   CommandInput,
@@ -593,6 +594,13 @@ const cycleVersion =
     return [];
   };
 
+/** Clips with a speed to reset: a ramp, or a constant speed other than 100%. */
+export const resettable = (clips: readonly Clip[]) =>
+  clips.filter(
+    (clip) =>
+      clip.mediaStart !== null && (clip.playbackRate !== 1 || hasRamp(clip)),
+  );
+
 /** The timeline edits bound to keys. Each press is one batch, so one undo step. */
 export const editKeys = {
   trimRippleStartToPlayhead: {
@@ -615,6 +623,20 @@ export const editKeys = {
           "Move the playhead inside a video clip to freeze a frame.",
         );
       return [freezeAt(clip, target.frame, "replace")];
+    },
+  },
+  clipResetRetime: {
+    label: "Reset speed",
+    commands: (timeline, target) => {
+      const seen = new Set<string>();
+      return resettable(selectedIn(timeline, target)).flatMap(
+        (clip): CommandInput[] => {
+          // setSpeed takes the linked partners along.
+          if (seen.has(clip.link ?? clip.id)) return [];
+          seen.add(clip.link ?? clip.id);
+          return [{ type: "setSpeed", clipId: clip.id, speed: 1 }];
+        },
+      );
     },
   },
   editNudgeTrimStepTrimStart: {
