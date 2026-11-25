@@ -44,7 +44,7 @@ const Input = z.object({
     .object({
       plan: DirectPlanSchema,
       html: z.string(),
-      /** The entry document with only the clips the mixed export captures. */
+      /** The entry document with idle video sources detached. */
       captureSource: z.string().optional(),
       captureBrowsers: z.int().positive().optional(),
       /** Why frame capture would not fit in memory; a fallback fails with it instead of starting. */
@@ -168,6 +168,12 @@ try {
   if (pieces && input.direct?.captureSource !== undefined)
     input.sources[entryPath] = input.direct.captureSource;
   const browsers = pieces && capture?.length && input.direct?.captureBrowsers;
+  // The local span's chunk resolves its worker count from the environment.
+  // Keep the fallback budget until the direct sources have passed verification.
+  if (browsers) {
+    process.env.PRODUCER_MAX_WORKERS = String(browsers);
+    process.env.PRODUCER_MIN_PARALLEL_FRAMES = String(Number.MAX_SAFE_INTEGER);
+  }
   const engineConfig = resolveConfig({
     ...(adjustment && { forceScreenshot: true, useDrawElement: false }),
     ...(browsers && {

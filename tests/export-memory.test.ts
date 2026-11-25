@@ -43,14 +43,15 @@ test("capture memory follows selected runs in export time, including transition 
   ).toBe(4);
 });
 
-test("a capture document keeps only the pictures its runs show, and all of its sound", () => {
+test("a capture document keeps its elements and detaches only idle video sources", () => {
   const html = `<!doctype html><html><head></head><body><main data-composition-id="main">
-  <video id="early" data-start="0" data-duration="10"></video>
-  <video id="intro" data-start="0" data-duration="8"></video>
-  <video id="under" data-start="10" data-duration="10"></video>
-  <video id="late" data-start="20" data-duration="10" data-transition-in="dissolve" data-transition-in-duration="1"></video>
-  <video id="after" data-start="40" data-duration="10"></video>
-  <img id="still" data-start="0" data-duration="5">
+  <video id="early" muted src="early.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="0" data-duration="10"></video>
+  <video id="intro" muted src="intro.mp4" data-start="0" data-duration="8"></video>
+  <video id="under" muted src="under.mp4" data-start="10" data-duration="10"></video>
+  <video id="late" muted src="late.mp4" data-start="20" data-duration="10" data-transition-in="dissolve" data-transition-in-duration="1"></video>
+  <video id="after" muted src="after.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="40" data-duration="10"></video>
+  <video id="voice" src="voice.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="40" data-duration="10"></video>
+  <img id="still" src="still.png" data-start="0" data-duration="5">
   <audio id="sound" data-start="0" data-duration="50"></audio>
   <div id="title" class="clip" data-start="intro + 10" data-duration="1.5"><span>Title</span></div>
   </main></body></html>`;
@@ -63,8 +64,25 @@ test("a capture document keeps only the pictures its runs show, and all of its s
     [...kept.matchAll(/ id="([a-z]+)"/g)].map((match) => match[1]),
   ).toEqual(
     // The dissolve into "late" can show it a second early.
-    ["intro", "under", "late", "sound", "title"],
+    [
+      "early",
+      "intro",
+      "under",
+      "late",
+      "after",
+      "voice",
+      "still",
+      "sound",
+      "title",
+    ],
   );
+  expect(kept).toContain('id="early" muted data-cutroom-idle-src="early.mp4"');
+  expect(kept).toContain('id="after" muted data-cutroom-idle-src="after.mp4"');
+  expect(kept).toContain('id="intro" muted src="intro.mp4"');
+  expect(kept).toContain('id="late" muted src="late.mp4"');
+  expect(kept).toContain('id="still" src="still.png"');
+  expect(kept).toContain('id="voice" src="voice.mp4"');
+  expect(loadedMedia(kept, true)).toBe(5);
   expect(kept).toContain(
     '<div id="title" class="clip" data-start="intro + 10"',
   );

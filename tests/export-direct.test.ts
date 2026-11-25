@@ -875,3 +875,143 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   },
   45_000,
 );
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "marked and mixed exports keep off-range elements in the page",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-dom-"));
+    const scratchDir = root + "-scratch";
+    const capture = createRenderWorkers({ scratchDir, directExport: false });
+    const direct = createRenderWorkers({ scratchDir });
+    const fps = { num: 30, den: 1 };
+    const section = { start: 60, end: 90 };
+    const page = (clip: string, css: string, script = "") =>
+      `<!doctype html><html><head><style>
+      html,body{margin:0;width:100%;height:100%;overflow:hidden}
+      .stage{position:relative;width:100%;height:100%;overflow:hidden}
+      #title{position:absolute;inset:0;background:#00f}
+      ${css}
+      </style></head><body><main id="main" class="stage" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-duration="3">
+      ${clip}
+      <div id="title" class="clip" data-start="2" data-duration="1" data-track-index="1"></div>
+      ${script}</main></body></html>`;
+    const logo =
+      '<img id="logo" class="clip" src="logo.png" data-start="0" data-duration="1" data-track-index="0">';
+    const video =
+      '<video id="v1" muted src="shot.mp4" data-start="0" data-duration="1" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video>';
+    let output = 0;
+    try {
+      await source(join(root, "shot.mp4"), "640x360", "30", BT709);
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=white:s=16x16",
+        "-frames:v",
+        "1",
+        "-threads",
+        "1",
+        join(root, "logo.png"),
+      ]);
+      const render = async (
+        html: string,
+        renderer: "mixed" | "capture",
+        range: typeof section | null,
+        format: "mp4" | "mov" = "mp4",
+      ) => {
+        await writeFile(join(root, "index.html"), html);
+        const filename = `output-${++output}.${format}`;
+        const workers = renderer === "mixed" ? direct : capture;
+        const state = workers.start(
+          {
+            project: { id: "export-dom", dir: root },
+            outputPath: join(root, filename),
+            format,
+            fps,
+            quality: "draft",
+            jobId: filename,
+          },
+          { filename, directory: root, range },
+        );
+        const deadline = Date.now() + 45_000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(50);
+        expect(state.error).toBeUndefined();
+        expect(state.status).toBe("complete");
+        expect(state.renderer).toBe(renderer);
+        const bytes = await command([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-i",
+          state.outputPath,
+          "-vf",
+          "format=rgba,crop=1:1:320:180",
+          "-pix_fmt",
+          "rgba",
+          "-f",
+          "rawvideo",
+          "pipe:1",
+        ]);
+        expect(bytes.length / 4).toBe(range ? 30 : 90);
+        return Array.from({ length: 30 }, (_, index) => {
+          const offset = (bytes.length / 4 - 30 + index) * 4;
+          const [red, green, blue, alpha] = bytes.subarray(offset, offset + 4);
+          return red! > 240 && green! < 16 && blue! < 16 && alpha === 255;
+        });
+      };
+      const expected = Array.from({ length: 30 }, () => true);
+      const nextVideo = video
+        .replace('id="v1"', 'id="v2"')
+        .replace('data-start="0"', 'data-start="1"');
+      for (const [name, html, renderer, range, format] of [
+        [
+          "marked CSS",
+          page(logo, "#main > :nth-child(2){background:#f00}"),
+          "capture",
+          section,
+          "mp4",
+        ],
+        [
+          "marked script",
+          page(
+            logo,
+            "",
+            '<script>if (document.getElementById("logo").getAttribute("src") === "logo.png") document.getElementById("title").style.background = "#f00";</script>',
+          ),
+          "capture",
+          section,
+          "mp4",
+        ],
+        [
+          "mixed CSS",
+          page(video + nextVideo, "#v1 ~ #title{background:#f00}"),
+          "mixed",
+          null,
+          "mp4",
+        ],
+        [
+          "marked ProRes",
+          page(logo, "#main > :nth-child(2){background:#f00}"),
+          "capture",
+          section,
+          "mov",
+        ],
+      ] as const) {
+        const whole = await render(html, "capture", null, format);
+        expect(whole, name).toEqual(expected);
+        expect(await render(html, renderer, range, format), name).toEqual(
+          whole,
+        );
+      }
+    } finally {
+      await Promise.all([direct.cancelAll(), capture.cancelAll()]);
+      await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
+    }
+  },
+  180_000,
+);

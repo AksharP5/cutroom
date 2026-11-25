@@ -2,7 +2,7 @@ import {
   parseStartExpression,
   scanHtmlOpeningTags,
 } from "@hyperframes/parsers";
-import { parse } from "parse5";
+import { defaultTreeAdapter, parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportOptions } from "../../shared/export.ts";
@@ -17,6 +17,7 @@ import {
 
 type Range = NonNullable<ExportOptions["range"]>;
 type Element = DefaultTreeAdapterTypes.Element;
+const IDLE_SOURCE = "data-cutroom-idle-src";
 export type CaptureWorkload = {
   mediaClips: number;
   durationFrames: number;
@@ -35,7 +36,12 @@ export function loadedMedia(html: string, sound: boolean) {
   let count = 0;
   const visit = (node: Element) => {
     if (attribute(node, "data-hidden") !== undefined) return;
-    if (kinds.includes(node.tagName)) count++;
+    if (
+      kinds.includes(node.tagName) &&
+      (attribute(node, IDLE_SOURCE) === undefined ||
+        attribute(node, "src") !== undefined)
+    )
+      count++;
     for (const child of elements(node)) visit(child);
   };
   for (const node of elements(parse(html))) visit(node);
@@ -84,6 +90,11 @@ export function timedCaptureMedia(
       return;
     if (element.tagName !== "video" && element.tagName !== "audio") continue;
     if (!sound && element.tagName === "audio") continue;
+    if (
+      attribute(element, IDLE_SOURCE) !== undefined &&
+      attribute(element, "src") === undefined
+    )
+      continue;
     const start = seconds(attribute(element, "data-start"));
     const length = seconds(attribute(element, "data-duration"));
     if (
@@ -99,10 +110,8 @@ export function timedCaptureMedia(
 }
 
 /**
- * A mixed export's capture document: the root video and image clips that no capture run shows are
- * left out, so its browsers load, and the export extracts pictures for, only what they draw.
- * Sound stays, since the export mixes it from this document. Every clip reaches out by the
- * longest transition, which can show it before its start or after its end.
+ * Keep the authored DOM in place. Detach only a video source that none of the
+ * capture frames or exported sound need. Stills keep their intrinsic layout.
  */
 export function captureDocument(
   html: string,
@@ -112,10 +121,46 @@ export function captureDocument(
   const page = elements(parse(html, { sourceCodeLocationInfo: true })).find(
     ({ tagName }) => tagName === "html",
   );
+  const head = page && elements(page).find(({ tagName }) => tagName === "head");
   const body = page && elements(page).find(({ tagName }) => tagName === "body");
   const root = body && elements(body)[0];
-  if (!root || attribute(root, "data-composition-id") === undefined)
+  if (
+    !page ||
+    !head ||
+    !body ||
+    !root ||
+    elements(body).length !== 1 ||
+    attribute(root, "data-composition-id") === undefined ||
+    activeContent(root) ||
+    [page, head, body, root].some(({ attrs }) =>
+      attrs.some(({ name }) => /^on/i.test(name)),
+    )
+  )
     return html;
+  for (const element of elements(head)) {
+    if (element.tagName === "meta" || element.tagName === "title") continue;
+    if (element.tagName === "style") {
+      const css = element.childNodes
+        .filter(defaultTreeAdapter.isTextNode)
+        .map(({ value }) => value)
+        .join("");
+      // A stylesheet can observe the source attribute or override a timed clip's visibility.
+      if (
+        !/\\|@import|\[\s*(?:[\w*-]*\|\s*)?(?:src|data-cutroom-idle-src)\b|(?:display|visibility|opacity)\s*:[^;}]+!\s*important/i.test(
+          css,
+        )
+      )
+        continue;
+    }
+    if (
+      element.tagName === "script" &&
+      element.attrs.length === 1 &&
+      element.childNodes.length === 0 &&
+      LIBRARY_SCRIPTS.has(attribute(element, "src") ?? "")
+    )
+      continue;
+    return html;
+  }
   const clips = elements(root);
   const reach = Math.max(
     0,
@@ -140,20 +185,40 @@ export function captureDocument(
     const expression = parseStartExpression(start.value);
     if (expression?.kind === "reference") anchors.add(expression.refId);
   }
-  const idle = clips.filter((clip) => {
-    if (clip.tagName !== "video" && clip.tagName !== "img") return false;
-    if (anchors.has(attribute(clip, "id") ?? "")) return false;
+  const idle: number[] = [];
+  for (const clip of clips) {
+    if (clip.tagName !== "video" || elements(clip).length) continue;
+    if (anchors.has(attribute(clip, "id") ?? "")) continue;
+    if (
+      clip.attrs.some(({ name }) =>
+        ["autoplay", "poster", "data-var-src", IDLE_SOURCE].includes(name),
+      )
+    )
+      continue;
     const start = seconds(attribute(clip, "data-start"));
     const length = seconds(attribute(clip, "data-duration"));
-    if (start === null || length === null) return false;
-    return !shown.some((run) => start < run.end && run.start < start + length);
-  });
+    if (start === null || length === null || length <= 0) continue;
+    if (shown.some((run) => start < run.end && run.start < start + length))
+      continue;
+    if (
+      attribute(clip, "muted") === undefined &&
+      attribute(clip, "data-has-audio") !== "false"
+    )
+      continue;
+    // An intrinsic size change could otherwise move its siblings even while hidden.
+    if (
+      !attribute(clip, "style")?.startsWith(
+        "position:absolute;inset:0;width:100%;height:100%;",
+      )
+    )
+      continue;
+    const source = clip.sourceCodeLocation?.attrs?.src;
+    if (source) idle.push(source.startOffset);
+  }
   let kept = html;
-  for (const { sourceCodeLocation } of idle.reverse()) {
-    if (!sourceCodeLocation) return html;
+  for (const offset of idle.sort((a, b) => b - a)) {
     kept =
-      kept.slice(0, sourceCodeLocation.startOffset) +
-      kept.slice(sourceCodeLocation.endOffset);
+      kept.slice(0, offset) + IDLE_SOURCE + kept.slice(offset + "src".length);
   }
   return kept;
 }
