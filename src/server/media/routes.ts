@@ -70,6 +70,7 @@ export function createMediaRoutes(
     "peaks",
     "filmstrip",
     "frame",
+    "thumbnail",
     "scrub",
     "proxy",
     "pcm",
@@ -77,7 +78,11 @@ export function createMediaRoutes(
     api.get(`/projects/:id/media/${kind}`, async (c) => {
       c.header("cache-control", "no-store");
       const project = await store.get(c.req.param("id"));
-      const path = PathSchema.parse(c.req.query("path"));
+      const requested = PathSchema.parse(c.req.query("path"));
+      const path =
+        kind === "thumbnail"
+          ? await projectVideo(project, requested)
+          : requested;
       const query = c.req.query();
       const range =
         kind === "peaks" &&
@@ -113,7 +118,7 @@ export function createMediaRoutes(
       const etag = `"${result.key}"`;
       const h = headers(
         etag,
-        kind === "frame"
+        kind === "frame" || kind === "thumbnail"
           ? "image/jpeg"
           : kind === "scrub" || kind === "proxy"
             ? "video/mp4"

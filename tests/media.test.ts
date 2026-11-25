@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  copyFile,
   mkdir,
   readFile,
   readdir,
@@ -8,7 +9,7 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import { createMediaRoutes } from "../src/server/media/routes";
 import { createMediaService } from "../src/server/media/service";
@@ -422,7 +423,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
   "repeated file versions change every derived key and bound persisted artifacts after restart",
   async () => {
     const fixture = await projectFixture();
-    let media = createMediaService({ maxCacheEntries: 4 });
+    let media = createMediaService({ maxCacheEntries: 3 });
     try {
       const project = await fixture.store.create({ name: "Replacement cache" });
       const path = join(project.path, "card.mkv");
@@ -448,7 +449,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         ]);
         // A new process must also prune older versions already on disk.
         await media.dispose();
-        media = createMediaService({ maxCacheEntries: 4 });
+        media = createMediaService({ maxCacheEntries: 3 });
         for (const kind of ["probe", "peaks", "filmstrip", "frame"] as const) {
           const deadline = Date.now() + 5000;
           let result = await media.request(project, "card.mkv", kind);
@@ -467,9 +468,76 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         const cache = (
           await readdir(join(project.path, ".cutroom/cache"))
         ).filter((name) => /^[a-f0-9]{64}$/.test(name));
-        expect(cache.length).toBeLessThanOrEqual(4);
-        expect(cache.sort()).toEqual([...keys.values()].sort());
+        expect(cache.sort()).toEqual(
+          [...keys]
+            .filter(([kind]) => kind !== "probe")
+            .map(([, key]) => key)
+            .sort(),
+        );
+        const probes = await readdir(
+          join(project.path, ".cutroom/cache/probes"),
+        );
+        expect(probes.length).toBeLessThanOrEqual(3);
+        expect(probes).toContain(keys.get("probe")!);
       }
+    } finally {
+      await media.dispose();
+      await fixture.close();
+    }
+  },
+  15000,
+);
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "browsing keeps an editing proxy and evicts the least recently used thumbnail",
+  async () => {
+    const fixture = await projectFixture();
+    const media = createMediaService({
+      maxCacheEntries: 3,
+      nvenc: async () => false,
+    });
+    try {
+      const project = await fixture.store.create({ name: "Thumbnail cache" });
+      const source = join(project.path, "edited.mp4");
+      await ffmpeg([
+        "-f",
+        "lavfi",
+        "-i",
+        "color=red:size=160x90:rate=10:duration=1",
+        "-c:v",
+        "libx265",
+        "-preset",
+        "ultrafast",
+        "-x265-params",
+        "log-level=error:pools=1:frame-threads=1",
+        source,
+      ]);
+      const asset = async (path: string, kind: "proxy" | "thumbnail") => {
+        const deadline = performance.now() + 5000;
+        for (;;) {
+          const result = await media.request(project, path, kind);
+          if (result.artifact) return result.artifact;
+          if (result.state.status === "failed")
+            throw new Error(result.state.error);
+          if (performance.now() > deadline)
+            throw new Error(`Could not prepare ${kind}`);
+          await Bun.sleep(15);
+        }
+      };
+      const proxy = await asset("edited.mp4", "proxy");
+      for (const path of ["a.mp4", "b.mp4", "c.mp4", "d.mp4"])
+        await copyFile(source, join(project.path, path));
+      const a = await asset("a.mp4", "thumbnail");
+      const b = await asset("b.mp4", "thumbnail");
+      await asset("c.mp4", "thumbnail");
+      const old = new Date(0);
+      await utimes(dirname(a), old, old);
+      await utimes(dirname(b), old, old);
+      expect(await asset("a.mp4", "thumbnail")).toBe(a);
+      await asset("d.mp4", "thumbnail");
+      expect(await Bun.file(proxy).exists()).toBe(true);
+      expect(await Bun.file(a).exists()).toBe(true);
+      expect(await Bun.file(b).exists()).toBe(false);
     } finally {
       await media.dispose();
       await fixture.close();
@@ -608,7 +676,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
   30000,
 );
 
-test("footage and editing proxy routes stay inside the project's visible video files", async () => {
+test("footage, editing proxy and thumbnail routes stay inside the project's visible video files", async () => {
   const fixture = await projectFixture();
   fixture.app.route("/api/cutroom", createMediaRoutes(fixture.store));
   const server = Bun.serve({ port: 0, fetch: fixture.app.fetch });
@@ -647,7 +715,7 @@ test("footage and editing proxy routes stay inside the project's visible video f
       "folder.mov",
       "missing.mp4",
     ]) {
-      for (const kind of ["source", "editing-proxy"]) {
+      for (const kind of ["source", "editing-proxy", "thumbnail"]) {
         const response = await fetch(url(kind, path));
         expect(response.ok, `${kind}: ${path}`).toBe(false);
         expect(await response.text()).not.toContain("private");
@@ -947,6 +1015,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
       // Newer artifacts push the oldest entries out, the PCM file with them.
       media = createMediaService({ maxCacheEntries: 2 });
       await pcmOf(media, project, "b.wav");
+      await pcmOf(media, project, "a.wav");
       expect(await readdir(entry).catch(() => null)).toBeNull();
     } finally {
       await media.dispose();

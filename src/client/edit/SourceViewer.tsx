@@ -11,8 +11,7 @@ import {
   peakLevels,
 } from "../../shared/media";
 import { RuntimeStateSchema } from "../../shared/preview";
-import { pictureAt } from "../../shared/timeline/piece";
-import { pictureSeek } from "../../shared/timeline/pictureSource";
+import { pictureTime } from "../../shared/timeline/pictureSource";
 import type { PictureSource } from "../../shared/timeline/pictureSource";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { TimecodeText } from "../components/TimecodeText";
@@ -33,6 +32,7 @@ import {
   closeSource,
   openSourceMarks,
   placeSource,
+  setSourceVideoTiming,
   sourcePlayer,
   sourceRange,
   useSource,
@@ -72,6 +72,7 @@ const PRESENT_MS = 100;
 function mediaPlayer(
   element: HTMLMediaElement,
   seekPosition: (seconds: number) => number,
+  readPosition: () => number,
 ): RuntimePlayer {
   let waiting: number | null = null;
   let turn = 0;
@@ -116,7 +117,7 @@ function mediaPlayer(
       if (busy) waiting = seconds;
       else go(seconds);
     },
-    time: () => waiting ?? element.currentTime,
+    time: () => waiting ?? readPosition(),
     clock: () => null,
     playing: () => !element.paused && !element.ended,
     setMuted(muted) {
@@ -253,13 +254,18 @@ function SourceMedia({
     const controller = new AbortController();
     const { signal } = controller;
     const video = element instanceof HTMLVideoElement ? element : null;
-    let proxy = false;
+    let sourceStart = file.start ?? 0;
+    let proxyOffset = 0;
     let pictures: PictureSource | null = null;
     let attached = false;
+    const native = !file.codec || !needsVideoProxy(file.codec);
+    let canAttach = !video || (native && file.codec !== undefined);
+    let confirmed = false;
     const ready = () => {
-      // The proxy's stream length can round differently. Marks stay on the source's clock.
+      if (!canAttach || attached) return;
+      // Video length comes from its picture stream. The element still reports audio length.
       if (
-        !proxy &&
+        !video &&
         Number.isFinite(element.duration) &&
         element.duration !== file.seconds
       )
@@ -267,42 +273,67 @@ function SourceMedia({
       if (video?.videoWidth) setShape(video.videoWidth / video.videoHeight);
       attached = true;
       sourcePlayer.attach(
-        mediaPlayer(element, (seconds) => {
-          if (!pictures || sourcePlayer.use.getState().state.kind === "playing")
-            return seconds + INSIDE_FRAME;
-          const ordinal = pictureAt(pictures.index, seconds);
-          return ordinal === null
-            ? seconds + INSIDE_FRAME
-            : Math.max(0, pictureSeek(pictures.index, ordinal));
-        }),
+        mediaPlayer(
+          element,
+          (seconds) => {
+            const source = sourceStart + seconds;
+            const asked = source + INSIDE_FRAME;
+            const playing =
+              sourcePlayer.use.getState().state.kind === "playing";
+            const seek = playing ? asked : pictureTime(pictures, asked, source);
+            return Math.max(0, seek - proxyOffset);
+          },
+          () => Math.max(0, element.currentTime + proxyOffset - sourceStart),
+        ),
       );
     };
     if (element.readyState >= element.HAVE_METADATA) ready();
-    else
-      element.addEventListener("loadedmetadata", ready, { once: true, signal });
+    element.addEventListener("loadedmetadata", ready, { signal });
 
     if (video) {
       const asset = (kind: string) =>
         mediaAssetUrl(projectId, kind, file.path, version);
+      video.addEventListener(
+        "error",
+        () => {
+          if (confirmed) failed();
+        },
+        { signal },
+      );
+      if (native) video.src = src;
       const prepare = async () => {
         const probe = await fetchMediaProbe(asset("probe"), signal);
         signal.throwIfAborted();
+        if (probe?.video) {
+          sourceStart = probe.video.start ?? 0;
+          setSourceVideoTiming(probe.video);
+        }
         if (!probe?.video || !needsVideoProxy(probe.video.codec)) {
-          video.src = src;
+          confirmed = canAttach = true;
+          if (!native) video.src = src;
+          else if (video.error) failed();
+          else if (video.readyState >= video.HAVE_METADATA) ready();
           return;
         }
-        proxy = true;
+        canAttach = false;
+        if (attached) {
+          sourcePlayer.attach(null);
+          attached = false;
+        }
+        if (native) {
+          video.removeAttribute("src");
+          video.load();
+        }
         setPreparing(true);
-        const seconds = probe.duration ?? probe.video.duration;
-        if (seconds > 0 && seconds !== file.seconds)
-          useSource.setState({ file: { ...file, seconds } });
+        const editingProxy = makesProxy(probe.video);
+        if (editingProxy) proxyOffset = probe.video.proxyOffset ?? 0;
         void fetchPictureSource(asset("frames"), signal).then((index) => {
           if (!index || signal.aborted) return;
           pictures = index;
           const { state, frame } = sourcePlayer.use.getState();
           if (attached && state.kind === "stopped") sourcePlayer.seek(frame);
         });
-        const url = makesProxy(probe.video)
+        const url = editingProxy
           ? asset(
               video.canPlayType("application/vnd.apple.mpegurl")
                 ? "editing-proxy"
@@ -313,7 +344,10 @@ function SourceMedia({
           if (!signal.aborted) failed();
           return;
         }
-        if (!signal.aborted) video.src = url;
+        if (!signal.aborted) {
+          confirmed = canAttach = true;
+          video.src = url;
+        }
       };
       void prepare().catch((error: unknown) => {
         if (signal.aborted) return;
@@ -387,7 +421,6 @@ function SourceMedia({
               preload="auto"
               playsInline
               onLoadedData={() => setPreparing(false)}
-              onError={failed}
             />
             {preparing && (
               <div className="edit-preparing" role="status">

@@ -129,7 +129,7 @@ export function placeAtPlayhead(
             ...placed,
             kind: picture ? placed.kind : "audio",
             frames: target.duration,
-            mediaStart: secondsOf(start),
+            mediaStart: (media.start ?? 0) + secondsOf(start),
             hasAudio: sound,
           },
           destination,

@@ -7,6 +7,7 @@ export const MediaKindSchema = z.enum([
   "peaks",
   "filmstrip",
   "frame",
+  "thumbnail",
   "scrub",
   "proxy",
   "pieces",

@@ -117,7 +117,7 @@ function VideoFrameThumbnail({ url }: { url: string }) {
     const controller = new AbortController();
     const { signal } = controller;
     let objectUrl: string | undefined;
-    void fetchMediaReady(url, signal, 200)
+    void fetchMediaReady(url, signal, 200, "GET", 1000)
       .then((response) => response?.blob())
       .then((blob) => {
         if (!blob || signal.aborted) return;
@@ -196,16 +196,17 @@ function MediaRow({
       : null,
   );
   const video = probe?.video;
-  const duration = video ? (probe.duration ?? video.duration) : audioDuration;
+  const duration = video?.duration ?? audioDuration;
   const src = mediaUrl(projectId, path, changed);
-  const thumbnail =
-    mediaAssetUrl(projectId, "frame", path, changed) + "&time=0";
+  const thumbnail = mediaAssetUrl(projectId, "thumbnail", path, changed);
   // Placement uses the original's length even while its picture is being made.
   const placeable = !gone && (kind === "image" || (duration ?? 0) > 0);
   const dragged = (): MediaDrag => ({
     kind,
     path,
     seconds: duration ?? STILL_SECONDS,
+    start: video?.start,
+    codec: video?.codec,
     hasAudio: kind === "audio" || probe?.channels !== undefined,
     format: ProjectFormatSchema.safeParse({
       width: video?.width,

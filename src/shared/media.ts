@@ -12,6 +12,10 @@ export const MediaInfoSchema = z.object({
       fps: z.number().positive(),
       matchFps: ProjectRateSchema.optional(),
       duration: z.number().nonnegative(),
+      /** First picture's time on the timeline's media clock. */
+      start: z.number().nonnegative().optional(),
+      /** Subtract this from a media time to seek on FFmpeg's relative clock. */
+      proxyOffset: z.number().optional(),
       codec: z.string(),
       alpha: z.boolean(),
       hdr: z.boolean(),

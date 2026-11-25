@@ -15,6 +15,7 @@ import type {
   PictureIndex,
   PlacedElement,
   StoredSource,
+  SourceTime,
 } from "./piece.ts";
 import type { Fps } from "./schema.ts";
 
@@ -343,6 +344,20 @@ export function pictureSeek(index: PictureIndex, ordinal: bigint) {
  */
 export const timePicture = (index: PictureIndex, asked: number) =>
   pictureAt(index, asked - MEDIA_ELEMENT_LEAD_SECONDS);
+
+/** Where a decoder finds the picture export writes, using an exact source time when available. */
+export function pictureTime(
+  pictures: PictureSource | null,
+  asked: number,
+  source?: SourceTime,
+) {
+  if (!pictures) return asked;
+  const ordinal =
+    source === undefined
+      ? timePicture(pictures.index, asked)
+      : pictureAt(pictures.index, source);
+  return ordinal === null ? asked : pictureSeek(pictures.index, ordinal);
+}
 
 /**
  * The picture a decoded frame's microsecond timestamp belongs to. A constant-rate file's

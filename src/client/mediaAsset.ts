@@ -20,6 +20,7 @@ export async function fetchMediaReady(
   signal: AbortSignal,
   pollMs: number,
   method: "GET" | "HEAD" = "GET",
+  maxPollMs = pollMs,
 ) {
   for (;;) {
     const response = await fetch(url, { signal, method });
@@ -27,11 +28,12 @@ export async function fetchMediaReady(
     await response.body?.cancel();
     await new Promise((resolve) => setTimeout(resolve, pollMs));
     signal.throwIfAborted();
+    pollMs = Math.min(pollMs * 2, maxPollMs);
   }
 }
 
 export async function fetchMediaProbe(url: string, signal: AbortSignal) {
-  const response = await fetchMediaReady(url, signal, 200);
+  const response = await fetchMediaReady(url, signal, 200, "GET", 1000);
   return response ? MediaInfoSchema.parse(await response.json()) : null;
 }
 
