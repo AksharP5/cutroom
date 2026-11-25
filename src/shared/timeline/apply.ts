@@ -820,9 +820,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "Move the playhead inside the video clip to freeze a frame.",
         );
       const linked = withPartners(clips, [video]);
-      const targets = linked.filter(
-        (clip) => clip.start < at && at < clipEnd(clip),
-      );
+      const spans = (clip: Clip) => clip.start < at && at < clipEnd(clip);
+      const targets = linked.filter(spans);
       if (replace && video.sourceRestrictions?.remove)
         throw new TimelineError("unsupported", video.sourceRestrictions.remove);
       if (!replace && targets.some((clip) => parseRateLane(clip.automation)))
@@ -830,7 +829,6 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "unsupported",
           "Freeze frame can't cut a speed ramp. Reset speed first.",
         );
-      const tracks = new Set(linked.map((clip) => clip.track));
       const duration = replace
         ? video.duration
         : Math.max(1, Math.round((2 * fps.num) / fps.den));
@@ -899,10 +897,28 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           ...timeline,
           clips: clips.map((clip) => (clip === video ? image : clip)),
         };
-      const cut = splitClips(clips, targets, at, fps, mint);
+      const own = linked.map((clip) => clip.track);
+      const report = rippleObserver(timeline, own, batch.onRippleCut);
+      const tracks = report ? rippleTracks(timeline, own, true) : new Set(own);
+      const cutting = report
+        ? withPartners(
+            clips,
+            clips.filter((clip) => tracks.has(clip.track) && spans(clip)),
+          ).filter(spans)
+        : targets;
+      if (report) {
+        for (const clip of cutting)
+          if (clip.sourceRestrictions?.copy)
+            refuseRippleCut(clip, timeline, true);
+        for (const track of new Set(cutting.map((clip) => clip.track)))
+          report(track, 0);
+      }
+      const cut = splitClips(clips, cutting, at, fps, mint);
+      const next = shiftAfter(cut, tracks, () => at, duration);
+      if (report) assertRippleSync(timeline, next, tracks, copies);
       return {
         ...timeline,
-        clips: [...shiftAfter(cut, tracks, () => at, duration), image],
+        clips: [...next, image],
       };
     }
     case "remove": {

@@ -902,7 +902,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       ids: pieceIds,
     })
     .describe(
-      "Freeze a local video frame. Insert adds a silent two-second still and ripples the video and linked tracks. Replace holds the picture for the original clip length and leaves linked audio in place.",
+      "Freeze a local video frame. Insert adds a silent two-second still and ripples participating tracks. Replace holds the picture for the original clip length and leaves linked audio in place.",
     ),
   z
     .object({
@@ -912,7 +912,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .boolean()
         .default(false)
         .describe(
-          "Remove the selected time ranges across edited and unlocked auto-select tracks, cutting overlapping clips and closing the full gap",
+          "Remove the selected time ranges across participating tracks, cutting overlapping clips and closing the full gap",
         ),
       ids: pieceIds,
     })
@@ -924,7 +924,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       at: frame.describe("Any frame inside the gap"),
     })
     .describe(
-      "Close the empty gap between clips on a track, as selecting it and pressing Delete does: everything after it moves earlier by its length on this track and every unlocked auto-select track. Refused when a clip on one of those tracks is in the gap's time, naming it; turning off auto-select on its track closes the gap without it. The space after a track's last clip is not a gap.",
+      "Close the empty gap between clips on a track. Everything after it moves earlier by its length on participating tracks. Refused when a clip on one of those tracks is in the gap, naming it. The space after a track's last clip is not a gap.",
     ),
   z
     .object({
@@ -983,7 +983,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .enum(["place", "overwrite", "insert"])
         .default("place")
         .describe(
-          "Defaults to place, which refuses overlaps. Unlike UI media drops, agents must explicitly choose overwrite to replace destination frames. insert splits and shifts unlocked auto-select tracks.",
+          "Defaults to place, which refuses overlaps. Unlike UI media drops, agents must explicitly choose overwrite to replace destination frames. insert splits and shifts participating tracks.",
         ),
       track: frame,
       at: frame,
