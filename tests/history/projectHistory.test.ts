@@ -35,6 +35,7 @@ import { fileContentVersion } from "@hyperframes/studio-server";
 import { recordFileWriteReceipt } from "@hyperframes/studio-server/history-host";
 import { hashOfVersion } from "../../src/server/history/fileVersion";
 import { HistoryBusyError } from "../../src/server/history/ownerLock";
+import { historyCache } from "../../src/server/history/historyCache";
 import { HistoryIdError } from "../../src/server/history/historyId";
 import {
   HistoryClosedError,
@@ -1703,6 +1704,43 @@ describe("openProjectHistory", () => {
     const hash = reopened.peek(entry.id)!["index.html"]!;
     expect((await reopened.readBlob(hash)).toString()).toBe("v3");
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "refuses an unreadable log and keeps its Undo history",
+    async () => {
+      const { history, write, projectDir, historyRoot } = await project({
+        "index.html": "v1",
+      });
+      const edited = await change(history, you, "Second", () =>
+        write("index.html", "v2"),
+      );
+      await history.close();
+
+      const logFile = join(historyRoot, history.projectId, "log.jsonl");
+      const stateFile = join(projectDir, ".hyperframes", "video-state.json");
+      const log = readFileSync(logFile, "utf-8");
+      const state = readFileSync(stateFile, "utf-8");
+      const cache = historyCache((dir) => open(dir, historyRoot));
+      chmodSync(logFile, 0o000);
+      try {
+        await expect(cache.get(projectDir)).rejects.toThrow(
+          /Could not read the project history log.*EACCES/,
+        );
+        expect(() => readProjectHistory({ projectDir, historyRoot })).toThrow(
+          /Could not read the project history log.*EACCES/,
+        );
+      } finally {
+        chmodSync(logFile, 0o644);
+      }
+      expect(readFileSync(logFile, "utf-8")).toBe(log);
+      expect(readFileSync(stateFile, "utf-8")).toBe(state);
+
+      const reopened = (await cache.get(projectDir))!;
+      expect(reopened.list().map(({ id }) => id)).toEqual([edited.id]);
+      await reopened.undo(edited.id, { who: you });
+      expect(inside(projectDir, "index.html")).toBe("v1");
+    },
+  );
 
   it("reports a damaged log line and keeps every line around it", async () => {
     const { history, write, projectDir, historyRoot } = await project({
