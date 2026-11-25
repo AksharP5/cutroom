@@ -5,6 +5,7 @@ import {
   previewMediaPath,
 } from "../../shared/media";
 import { waveformPeak } from "./math";
+import { fetchMediaReady } from "../mediaAsset";
 import { filmGrades } from "./filmGrades";
 import type { Grade } from "../../shared/timeline/grade";
 
@@ -96,17 +97,6 @@ export function createTimelineMedia(
       : `${project}/${kind}?path=${path.encoded}&v=${path.version}${query}`;
   };
 
-  /** Asks again while the server is still generating. Null when it has nothing to give. */
-  async function fetchReady(url: string, pollMs: number) {
-    for (;;) {
-      const response = await fetch(url, { signal: closing.signal });
-      if (response.status !== 202) return response.ok ? response : null;
-      await response.body?.cancel();
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
-      closing.signal.throwIfAborted();
-    }
-  }
-
   /** Keys read since the last paint began, which are never dropped to make room. */
   const drawn = new Set<string>();
 
@@ -183,7 +173,7 @@ export function createTimelineMedia(
   }
 
   const films = cache(async (url) => {
-    const response = await fetchReady(url, POLL_MS);
+    const response = await fetchMediaReady(url, closing.signal, POLL_MS);
     return response && FilmSchema.parse(await response.json());
   });
   const loadPicture = async (
@@ -191,7 +181,7 @@ export function createTimelineMedia(
     pollMs: number,
     options?: ImageBitmapOptions,
   ) => {
-    const response = await fetchReady(url, pollMs);
+    const response = await fetchMediaReady(url, closing.signal, pollMs);
     if (!response) return null;
     const blob = await response.blob();
     if (blob.type !== "image/svg+xml") return createImageBitmap(blob, options);
@@ -218,7 +208,7 @@ export function createTimelineMedia(
   );
   const frames = cache((url) => loadPicture(url, FRAME_POLL_MS), FRAME_BYTES);
   const peaks = cache(async (url) => {
-    const response = await fetchReady(url, POLL_MS);
+    const response = await fetchMediaReady(url, closing.signal, POLL_MS);
     if (!response) return null;
     const bytes = await response.arrayBuffer();
     const pairs = new Int16Array(

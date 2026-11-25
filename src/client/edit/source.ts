@@ -5,6 +5,7 @@ import { SourceViewSchema, emptySourceMarks } from "../../shared/timeline/view";
 import type { SourceMarks } from "../../shared/timeline/view";
 import { createViewPreferences } from "../viewPreferences";
 import type { Timeline } from "../../shared/timeline/schema";
+import type { MediaInfo } from "../../shared/media";
 import { placedMedia } from "../timeline/gesture";
 import type { MediaDrag } from "../timeline/mediaDrag";
 import { showToast } from "../workspace";
@@ -37,6 +38,8 @@ export const sourcePlayer = createTransport();
 let pendingMarks: SourceMarks | null = null;
 /** Where a newly opened file's playhead starts, for match frame; otherwise its in mark. */
 let openingFrame: number | null = null;
+/** An opening frame from Match Frame can arrive before the video clock is known. */
+let matchedFrame: number | null = null;
 /** A library item's marks, kept for the session: it is no project file to save them beside. */
 const libraryMarks = new Map<string, SourceMarks>();
 
@@ -45,19 +48,20 @@ function sync() {
   if (!file) return;
   const { fps } = useTransport.getState();
   const duration = placedMedia(file, fps, ROOT_COMPOSITION).frames;
+  const origin = file.start ?? 0;
   const marks = file.library
     ? (libraryMarks.get(file.library.name) ?? emptySourceMarks())
     : (pendingMarks ?? preferences.use.getState());
   const start =
     marks.in === null
       ? null
-      : Math.min(duration - 1, Math.max(0, toFrames(marks.in, fps)));
+      : Math.min(duration - 1, Math.max(0, toFrames(marks.in - origin, fps)));
   const out =
     marks.out === null
       ? null
       : Math.min(
           duration,
-          Math.max((start ?? 0) + 1, toFrames(marks.out, fps)),
+          Math.max((start ?? 0) + 1, toFrames(marks.out - origin, fps)),
         );
   // Round saved seconds to this timeline's frames and keep them within the source.
   sourcePlayer.setTimeline({
@@ -83,10 +87,20 @@ const stop = (player: typeof transport) => {
 /** Loads a file and shows it, at `frame` when given. The same file otherwise keeps its place. */
 export function openSource(file: MediaDrag, frame?: number) {
   stop(transport);
-  const loaded = useSource.getState().file?.path === file.path;
+  const previous = useSource.getState().file;
+  const loaded = previous?.path === file.path;
+  const media =
+    loaded && file.kind === "video" && file.codec === undefined
+      ? previous
+      : file;
   openingFrame = loaded ? null : (frame ?? null);
-  useSource.setState({ file, shown: true });
-  if (loaded && frame !== undefined) sourcePlayer.seek(frame);
+  useSource.setState({ file: media, shown: true });
+  if (loaded && frame !== undefined) {
+    const { fps } = sourcePlayer.use.getState();
+    matchedFrame =
+      media.kind === "video" && media.start === undefined ? frame : null;
+    sourcePlayer.seek(frame - toFrames(media.start ?? 0, fps));
+  }
   // A library item has no saved marks to read, which is where a file's playhead is placed.
   else if (!loaded && file.library) sourcePlayer.seek(frame ?? 0);
 }
@@ -96,6 +110,7 @@ export function openSourceMarks(projectId: string, path: string) {
   pendingMarks = null;
   const opening = openingFrame;
   openingFrame = null;
+  matchedFrame = opening;
   sourcePlayer.seek(opening ?? 0);
   let loaded = false;
   return preferences.open(
@@ -118,6 +133,25 @@ export function openSourceMarks(projectId: string, path: string) {
   );
 }
 
+export function setSourceVideoTiming(video: NonNullable<MediaInfo["video"]>) {
+  const { file } = useSource.getState();
+  if (!file) return;
+  const { frame, fps, state } = sourcePlayer.use.getState();
+  const start = video.start ?? 0;
+  const seconds = video.duration || file.seconds;
+  const match = state.kind === "stopped" && matchedFrame === frame;
+  matchedFrame = null;
+  if (
+    start !== file.start ||
+    seconds !== file.seconds ||
+    video.codec !== file.codec
+  )
+    useSource.setState({
+      file: { ...file, start, seconds, codec: video.codec },
+    });
+  if (match && start !== 0) sourcePlayer.seek(frame - toFrames(start, fps));
+}
+
 /** Switches the viewer between the loaded source and the timeline; only one of them plays. */
 export function showSource(shown: boolean) {
   if (!useSource.getState().file) return;
@@ -136,9 +170,11 @@ export function markSource(range: Marks) {
   if (!file) return;
   const { identity } = preferences.use.getState();
   const { fps } = sourcePlayer.use.getState();
+  // Saved marks use the file's media clock, including a late video's leading offset.
+  const origin = file.start ?? 0;
   const marks = {
-    in: range.in === null ? null : frameTime(range.in, fps),
-    out: range.out === null ? null : frameTime(range.out, fps),
+    in: range.in === null ? null : origin + frameTime(range.in, fps),
+    out: range.out === null ? null : origin + frameTime(range.out, fps),
   };
   if (file.library) {
     libraryMarks.set(file.library.name, marks);
@@ -161,7 +197,7 @@ export function sourceRange(): MediaDrag | null {
   const start = range.in ?? 0;
   return {
     ...file,
-    start: frameTime(start, fps),
+    start: (file.start ?? 0) + frameTime(start, fps),
     seconds: frameTime((range.out ?? duration) - start, fps),
   };
 }

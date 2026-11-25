@@ -103,7 +103,19 @@ export function mediaClock(raw: string) {
       (stream.codec_type === "video" || stream.codec_type === "audio") &&
       stream["disposition:attached_pic"] !== "1",
   );
-  const earliest = av
+  const format = records(raw, "format").next().value;
+  return { av, format, ...mediaClockOrigin(av, format?.format_name) };
+}
+
+export function mediaClockOrigin(
+  streams: readonly {
+    time_base?: string;
+    start_pts?: string;
+    start_time?: string;
+  }[],
+  formatName: string | undefined,
+) {
+  const earliest = streams
     .map(readStreamStart)
     .reduce<ReturnType<typeof readStreamStart>>(
       (first, next) =>
@@ -112,13 +124,12 @@ export function mediaClock(raw: string) {
           : first,
       undefined,
     );
-  const format = records(raw, "format").next().value;
-  const fromZero = /\b(mp4|webm)\b/.test(format?.format_name ?? "");
+  const fromZero = /\b(mp4|webm)\b/.test(formatName ?? "");
   const zero =
     !earliest || (fromZero && earliest.time.n > 0n)
       ? fraction(0n)
       : earliest.time;
-  return { av, format, earliest, zero };
+  return { earliest, zero };
 }
 
 function onGrid(packets: Packet[], tick: ExactTime, rate: Fps) {

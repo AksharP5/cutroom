@@ -1,6 +1,5 @@
-import { ProjectRateSchema } from "../../shared/projectFormat";
 import { z } from "zod";
-import { mediaSettings } from "../../shared/media";
+import { MediaInfoSchema, mediaSettings } from "../../shared/media";
 import type { RampRun } from "../../shared/timeline/rampRuns";
 
 export const MediaKindSchema = z.enum([
@@ -8,6 +7,7 @@ export const MediaKindSchema = z.enum([
   "peaks",
   "filmstrip",
   "frame",
+  "thumbnail",
   "scrub",
   "proxy",
   "pieces",
@@ -36,22 +36,6 @@ export const RampTaskSchema = z.object({
   frames: z.number().int().positive(),
 });
 export type RampTask = z.infer<typeof RampTaskSchema>;
-export const MediaInfoSchema = z.object({
-  channels: z.number().int().positive().optional(),
-  video: z
-    .object({
-      width: z.number().int().positive(),
-      height: z.number().int().positive(),
-      pixelAspect: z.number().positive(),
-      fps: z.number().positive(),
-      matchFps: ProjectRateSchema.optional(),
-      duration: z.number().nonnegative(),
-      codec: z.string(),
-      alpha: z.boolean(),
-      hdr: z.boolean(),
-    })
-    .optional(),
-});
 /**
  * How an editing proxy is cut into pieces of about four seconds that play as soon as each is made.
  * Times are on the proxy's clock, the source's own with its start at zero.

@@ -1,8 +1,5 @@
 import { canAddVersion } from "../../shared/timeline/versions";
-import {
-  ProjectFormatSchema,
-  ProjectRateSchema,
-} from "../../shared/projectFormat";
+import { ProjectFormatSchema } from "../../shared/projectFormat";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { MagnifyingGlass, Plus, Waveform } from "@phosphor-icons/react";
@@ -13,6 +10,7 @@ import {
   mediaKind,
   mediaKinds,
   mediaSearch,
+  needsVideoProxy,
   previewMediaPath,
 } from "../../shared/media";
 import type { TimelineView } from "../../shared/timeline/schema";
@@ -23,6 +21,7 @@ import {
   mediaUrl,
   reportCommittedEntry,
 } from "../api";
+import { fetchMediaReady, mediaAssetUrl, useMediaProbe } from "../mediaAsset";
 import { useOfflineMedia } from "../edit/offlineMedia";
 import { newTimeline } from "../edit/compositions";
 import { placeAtPlayhead } from "../edit/placeMedia";
@@ -111,6 +110,31 @@ function usedMediaCount(view: TimelineView, name: string) {
   return counts.get(name) ?? 0;
 }
 
+/** The timeline's cached JPEG is enough for a row, even if its editing proxy is still being made. */
+function VideoFrameThumbnail({ url }: { url: string }) {
+  const [src, setSrc] = useState<string>();
+  useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
+    let objectUrl: string | undefined;
+    void fetchMediaReady(url, signal, 200, "GET", 1000)
+      .then((response) => response?.blob())
+      .then((blob) => {
+        if (!blob || signal.aborted) return;
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      })
+      .catch((error: unknown) => {
+        if (!signal.aborted) console.warn("Media thumbnail failed", error);
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [url]);
+  return src && <img src={src} alt="" />;
+}
+
 /** One row: a thumbnail, the file name, and its length read from the file itself. */
 function MediaRow({
   projectId,
@@ -148,11 +172,7 @@ function MediaRow({
       ? usedMediaCount(state.view, path)
       : 0,
   );
-  const [duration, setDuration] = useState<number | null>(null);
-  const [videoInfo, setVideoInfo] = useState<{
-    hasAudio: boolean;
-    format?: MediaDrag["format"];
-  } | null>(null);
+  const [audioDuration, setAudioDuration] = useState<number | null>(null);
   // Decoders start only for rows that have been on screen.
   const row = useRef<HTMLLIElement>(null);
   const [seen, setSeen] = useState(false);
@@ -169,69 +189,30 @@ function MediaRow({
   // The file left this name, by a rename or a move, before the list read it again: asking for
   // it now would only show a broken picture until the row goes.
   const gone = offline || changed === null;
-  useEffect(() => setDuration(null), [changed]);
-  useEffect(() => {
-    if (!seen || gone || kind !== "video") return;
-    const closing = new AbortController();
-    setVideoInfo(null);
-    const probe = async () => {
-      for (;;) {
-        const response = await fetch(
-          `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/probe?path=${encodeURIComponent(path)}&v=${encodeURIComponent(changed ?? "")}`,
-          { signal: closing.signal },
-        );
-        if (response.status !== 202) {
-          if (!response.ok)
-            throw new Error(`Cannot probe ${path} (${response.status}).`);
-          const info = z
-            .object({
-              channels: z.number().positive().optional(),
-              video: z
-                .object({
-                  width: z.number(),
-                  height: z.number(),
-                  matchFps: ProjectRateSchema.optional(),
-                })
-                .optional(),
-            })
-            .parse(await response.json());
-          if (!closing.signal.aborted) {
-            const format = ProjectFormatSchema.safeParse({
-              ...info.video,
-              fps: info.video?.matchFps,
-            });
-            setVideoInfo({
-              hasAudio: info.channels !== undefined,
-              format: format.data,
-            });
-          }
-          return;
-        }
-        await response.body?.cancel();
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        closing.signal.throwIfAborted();
-      }
-    };
-    void probe().catch((error: unknown) => {
-      if (!closing.signal.aborted) console.warn("Media probe failed", error);
-    });
-    return () => closing.abort();
-  }, [seen, gone, kind, projectId, path, changed]);
+  useEffect(() => setAudioDuration(null), [changed]);
+  const probe = useMediaProbe(
+    seen && !gone && kind === "video"
+      ? mediaAssetUrl(projectId, "probe", path, changed)
+      : null,
+  );
+  const video = probe?.video;
+  const duration = video?.duration ?? audioDuration;
   const src = mediaUrl(projectId, path, changed);
-  const measure = (element: HTMLMediaElement) => {
-    if (Number.isFinite(element.duration)) setDuration(element.duration);
-  };
-  // A row goes onto the timeline once its length is known.
-  const placeable =
-    !gone &&
-    (kind === "image" ||
-      (duration !== null && (kind !== "video" || videoInfo !== null)));
+  const thumbnail = mediaAssetUrl(projectId, "thumbnail", path, changed);
+  // Placement uses the original's length even while its picture is being made.
+  const placeable = !gone && (kind === "image" || (duration ?? 0) > 0);
   const dragged = (): MediaDrag => ({
     kind,
     path,
     seconds: duration ?? STILL_SECONDS,
-    hasAudio: videoInfo?.hasAudio ?? kind === "audio",
-    format: videoInfo?.format,
+    start: video?.start,
+    codec: video?.codec,
+    hasAudio: kind === "audio" || probe?.channels !== undefined,
+    format: ProjectFormatSchema.safeParse({
+      width: video?.width,
+      height: video?.height,
+      fps: video?.matchFps,
+    }).data,
   });
   // The source viewer needs a timeline: its playhead counts the timeline's frames.
   const open = () => {
@@ -331,15 +312,12 @@ function MediaRow({
       }}
     >
       <span className="media-thumb" aria-hidden="true">
-        {seen && !gone && kind === "video" && (
-          <video
-            src={`${src}#t=0.1`}
-            preload="metadata"
-            muted
-            playsInline
-            onLoadedMetadata={(event) => measure(event.currentTarget)}
-          />
-        )}
+        {video &&
+          (needsVideoProxy(video.codec) ? (
+            <VideoFrameThumbnail key={thumbnail} url={thumbnail} />
+          ) : (
+            <video src={`${src}#t=0.1`} preload="metadata" muted playsInline />
+          ))}
         {!gone && kind === "audio" && (
           <>
             <Waveform size={14} />
@@ -347,7 +325,10 @@ function MediaRow({
               <audio
                 src={src}
                 preload="metadata"
-                onLoadedMetadata={(event) => measure(event.currentTarget)}
+                onLoadedMetadata={({ currentTarget }) => {
+                  if (Number.isFinite(currentTarget.duration))
+                    setAudioDuration(currentTarget.duration);
+                }}
               />
             )}
           </>

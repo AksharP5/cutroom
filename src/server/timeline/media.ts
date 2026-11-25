@@ -7,12 +7,16 @@ import {
 } from "../../shared/pipeline";
 import type { FootageColour } from "../../shared/pipeline";
 import type { Project } from "../../shared/project";
-import { fileFingerprint, localMediaPath, mediaKind } from "../../shared/media";
+import {
+  fileFingerprint,
+  localMediaPath,
+  makesProxy,
+  mediaKind,
+} from "../../shared/media";
 import type { MediaFileDetails } from "../../shared/media";
 import { projectPath, unavailableProjectFile } from "../projects/path";
 import { compositionScope, mediaSources } from "./composition";
 import { localMediaInputOptions } from "../media/input";
-import { makesProxy } from "../media/settings";
 
 const ProbeSchema = z.object({
   streams: z
