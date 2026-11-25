@@ -31,13 +31,13 @@ export function registerExportTools(
     "export_start",
     {
       description:
-        "Export through the editor's render jobs, of the root composition or one named by composition: MP4 (H.264), MOV (ProRes 4444 with alpha), WebM (VP9 with alpha) or GIF. The format resolve writes a new folder for DaVinci Resolve: the whole timeline as FCPXML linked to the original media (tracks, cuts, constant speed, V1 transitions, transforms, crops, opacity and keyframes, region zooms, volume), its markers as an EDL, transparent ProRes 4444 layers for titles, scenes, captions and HTML, plus separate composites for adjustment grades, blurs and highlights, rendered as ordinary export jobs, and Summary.txt listing what Resolve can't show; it answers once the layers are done with the files and those notes, and copyMedia copies the media in. It names and refuses a clip with authored speed automation that would link to its source. Areas nothing draws stay transparent in MOV, WebM and GIF, so hide a full-frame background for an overlay. Defaults to In to Out when both marks exist, otherwise the whole timeline, Standard quality, the composition's size and rate, and the next free project name in .cutroom/renders with the format's extension. Explicit frame ranges are half-open. A chosen directory must be an absolute existing folder. A filename that already exists in the folder is refused before the export starts. Only one export can run at a time across all projects and clients. If one is running, wait for it or use export_cancel with its jobId before starting another.",
+        "Start an MP4, MOV, WebM, GIF, or DaVinci Resolve export and return a jobId to poll with export_status. Resolve writes the whole timeline as FCPXML, rendered ProRes layers, marker EDL, and Summary.txt. Set copyMedia to include copies. Omit filename for Resolve. For other formats the defaults are marked In to Out when both exist, otherwise the whole timeline, Standard quality, composition size and rate, and the next free project name in .cutroom/renders. Explicit ranges are half-open. Choose an absolute existing directory. Only one export can run across all projects and clients.",
       inputSchema: ExportStartSchema.extend({ projectId: z.string() }),
       annotations: edit,
     },
     async ({ projectId, ...input }) => {
       const project = encodeURIComponent(projectId);
-      if (input.filename) {
+      if (input.filename && input.format !== "resolve") {
         // A taken name otherwise starts a job that only fails when it publishes.
         const query = new URLSearchParams({
           filename: input.filename,
@@ -61,7 +61,12 @@ export function registerExportTools(
             isError: true,
           };
       }
-      return request(`/projects/${project}/export`, "POST", input);
+      const path = `/projects/${project}/export`;
+      return request(
+        input.format === "resolve" ? `${path}?background=1` : path,
+        "POST",
+        input,
+      );
     },
   );
   server.registerTool(
@@ -83,7 +88,7 @@ export function registerExportTools(
     "export_status",
     {
       description:
-        "Read any editor or agent export job's status, stage, progress percent, current-stage time estimate, output path, finished byte size, and failure cause. An estimate is null until enough frames have been measured.",
+        "Poll the jobId from export_start for status, stage, progress from 0 to 100, failure cause, and final outputPath. A completed Resolve job also returns result with its package files and notes. Video jobs include byte size and estimated time for stages with enough frames measured.",
       inputSchema: job,
       annotations: { ...edit, readOnlyHint: true },
     },

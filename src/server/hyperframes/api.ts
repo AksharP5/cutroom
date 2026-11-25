@@ -115,6 +115,7 @@ import { measureLoudness } from "../timeline/audio";
 import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
 import { exportResolve } from "../resolve/export";
+import { createResolveJobs } from "../resolve/jobs";
 import { layerHtml, layerSources } from "../resolve/layers";
 import { previewPolicy } from "./isolation";
 import { APP_STATE_DIR, previewTimingPolicy } from "./previewTimingPolicy";
@@ -459,6 +460,16 @@ export function createHyperframesApi(
       ...layerSources.getStore(),
     }),
   });
+  const resolveJobs = createResolveJobs();
+  const resolveScope = new AsyncLocalStorage<string>();
+  const checkResolveJob = () => {
+    const job = resolveJobs.active()?.state;
+    if (job && job.jobId !== resolveScope.getStore())
+      throw new HttpError(
+        409,
+        `Export "${job.name}" is running. Wait for it or cancel it with export_cancel using jobId "${job.jobId}".`,
+      );
+  };
   const exportRequest = new AsyncLocalStorage<ExportRequest>();
   /** The timeline the editor shows while it asks for lint; unset lints every timeline in full. */
   const lintScope = new AsyncLocalStorage<string>();
@@ -550,9 +561,6 @@ export function createHyperframesApi(
     const input = ExportStartSchema.parse(await c.req.json());
     const project = await store.get(c.req.param("id"));
     const composition = exportedComposition(input.composition);
-    const { timeline, size, variables, declarations, parsed } =
-      await readComposition(project.id, composition);
-    const overrides = await variables(input.variables);
     const { format } = input;
     if (format === "resolve") {
       if (input.filename)
@@ -560,87 +568,134 @@ export function createHyperframesApi(
           400,
           "A Resolve export is a folder named after the project; leave out filename.",
         );
-      const images = new Map<string, string>();
-      for (const variable of declarations()) {
-        if (variable.type !== "image") continue;
-        const value =
-          overrides?.[variable.id] ?? variableDefaultValue(variable);
-        if (typeof value === "string" && value) images.set(variable.id, value);
-      }
-      return c.json(
-        await exportResolve(
-          {
-            project,
-            composition,
-            name: compositionExportName(project.name, composition),
-            timeline,
-            size,
-            images,
-          },
-          {
-            directory: input.directory,
-            copyMedia: input.copyMedia,
-            // Each layer is an ordinary MOV render job, so the editor shows its progress.
-            render: async (layer, output) => {
-              const started = await layerSources.run(
-                {
-                  [resolve(project.path, composition)]: layerHtml(
-                    parsed,
-                    layer,
-                  ),
-                },
-                () =>
-                  api.request(
-                    new URL(
-                      `/projects/${encodeURIComponent(project.id)}/render`,
-                      c.req.url,
-                    ),
+      checkResolveJob();
+      const running = renders.active();
+      if (running)
+        throw new HttpError(
+          409,
+          `Export "${running.name}" is running. Wait for it or cancel it with export_cancel using jobId "${running.id}".`,
+        );
+      const requestUrl = c.req.url;
+      // Authorization belongs to the admitted package, including layers after the client leaves.
+      const headers = new Headers(c.req.raw.headers);
+      headers.delete(AGENT_HEADER);
+      const name = compositionExportName(project.name, composition);
+      const job = resolveJobs.start(
+        project.id,
+        composition,
+        name,
+        ({ jobId, signal, update }) =>
+          resolveScope.run(jobId, async () => {
+            signal.throwIfAborted();
+            const { timeline, size, variables, declarations, parsed } =
+              await readComposition(project.id, composition);
+            const overrides = await variables(input.variables);
+            const images = new Map<string, string>();
+            for (const variable of declarations()) {
+              if (variable.type !== "image") continue;
+              const value =
+                overrides?.[variable.id] ?? variableDefaultValue(variable);
+              if (typeof value === "string" && value)
+                images.set(variable.id, value);
+            }
+            return exportResolve(
+              {
+                project,
+                composition,
+                name,
+                timeline,
+                size,
+                images,
+              },
+              {
+                directory: input.directory,
+                copyMedia: input.copyMedia,
+                signal,
+                onAssemble: () => update("Writing Resolve package", 95),
+                // Each layer is an ordinary MOV render job, so the editor shows its progress.
+                render: async (layer, output, index, total) => {
+                  const stage = `Rendering layer ${index + 1} of ${total}`;
+                  const progress = (percent: number) =>
+                    5 + (90 * (index + percent / 100)) / total;
+                  update(stage, progress(0));
+                  const started = await layerSources.run(
                     {
-                      method: "POST",
-                      headers: c.req.raw.headers,
-                      body: JSON.stringify({
-                        format: "mov",
-                        quality: "high",
-                        fps: `${timeline.fps.num}/${timeline.fps.den}`,
-                        ...(composition !== "index.html" && { composition }),
-                        ...(overrides &&
-                          Object.keys(overrides).length && {
-                            variables: overrides,
-                          }),
-                        cutroom: {
-                          ...output,
-                          range: { start: layer.start, end: layer.end },
-                          gpu: false,
-                        },
-                      }),
+                      [resolve(project.path, composition)]: layerHtml(
+                        parsed,
+                        layer,
+                      ),
                     },
-                  ),
-              );
-              if (!started.ok)
-                throw new HttpError(
-                  started.status === 409 ? 409 : 500,
-                  await started.text(),
-                );
-              const { jobId, outputPath } = z
-                .object({ jobId: z.string(), outputPath: z.string() })
-                .parse(await started.json());
-              for (;;) {
-                await Bun.sleep(500);
-                const job = renders.get(jobId);
-                if (!job) continue;
-                const { status, error } = snapshot(job);
-                if (status === "complete") return outputPath;
-                if (status !== "rendering")
+                    () =>
+                      api.request(
+                        new URL(
+                          `/projects/${encodeURIComponent(project.id)}/render`,
+                          requestUrl,
+                        ),
+                        {
+                          method: "POST",
+                          headers,
+                          body: JSON.stringify({
+                            format: "mov",
+                            quality: "high",
+                            fps: `${timeline.fps.num}/${timeline.fps.den}`,
+                            ...(composition !== "index.html" && {
+                              composition,
+                            }),
+                            ...(overrides &&
+                              Object.keys(overrides).length && {
+                                variables: overrides,
+                              }),
+                            cutroom: {
+                              ...output,
+                              range: { start: layer.start, end: layer.end },
+                              gpu: false,
+                            },
+                          }),
+                        },
+                      ),
+                  );
+                  if (!started.ok)
+                    throw new HttpError(
+                      started.status === 409 ? 409 : 500,
+                      await started.text(),
+                    );
+                  const { jobId, outputPath } = z
+                    .object({ jobId: z.string(), outputPath: z.string() })
+                    .parse(await started.json());
+                  const job = renders.get(jobId);
+                  if (!job)
+                    throw new Error("The Resolve layer job was not found.");
+                  while (job.status === "rendering") {
+                    if (signal.aborted) {
+                      await job.cancel();
+                      if (snapshot(job).status !== "failed")
+                        signal.throwIfAborted();
+                    }
+                    update(
+                      job.stage ? `${stage}: ${job.stage}` : stage,
+                      progress(job.progress),
+                    );
+                    if (job.status === "rendering") await Bun.sleep(250);
+                  }
+                  if (job.status === "complete") return outputPath;
                   throw new HttpError(
                     500,
-                    `The ${output.filename} layer did not render: ${error ?? status}.`,
+                    `The ${output.filename} layer did not render: ${job.error ?? job.status}.`,
                   );
-              }
-            },
-          },
-        ),
+                },
+              },
+            );
+          }),
       );
+      if (c.req.query("background") === "1")
+        return c.json({ jobId: job.state.jobId }, 202);
+      return c.json(await job.done);
     }
+    const { timeline, size, variables } = await readComposition(
+      project.id,
+      composition,
+    );
+    const overrides = await variables(input.variables);
     const output = exportSize(input.size, size);
     if ("problem" in output) throw new HttpError(400, output.problem);
     const fps = exportFps(
@@ -1228,7 +1283,10 @@ export function createHyperframesApi(
         ...options,
         previewUrl: isolatedPreview(options.project.id, options.previewUrl),
       }),
-    startRender: (options) => renders.start(options, exportRequest.getStore()),
+    startRender: (options) => {
+      checkResolveJob();
+      return renders.start(options, exportRequest.getStore());
+    },
   };
 
   api.get("/projects/:id/isolated-preview", async (c) => {
@@ -1954,9 +2012,11 @@ export function createHyperframesApi(
     return c.json({ jobs: job ? [snapshot(job)] : [] });
   });
   api.get("/render/:jobId", (c) => {
+    c.header("Cache-Control", "no-store");
+    const packageJob = resolveJobs.get(c.req.param("jobId"));
+    if (packageJob) return c.json(packageJob.state);
     const job = renders.get(c.req.param("jobId"));
     if (!job) throw new HttpError(404, "Export job not found.");
-    c.header("Cache-Control", "no-store");
     return c.json(snapshot(job));
   });
   // The whole mix as an export wrote it, measured with FFmpeg's EBU R128 meter.
@@ -1974,6 +2034,12 @@ export function createHyperframesApi(
     return c.json(await measureLoudness(job.outputPath));
   });
   api.post("/render/:jobId/cancel", async (c) => {
+    const packageJob = resolveJobs.get(c.req.param("jobId"));
+    if (packageJob) {
+      reviews.authorize(c.req.header(AGENT_HEADER), packageJob.state.projectId);
+      await packageJob.cancel();
+      return c.json(packageJob.state);
+    }
     const job = renders.get(c.req.param("jobId"));
     reviews.authorize(c.req.header(AGENT_HEADER), job?.projectId);
     if (!job) throw new HttpError(404, "Export job not found.");
@@ -2082,6 +2148,8 @@ export function createHyperframesApi(
   return Object.assign(api, {
     /** The export running for this project, if any. One export runs at a time across projects. */
     runningExport(projectId: string) {
+      const packageJob = resolveJobs.active();
+      if (packageJob?.state.projectId === projectId) return packageJob;
       const job = renders.active();
       return job?.projectId === projectId ? job : undefined;
     },
@@ -2167,6 +2235,7 @@ export function createHyperframesApi(
       for (const cancel of pendingSettles.values()) cancel();
       watchers.clear();
       pendingSettles.clear();
+      await resolveJobs.close();
       await renders.cancelAll();
       await thumbnails.close();
       await linter.close();

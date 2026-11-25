@@ -12,6 +12,7 @@ import { TimelineDestinationsSchema } from "../../shared/timeline/view";
 import type { RequestOptions } from "./server";
 import {
   TimelineReplyFormatSchema,
+  boundedEditReply,
   editReply,
   readTimelineReply,
 } from "./timelineReply";
@@ -256,17 +257,13 @@ export function registerTimelineTools(
     "timeline_edit",
     {
       description:
-        "Apply a batch of timeline commands as one undo step, in order and atomically: a command that cannot apply exactly fails the whole batch, naming its index. Pass the revision from timeline_read; stale revisions are refused. Fields mean what timeline_read says. Use setFormat {width, height, fps: {num, den}} on its own to change picture size and snap each clip edge to the new grid while preserving source timing, or preview it with timeline_format_preview. setFormat always returns the complete timeline at the new rate, with every clip field. " +
-        "The reply has the next revision and only what changed: changes.clips, changes.tracks, changes.markers and changes.authoredAudioGroups each list added (complete, so new clip IDs from razor, insert and paste and generated audio group IDs are here), changed (the id or index with the new values of changed fields; null means cleared) and removed (ids or indexes), plus range, duration, fps, size and main when they change. skippedClips names clips an auto-select razor left whole, with the reason. warnings names clips on an edited track that track gain skips; tell the user, and keep their authored group. For other edits a reply is compact when replyFormat is compact, or when its clip changes pass 256 KiB of JSON. In a compact reply, clip additions omit defaults as in timeline_read, and moved clips may not be in changes.clips.changed: 16 or more clips whose only change is the same shift in start are listed in changes.clips.shifted as {by, ids}, so read both lists, adding by frames to each listed clip's previous start. Other changes give the new values, including explicit resets. The last text line says what the edit did. Pass fullTimeline: true to also get every clip, or use replyFormat: legacy if you need the original delta shape. " +
-        "Linked clips edit together, and ripple edits follow unlocked auto-select tracks. A ripple refuses when a participating clip cannot be cut or removed exactly, naming its track; turning off auto-select there ripples without it. Removing time through the middle of a text element or still image shortens it; video, audio and sub-compositions split. Tracks stay when emptied; removeTrack removes an unlocked empty one. A cutting command's ids names its new pieces, keyed by source clip id in cut order (a ripple through several ranges cuts last range first); an id ever used in the project is refused with duplicate_id. " +
-        "Use freeze {clipId, at} to insert a silent, two-second still at an interior frame of a local video. Linked audio resumes with the right half. " +
-        'For a lower third, name or heading, insert a title: clip {kind: "title", text, duration, title}, with a title.size that suits the composition (default 64 px). Its entrance stays on the clip\'s first frame and its exit on the last through every edit; a razor keeps the entrance on the first piece and the exit on the second. Verify setClip text with timeline_view, since other scripts can replace the words. ' +
-        'To zoom into part of the picture ("zoom into the button"), blur it or highlight it, look first with timeline_view, then turn the region you saw into fractions of the frame: x and width divided by the image width, y and height by its height, with some margin around it. For a zoom over everything at that moment, insert an adjustment layer on a video track above the pictures: clip {kind: "adjustment", duration, region: {effect: "zoom", box}}; it ramps in over region.in frames and back out over region.out (0 holds it to the end), shaped by region.ease (ease-in-out by default; linear, ease, ease-in, ease-out, expo-in, expo-out). To zoom only one clip, setClip {clipId, region: {effect: "zoom", box}}. A zoom\'s box keeps the frame\'s shape around the box you give and magnifies 1/width, up to 10x. Blur (area inside or outside) and highlight (dim and optional blur outside the box, with radius and feather) go on an adjustment layer. setClip.region changes only the fields it names, and null removes it. Check the result with timeline_view at the ramp\'s end. ' +
-        "Cutroom never rewrites animation scripts, and root tweens sit at absolute composition seconds, so moving or cutting a clip can leave its animation behind. The reply never says so; afterwards the server may send a notifications/message warning from logger cutroom.animation with event animation-left-behind, projectId, the originating requestId, revision, composition and the clips' ids and labels. Detection is best-effort. Put bespoke animation in clip-local sub-composition files, which follow their host clips.",
+        "Apply timeline commands in order as one atomic undo step. Use the latest timeline_read revision. A refused command names its index. The reply gives the new revision, changes, and a final line describing the edit. Deltas list added objects, changed fields with explicit resets, removed IDs, and in compact replies uniform clip moves as shifted {by, ids}. Large default replies give changeCounts and addedClipIds when they fit. Read the affected windows with timeline_read for details. Check skippedClips and warnings. " +
+        "Linked clips edit together. Ripples follow unlocked auto-select tracks. A restriction on a participating clip refuses the ripple and names its track. Supply ids keyed by original clip ID to name new pieces, in cut order. Leave ids out for fresh IDs. " +
+        "Use setFormat alone, or preview it with timeline_format_preview. It returns the full timeline. Use freeze to insert a silent still, insert clip.kind title for editable text, and insert clip.kind adjustment or setClip.region for zoom, blur or highlight. Verify the picture with timeline_view. Root animation scripts are never rewritten and may stay at their old time. The cutroom.animation logger may report affected clips after the reply.",
       inputSchema: CommandBatchSchema.extend({
         projectId: input.projectId,
         replyFormat: TimelineReplyFormatSchema.default("auto").describe(
-          "auto keeps the original shape until clip changes pass 256 KiB of JSON; compact omits defaults on added clips and groups 16 or more uniform shifts into changes.clips.shifted; legacy keeps the original clip fields and per-clip changes",
+          "auto (default) keeps the reply small, with a summary if needed; compact returns the entire compact delta; legacy returns the entire original delta",
         ),
         fullTimeline: z
           .boolean()
@@ -307,13 +304,18 @@ export function registerTimelineTools(
               projectId,
               ...data,
             }),
-          reply: (result) =>
-            editReply(
+          reply: (result) => {
+            const complete = formatChanged || fullTimeline || !exact;
+            const delta = editReply(
               before.view,
               TimelineViewSchema.parse(result),
-              formatChanged || fullTimeline || !exact,
+              complete,
               exact && !formatChanged ? replyFormat : "legacy",
-            ),
+            );
+            return replyFormat === "auto" && !complete
+              ? boundedEditReply(delta)
+              : delta;
+          },
         },
       );
       if (result.isError || !backgrounds.length) return result;

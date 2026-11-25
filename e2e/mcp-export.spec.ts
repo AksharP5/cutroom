@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { z } from "zod";
-import { ExportJobSchema } from "../src/shared/export";
+import { ExportJobSchema, ResolveExportJobSchema } from "../src/shared/export";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
@@ -386,6 +386,108 @@ test("a reload in another project finds the running export and can cancel it", a
         }),
       ).status,
     ).toBe("cancelled");
+  } finally {
+    await client.close();
+  }
+});
+
+test("MCP starts a Resolve job before its layers finish and polls the package", async ({
+  request,
+  baseURL,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Agent Resolve", width: 320, height: 240, duration: 2 },
+      })
+    ).json(),
+  );
+  const path = `/api/cutroom/projects/${project.id}/source`;
+  const original = SourceSchema.parse(await (await request.get(path)).json());
+  expect(
+    (
+      await request.put(path, {
+        data: {
+          path: "index.html",
+          expectedVersion: original.version,
+          content: source(2),
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+
+  const client = new Client({ name: "resolve-job-proof", version: "1" });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+        requestInit: { headers: { origin: baseURL! } },
+      }),
+    );
+    const began = performance.now();
+    const response = await client.callTool({
+      name: "export_start",
+      arguments: { projectId: project.id, format: "resolve" },
+    });
+    console.log(
+      `Resolve export_start: ${Math.round(performance.now() - began)} ms`,
+    );
+    const { jobId } = result(z.object({ jobId: z.string() }), response);
+    const status = async (id = jobId) =>
+      result(
+        ResolveExportJobSchema,
+        await client.callTool({
+          name: "export_status",
+          arguments: { jobId: id },
+        }),
+      );
+    expect(await status()).toMatchObject({
+      status: "rendering",
+      progress: expect.any(Number),
+    });
+    const overlapping = await client.callTool({
+      name: "export_start",
+      arguments: { projectId: project.id, format: "mp4" },
+    });
+    expect(overlapping.isError).toBe(true);
+    expect(JSON.stringify(overlapping.content)).toContain(jobId);
+    await expect.poll(async () => (await status()).progress).toBeGreaterThan(0);
+    await expect
+      .poll(async () => (await status()).status, { timeout: 40_000 })
+      .toBe("complete");
+    const done = await status();
+    expect(done).toMatchObject({
+      progress: 100,
+      error: null,
+      outputPath: expect.stringContaining("Agent Resolve"),
+    });
+    expect(await readdir(done.outputPath!)).toEqual(
+      expect.arrayContaining(["Agent Resolve.fcpxml", "Layers", "Summary.txt"]),
+    );
+    expect(
+      (await stat(`${done.outputPath}/Layers/V1.mov`)).size,
+    ).toBeGreaterThan(0);
+    expect(done.result?.timeline).toBe(
+      `${done.outputPath}/Agent Resolve.fcpxml`,
+    );
+
+    const failed = result(
+      z.object({ jobId: z.string() }),
+      await client.callTool({
+        name: "export_start",
+        arguments: {
+          projectId: project.id,
+          format: "resolve",
+          directory: `${project.path}/missing`,
+        },
+      }),
+    );
+    await expect
+      .poll(async () => (await status(failed.jobId)).status)
+      .toBe("failed");
+    expect(await status(failed.jobId)).toMatchObject({
+      outputPath: null,
+      error: "The output folder does not exist.",
+    });
   } finally {
     await client.close();
   }

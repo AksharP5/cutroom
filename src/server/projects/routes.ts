@@ -15,7 +15,9 @@ import {
   CreateProjectSchema,
   CutWordsSchema,
   DuplicateTimelineSchema,
+  HistoryPageSchema,
   ImportProjectSchema,
+  MediaSourcesPageSchema,
   NewTimelineSchema,
   RenameProjectSchema,
   RenameTimelineSchema,
@@ -210,6 +212,44 @@ export function createProjectRoutes(
         const proxy = proxies.get(clip.mediaPath);
         return proxy ? { ...clip, proxy } : clip;
       }),
+    });
+  });
+  api.get("/projects/:id/media/sources", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const query = c.req.query();
+    const { limit, offset } = parseInput(MediaSourcesPageSchema, {
+      limit: query.limit === undefined ? undefined : Number(query.limit),
+      offset: query.offset === undefined ? undefined : Number(query.offset),
+    });
+    const sources = new Map<
+      string,
+      {
+        mediaPath: string;
+        kind: "video" | "audio";
+        uses: number;
+      }
+    >();
+    for (const { mediaPath, kind } of await listMedia(project)) {
+      const source = sources.get(mediaPath);
+      if (source) {
+        source.uses++;
+        // Linked picture and audio can reference the same file, which needs one proxy.
+        if (kind === "video") source.kind = kind;
+      } else sources.set(mediaPath, { mediaPath, kind, uses: 1 });
+    }
+    const paths = [...sources.keys()].sort();
+    const media = await Promise.all(
+      paths.slice(offset, offset + limit).map(async (path) => {
+        const source = sources.get(path)!;
+        const proxy =
+          source.kind === "video" ? await proxyState(project, path) : null;
+        return proxy ? { ...source, proxy } : source;
+      }),
+    );
+    return c.json({
+      media,
+      total: paths.length,
+      nextOffset: offset + limit < paths.length ? offset + limit : null,
     });
   });
   api.post("/projects/:id/media/rename", async (c) => {
@@ -601,7 +641,15 @@ export function createProjectRoutes(
     const project = await store.get(c.req.param("id"));
     const { who } = historyActor(reviews, c, project);
     const history = await store.history(project);
-    return c.json(await historySummary(project, history.list(), who));
+    const { limit, before } = c.req.query();
+    const page =
+      limit === undefined && before === undefined
+        ? undefined
+        : parseInput(HistoryPageSchema, {
+            limit: limit === undefined ? undefined : Number(limit),
+            before,
+          });
+    return c.json(await historySummary(project, history.list(), who, page));
   });
   for (const direction of ["undo", "redo"] as const) {
     api.post(`/projects/:id/history/${direction}`, async (c) => {

@@ -26,7 +26,7 @@ import {
   ProjectDocumentSchema,
   emptyProjectDocument,
 } from "../../shared/project";
-import type { Project } from "../../shared/project";
+import type { HistoryPageSchema, Project } from "../../shared/project";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { protectedPath } from "../../shared/sourcePaths";
 import { ownerWho } from "./historyActor";
@@ -179,25 +179,52 @@ export async function historySummary(
   project: Project,
   entries: readonly Entry[],
   who: HistoryWho,
+  page?: z.output<typeof HistoryPageSchema>,
 ) {
+  const end = page?.before
+    ? entries.findIndex(({ id }) => id === page.before)
+    : entries.length;
+  if (end < 0)
+    throw new HttpError(
+      400,
+      "History cursor not found. Read the newest page again.",
+    );
+  const start = page ? Math.max(0, end - page.limit) : 0;
   const skipped = isOwner(who) ? await readHistorySkips(project) : undefined;
   const undo = historyCandidate(entries, "undo", who, skipped);
   const redo = historyCandidate(entries, "redo", who, skipped);
   return {
-    entries: entries.map(({ who: author, requestId: _requestId, ...entry }) => {
+    entries: entries.slice(start, end).map((entry) => {
+      const { who: author, requestId: _requestId, ...details } = entry;
       const display = { kind: author.kind, name: author.name };
-      return {
-        ...entry,
-        ...(isImport({ ...entry, who: author }) && {
-          label: `${author.kind === "outside" ? "Added" : "Imported"} ${entry.files.length} ${entry.files.length === 1 ? "file" : "files"}`,
-        }),
-        who: display,
+      const label = isImport(entry)
+        ? `${author.kind === "outside" ? "Added" : "Imported"} ${entry.files.length} ${entry.files.length === 1 ? "file" : "files"}`
+        : entry.label;
+      const status = {
+        label,
         author: display,
-        mine: belongsTo({ ...entry, who: author }, who),
-        step: !skipped?.has(entry.id) && editable({ ...entry, who: author }),
+        mine: belongsTo(entry, who),
+        step: !skipped?.has(entry.id) && editable(entry),
+      };
+      if (page)
+        return {
+          id: entry.id,
+          endedAt: entry.endedAt,
+          fileCount: entry.files.length,
+          undone: entry.undone,
+          undoes: entry.undoes,
+          restoredTo: entry.restoredTo,
+          category: entry.category,
+          ...status,
+        };
+      return {
+        ...details,
+        ...status,
+        who: display,
         ...(skipped?.has(entry.id) && { skipped: true }),
       };
     }),
+    ...(page && { nextBefore: start > 0 ? entries[start]!.id : null }),
     canUndo: !!undo,
     canRedo: !!redo,
     nextUndo: undo ? { id: undo.id, label: undo.label } : null,
