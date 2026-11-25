@@ -170,5 +170,5 @@ test("HEVC shows in Media and Source, and a marked silent 4K shot can be placed"
   await page.keyboard.press("Control+z");
   await expect.poll(clips).toEqual([]);
   await drop(silent);
-  await expect.poll(clips).toEqual([["video", "silent-4k.mp4", 120, null]]);
+  await expect.poll(clips).toEqual([["video", "silent-4k.mp4", 120, 0]]);
 });
