@@ -36,6 +36,7 @@ import {
 } from "../../shared/media";
 import {
   EDIT_HISTORY_HEADER,
+  EDIT_WARNING_HEADER,
   EDIT_SUMMARY_HEADER,
 } from "../../shared/timeline/schema";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
@@ -155,7 +156,14 @@ export function createMcpServer(options: McpOptions = {}) {
         ...(body !== undefined && { body: JSON.stringify(body) }),
       });
       const historyId = response.headers.get(EDIT_HISTORY_HEADER);
-      const commit = historyId ? { historyId } : {};
+      const warning = response.headers.get(EDIT_WARNING_HEADER);
+      const commit = {
+        ...(historyId && { historyId }),
+        ...(warning && { warning }),
+      };
+      const warningContent = warning
+        ? [{ type: "text" as const, text: warning }]
+        : [];
       if (response.ok && followup) {
         const events = animationEvents(response);
         const first = await events.next();
@@ -182,6 +190,7 @@ export function createMcpServer(options: McpOptions = {}) {
         return {
           content: [
             { type: "text" as const, text: JSON.stringify(result) },
+            ...warningContent,
             // Last, on its own line, where the agent panel reads the row's sentence.
             ...(summary
               ? [
@@ -212,7 +221,10 @@ export function createMcpServer(options: McpOptions = {}) {
         };
       const result = await reply(text ? JSON.parse(text) : null);
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(result) }],
+        content: [
+          { type: "text" as const, text: JSON.stringify(result) },
+          ...warningContent,
+        ],
         structuredContent: { result, ...commit },
       };
     } catch (error) {

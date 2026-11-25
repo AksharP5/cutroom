@@ -1,11 +1,21 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { fileContentVersion } from "@hyperframes/studio-server";
 import { createApp } from "../src/server/app";
 import { browserExecutable } from "../src/server/hyperframes/render";
 import { createProjectStore } from "../src/server/projects/store";
+import { externalHistoryCredential } from "../src/server/projects/historyActor";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
 import { projectFixture } from "./project-fixture";
 import { addStarterClips } from "./starter-clips";
@@ -169,6 +179,78 @@ test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     }
   },
 );
+
+for (const failure of [
+  "owner review ledger",
+  "agent review ledger",
+  "history log",
+]) {
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    `a committed source save succeeds when the ${failure} is unwritable`,
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "cutroom-save-"));
+      const runtime = await createApp({
+        dataDir: join(root, "data"),
+        projectsDir: join(root, "projects"),
+      });
+      try {
+        const project = await runtime.projects.create({ name: "Save" });
+        await addStarterClips(project);
+        const history = await runtime.projects.history(project);
+        const file = join(project.path, "index.html");
+        const original = await readFile(file, "utf8");
+        const content = original.replace(">Save</div>", ">Saved</div>");
+        const historyFailed = failure === "history log";
+        const blocked = historyFailed
+          ? join(root, "data", "history", history.projectId, "log.jsonl")
+          : join(project.path, ".cutroom");
+        if (!historyFailed) await mkdir(blocked, { recursive: true });
+        const mode = (await stat(blocked)).mode & 0o777;
+        await chmod(blocked, mode & ~0o222);
+        try {
+          const origin = "http://127.0.0.1:4317";
+          const response = await runtime.app.request(
+            `${origin}/api/cutroom/projects/${project.id}/source`,
+            {
+              method: "PUT",
+              headers: {
+                origin,
+                "content-type": "application/json",
+                ...(failure === "agent review ledger" && {
+                  "x-cutroom-agent": externalHistoryCredential(),
+                }),
+              },
+              body: JSON.stringify({
+                content,
+                expectedVersion: fileContentVersion(original),
+              }),
+            },
+          );
+          expect(await readFile(file, "utf8")).toBe(content);
+          const entry = history
+            .list()
+            .find(({ label }) => label === "Edit index.html");
+          expect(!!entry).toBe(!historyFailed);
+          expect(response.status, await response.clone().text()).toBe(200);
+          expect(SourceSchema.parse(await response.json()).content).toBe(
+            content,
+          );
+          expect(response.headers.get("x-cutroom-history-entry")).toBe(
+            entry?.id ?? null,
+          );
+          expect(response.headers.get("x-cutroom-edit-warning")).toContain(
+            historyFailed ? "Undo history" : "review changes",
+          );
+        } finally {
+          await chmod(blocked, mode);
+        }
+      } finally {
+        await runtime.dispose();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+}
 
 test("agents cannot remove a project", async () => {
   const fixture = await projectFixture();

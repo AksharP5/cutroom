@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { EDIT_HISTORY_HEADER } from "../shared/timeline/schema";
+import {
+  EDIT_HISTORY_HEADER,
+  EDIT_WARNING_HEADER,
+} from "../shared/timeline/schema";
 
 /** Fresh for each page, including a duplicated tab; never stored with project data. */
 export const tabOrigin = crypto.randomUUID();
@@ -66,12 +69,23 @@ export function onCommittedEntry(
   committedEntry = listener;
 }
 
+let editWarning: ((projectId: string, warning: string) => void) | undefined;
+
+export function onEditWarning(
+  listener: (projectId: string, warning: string) => void,
+) {
+  editWarning = listener;
+}
+
 /** For a successful write sent without `api`: `path` is the part after /api/cutroom. */
 export function reportCommittedEntry(path: string, headers: Headers) {
-  const entryId = headers.get(EDIT_HISTORY_HEADER);
   const projectId = /^\/projects\/([^/?]+)/.exec(path)?.[1];
-  if (entryId && projectId)
-    committedEntry?.(decodeURIComponent(projectId), entryId);
+  if (!projectId) return;
+  const id = decodeURIComponent(projectId);
+  const entryId = headers.get(EDIT_HISTORY_HEADER);
+  if (entryId) committedEntry?.(id, entryId);
+  const warning = headers.get(EDIT_WARNING_HEADER);
+  if (warning) editWarning?.(id, warning);
 }
 
 export async function api<T>(
