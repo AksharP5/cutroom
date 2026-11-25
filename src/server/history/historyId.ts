@@ -10,7 +10,6 @@ import {
   readFileSync,
   statSync,
   utimesSync,
-  writeFileSync,
 } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { replaceFileAtomically } from "@hyperframes/core/atomic-file";
@@ -95,7 +94,7 @@ export function projectHistoryId(
   ) {
     id = randomUUID();
     mkdirWithinProject(dir, join(dir, ".hyperframes"));
-    writeFileSync(join(dir, ID_PATH), `${id}\n`);
+    replaceFileAtomically(join(dir, ID_PATH), `${id}\n`, 0o644);
   }
   recordProject(join(historyRoot, id), dir, folder);
   return id;
