@@ -1215,3 +1215,60 @@ test("a held speed point snaps to the speed list, stays between its neighbours a
   );
   expect(pointOf(capped)!.speed).toBeLessThan(10);
 });
+
+test("a sideways speed-point drag stops when the linked sound runs out", () => {
+  const automation = JSON.stringify({
+    version: 1,
+    lanes: [
+      {
+        target: "rate",
+        points: [
+          { t: 0, v: 1, ease: "hold" },
+          { t: 1, v: 2, ease: "hold" },
+          { t: 2, v: 1 },
+        ],
+      },
+    ],
+  });
+  const timeline = {
+    ...sequence(),
+    clips: [
+      clip("ramp", 0, 0, 90, {
+        src: "take.mp4",
+        mediaStart: 0,
+        sourceDuration: 9,
+        link: "take",
+        automation,
+      }),
+      clip("sound", 1, 0, 90, {
+        kind: "audio",
+        src: "other.wav",
+        mediaStart: 0,
+        sourceDuration: 4.2,
+        link: "take",
+        automation,
+      }),
+    ],
+  };
+  const held = dragPreview(
+    drag({ kind: "speed", clipId: "ramp", index: 1 }, [], 30, timeline),
+    {
+      frame: 15,
+      track: 0,
+      reach: 0,
+      speed: { travel: 0, body: 40, fine: false },
+    },
+  );
+  expect(held.readout).toBe(
+    "Source ends. This is the furthest this point can move.",
+  );
+  expect(held.valid).toBe(true);
+  expect(held.commands[0]).toMatchObject({
+    type: "setSpeed",
+    points: [
+      expect.anything(),
+      { frame: 24, speed: 2, ease: "hold" },
+      expect.anything(),
+    ],
+  });
+});

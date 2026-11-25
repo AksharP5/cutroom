@@ -7,10 +7,11 @@ import {
   sourceOutFrame,
   speedAtFrame,
   speedLevel,
-  mostSpeed,
+  limitSpeedPoint,
   SPEED_PRESETS,
   speedAtLevel,
   speedPoints,
+  speedProjection,
   withSpeedPoints,
 } from "../../../shared/timeline/speed";
 import type { SpeedInput, SpeedPoint } from "../../../shared/timeline/speed";
@@ -21,7 +22,7 @@ import type {
   KeyframeEase,
 } from "../../../shared/timeline/schema";
 import { openContextMenu } from "../../components/ContextMenu";
-import { editTimeline } from "../timeline";
+import { useTimeline, editTimeline } from "../timeline";
 import { resettable } from "../keys";
 import { TimecodeText } from "../../components/TimecodeText";
 import { formatTimecode } from "../../../shared/timeline/timecode";
@@ -30,7 +31,6 @@ import { useTransport } from "../transport";
 import { ValueField } from "./ValueField";
 import { useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import { framesAfterOut } from "../../../shared/timeline/clipTiming";
 
 const GRID = [4, 2, 1, 0.5, 0.25];
 
@@ -381,19 +381,17 @@ function SpeedGraph({
       speed: Math.round(speed * 1e4) / 1e4,
     };
     next[index] = clamped;
-    const fits =
-      framesAfterOut(
-        { ...clip, automation: withSpeedPoints(clip, next, fps) },
-        fps,
-      ) >= 0;
-    if (fits || clamped.speed <= points[index]!.speed)
-      return { points: next, hint: null };
-    const most = mostSpeed(clip, next, index, fps) ?? points[index]!.speed;
-    next[index] = { ...clamped, speed: Math.max(points[index]!.speed, most) };
-    return {
-      points: next,
-      hint: `Source ends. ${Math.round(next[index]!.speed * 100)}% is the most this point can go.`,
-    };
+    const project = speedProjection(
+      clip,
+      useTimeline.getState().view?.timeline.clips ?? [clip],
+      fps,
+    );
+    return (
+      limitSpeedPoint(project, next, index, points[index]!, fps) ?? {
+        points: next,
+        hint: null,
+      }
+    );
   };
   const press = (event: PointerEvent<HTMLElement>, index: number) => {
     if (event.button !== 0 || disabled) return;

@@ -12,8 +12,6 @@ import type { Intent } from "../timeline/gesture";
 import type { EditFrame } from "../../shared/preview";
 import { transport, useTransport } from "./transport";
 import { speedPoints } from "../../shared/timeline/speed";
-import { resolveClip } from "../../shared/timeline/clipTiming";
-import { frames, secondsOf, sourceAt } from "../../shared/timeline/piece";
 
 export type EditPicture = {
   time: number;
@@ -80,14 +78,14 @@ function speedPicture(timeline: Timeline, clipId: string, index: number) {
   const frame = clip.start + Math.round(point.frame);
   const time = sourceAt(
     resolveClip(clip, timeline.fps),
-    frames(frame, timeline.fps),
+    framesOf(frame, timeline.fps),
   );
   return {
     time: frameTime(frame, timeline.fps),
     frames: [
       {
         clipId: clip.id,
-        time: typeof time === "number" ? time : secondsOf(time),
+        time: sourceSeconds(time),
       },
     ],
     labels: [],

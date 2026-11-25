@@ -27,7 +27,12 @@ const HERO = JSON.stringify({
   ],
 });
 
-async function rampProject(page: Page, request: Page["request"], plain = "") {
+async function rampProject(
+  page: Page,
+  request: Page["request"],
+  plain = "",
+  broll = `data-automation='${HERO}'`,
+) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -45,7 +50,7 @@ async function rampProject(page: Page, request: Page["request"], plain = "") {
     `<video id="${id}" class="clip" src="broll.mp4" muted data-start="${start}" data-duration="6" data-track-index="0" ${attrs} style="position:absolute;inset:0;width:100%;height:100%"></video>`;
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><body><main id="main" data-composition-id="main" data-width="640" data-height="360" data-fps="30" data-duration="12">${video("plain", 0, plain)}${video("broll", 6, `data-automation='${HERO}'`)}</main></body></html>`,
+    `<!doctype html><html><body><main id="main" data-composition-id="main" data-width="640" data-height="360" data-fps="30" data-duration="12">${video("plain", 0, plain)}${video("broll", 6, broll)}</main></body></html>`,
   );
   await page.goto(`/#project/${project.id}`);
   await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
@@ -68,7 +73,7 @@ test("a ramp an agent wrote shows on its clip and in Timing", async ({
   const timing = page.locator(".inspector-timing");
   await expect(timing.getByLabel("Speed", { exact: true })).toHaveValue("160%");
   await expect(timing.getByLabel("Source out")).toHaveText("00:00:05:29");
-  const graph = timing.getByRole("img", { name: "Speed over the clip" });
+  const graph = timing.getByRole("group", { name: "Speed over the clip" });
   await expect(graph.locator(".speed-point")).toHaveCount(5);
   await expect(graph.locator(".speed-point[data-on]")).toHaveCount(1);
 
@@ -124,7 +129,10 @@ test("speed points, eases, presets and reset each edit as one undo step", async 
   await expect(easeInOut).toHaveAttribute("aria-checked", "false");
 
   // The diamond removes the point under the playhead and adds one where there is none.
-  const diamond = timing.getByRole("button", { name: "Speed point" });
+  const diamond = timing.getByRole("button", {
+    name: "Speed point",
+    exact: true,
+  });
   await diamond.click();
   await expect(points).toHaveCount(4);
   await page.keyboard.press("Control+z");
@@ -436,4 +444,48 @@ test("the speed graph edits points by pointer and by key", async ({
   await expect
     .poll(async () => (await savedRamp(page, "broll")).points?.[3])
     .not.toEqual({ t: 4.5, v: 1.6 });
+});
+
+test("sideways point drags show the source limit before saving the last frame that fits", async ({
+  page,
+  request,
+}) => {
+  const automation = JSON.stringify({
+    version: 1,
+    lanes: [
+      {
+        target: "rate",
+        points: [
+          { t: 0, v: 1, ease: "hold" },
+          { t: 1, v: 2, ease: "hold" },
+          { t: 2, v: 1 },
+        ],
+      },
+    ],
+  });
+  await rampProject(
+    page,
+    request,
+    "",
+    `data-media-start="2.8" data-automation='${automation}'`,
+  );
+  await page.locator('[data-clip="broll"]').click();
+  const layer = page.locator('[data-clip-speed="broll"]');
+  const width = (await layer.boundingBox())!.width;
+  const box = (await layer.locator('[data-speed-point="1"]').boundingBox())!;
+  const x = box.x + box.width / 2,
+    y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x - width * (15 / 180), y, { steps: 6 });
+  await expect(page.locator(".tl-readout")).toHaveText(
+    "Source ends. This is the furthest this point can move.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Current time. Click to type a time." }),
+  ).toHaveText("00:00:06:24");
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await savedRamp(page, "broll")).points?.[1])
+    .toEqual({ t: 0.8, v: 2, ease: "hold" });
 });

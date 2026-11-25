@@ -14,9 +14,10 @@ import {
 import { CommandSchema } from "../../shared/timeline/schema";
 import { clipFades, volumePoints } from "../../shared/timeline/mix";
 import {
-  mostSpeed,
+  limitSpeedPoint,
   speedLevel,
   speedPoints,
+  speedProjection,
 } from "../../shared/timeline/speed";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import {
@@ -663,35 +664,38 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
         travel === 0 || low > high
           ? point.frame
           : Math.max(low, Math.min(high, free + (snapped?.by ?? 0)));
-      let speed = snapSpeed(point.speed * factor);
-      const placed = (value: number) =>
-        inputs.map((each, index) =>
-          index === intent.index ? { ...each, frame, speed: value } : each,
+      const speed =
+        factor === 1 ? point.speed : snapSpeed(point.speed * factor);
+      const pointsAt = inputs.map((each, index) =>
+        index === intent.index ? { ...each, frame, speed } : each,
+      );
+      const move = (next: typeof pointsAt, snap: number | null) => {
+        const chosen = next[intent.index]!;
+        return edit(
+          "Move speed point",
+          chosen.frame === point.frame && chosen.speed === point.speed
+            ? []
+            : [{ type: "setSpeed", clipId: clip.id, points: next }],
+          chosen.frame - point.frame,
+          snap,
         );
-      let readout = read(speed, frame);
-      const result = edit(
-        "Move speed point",
-        frame === point.frame && speed === point.speed
-          ? []
-          : [{ type: "setSpeed", clipId: clip.id, points: placed(speed) }],
-        frame - point.frame,
+      };
+      const result = move(
+        pointsAt,
         snapped && frame === free + snapped.by ? snapped.at : null,
       );
-      if (result.valid || speed <= point.speed) return { ...result, readout };
-      // The source ends first: the point stops at the most it can take.
-      const most = mostSpeed(clip, placed(speed), intent.index, fps);
-      if (most === null) return { ...result, readout };
-      speed = Math.max(point.speed, most);
-      readout = `Source ends. ${Math.round(speed * 100)}% is the most this point can go.`;
-      return {
-        ...edit(
-          "Move speed point",
-          [{ type: "setSpeed", clipId: clip.id, points: placed(speed) }],
-          frame - point.frame,
-          null,
-        ),
-        readout,
-      };
+      if (!result.valid) {
+        const limited = limitSpeedPoint(
+          speedProjection(clip, timeline.clips, fps),
+          pointsAt,
+          intent.index,
+          point,
+          fps,
+        );
+        if (limited)
+          return { ...move(limited.points, null), readout: limited.hint };
+      }
+      return { ...result, readout: read(speed, frame) };
     }
     case "fade": {
       const clip = find(intent.clipId);
