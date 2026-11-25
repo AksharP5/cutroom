@@ -19,7 +19,7 @@ import {
   speedLevel,
   speedPoints,
 } from "../../shared/timeline/speed";
-import { speedPath } from "./ClipSpeed";
+import { speedLineTitle, speedPath } from "./ClipSpeed";
 import { transport } from "../edit/transport";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
@@ -142,6 +142,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     travel: number;
     body: number;
     fine: boolean;
+    top: number;
   } | null>(null);
   /** An Alt press on a gain line or point, which a click turns into a point edit. */
   const pointClick = useRef<{ hit: Hit; x: number } | null>(null);
@@ -397,16 +398,17 @@ export function useLaneGestures(options: LaneGestureOptions) {
       for (const curve of line.querySelectorAll("path"))
         curve.setAttribute("d", path);
       const handles = line.querySelectorAll<HTMLElement>("[data-speed-point]");
+      const playhead = latest.current.playhead();
       (speedPoints(clip, shown.fps) ?? []).forEach(
         ({ frame, speed }, index) => {
-          handles[index]?.style.setProperty(
-            "--at",
-            `${(frame / clip.duration) * 100}%`,
-          );
-          handles[index]?.style.setProperty(
-            "--level",
-            String(speedLevel(speed) * 100),
-          );
+          const handle = handles[index];
+          if (!handle) return;
+          const absoluteFrame = clip.start + frame;
+          if (Number(handle.dataset.speedFrame) !== absoluteFrame)
+            handle.dataset.speedFrame = String(absoluteFrame);
+          handle.toggleAttribute("data-on", absoluteFrame === playhead);
+          handle.style.setProperty("--at", `${(frame / clip.duration) * 100}%`);
+          handle.style.setProperty("--level", String(speedLevel(speed) * 100));
         },
       );
     }
@@ -646,6 +648,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     // Measure before the preview writes hundreds of transforms; reading after forces layout.
     const at = local(x, y);
     const edge = scrollerEdge();
+    let speedPoint: { x: number; y: number } | undefined;
     const readoutWidth = readout.current?.offsetWidth || 120;
     const readoutHeight = readout.current?.offsetHeight || 24;
     const input = dragInput(active);
@@ -662,7 +665,15 @@ export function useLaneGestures(options: LaneGestureOptions) {
         const clip = next.shown.clips.find((item) => item.id === held.clipId);
         const point =
           clip && speedPoints(clip, active.timeline.fps)?.[held.index];
-        if (point) transport.seek(clip.start + Math.round(point.frame));
+        if (clip && point) {
+          transport.seek(clip.start + Math.round(point.frame));
+          const body = speedHeld.current;
+          if (body)
+            speedPoint = {
+              x: (clip.start + point.frame) * ppf - point.frame / clip.duration,
+              y: body.top + speedLevel(point.speed) * body.body,
+            };
+        }
       }
       const { intent } = active;
       if (intent.kind === "blade") {
@@ -698,6 +709,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     }
     if (readout.current && !readout.current.hidden) {
       const { intent } = active;
+      if (intent.kind === "speed" && speedHeld.current && !speedPoint) return;
       const held =
         intent.kind === "gain"
           ? (preview.current?.shown ?? active.timeline).clips.find(
@@ -706,11 +718,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
           : undefined;
       placeReadout(
         readout.current,
-        at,
+        speedPoint ?? at,
         edge,
         readoutWidth,
         readoutHeight,
-        held ? gainLineAt(held, active.timeline.fps) : null,
+        speedPoint?.y ?? (held ? gainLineAt(held, active.timeline.fps) : null),
       );
     }
   }
@@ -725,7 +737,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       : { x: Infinity, y: Infinity };
   }
 
-  /** A gain readout sits on the line it reports, `line` pixels down; any other follows the pointer. */
+  /** Level readouts align with their line or point; other readouts follow the pointer. */
   function placeReadout(
     label: HTMLElement,
     at: { x: number; y: number },
@@ -926,6 +938,18 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const root = lanes.current;
     const hit = hitAt(event);
     hoverClip(hit?.clip ?? null);
+    if (hit?.speed === "line" && event.target instanceof SVGElement) {
+      const title = event.target.querySelector("title");
+      const frame = Math.max(
+        0,
+        Math.min(
+          hit.clip.duration - 1,
+          Math.round((hit.x / hit.width) * hit.clip.duration),
+        ),
+      );
+      const value = speedLineTitle(speedAtFrame(hit.clip, timeline.fps, frame));
+      if (title && title.textContent !== value) title.textContent = value;
+    }
     const mix =
       hit &&
       root?.querySelector<HTMLElement>(
@@ -1090,13 +1114,18 @@ export function useLaneGestures(options: LaneGestureOptions) {
     if (intent.kind === "gain" && hit)
       holdGain(hit.clip, timeline.fps, event.shiftKey);
     if ((intent.kind === "speed" || intent.kind === "speedLine") && hit) {
-      const body = latest.current.lanes.current
+      const box = latest.current.lanes.current
         ?.querySelector(
           `[data-clip-speed="${CSS.escape(hit.clip.id)}"] .tl-fade-curve`,
         )
-        ?.getBoundingClientRect().height;
-      speedHeld.current = body
-        ? { travel: 0, body, fine: event.shiftKey }
+        ?.getBoundingClientRect();
+      speedHeld.current = box?.height
+        ? {
+            travel: 0,
+            body: box.height,
+            fine: event.shiftKey,
+            top: local(0, box.top).y,
+          }
         : null;
     }
     if (intent.kind === "point" && hit) {

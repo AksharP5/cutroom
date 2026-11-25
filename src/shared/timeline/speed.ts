@@ -485,6 +485,6 @@ export function limitSpeedPoint(
   }
   return {
     points: place(near, speed),
-    hint: "Source ends. This is the furthest this point can move.",
+    hint: "Source ends.",
   };
 }

@@ -446,6 +446,70 @@ test("the speed graph edits points by pointer and by key", async ({
     .not.toEqual({ t: 4.5, v: 1.6 });
 });
 
+test("graph selection clears on an Inspector click and when a drag is cancelled", async ({
+  page,
+  request,
+}) => {
+  await rampProject(page, request);
+  await page.locator('[data-clip="broll"]').click();
+  await seekFrame(page, 225);
+  const timing = page.locator(".inspector-timing");
+  const point = timing.locator(".speed-point").nth(2);
+  await point.click();
+  await expect(point).toHaveAttribute("aria-pressed", "true");
+  await timing.getByLabel("Speed", { exact: true }).click();
+  await expect(point).toHaveAttribute("aria-pressed", "false");
+
+  const box = (await point.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y - 12, { steps: 3 });
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(point).toHaveAttribute("aria-pressed", "false");
+
+  await timing.getByRole("radio", { name: "Ease out" }).click();
+  await expect
+    .poll(async () => (await savedRamp(page, "broll")).points?.[1])
+    .toEqual({ t: 1.5, v: 1.6, ease: "out" });
+  expect((await savedRamp(page, "broll")).points?.[2]).toEqual({
+    t: 3,
+    v: 0.25,
+  });
+});
+
+test("the timeline fills only the speed point at the playhead", async ({
+  page,
+  request,
+}) => {
+  await rampProject(page, request);
+  const line = page.locator('[data-clip-speed="broll"]');
+  const filled = line.locator(".tl-volume-point[data-on]");
+  await seekFrame(page, 225);
+  await expect(filled).toHaveAttribute("data-speed-point", "1");
+  await seekFrame(page, 226);
+  await expect(filled).toHaveCount(0);
+  await seekFrame(page, 270);
+  await expect(filled).toHaveAttribute("data-speed-point", "2");
+});
+
+test("hovering the timeline curve names the speed at that frame", async ({
+  page,
+  request,
+}) => {
+  await rampProject(page, request);
+  const line = page.locator('[data-clip-speed="broll"]');
+  const a = (await line.locator('[data-speed-point="1"]').boundingBox())!;
+  const b = (await line.locator('[data-speed-point="2"]').boundingBox())!;
+  await page.mouse.move(
+    a.x + a.width / 2 + (b.x - a.x) * 0.4,
+    a.y + a.height / 2 + (b.y - a.y) * 0.4,
+  );
+  await expect(line.locator("title")).toHaveText(
+    "Speed 76%. Shift for fine adjustment. Alt-click adds a speed point.",
+  );
+});
+
 test("sideways point drags show the source limit before saving the last frame that fits", async ({
   page,
   request,
@@ -478,9 +542,7 @@ test("sideways point drags show the source limit before saving the last frame th
   await page.mouse.move(x, y);
   await page.mouse.down();
   await page.mouse.move(x - width * (15 / 180), y, { steps: 6 });
-  await expect(page.locator(".tl-readout")).toHaveText(
-    "Source ends. This is the furthest this point can move.",
-  );
+  await expect(page.locator(".tl-readout")).toHaveText("Source ends.");
   await expect(
     page.getByRole("button", { name: "Current time. Click to type a time." }),
   ).toHaveText("00:00:06:24");

@@ -1655,6 +1655,15 @@ input.tl-track-gain {
    track is locked, where the line is drawn without handles. */
 .tl-speed .tl-volume-point {
   pointer-events: auto;
+  background: var(--scrim);
+  border-color: var(--text-secondary);
+}
+.tl-speed .tl-volume-point:hover {
+  border-color: var(--text-primary);
+}
+.tl-speed .tl-volume-point[data-on] {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
 }
 .tl-speed .tl-volume-point[data-ease="hold"] {
   rotate: 0deg;

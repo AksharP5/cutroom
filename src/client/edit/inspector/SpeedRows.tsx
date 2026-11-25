@@ -29,7 +29,7 @@ import { formatTimecode } from "../../../shared/timeline/timecode";
 import { speedPath } from "../../timeline/ClipSpeed";
 import { useTransport } from "../transport";
 import { ValueField } from "./ValueField";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 
 const GRID = [4, 2, 1, 0.5, 0.25];
@@ -118,6 +118,25 @@ export function SpeedRows({
 }) {
   const points = speedPoints(clip, fps);
   const [chosen, setChosen] = useState<number | null>(null);
+  useEffect(() => {
+    if (chosen === null) return;
+    const clear = (event: globalThis.PointerEvent) => {
+      if (
+        event.target instanceof Element &&
+        !event.target.closest(".speed-point, .speed-ease")
+      )
+        setChosen(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setChosen(null);
+    };
+    document.addEventListener("pointerdown", clear, true);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", clear, true);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [chosen]);
   // A constant clip renders only when the playhead crosses its edges, never per frame.
   const local = useTransport(({ frame }) => {
     const at = frame - clip.start;
@@ -414,9 +433,15 @@ function SpeedGraph({
       target.removeEventListener("pointercancel", cancel);
       window.removeEventListener("keydown", escape, true);
       setDraft(null);
+      if (!commit) {
+        onSelect(null);
+        target.blur();
+        if (target.hasPointerCapture(event.pointerId))
+          target.releasePointerCapture(event.pointerId);
+        return;
+      }
       const moved = latest?.points[index];
       if (
-        commit &&
         latest &&
         moved &&
         (moved.frame !== start.frame || moved.speed !== start.speed)

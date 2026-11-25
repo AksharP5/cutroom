@@ -21,6 +21,7 @@ import { getAudioFxDef } from "@hyperframes/core/audio-fx";
 import { AudioMeters } from "./meters";
 import {
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -1145,17 +1146,34 @@ export function Timeline({
     });
   }, [frames, fps.num, fps.den]);
 
+  // Only mounted points on this or the previous frame get a DOM write.
+  const markSpeedPlayhead = useCallback((frame: number) => {
+    const matches = lanes.current?.querySelectorAll<HTMLElement>(
+      `[data-speed-frame="${frame}"], [data-speed-frame][data-on]`,
+    );
+    for (const point of matches ?? [])
+      point.toggleAttribute(
+        "data-on",
+        Number(point.dataset.speedFrame) === frame,
+      );
+  }, []);
+
+  useLayoutEffect(() => {
+    markSpeedPlayhead(clock.frame());
+  }, [clock, timeline, mounted, speedShown, markSpeedPlayhead]);
+
   useEffect(() => {
     const write = () => {
       const frame = clock.frame();
       playhead.current?.style.setProperty("--f", String(frame));
       playheadHead.current?.style.setProperty("--f", String(frame));
+      markSpeedPlayhead(frame);
       if (!scrubbing.current)
         viewport.current?.follow(frame, clock.direction());
     };
     write();
     return clock.subscribe(write);
-  }, [clock]);
+  }, [clock, markSpeedPlayhead]);
 
   useEffect(() => {
     if (!recording) return;

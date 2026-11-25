@@ -1259,9 +1259,7 @@ test("a sideways speed-point drag stops when the linked sound runs out", () => {
       speed: { travel: 0, body: 40, fine: false },
     },
   );
-  expect(held.readout).toBe(
-    "Source ends. This is the furthest this point can move.",
-  );
+  expect(held.readout).toBe("Source ends.");
   expect(held.valid).toBe(true);
   expect(held.commands[0]).toMatchObject({
     type: "setSpeed",

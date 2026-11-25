@@ -2,6 +2,7 @@ import { memo } from "react";
 import { create } from "zustand";
 import type { Clip, Fps } from "../../shared/timeline/schema";
 import {
+  speedAtFrame,
   speedCurve,
   speedLevel,
   speedPoints,
@@ -34,7 +35,8 @@ export const speedPath = (clip: Clip, fps: Fps) =>
     )
     .join(" ");
 
-const percent = (speed: number) => `${Math.round(speed * 100)}%`;
+export const speedLineTitle = (speed: number) =>
+  `Speed ${Math.round(speed * 100)}%. Shift for fine adjustment. Alt-click adds a speed point.`;
 
 /**
  * A clip's speed, drawn across its filmstrip like the gain line on sound: always on a ramp, so an
@@ -55,9 +57,6 @@ export const ClipSpeed = memo(function ClipSpeed({
 }) {
   const path = speedPath(clip, fps);
   const points = speedPoints(clip, fps);
-  const speeds = points?.map(({ speed }) => speed) ?? [clip.playbackRate];
-  const low = Math.min(...speeds);
-  const high = Math.max(...speeds);
   return (
     <div
       className={`tl-mix tl-speed on-${row.track.kind}${row.track.locked ? " locked" : ""}`}
@@ -73,9 +72,7 @@ export const ClipSpeed = memo(function ClipSpeed({
         <path className="tl-envelope-edge" d={path} />
         <path d={path} />
         <path className="tl-gain" data-speed="line" d={path}>
-          <title>
-            {`Speed ${low === high ? percent(low) : `${percent(low)} to ${percent(high)}`}. Shift for fine adjustment. Alt-click adds a speed point.`}
-          </title>
+          <title>{speedLineTitle(speedAtFrame(clip, fps, 0))}</title>
         </path>
       </svg>
       {showPoints &&
@@ -85,6 +82,7 @@ export const ClipSpeed = memo(function ClipSpeed({
             className="tl-volume-point"
             data-speed={index}
             data-speed-point={index}
+            data-speed-frame={clip.start + frame}
             data-ease={ease}
             hidden={frame < 0 || frame > clip.duration}
             title="Speed point. Drag to move it, Alt-click to remove it."
