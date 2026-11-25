@@ -6,7 +6,11 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
-import { ExportJobSchema } from "../src/shared/export";
+import {
+  ExportJobSchema,
+  ResolveExportJobSchema,
+  ResolveExportSchema,
+} from "../src/shared/export";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { seekFrame } from "./position-helpers";
@@ -658,13 +662,23 @@ for (const mode of playbackModes)
         iframe,
       );
 
-      const resolved = await result(
-        z.object({ timeline: z.string(), summary: z.string() }),
+      const { jobId: resolveJobId } = await result(
+        z.object({ jobId: z.string() }),
         "export_start",
         {
           projectId,
           format: "resolve",
         },
+      );
+      const resolveStatus = () =>
+        result(ResolveExportJobSchema, "export_status", {
+          jobId: resolveJobId,
+        });
+      await expect
+        .poll(async () => (await resolveStatus()).status)
+        .toBe("complete");
+      const resolved = ResolveExportSchema.parse(
+        (await resolveStatus()).result,
       );
       const xml = await readFile(resolved.timeline, "utf8");
       expect(xml).toContain("cam-b.mp4");
