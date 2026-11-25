@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants, createWriteStream, readFileSync } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -18,7 +19,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname, isAbsolute, join, posix, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -128,55 +129,79 @@ const bootId = () => {
 };
 
 /**
- * Lists what the copy takes, never following a link: each folder is opened without following
- * one and read through that open handle, so a folder swapped for a link mid-walk is refused.
+ * Walks real directories through open handles, refusing a folder swapped for a link mid-walk.
  */
+async function* walk(
+  directory: string,
+  skip?: (path: string, parent: string, name: string) => boolean,
+  parent = "",
+): AsyncGenerator<{ path: string; absolute: string; info: BigIntStats }> {
+  const handle = await open(directory, directoryFlags);
+  try {
+    const pinned = pinnedDirectory(directory, handle.fd);
+    for (const raw of await readdir(pinned, { encoding: "buffer" })) {
+      const name = raw.toString("utf8");
+      const path = parent ? `${parent}/${name}` : name;
+      if (!Buffer.from(name, "utf8").equals(raw))
+        throw new HttpError(
+          422,
+          `"${path}" has a name that is not valid UTF-8. Rename it, then duplicate the project.`,
+        );
+      if (skip?.(path, parent, name)) continue;
+      const absolute = join(pinned, name);
+      const info = await lstat(absolute, { bigint: true });
+      yield { path, absolute, info };
+      if (info.isDirectory()) yield* walk(absolute, skip, path);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 async function snapshot(root: string) {
   const entries: Entry[] = [];
-  const visit = async (directory: string, parent: string) => {
-    const handle = await open(directory, directoryFlags);
-    try {
-      const pinned = pinnedDirectory(directory, handle.fd);
-      for (const raw of await readdir(pinned, { encoding: "buffer" })) {
-        const name = raw.toString("utf8");
-        const path = parent ? `${parent}/${name}` : name;
-        if (!Buffer.from(name, "utf8").equals(raw))
-          throw new HttpError(
-            422,
-            `"${path}" has a name that is not valid UTF-8. Rename it, then duplicate the project.`,
-          );
-        if (LEFT_BEHIND.has(path) || stagedName.test(name)) continue;
-        // Atomic writes in progress.
-        if (parent === ".cutroom" && name.endsWith(".tmp")) continue;
-        const absolute = join(pinned, name);
-        const info = await lstat(absolute, { bigint: true });
-        const mode = Number(info.mode & 0o777n);
-        if (info.isDirectory()) {
-          entries.push({ kind: "directory", path, mode });
-          await visit(absolute, path);
-        } else if (info.isFile())
-          entries.push({
-            kind: "file",
-            path,
-            identity: sourceIdentity(info),
-            size: info.size,
-            mode,
-          });
-        else if (info.isSymbolicLink()) {
-          // Kept only when it resolves inside the project, through every link along the way.
-          const target = await readlink(absolute);
-          if (isAbsolute(target)) continue;
-          const resolved = await realpath(join(root, path)).catch(() => null);
-          if (resolved && inside(root, resolved))
-            entries.push({ kind: "link", path, target });
-        }
-      }
-    } finally {
-      await handle.close();
+  const skip = (path: string, parent: string, name: string) =>
+    LEFT_BEHIND.has(path) ||
+    stagedName.test(name) ||
+    // Atomic writes in progress.
+    (parent === ".cutroom" && name.endsWith(".tmp"));
+  for await (const { path, absolute, info } of walk(root, skip)) {
+    const mode = Number(info.mode & 0o777n);
+    if (info.isDirectory()) entries.push({ kind: "directory", path, mode });
+    else if (info.isFile())
+      entries.push({
+        kind: "file",
+        path,
+        identity: sourceIdentity(info),
+        size: info.size,
+        mode,
+      });
+    else if (info.isSymbolicLink()) {
+      if (isAbsolute(await readlink(absolute))) continue;
+      const resolved = await realpath(absolute).catch(() => null);
+      if (resolved && inside(root, resolved))
+        entries.push({ kind: "link", path, target: relative(root, resolved) });
     }
-  };
-  await visit(root, "");
-  return entries;
+  }
+  const copied = new Set(
+    entries.filter(({ kind }) => kind !== "link").map(({ path }) => path),
+  );
+  return entries.filter(
+    (entry) =>
+      entry.kind !== "link" || !entry.target || copied.has(entry.target),
+  );
+}
+
+async function verifyCopyLinks(root: string) {
+  for await (const { path, absolute, info } of walk(root)) {
+    if (!info.isSymbolicLink()) continue;
+    const resolved = await realpath(absolute).catch(() => null);
+    if (!resolved || !inside(root, resolved))
+      throw new HttpError(
+        422,
+        `"${path}" does not point inside the project copy.`,
+      );
+  }
 }
 
 const changed = (entry: FileEntry) =>
@@ -489,7 +514,11 @@ export function createDuplicateRoutes(
           const to = join(stage, entry.path);
           if (entry.kind === "directory")
             await mkdir(to, { mode: entry.mode | 0o700 });
-          else if (entry.kind === "link") await symlink(entry.target, to);
+          else if (entry.kind === "link")
+            await symlink(
+              relative(dirname(entry.path), entry.target) || ".",
+              to,
+            );
           else if (entry.size <= SMALL_BYTES || UNPINNED.has(entry.path))
             await cloneFile(source, stage, entry, "copy");
           else later.push(entry);
@@ -541,17 +570,22 @@ export function createDuplicateRoutes(
           throw error;
         });
         // Listed only once complete and named. The marker stays until then.
-        const copy = await store
-          .importProject({ path: destination, name: view.name })
-          .catch(async (error: unknown) => {
-            await rename(destination, staging!).catch((undo: unknown) =>
-              console.warn(
-                `Could not move the unlisted copy ${destination} back to ${staging}:`,
-                undo,
-              ),
-            );
-            throw error;
+        let copy: Project;
+        try {
+          await verifyCopyLinks(destination);
+          copy = await store.importProject({
+            path: destination,
+            name: view.name,
           });
+        } catch (error) {
+          await rename(destination, staging!).catch((undo: unknown) =>
+            console.warn(
+              `Could not move the unlisted copy ${destination} back to ${staging}:`,
+              undo,
+            ),
+          );
+          throw error;
+        }
         published = true;
         await unlink(join(destination, MARKER)).catch((error: unknown) =>
           console.warn(

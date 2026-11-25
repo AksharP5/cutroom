@@ -7,11 +7,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import {
+  lstat,
   mkdir,
   mkdtemp,
   open,
   readFile,
   readdir,
+  readlink,
   rm,
   stat,
   symlink,
@@ -232,7 +234,8 @@ describe.each(disks)("on $base", ({ base, clones }) => {
       ".thumbnails/index.jpg",
     ])
       await write(left, "the original's");
-    await symlink("footage.zip", at("assets/alias.zip"));
+    await symlink("./footage.zip", at("assets/alias.zip"));
+    await symlink("../.cutroom/renders/Sidecars.mp4", at("assets/render.mp4"));
     await symlink("/etc/hostname", at("assets/absolute.txt"));
     await symlink("../../outside.txt", at("assets/escape.txt"));
     // Each link alone stays inside; followed together they leave the project.
@@ -258,6 +261,10 @@ describe.each(disks)("on $base", ({ base, clones }) => {
     expect(new Uint8Array(await readFile(copied("assets/alias.zip")))).toEqual(
       archive,
     );
+    await expect(lstat(copied("assets/render.mp4"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await readlink(copied("assets/alias.zip"))).toBe("footage.zip");
     expect(await exists(copied("p/q/s"))).toBe(true);
     // Rows for the original's ledger stay behind with it.
     expect(
