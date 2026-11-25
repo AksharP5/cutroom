@@ -367,6 +367,8 @@ export const ClipSchema = z.object({
   src: z.string().nullable(),
   /** Length of the source media in seconds when it could be probed; video and audio only. */
   sourceDuration: z.number().positive().nullable(),
+  /** The source restarts at the clip's In point when it reaches its end. */
+  loop: z.literal(true).optional(),
   /** Whether the clip plays sound: audio, and video that is neither muted nor declared silent. */
   hasAudio: z.boolean(),
   authoredAudioGroupId: z

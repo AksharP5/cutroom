@@ -139,8 +139,13 @@ export function elementBounds(clip: Clip) {
   };
 }
 
-/** Resolve the editor's frame-grid projection, with or without its transition handles. */
-export function resolveClip(clip: Clip, fps: Fps, physical = false) {
+/** Resolve the editor's frame-grid projection. A playable end enables authored loops. */
+export function resolveClip(
+  clip: Clip,
+  fps: Fps,
+  physical = false,
+  playableEnd?: ExactTime,
+) {
   const at = frames(clip.start, fps);
   const bounds = physical
     ? elementBounds(clip)
@@ -160,6 +165,7 @@ export function resolveClip(clip: Clip, fps: Fps, physical = false) {
       edge: window,
       local: window,
       curve: source.curve,
+      loop: playableEnd !== undefined && clip.loop,
       stored:
         bounds.start === clip.start
           ? source.stored
@@ -171,6 +177,7 @@ export function resolveClip(clip: Clip, fps: Fps, physical = false) {
             ),
     },
     fps,
+    playableEnd,
   );
 }
 

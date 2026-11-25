@@ -1,4 +1,9 @@
-import { gainAt, sourcePosition } from "./segment";
+import {
+  gainAt,
+  sourcePosition,
+  unwrappedSourcePosition,
+  wrapPosition,
+} from "./segment";
 import type { Segment } from "./segment";
 
 /** Samples per PCM chunk: 5.5 s, 512 KB. */
@@ -75,11 +80,15 @@ function sample(chunks: Voice["chunks"], k: number) {
 }
 
 /** The source sample at a fractional index, straight between neighbours. */
-function read(chunks: Voice["chunks"], at: number) {
-  const index = Math.floor(at);
+function read(
+  chunks: Voice["chunks"],
+  at: number,
+  index: number,
+  next: number,
+) {
   const fraction = at - index;
   const a = sample(chunks, index);
-  return fraction ? a + (sample(chunks, index + 1) - a) * fraction : a;
+  return fraction ? a + (sample(chunks, next) - a) * fraction : a;
 }
 
 /** One motion's reading of the voices, with each tape voice's gate. */
@@ -154,9 +163,12 @@ class Lane {
           if (n < segment.samples.start || n >= segment.samples.end) continue;
           const source = sourcePosition(segment, n);
           const at = Math.floor(source);
+          const next = segment.loop
+            ? Math.floor(wrapPosition(segment.loop, Math.ceil(source)))
+            : at + 1;
           let value: number;
-          if (held(chunks, at) && held(chunks, at + 1)) {
-            value = read(chunks, source);
+          if (held(chunks, at) && held(chunks, next)) {
+            value = read(chunks, source, at, next);
             this.gates[v] = Math.min(1, this.gates[v]! + 1 / GATE);
             this.last[v] = value;
           } else {
@@ -194,12 +206,20 @@ function grain(
 ) {
   const n = anchor + direction * phase;
   if (n < segment.samples.start || n >= segment.samples.end) return 0;
-  const first = sourcePosition(segment, anchor);
-  const last = first + direction * GRAIN;
-  if (!held(chunks, first) || !held(chunks, last)) return 0;
-  const source = first + direction * phase;
-  note(reading, Math.floor(source));
-  return window[phase]! * read(chunks, source) * gainAt(segment.gain, n);
+  const first = unwrappedSourcePosition(segment, anchor);
+  const { loop } = segment;
+  const last = wrapPosition(loop, first + direction * GRAIN);
+  if (!held(chunks, wrapPosition(loop, first)) || !held(chunks, last)) return 0;
+  const source = wrapPosition(loop, first + direction * phase);
+  const at = Math.floor(source);
+  const next = loop
+    ? Math.floor(wrapPosition(loop, Math.ceil(source)))
+    : at + 1;
+  if (loop && (!held(chunks, at) || !held(chunks, next))) return 0;
+  note(reading, at);
+  return (
+    window[phase]! * read(chunks, source, at, next) * gainAt(segment.gain, n)
+  );
 }
 
 /**

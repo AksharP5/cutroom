@@ -1,4 +1,5 @@
-/** What a scrub plan hands the audio thread: plain data and readers with no imports. */
+/** What a scrub plan hands the audio thread, as plain data. */
+import { wrapSource } from "../../shared/timeline/piece";
 
 /** Output samples between two entries of a ramp's source table. */
 export const RAMP_STEP = 480;
@@ -27,11 +28,13 @@ export type Segment = {
   /** Output samples `[start, end)`, transition handles included. */
   samples: { start: number; end: number };
   map: SourceMap;
+  /** A repeat from the source In point to its playable end, in source samples. */
+  loop?: { start: number; length: number };
   gain: readonly GainPoint[];
 };
 
-/** The source position output sample `n` of a segment reads, in source samples. */
-export function sourcePosition({ map, samples }: Segment, n: number) {
+/** Where output sample `n` falls on the source line before wrapping. */
+export function unwrappedSourcePosition({ map, samples }: Segment, n: number) {
   if (map.kind === "line") return n + map.offset;
   if (map.kind === "rate") return map.start + (n - samples.start) * map.rate;
   const { positions } = map;
@@ -41,6 +44,13 @@ export function sourcePosition({ map, samples }: Segment, n: number) {
   const to = positions[step + 1] ?? from;
   return from + (to - from) * (at - step);
 }
+
+export function sourcePosition(segment: Segment, n: number) {
+  return wrapPosition(segment.loop, unwrappedSourcePosition(segment, n));
+}
+
+export const wrapPosition = (loop: Segment["loop"], at: number) =>
+  loop ? wrapSource(at, loop.start, loop.length) : at;
 
 /** Gain at output sample `n`, read from straight pieces between points. */
 export function gainAt(points: readonly GainPoint[], n: number) {
