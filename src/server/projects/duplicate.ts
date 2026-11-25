@@ -237,8 +237,12 @@ async function rebaseMatteManifest(stage: string, entries: Entry[]) {
         mtimeMs: source.mtimeMs,
       }) ||
       (matte.file && !files.has(matte.file))
-    )
+    ) {
+      // Left as it was: it stays stale for the copy's newer file, and the
+      // matte service removes it and its mask as it does any stale entry.
+      mattes.push(matte);
       continue;
+    }
     let mtimeMs = times.get(matte.src);
     if (mtimeMs === undefined) {
       mtimeMs = (await lstat(join(stage, source.path))).mtimeMs;
