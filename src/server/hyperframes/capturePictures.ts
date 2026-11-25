@@ -19,7 +19,12 @@ import { placedMedia } from "../../shared/timeline/placedMedia.ts";
 import { frameCacheSource } from "./frameCache.ts";
 import { projectPath } from "../projects/path.ts";
 import { FpsSchema, type Fps } from "../../shared/timeline/schema.ts";
-import { ordinalDecode, picturePiece, picturesAt } from "./pictureSelection.ts";
+import {
+  ordinalDecode,
+  picturePiece,
+  picturesAt,
+  RETRY_KEYFRAMES,
+} from "./pictureSelection.ts";
 
 export const PictureSlotsSchema = z.object({
   first: z.number().int(),
@@ -149,9 +154,9 @@ export async function extractPictures(input: {
   const batchSize = process.platform === "win32" ? 250 : 1200;
   for (let first = 0; first < ordinals.length; first += batchSize) {
     const batch = ordinals.slice(first, first + batchSize);
-    for (const retry of [false, true]) {
+    for (const back of [0, RETRY_KEYFRAMES]) {
       signal?.throwIfAborted();
-      const decode = ordinalDecode(source, batch, 0, retry);
+      const decode = ordinalDecode(source, batch, 0, back);
       const result = await runFfmpeg(
         [
           "-loglevel",
@@ -178,7 +183,8 @@ export async function extractPictures(input: {
         { signal, timeout: input.timeout, onStderr: decode.read },
       );
       signal?.throwIfAborted();
-      const matches = decode.verified();
+      const missed = decode.unverified();
+      const matches = missed === undefined;
       const diskFull = /no space left on device|disk quota exceeded/i.test(
         result.stderr,
       );
@@ -201,13 +207,16 @@ export async function extractPictures(input: {
         input.done(batch.length);
         break;
       }
-      if (retry)
+      if (back)
         throw new VideoSourceExtractionError(
           "ffmpeg_failed",
           false,
           "The decoded pictures did not match the source timestamps",
-          `Could not verify picture ${batch[0]} in ${basename(source.path)} after retrying from the start of the source.`,
+          `Could not verify picture ${missed} in ${basename(source.path)} after decoding again from ${RETRY_KEYFRAMES} keyframes earlier.`,
         );
+      console.warn(
+        `Picture ${missed} of ${basename(source.path)} did not verify after its seek, so it decodes again from ${RETRY_KEYFRAMES} keyframes earlier.`,
+      );
     }
   }
 }

@@ -215,6 +215,8 @@ export function createRenderWorkers(configuration: {
     projectId: string;
     composition: string;
     html: string;
+    /** The exported range in composition seconds, when it is not the whole timeline. */
+    range?: { start: number; end: number };
     signal: AbortSignal;
     onWait: (progress: number) => void;
   }) => Promise<{ html: string; cleanup: () => Promise<void> } | null>;
@@ -443,6 +445,12 @@ export function createRenderWorkers(configuration: {
                   projectId: options.project.id,
                   composition: options.composition ?? "index.html",
                   html,
+                  range: output?.range
+                    ? {
+                        start: frameTime(output.range.start, options.fps),
+                        end: frameTime(output.range.end, options.fps),
+                      }
+                    : undefined,
                   signal: mattes.signal,
                   onWait: (progress) => {
                     state.stage = `Waiting for background mattes ${Math.floor(progress * 100)}%`;

@@ -547,8 +547,11 @@ test.skipIf(
       expect(picturesAt(piece, index, ntsc, 0, 2000)).toEqual(
         sequence(2000, (frame) => 15 + (frame % 60)),
       );
-      expect(ordinalDecode(index, [65], 0, false).args).toContain("-ss");
-      expect(ordinalDecode(index, [65], 0, true).args).toEqual([]);
+      // A retry seeks two GOPs earlier, never back to the start of the file.
+      const seekUs = (back: number) =>
+        Number(ordinalDecode(index, [65], 0, back).args.at(-1)?.slice(0, -2));
+      expect(seekUs(2)).toBeGreaterThan(0);
+      expect(seekUs(2)).toBeLessThan(seekUs(0));
 
       const video = {
         id: "picture",
@@ -641,4 +644,51 @@ test.skipIf(!ready)(
     });
   },
   120_000,
+);
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "a seek into Matroska with B-frames lands a GOP early and still keeps the wanted pictures",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "mkv-seek-"));
+    try {
+      // As OBS writes: a millisecond clock and reordered frames.
+      const path = join(root, "take.mkv");
+      await source(path, "60", 600, ["-bf", "2", "-g", "60"]);
+      const index = await sourcePictures(path);
+      if (!index) throw new Error("The fixture has no picture index.");
+      const wanted = sequence(120, (i) => 300 + i);
+      const decode = ordinalDecode(index, wanted, 0);
+      expect(decode.args).toContain("-ss");
+      const images = join(root, "picked-%d.png");
+      const child = Bun.spawn(
+        [
+          "ffmpeg",
+          "-loglevel",
+          "info",
+          "-nostdin",
+          "-copyts",
+          ...decode.args,
+          "-i",
+          path,
+        ].concat([
+          "-vf",
+          decode.filters.join(","),
+          "-fps_mode",
+          "passthrough",
+          images,
+        ]),
+        { stdout: "ignore", stderr: "pipe" },
+      );
+      decode.read(await new Response(child.stderr).text());
+      expect(await child.exited).toBe(0);
+      expect(decode.unverified()).toBeUndefined();
+      // The cells hold eight bits of each picture's ordinal.
+      expect(await labels(images)).toEqual(
+        wanted.map((ordinal) => ordinal % 256),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  30_000,
 );

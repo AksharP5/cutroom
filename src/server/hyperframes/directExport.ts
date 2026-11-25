@@ -25,7 +25,12 @@ import type { ExportStage } from "../../shared/export.ts";
 import { frames, pictureAt, sourceAt } from "../../shared/timeline/piece.ts";
 import { localMediaInputOptions } from "../media/input.ts";
 import { sourcePictures, type SourcePictures } from "../media/pictureIndex.ts";
-import { ordinalDecode, picturePiece, picturesAt } from "./pictureSelection.ts";
+import {
+  ordinalDecode,
+  picturePiece,
+  picturesAt,
+  RETRY_KEYFRAMES,
+} from "./pictureSelection.ts";
 
 /** The planner's audio stage, which Cutroom's render isolation hands over when the producer loads. */
 export type AudioStage = (input: {
@@ -427,7 +432,7 @@ type EncodePart = {
   onFrames: (frames: number) => void;
 };
 
-/** Encodes one part's pieces in a single FFmpeg process, retrying only mismatched seeks. */
+/** Encodes one part's pieces in a single FFmpeg process, retrying only the pieces that missed. */
 async function encodePart(input: EncodePart) {
   let reported = 0;
   const report = (frames: number) => {
@@ -435,21 +440,25 @@ async function encodePart(input: EncodePart) {
     input.onFrames(frames - reported);
     reported = frames;
   };
-  const first = await encodePartAttempt(input, new Map(), report);
+  const first = await encodePartAttempt(input, new Set(), report);
   if (!first.size) return;
-  const second = await encodePartAttempt(input, first, report);
+  for (const [index, ordinal] of first)
+    console.warn(
+      `Picture ${ordinal} of ${input.pieces[index]!.src} did not verify after its seek, so its part decodes again from ${RETRY_KEYFRAMES} keyframes earlier.`,
+    );
+  const second = await encodePartAttempt(input, new Set(first.keys()), report);
   const missed = second.entries().next().value;
   if (missed) {
     const [index, ordinal] = missed;
     throw new Error(
-      `Could not verify picture ${ordinal} in ${input.pieces[index]!.src} after retrying from the start of the source.`,
+      `Could not verify picture ${ordinal} in ${input.pieces[index]!.src} after decoding again from ${RETRY_KEYFRAMES} keyframes earlier.`,
     );
   }
 }
 
 async function encodePartAttempt(
   input: EncodePart,
-  retry: ReadonlyMap<number, number>,
+  retry: ReadonlySet<number>,
   report: (frames: number) => void,
 ) {
   const { fps, width, height, pieces } = input;
@@ -512,7 +521,12 @@ async function encodePartAttempt(
         starts.push(slot);
       }
     }
-    const decode = ordinalDecode(source, ordinals, index, retry.has(index));
+    const decode = ordinalDecode(
+      source,
+      ordinals,
+      index,
+      retry.has(index) ? RETRY_KEYFRAMES : 0,
+    );
     checks.set(index, decode);
     inputs.push(...localMediaInputOptions, ...decode.args, "-i", piece.path);
     // Set each selected ordinal on its first output slot. The extra EOF frame gives
@@ -604,9 +618,10 @@ async function encodePartAttempt(
   });
   input.signal.throwIfAborted();
   const mismatches = new Map(
-    [...checks]
-      .filter(([, decode]) => !decode.verified())
-      .map(([index, decode]) => [index, decode.first]),
+    [...checks].flatMap(([index, decode]) => {
+      const ordinal = decode.unverified();
+      return ordinal === undefined ? [] : [[index, ordinal] as const];
+    }),
   );
   const empty = /nothing was written|output file is empty/i.test(result.stderr);
   if (!result.success && (!mismatches.size || !empty))

@@ -13,6 +13,11 @@ import {
   readBackground,
 } from "../../shared/timeline/background.ts";
 import type { Background } from "../../shared/timeline/background.ts";
+import { secondsOf } from "../../shared/timeline/piece.ts";
+import {
+  compositionScope,
+  compositionWindows,
+} from "../timeline/composition.ts";
 import { localMediaInputOptions } from "../media/input.ts";
 import { projectPath } from "../projects/path.ts";
 import type { MatteService } from "./service.ts";
@@ -31,8 +36,16 @@ interface MattedVideo {
   background: Background;
 }
 
-/** Video elements with their background removed, and the source seconds each plays. */
-export function mattedVideos(html: string): MattedVideo[] {
+/**
+ * Video elements with their background removed, and the source seconds each plays. With a range
+ * in composition seconds, only those that play in it.
+ */
+export function mattedVideos(
+  html: string,
+  range?: { start: number; end: number },
+  composition = "index.html",
+): MattedVideo[] {
+  let windows: ReturnType<typeof compositionWindows> | undefined;
   return scanHtmlOpeningTags(html).flatMap((tag) => {
     if (tag.name !== "video") return [];
     const value = (name: string) => {
@@ -48,6 +61,16 @@ export function mattedVideos(html: string): MattedVideo[] {
     // A hidden clip, such as one outside a layer being rendered, needs no cutout.
     const hidden = tag.attributes.some((entry) => entry.name === "data-hidden");
     if (!marked || hidden || !src || !(duration > 0)) return [];
+    if (range) {
+      windows ??= compositionWindows(html, compositionScope(composition));
+      const window = windows.get(tag.start);
+      if (
+        window &&
+        (secondsOf(window.start) >= range.end ||
+          (window.end && secondsOf(window.end) <= range.start))
+      )
+        return [];
+    }
     const automation = value("data-automation")?.value ?? null;
     if (!(rate > 0) || parseRateLane(automation) !== null)
       throw new Error(
@@ -265,11 +288,13 @@ export async function prepareMatteExport(options: {
   /** The composition, relative to the project. */
   composition: string;
   html: string;
+  /** The exported part of the composition, in seconds; a cutout outside it is not made. */
+  range?: { start: number; end: number };
   mattes: MatteService;
   signal: AbortSignal;
   onWait: (progress: number) => void;
 }): Promise<{ html: string; cleanup: () => Promise<void> } | null> {
-  const videos = mattedVideos(options.html);
+  const videos = mattedVideos(options.html, options.range, options.composition);
   if (!videos.length) return null;
   const ffmpeg = findFfBinary("ffmpeg", { configuredMustExist: true });
   const ffprobe = findFfBinary("ffprobe", { configuredMustExist: true });

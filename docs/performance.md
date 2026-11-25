@@ -55,6 +55,22 @@ A root that declares no length (`data-duration="0"`, which deleting every clip l
 
 Compiled timing indexes the compiler's short IDs referenced in the document. On the 1,000-clip camera fixture, building the same timing snapshot from compiled markup dropped from 93 ms to 23 ms over 20 warmed samples per build. This measures the snapshot calculation in isolation, excluding compilation, network time and drawing.
 
+## Export from long recordings
+
+The fixture stands in for an OBS recording: a 30-minute 1080p60 HEVC take in Matroska, 1 ms timestamps, B-frames, a 2 s GOP, a frame number burned into an 18-bit stripe along the top, and gated noise for sound. One timeline cuts it into 55 pieces (125 clips with b-roll, titles, a cutout and music), another into 528 (1,078 clips). An export's pictures are read back from the stripe and its sound is compared with the take's.
+
+FFmpeg seeks 3/23 s early in a stream with B-frames unless its container seeks by presentation time, so a Matroska seek to a keyframe landed a whole GOP early. Pictures were chosen by decode count from the landing point, so every part failed verification and was decoded again from the first frame of the take. Pictures are now kept by their decoded timestamp, the seek asks for a time just past the keyframe, and a retry starts two keyframes earlier. A range export also no longer waits for or makes cutouts of clips outside it.
+
+Measured on November 23, 2026, with NVENC (Standard is `p5`, CQ 23). Every exported picture matched its stripe, and speech onsets were within 8 samples of the take on both sides: the take's own millisecond timestamps.
+
+| Plain-cut export                     | main `eb4f5750` | Now     | FFmpeg alone, same encoder |
+| ------------------------------------ | --------------- | ------- | -------------------------- |
+| 2 min at 8:00, 125 clips             | 329 s, 415 s    | 24–27 s | 20.9 s                     |
+| 110 s at 21:00, 27 min into the take | 743 s           | 22.9 s  | not run                    |
+| 2 min at 8:00, 1,078 clips           | 734 s           | 25.3 s  | not run                    |
+
+The remaining time is NVENC at `p5`: four parts encode at about 340 frames a second together, as one FFmpeg does. `p4` encodes twice as fast; the Standard tier keeps `p5` for its quality.
+
 ## Cutroom vs HyperFrames Studio
 
 On November 16, 2026 the same project was opened and edited in Cutroom (main `c3db508`, default settings, so the footage pipeline was off) and in HyperFrames Studio 0.9.26, run from this repository's `node_modules` with `hyperframes preview --no-open`. `node scripts/bench-vs-studio.ts` does both: it makes the project, starts the editor's own server on a private port, and drives one headed Chromium 155 window (X11, 1720x1050, muted) through every operation below. Three runs per editor, each with a fresh server, project copy and browser, unthrottled and with CPU throttled 4x (the editor page and, in Cutroom, its out-of-process preview). The machine was shared: load average about 10 to 13 from other work during the runs. The play rows were measured again the same day on main `4f506ed`, three runs per column, measured as described under 1x playback below.

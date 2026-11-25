@@ -551,20 +551,11 @@ function compositionRoot(
   return root;
 }
 
-function projectComposition(
-  { scope, all }: CompositionMarkup,
-  {
-    mediaLengths = new Map(),
-    rootId,
-  }: {
-    /** A bundled scene instance whose tracks are mixed independently of its parent. */
-    rootId?: string;
-    /** Measured source lengths in seconds, by `src`. */
-    mediaLengths?: ReadonlyMap<string, number>;
-  } = {},
+function resolveElementTimings(
+  all: SourceElement[],
+  fps: Fps,
+  mediaLengths: ReadonlyMap<string, number>,
 ) {
-  const root = compositionRoot(all, scope, rootId);
-  const fps = compositionFps(root.attrs["data-fps"]);
   const byId = new Map<string, SourceElement>();
   for (const element of all)
     if (element.attrs.id && !byId.has(element.attrs.id))
@@ -622,6 +613,45 @@ function projectComposition(
       el.element,
       { ...el.read, begin: start, finish: end },
     ]),
+  );
+  return { byId, lengthOf, timings };
+}
+
+/** The resolved authored windows, keyed by each element's opening tag offset. */
+export function compositionWindows(html: string, scope: CompositionScope) {
+  const { all } = compositionMarkup(html, scope);
+  const root = compositionRoot(all, scope);
+  const { timings } = resolveElementTimings(
+    all,
+    compositionFps(root.attrs["data-fps"]),
+    new Map(),
+  );
+  return new Map(
+    Array.from(timings, ([element, { begin, finish }]) => [
+      element.start,
+      { start: begin, end: finish },
+    ]),
+  );
+}
+
+function projectComposition(
+  { scope, all }: CompositionMarkup,
+  {
+    mediaLengths = new Map(),
+    rootId,
+  }: {
+    /** A bundled scene instance whose tracks are mixed independently of its parent. */
+    rootId?: string;
+    /** Measured source lengths in seconds, by `src`. */
+    mediaLengths?: ReadonlyMap<string, number>;
+  } = {},
+) {
+  const root = compositionRoot(all, scope, rootId);
+  const fps = compositionFps(root.attrs["data-fps"]);
+  const { byId, lengthOf, timings } = resolveElementTimings(
+    all,
+    fps,
+    mediaLengths,
   );
   type Timing = ClipTiming & { begin: ExactTime; finish: ExactTime | null };
   const timing = (element: SourceElement) => timings.get(element)!;
