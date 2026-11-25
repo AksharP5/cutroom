@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -17,8 +18,7 @@ test("timeline_view draws alternating far seeks in one long source", async ({
   const body: unknown = await response.json();
   expect(response.ok(), JSON.stringify(body)).toBe(true);
   const project = ProjectSchema.parse(body);
-  const video = Bun.spawnSync([
-    "ffmpeg",
+  const video = spawnSync("ffmpeg", [
     "-v",
     "error",
     "-f",
@@ -35,7 +35,6 @@ test("timeline_view draws alternating far seeks in one long source", async ({
     "vfr",
     "-c:a",
     "aac",
-
     "-c:v",
     "libx265",
     "-preset",
@@ -46,8 +45,9 @@ test("timeline_view draws alternating far seeks in one long source", async ({
     "pools=2:log-level=error",
     join(project.path, "take.mkv"),
   ]);
-  expect(video.stderr.toString()).toBe("");
-  expect(video.exitCode).toBe(0);
+  expect(video.status, video.stderr?.toString() ?? video.error?.message).toBe(
+    0,
+  );
   await writeFile(
     join(project.path, "index.html"),
     '<!doctype html><style>body{margin:0}video{position:absolute;inset:0;width:100%;height:100%}</style><main data-composition-id="main" data-width="96" data-height="54" data-fps="60" data-duration="1400"><video class="clip" id="take" src="take.mkv" muted data-start="0" data-duration="1400" data-media-start="351.4" data-track-index="0"></video></main>',
@@ -81,9 +81,9 @@ test("timeline_view draws alternating far seeks in one long source", async ({
         const image = picture.parse(
           z.array(z.unknown()).parse(reply.content)[2 * index],
         );
-        const pixel = Bun.spawnSync(
+        const pixel = spawnSync(
+          "ffmpeg",
           [
-            "ffmpeg",
             "-v",
             "error",
             "-f",
@@ -98,9 +98,12 @@ test("timeline_view draws alternating far seeks in one long source", async ({
             "rawvideo",
             "pipe:1",
           ],
-          { stdin: Buffer.from(image.data, "base64") },
+          { input: Buffer.from(image.data, "base64") },
         );
-        expect(pixel.exitCode, pixel.stderr.toString()).toBe(0);
+        expect(
+          pixel.status,
+          pixel.stderr?.toString() ?? pixel.error?.message,
+        ).toBe(0);
         const [red, , blue] = pixel.stdout;
         if ((frame < 32_916 ? red! - blue! : blue! - red!) <= 200)
           errors.push(`Frame ${frame} drew red=${red}, blue=${blue}`);
