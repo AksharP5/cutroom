@@ -17,7 +17,7 @@ async function watches() {
 }
 
 test.skipIf(process.platform !== "linux")(
-  "listing and resolving closed projects keeps no watches; editor subscriptions share and release them",
+  "resolving closed projects keeps no watches; editor subscriptions share and release them",
   async () => {
     const f = await projectFixture();
     const api = createHyperframesApi(f.store, f.review);
@@ -28,7 +28,6 @@ test.skipIf(process.platform !== "linux")(
         ),
       );
       const before = await watches();
-      await api.request("/projects");
       for (const project of projects)
         await api.request(`/projects/${project.id}`);
       expect(await watches()).toBe(before);

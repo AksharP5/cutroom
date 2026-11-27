@@ -1,38 +1,15 @@
-import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
-import { studioPlugin } from "./build/studioPlugin";
 
 export default defineConfig({
-  plugins: [studioPlugin(), react(), tailwindcss()],
-  resolve: {
-    alias: [
-      {
-        find: /^@hyperframes\/studio$/,
-        replacement: resolve("node_modules/@hyperframes/studio/src/index.ts"),
-      },
-      {
-        find: "@upstream-studio",
-        replacement: resolve("node_modules/@hyperframes/studio/src"),
-      },
-    ],
-    // Extensions must share Studio's pinned CodeMirror view and facet identities.
-    dedupe: [
-      "react",
-      "react-dom",
-      "zustand",
-      "@codemirror/view",
-      "@codemirror/state",
-    ],
-  },
+  plugins: [react()],
+  // CodeMirror's packages install a newer view beside the pinned one. Extensions must share one
+  // view and its facet identities.
+  resolve: { dedupe: ["@codemirror/view", "@codemirror/state"] },
   // Lightning CSS expands the tokens' @custom-media breakpoints, which browsers cannot read yet.
   css: {
     transformer: "lightningcss",
     lightningcss: { drafts: { customMedia: true } },
-  },
-  define: {
-    "import.meta.env.VITE_HYPERFRAMES_NO_TELEMETRY": JSON.stringify("1"),
   },
   server: {
     host: "127.0.0.1",

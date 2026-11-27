@@ -365,11 +365,9 @@ function MediaRow({
 export function MediaPanel({
   projectId,
   projectPath,
-  hidden,
 }: {
   projectId: string;
   projectPath: string;
-  hidden: boolean;
 }) {
   // Read here rather than in the shell, so a burst of file events re-renders only this panel.
   const revision = useWorkspace((state) => state.mediaRevision);
@@ -440,12 +438,10 @@ export function MediaPanel({
   // Its panel key lands on the list's current file, or on Import while there is none.
   useKeymap({
     viewActiveWindowSelectionEffects: () => {
-      if (hidden) return;
       openLibrary();
       setLibraryFocus((count) => count + 1);
     },
     viewActiveWindowSelectionMediaPoolClips: () => {
-      if (hidden) return;
       if (showing === "library") setView("media");
       focusMediaRow(
         panel.current?.querySelector<HTMLElement>('.media-row[tabindex="0"]') ??
@@ -756,7 +752,6 @@ export function MediaPanel({
       ref={panel}
       className="media-panel"
       aria-label="Media"
-      hidden={hidden}
       data-dragging={dragging || undefined}
       onDragOver={(event) => {
         if (!acceptsFiles(event)) return;

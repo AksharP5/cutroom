@@ -676,8 +676,6 @@ async function insertImages(composition: string, sources: string[]) {
 }
 
 test("selective history protects a freeze used by another composition, including mounted build scenes", async () => {
-  const editor = createHyperframesApi(fixture.store, fixture.review);
-  fixture.app.route("/api/editor", editor);
   fixture.app.route(
     "/api/cutroom",
     createTimelineRoutes(fixture.store, fixture.review),
@@ -713,11 +711,9 @@ test("selective history protects a freeze used by another composition, including
   );
   const targets = [{ file: "index.html", id: "still" }];
   const who = { kind: "person", name: "You" } as const;
-  const selected = (entryId: string, mode?: "keep-later-edits" | "just-this") =>
-    fixture.app.request(`/api/editor/projects/${project.id}/history/undo`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ entryId, mode }),
+  const selected = (entryId: string, direction: "undo" | "redo" = "undo") =>
+    fixture.request(`/projects/${project.id}/history/${direction}`, "POST", {
+      entryId,
     });
   const refuse = async (response: Response, usedBy = scene) => {
     expect(response.status, await response.clone().text()).toBe(409);
@@ -725,66 +721,60 @@ test("selective history protects a freeze used by another composition, including
     if (body.conflict) expect(body.conflict.files).toContain(usedBy);
     else expect(body.error).toContain(`still used by ${usedBy}`);
   };
-  try {
-    await mkdir(at("assets/freeze/export"), { recursive: true });
-    await symlink("assets/freeze", at("alias"));
-    await writeFile(at(preview), "preview pixels");
-    await writeFile(at(exported), "export pixels");
-    await writeFile(at("index.html"), indexFrozen);
-    await ledger.claim(who, "Freeze frame", ["index.html", preview, exported], {
-      targets,
-    });
-    await ledger.checkpoint();
-    const freeze = ledger.list().at(-1)!;
-    expect(freeze.targets).toEqual(targets);
-    const builtReuse = builtSource.replace(
-      "</div>",
-      '<img src="../alias/still.png" id="still-from-build"></div>',
-    );
-    await writeFile(at(built), builtReuse);
-    const buildHistory = ledger.list();
-    expect((await selected(freeze.id, "keep-later-edits")).status).toBe(400);
-    await refuse(await selected(freeze.id), built);
-    expect(ledger.list()).toEqual(buildHistory);
-    expect(await readFile(at(built), "utf8")).toBe(builtReuse);
-    expect(await present(preview)).toBe(true);
-    expect(await present(exported)).toBe(true);
-    await writeFile(at(built), builtSource);
+  await mkdir(at("assets/freeze/export"), { recursive: true });
+  await symlink("assets/freeze", at("alias"));
+  await writeFile(at(preview), "preview pixels");
+  await writeFile(at(exported), "export pixels");
+  await writeFile(at("index.html"), indexFrozen);
+  await ledger.claim(who, "Freeze frame", ["index.html", preview, exported], {
+    targets,
+  });
+  await ledger.checkpoint();
+  const freeze = ledger.list().at(-1)!;
+  expect(freeze.targets).toEqual(targets);
+  const builtReuse = builtSource.replace(
+    "</div>",
+    '<img src="../alias/still.png" id="still-from-build"></div>',
+  );
+  await writeFile(at(built), builtReuse);
+  const buildHistory = ledger.list();
+  await refuse(await selected(freeze.id), built);
+  expect(ledger.list()).toEqual(buildHistory);
+  expect(await readFile(at(built), "utf8")).toBe(builtReuse);
+  expect(await present(preview)).toBe(true);
+  expect(await present(exported)).toBe(true);
+  await writeFile(at(built), builtSource);
 
-    const reused = await insertImages(scene, ["../alias/still.png"]);
-    const history = ledger.list();
-    for (const mode of [undefined, "just-this"] as const)
-      await refuse(await selected(freeze.id, mode));
-    expect(ledger.list()).toEqual(history);
-    expect(await readFile(at(scene), "utf8")).toBe(reused);
-    expect(await readFile(at("index.html"), "utf8")).toBe(indexFrozen);
-    expect(await present(preview)).toBe(true);
-    expect(await present(exported)).toBe(true);
+  const reused = await insertImages(scene, ["../alias/still.png"]);
+  const history = ledger.list();
+  await refuse(await selected(freeze.id));
+  expect(ledger.list()).toEqual(history);
+  expect(await readFile(at(scene), "utf8")).toBe(reused);
+  expect(await readFile(at("index.html"), "utf8")).toBe(indexFrozen);
+  expect(await present(preview)).toBe(true);
+  expect(await present(exported)).toBe(true);
 
-    expect((await step("undo")).status).toBe(200);
-    expect((await selected(freeze.id)).status).toBe(200);
-    expect(ledger.list().at(-1)).toMatchObject({ undoes: freeze.id, targets });
-    expect(await readFile(at("index.html"), "utf8")).toBe(indexBefore);
-    expect(await present(preview)).toBe(false);
-    expect(await present(exported)).toBe(false);
-    expect((await step("redo")).status).toBe(200);
-    expect(await readFile(at("index.html"), "utf8")).toBe(indexFrozen);
+  expect((await step("undo")).status).toBe(200);
+  expect((await selected(freeze.id)).status).toBe(200);
+  expect(ledger.list().at(-1)).toMatchObject({ undoes: freeze.id, targets });
+  expect(await readFile(at("index.html"), "utf8")).toBe(indexBefore);
+  expect(await present(preview)).toBe(false);
+  expect(await present(exported)).toBe(false);
+  expect((await step("redo")).status).toBe(200);
+  expect(await readFile(at("index.html"), "utf8")).toBe(indexFrozen);
 
-    expect(
-      (await post("rename", { path: preview, name: "renamed.png" })).status,
-    ).toBe(200);
-    expect((await step("undo")).status).toBe(200);
-    const undoneRename = ledger.list().at(-1)!;
-    const reusedAgain = await insertImages(scene, ["../alias/still.png"]);
-    const beforeRedo = ledger.list();
-    await refuse(await selected(undoneRename.id));
-    expect(ledger.list()).toEqual(beforeRedo);
-    expect(await readFile(at(scene), "utf8")).toBe(reusedAgain);
-    expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
-    expect(await readFile(at(exported), "utf8")).toBe("export pixels");
-  } finally {
-    await editor.dispose();
-  }
+  expect(
+    (await post("rename", { path: preview, name: "renamed.png" })).status,
+  ).toBe(200);
+  expect((await step("undo")).status).toBe(200);
+  const undoneRename = ledger.list().at(-1)!;
+  const reusedAgain = await insertImages(scene, ["../alias/still.png"]);
+  const beforeRedo = ledger.list();
+  await refuse(await selected(undoneRename.id, "redo"));
+  expect(ledger.list()).toEqual(beforeRedo);
+  expect(await readFile(at(scene), "utf8")).toBe(reusedAgain);
+  expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+  expect(await readFile(at(exported), "utf8")).toBe("export pixels");
 });
 
 test.each([
@@ -1182,7 +1172,7 @@ test("source marks follow the visible still across undo and redo of identical va
   ).toEqual({ in: null, out: null });
 });
 
-test("direct file operations cannot split a freeze frame", async () => {
+test("uploads and removals cannot split a freeze frame", async () => {
   const editor = createHyperframesApi(fixture.store, fixture.review);
   fixture.app.route("/api/editor", editor);
   const preview = "assets/freeze/still.png";
@@ -1191,42 +1181,22 @@ test("direct file operations cannot split a freeze frame", async () => {
   await writeFile(at(preview), "preview pixels");
   await writeFile(at(exported), "export pixels");
   await symlink(at("assets/freeze/export"), at("effects"));
-  const base = `/api/editor/projects/${project.id}/files/`;
   try {
-    for (const path of [
-      preview,
-      exported,
-      "effects/still.png",
-      "assets/freeze/export",
-      "assets",
-    ]) {
-      for (const method of ["DELETE", "PATCH"]) {
-        const response = await fixture.app.request(`${base}${path}`, {
-          method,
-          ...(method === "PATCH" && {
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ newPath: "moved.png" }),
-          }),
-        });
-        expect(response.status).toBe(409);
-      }
+    for (const dir of ["assets/freeze", "assets/freeze/export", "effects"]) {
+      const form = new FormData();
+      form.append("files", new File(["other pixels"], "still.png"));
+      const response = await fixture.app.request(
+        `/api/editor/projects/${project.id}/upload?dir=${dir}`,
+        { method: "POST", body: form },
+      );
+      expect(response.status, dir).toBe(409);
     }
-    const moveIntoExport = await fixture.app.request(
-      `${base}assets/unused.mp3`,
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ newPath: "assets/freeze/export/incoming.png" }),
-      },
-    );
-    expect(moveIntoExport.status).toBe(409);
     expect(
       (await post("remove", { path: "effects/still.png", confirmUsed: true }))
         .status,
     ).toBe(403);
     expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
     expect(await readFile(at(exported), "utf8")).toBe("export pixels");
-    expect(await present("moved.png")).toBe(false);
   } finally {
     await editor.dispose();
   }

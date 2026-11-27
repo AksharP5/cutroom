@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileContentVersion } from "@hyperframes/studio-server";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createReviewService } from "../src/server/projects/review";
 import { createProjectStore } from "../src/server/projects/store";
@@ -33,9 +32,6 @@ async function setup() {
 describe("HyperFrames editor integration", () => {
   test("serves real project files, self-hosted runtime, and a seekable preview", async () => {
     const { api, project } = await setup();
-    const listed = await api.request("/projects");
-    expect(listed.status).toBe(200);
-    expect(await listed.text()).toContain(project.id);
     const resolved = await api.request(`/projects/${project.id}`);
     expect(await resolved.text()).toContain('"index.html"');
     const runtime = await api.request("/runtime.js");
@@ -43,6 +39,8 @@ describe("HyperFrames editor integration", () => {
     expect((await runtime.text()).length).toBeGreaterThan(10_000);
     const preview = await api.request(`/projects/${project.id}/preview`);
     expect(preview.status).toBe(200);
+    // Opened by URL on Cutroom's own origin, composition scripts must not run.
+    expect(preview.headers.get("content-security-policy")).toBe("sandbox");
     const html = await preview.text();
     expect(html).toContain("Geometry test");
     expect(html).toContain("/api/runtime.js");
@@ -51,59 +49,6 @@ describe("HyperFrames editor integration", () => {
     const gsap = await api.request("/vendor/npm/gsap@3.15.0/dist/gsap.min.js");
     expect(gsap.status).toBe(200);
     expect(await gsap.text()).toContain("gsap");
-  });
-
-  test("canvas mutations share project history, undo restores source, and stale writes conflict", async () => {
-    const { api, project, store } = await setup();
-    const source = join(project.path, "index.html");
-    const original = await readFile(source, "utf8");
-    const window = await (
-      await store.history(project)
-    ).beginWindow({ kind: "person", name: "You" }, "Set headline color");
-    const patch = await api.request(
-      `/projects/${project.id}/file-mutations/patch-element/index.html`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "if-match": fileContentVersion(original),
-        },
-        body: JSON.stringify({
-          target: { id: "headline" },
-          operations: [
-            {
-              type: "inline-style",
-              property: "color",
-              value: "rgb(255, 0, 0)",
-            },
-          ],
-        }),
-      },
-    );
-    expect(patch.status).toBe(200);
-    const edited = await readFile(source, "utf8");
-    expect(edited).toContain("rgb(255, 0, 0)");
-    await window.close();
-    const stale = await api.request(
-      `/projects/${project.id}/files/index.html`,
-      {
-        method: "PUT",
-        headers: {
-          "content-type": "text/plain",
-          "if-match": fileContentVersion(original),
-        },
-        body: original,
-      },
-    );
-    expect(stale.status).toBe(409);
-    expect(await readFile(source, "utf8")).toBe(edited);
-    const undo = await api.request(`/projects/${project.id}/history/step`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ direction: "back" }),
-    });
-    expect(undo.status).toBe(200);
-    expect(await readFile(source, "utf8")).toBe(original);
   });
 
   test("an outside file edit invalidates the cached preview", async () => {

@@ -27,13 +27,7 @@ import {
 } from "../../shared/export";
 import { projectMutationGuard } from "../projects/authorization";
 import { historyActor } from "../projects/historyActor";
-import {
-  HistoryRequestSchema,
-  historySummary,
-  replayHistory,
-} from "../projects/history";
-import { parseInput } from "../projects/routes";
-import { sourceWriteGuard } from "./source-guard";
+import { uploadGuard } from "./source-guard";
 import {
   canonicalProjectPath,
   listTimelines,
@@ -74,7 +68,6 @@ import {
 import type { lintHyperframeHtml } from "@hyperframes/core/lint";
 import { createLinter } from "./lint";
 import {
-  DELETED_VERSION,
   PREVIEW_BUNDLE_OPTIONS,
   STUDIO_SIGNATURE_MANIFEST_PATHS,
   affectsPreview,
@@ -173,8 +166,6 @@ export interface FileChange {
   projectId: string;
   path: string;
   version: string | null;
-  content?: string;
-  writeToken?: string;
   affectsPreview: boolean;
   affectedCompositions: string[] | null;
 }
@@ -192,7 +183,21 @@ function scheduleFileSettle(_path: string, read: () => Promise<void>) {
   return () => clearTimeout(timer);
 }
 
-/** `reviews` must be the server's one review service, so editor undo shares its per-project queue. */
+/**
+ * The HyperFrames Studio routes Cutroom serves: the project listing, preview documents and
+ * assets, frame captures, lint, the selection agents read, uploads and render jobs. Its file
+ * writers, catalog, fonts and media tools have Cutroom counterparts under /api/cutroom.
+ */
+const studioRoutes: readonly (readonly [method: string, path: RegExp])[] = [
+  ["GET", /^projects\/[^/]+$/],
+  ["GET", /^projects\/[^/]+\/(?:preview|lint|selection)$/],
+  ["GET", /^projects\/[^/]+\/(?:preview|thumbnail)\/./],
+  ["PUT", /^projects\/[^/]+\/selection$/],
+  ["POST", /^projects\/[^/]+\/(?:upload|render)$/],
+  ["GET", /^render\/[^/]+\/(?:progress|download|view)$/],
+];
+
+/** `reviews` must be the server's one review service, so uploads share its per-project queue. */
 export function createHyperframesApi(
   store: ProjectStore,
   reviews: ReviewService,
@@ -228,21 +233,12 @@ export function createHyperframesApi(
     throw error;
   });
   api.use("/projects/:id/*", projectMutationGuard(reviews));
-  api.use("/projects/:id/*", sourceWriteGuard(store));
-  api.use("/projects/:id/*", async (c, next) => {
-    if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return next();
-    const family = requestSubPath(c.req.url, "projects/:id").split("/")[0];
-    if (
-      !["upload", "files", "duplicate-file", "file-mutations"].includes(
-        family ?? "",
-      )
-    )
-      return next();
-    const project = await store.get(c.req.param("id") ?? "");
+  api.post("/projects/:id/upload", uploadGuard(store));
+  api.post("/projects/:id/upload", async (c, next) => {
+    const project = await store.get(c.req.param("id"));
     await resolveProject(project.id);
     const token = c.req.header(AGENT_HEADER);
     await reviews.editAssets(project, token, () => {
-      if (family !== "upload") return store.serializeMutation(project, next);
       const paths = new Set<string>();
       return store
         .mutateWithEntry(
@@ -313,6 +309,15 @@ export function createHyperframesApi(
     timingBuild.getStore() ? next() : timingBuild.run({}, next);
   api.use("/projects/:id/preview", previewContext);
   api.use("/projects/:id/preview/*", previewContext);
+  // On Cutroom's own origin a project file is data for the editor to read. Opened as a
+  // document it gets an opaque origin and runs no script, so authored HTML or SVG cannot reach
+  // the workspace API. A preview capability replaces this policy with its own.
+  const inertDocument: MiddlewareHandler = async (c, next) => {
+    await next();
+    c.header("Content-Security-Policy", "sandbox");
+  };
+  api.use("/projects/:id/preview", inertDocument);
+  api.use("/projects/:id/preview/*", inertDocument);
   // Upstream signs the project, then compiles. A body compiled from files that changed in
   // between must not carry the older signature's ETag: after an undo back to that version,
   // a browser revalidating with it would get a 304 and keep showing the newer picture.
@@ -994,18 +999,13 @@ export function createHyperframesApi(
           try {
             const info = await stat(absolute);
             if (!info.isFile() || info.size > 2_000_000)
-              return { sequence, version: null, content: undefined };
-            const bytes = await readFile(absolute);
+              return { sequence, version: null };
             return {
               sequence,
-              version: fileContentVersion(bytes),
-              content: /\.(html?|css|m?[jt]sx?|json|srt|vtt)$/i.test(path)
-                ? bytes.toString("utf8")
-                : undefined,
+              version: fileContentVersion(await readFile(absolute)),
             };
           } catch (error) {
-            if (isMissing(error))
-              return { sequence, version: null, content: undefined };
+            if (isMissing(error)) return { sequence, version: null };
             throw error;
           }
         };
@@ -1026,16 +1026,11 @@ export function createHyperframesApi(
         };
         const deliver = async ({
           version,
-          content,
         }: Awaited<ReturnType<typeof read>>) => {
           // Both paths below can see one write. Each version is announced once.
           if (version !== null && announced.get(key) === version) return;
           if (version === null) announced.delete(key);
           else announced.set(key, version);
-          const receipt = identifyFileWrite(
-            absolute,
-            version ?? DELETED_VERSION,
-          );
           let mixChanged = false;
           if (path === PROJECT_DOCUMENT_PATH) {
             const next = await readMix();
@@ -1049,7 +1044,6 @@ export function createHyperframesApi(
             projectId: project.id,
             path,
             version,
-            content,
             affectsPreview: affects,
             affectedCompositions: affects
               ? await affectedCompositions(
@@ -1058,7 +1052,6 @@ export function createHyperframesApi(
                   compositionsAffectedBy(project.dir, path),
                 )
               : [],
-            ...(receipt ? { writeToken: receipt.writeToken } : {}),
           };
           if (affects) await reviews.observeAssets(await store.get(project.id));
           for (const subscriber of subscribers) subscriber(change);
@@ -1871,25 +1864,6 @@ export function createHyperframesApi(
           },
     ),
   );
-  api.get("/telemetry-identity", (c) => c.json({ distinctId: null }));
-  api.post("/telemetry", (c) => c.body(null, 204));
-  api.get("/events", (c) =>
-    streamSSE(c, async (stream) => {
-      const listener = (change: FileChange) => {
-        void stream
-          .writeSSE({ event: "file-change", data: JSON.stringify(change) })
-          .catch(() => {});
-      };
-      subscribers.add(listener);
-      try {
-        await stream.writeSSE({ event: "ready", data: "{}" });
-        if (!stream.aborted)
-          await new Promise<void>((done) => stream.onAbort(done));
-      } finally {
-        subscribers.delete(listener);
-      }
-    }),
-  );
   // Studio's listing feeds the Media panel, Assets, and the code tree. Dot folders hold app
   // state such as Cutroom's review captures, so they are hidden here like everywhere else,
   // and so are trash files and the export PNGs that belong to freeze-frame Media items.
@@ -2098,80 +2072,33 @@ export function createHyperframesApi(
       }
     });
   });
-  api.get("/projects/:id/history", async (c) => {
-    const project = await store.get(c.req.param("id"));
-    const history = await store.historyIfAvailable(project);
-    const {
-      nextUndo: back,
-      nextRedo: forward,
-      entries,
-      historyUnavailable,
-    } = await historySummary(
-      project,
-      history?.list(),
-      historyActor(reviews, c, project).who,
-    );
-    return c.json({ entries, back, forward, historyUnavailable });
-  });
-  api.post("/projects/:id/history/checkpoint", async (c) => {
-    const project = await store.get(c.req.param("id"));
-    await store.serializeMutation(project, async () => {
-      await (await store.history(project)).checkpoint();
-    });
-    return c.json({ ok: true });
-  });
-  const studioHistoryBody = HistoryRequestSchema.extend({
-    direction: z.enum(["back", "forward"]).optional(),
-    mode: z.literal("just-this").optional(),
-  });
-  for (const action of ["step", "undo"] as const) {
-    api.post(`/projects/:id/history/${action}`, async (c) => {
-      if (!c.req.header("content-type")?.includes("application/json"))
-        throw new HttpError(400, "Send a JSON history action.");
-      const { direction, mode, ...input } = parseInput(
-        studioHistoryBody,
-        await c.req.json(),
-      );
-      if (
-        (action === "undo" && !input.entryId) ||
-        (action === "step" && (input.entryId || mode))
-      )
-        throw new HttpError(400, "Choose a history step or an exact edit.");
-      const project = await store.get(c.req.param("id"));
-      const exactUndo =
-        input.entryId &&
-        (await store.history(project))
-          .list()
-          .find(({ id }) => id === input.entryId)?.undoes;
-      const result = await replayHistory(
-        reviews,
-        project,
-        historyActor(reviews, c, project),
-        direction === "forward" || exactUndo ? "redo" : "undo",
-        input,
-      );
-      return c.json(result, result.ok ? 200 : 409);
-    });
-  }
-  for (const action of [
-    "restore",
-    "claim",
-    "window",
-    "window/:windowId/close",
-  ] as const) {
-    api.post(`/projects/:id/history/${action}`, () => {
-      throw new HttpError(
-        409,
-        "This Studio history action is unavailable in Cutroom.",
-      );
-    });
-  }
   api.get("/projects/:id/lint", async (c, next) => {
     const composition = c.req.query("composition");
     if (composition === undefined) return next();
     await lintScope.run(canonicalProjectPath(composition), next);
   });
-  api.route("/", createStudioApi(adapter));
+  const studio = createStudioApi(adapter);
+  const onlyStudioRoutes: MiddlewareHandler = (c, next) => {
+    const route = /\/((?:projects|render)\/.*)$/.exec(c.req.path)?.[1] ?? "";
+    const method = c.req.method === "HEAD" ? "GET" : c.req.method;
+    if (
+      !studioRoutes.some(
+        ([allowed, path]) => allowed === method && path.test(route),
+      )
+    )
+      throw new HttpError(404, "This API route does not exist.");
+    return next();
+  };
+  // Studio's routes merge into this API. The guard covers every namespace Studio registers and
+  // nothing else, so a router mounted beside this one keeps its own routes.
+  const namespaces = new Set(
+    studio.routes.map(({ path }) => path.split("/")[1] ?? ""),
+  );
+  for (const name of namespaces)
+    if (name && name !== "*")
+      for (const scope of [`/${name}`, `/${name}/*`])
+        api.use(scope, onlyStudioRoutes);
+  api.route("/", studio);
   return Object.assign(api, {
     /** The export running for this project, if any. One export runs at a time across projects. */
     runningExport(projectId: string) {

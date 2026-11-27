@@ -23,7 +23,7 @@ export interface EditorContext {
   isPlaying: boolean;
   compositionPath: string;
   selectedElementIds: string[];
-  /** Cutroom's editor names its selected clips; the embedded editor knows only element ids. */
+  /** The selected clips by name, for the agent. */
   selectedClips?: SelectedClip[];
 }
 
