@@ -1,5 +1,6 @@
-import { isAudioKind } from "../../shared/timeline/schema";
+import { CommandSchema, isAudioKind } from "../../shared/timeline/schema";
 import {
+  apply,
   clipEnd,
   cutRoom,
   planBatchTransitions,
@@ -41,7 +42,12 @@ export interface EditTarget {
 interface EditKey {
   /** The undo step's name. */
   label: string;
-  commands(timeline: Timeline, target: EditTarget): CommandInput[];
+  /** `note` says what the edit left out, shown once it lands. */
+  commands(
+    timeline: Timeline,
+    target: EditTarget,
+    note?: (text: string) => void,
+  ): CommandInput[];
 }
 
 const spans = (clip: Clip, frame: number) =>
@@ -613,9 +619,14 @@ const cycleVersion =
 /**
  * Alt+\ joins a through edit: the selected cut, the cut between two selected clips, or else the
  * cut at the playhead on unlocked auto-select tracks. The engine takes linked partners along and
- * says why when the pieces do not continue each other.
+ * says why when the pieces do not continue each other. Of several cuts, those that join do, and
+ * the note names the rest; when none does, the first reason refuses the key.
  */
-const join = (timeline: Timeline, target: EditTarget): CommandInput[] => {
+const join = (
+  timeline: Timeline,
+  target: EditTarget,
+  note?: (text: string) => void,
+): CommandInput[] => {
   const point =
     target.editPoint && clipsAtEditPoint(timeline, target.editPoint);
   const selected = selectedIn(timeline, target);
@@ -641,11 +652,27 @@ const join = (timeline: Timeline, target: EditTarget): CommandInput[] => {
     if (to.link !== null) links.add(to.link);
     return [{ type: "join", from: from.id, to: to.id }];
   });
-  if (commands.length) return commands;
-  throw new TimelineError(
-    "not_found",
-    "Nothing to join. Select a cut between two pieces of a clip, or put the playhead on it.",
-  );
+  if (!commands.length)
+    throw new TimelineError(
+      "not_found",
+      "Nothing to join. Select a cut between two pieces of a clip, or put the playhead on it.",
+    );
+  let joined = timeline;
+  const refusals: TimelineError[] = [];
+  const joins = commands.filter((command) => {
+    try {
+      joined = apply(joined, CommandSchema.parse(command));
+      return true;
+    } catch (error) {
+      if (!(error instanceof TimelineError)) throw error;
+      refusals.push(error);
+      return false;
+    }
+  });
+  if (!joins.length) throw refusals[0]!;
+  if (refusals.length)
+    note?.(refusals.map((refusal) => refusal.message).join(" "));
+  return joins;
 };
 
 /** Clips with a speed to reset: a ramp, or a constant speed other than 100%. */

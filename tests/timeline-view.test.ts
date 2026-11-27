@@ -736,7 +736,7 @@ test("a ramped clip's filmstrip and waveform show the source it plays, not a str
   ).toBeNull();
 });
 
-test("gap keys stop where each auto-select track's empty time starts", () => {
+test("gap keys stop where each unlocked auto-select track's empty time starts", () => {
   const state = timeline(
     [
       clip("a", 0, 30, 30),
@@ -744,8 +744,15 @@ test("gap keys stop where each auto-select track's empty time starts", () => {
       clip("c", 1, 0, 200),
       clip("d", 2, 0, 10),
       clip("e", 2, 50, 10),
+      clip("f", 3, 0, 20),
+      clip("g", 3, 40, 10),
     ],
-    [track(0), track(1), track(2, { autoSelect: false })],
+    [
+      track(0),
+      track(1),
+      track(2, { autoSelect: false }),
+      track(3, { locked: true }),
+    ],
   );
   expect(gapStarts(state)).toEqual([0, 60]);
 });

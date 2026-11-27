@@ -3688,13 +3688,13 @@ const canonical = (value: unknown): unknown =>
 function notThroughEdit(from: Clip, to: Clip, fps: Fps): string | null {
   if (from.src === null || from.mediaStart === null || from.src !== to.src)
     return "they are not pieces of one file";
-  if (from.keyframes || to.keyframes || from.automation || to.automation)
-    return "one has keyframes or volume points";
   if (hasRamp(from) || hasRamp(to)) return "one has a speed ramp";
   if (from.fadeOut || to.fadeIn || from.transitionOut || to.transitionIn)
     return "there is a fade or transition at the cut";
+  // A razor leaves the first piece the whole clip's keyframes and volume points, so the joined
+  // clip carries them, and they must still continue into the second piece unchanged.
   const whole = joinedClip(from, to);
-  const same = (piece: Clip, original: Clip) =>
+  const same = (piece: Clip, original: Clip, animated = true) =>
     piece.mediaStart !== null &&
     original.mediaStart !== null &&
     Math.abs(piece.mediaStart - original.mediaStart) <= 1e-6 &&
@@ -3705,11 +3705,22 @@ function notThroughEdit(from: Clip, to: Clip, fps: Fps): string | null {
         link: original.link,
         startRef: original.startRef,
         mediaStart: 0,
+        ...(!animated && { keyframes: null, automation: null }),
       }),
-    ) === JSON.stringify(canonical({ ...original, mediaStart: 0 }));
-  return same(windowClip(whole, from.start, to.start, fps), from) &&
-    same(windowClip(whole, to.start, clipEnd(to), fps), to)
-    ? null
+    ) ===
+      JSON.stringify(
+        canonical({
+          ...original,
+          mediaStart: 0,
+          ...(!animated && { keyframes: null, automation: null }),
+        }),
+      );
+  const pieces = (animated: boolean) =>
+    same(windowClip(whole, from.start, to.start, fps), from, animated) &&
+    same(windowClip(whole, to.start, clipEnd(to), fps), to, animated);
+  if (pieces(true)) return null;
+  return pieces(false)
+    ? "their keyframes or volume points were changed after the cut"
     : "the second does not pick up the source where the first ends, or a setting differs";
 }
 

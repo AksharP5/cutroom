@@ -938,7 +938,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       to: clipId.describe("The clip that starts where `from` ends"),
     })
     .describe(
-      "Join two pieces of one clip back into one at a through edit, with their linked partners, as Resolve's Join Clips does. Refused unless razoring the joined clip there would give back exactly these pieces: same file, continuous source and nothing changed on either side, with no keyframes, volume points, fade or transition at the cut.",
+      "Join two pieces of one clip back into one at a through edit, with their linked partners, as Resolve's Join Clips does. Refused unless razoring the joined clip there would give back exactly these pieces: same file, continuous source and nothing changed on either side, keyframes and volume points included, with no speed ramp on either piece and no fade or transition at the cut. Keyframes and volume points carry over.",
     ),
   z
     .object({

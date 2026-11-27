@@ -14,7 +14,7 @@ import { encode, frames } from "../src/shared/timeline/piece";
 import { editLabel } from "../src/shared/timeline/labels";
 import { countingIds } from "./clip-ids";
 import { syncOffsets } from "../src/shared/timeline/sync";
-import { volumePoints } from "../src/shared/timeline/mix";
+import { volumePoints, withVolumePoints } from "../src/shared/timeline/mix";
 import { editKeys } from "../src/client/edit/keys";
 import { pasteAttributes } from "../src/client/edit/pasteAttributes";
 import { nearestEditPoint } from "../src/client/timeline/selection";
@@ -2234,6 +2234,56 @@ test("join puts a razored clip and its sound back together, and refuses pieces t
   );
   expect(() => run(cut, { type: "join", from: "a-2", to: "a" })).toThrow(
     "does not start where",
+  );
+});
+
+test("join carries the keyframes and volume points a razor split, unless a piece's changed since", () => {
+  const animated = timeline(
+    [
+      clip("k", 0, 0, 90, {
+        keyframes: {
+          opacity: [
+            { frame: 0, value: 0.2, ease: "linear" },
+            { frame: 60, value: 1, ease: "linear" },
+          ],
+        },
+      }),
+      clip("v", 1, 0, 90, {
+        kind: "audio",
+        hasAudio: true,
+        src: "music.wav",
+        automation: withVolumePoints(
+          null,
+          [
+            { frame: 0, gain: 1 },
+            { frame: 60, gain: 0.25 },
+          ],
+          { num: 30, den: 1 },
+        ),
+      }),
+    ],
+    avTracks,
+  );
+  const cut = run(animated, { type: "split", at: 30 });
+  const [k2, v2] = [0, 1].map(
+    (track) => cut.clips.find((item) => item.track === track && item.start)!.id,
+  );
+  const joined = run(
+    cut,
+    { type: "join", from: "k", to: k2! },
+    { type: "join", from: "v", to: v2! },
+  );
+  expect(joined.clips).toEqual(animated.clips);
+
+  const moved = run(cut, {
+    type: "setKeyframe",
+    clipId: k2!,
+    property: "opacity",
+    frame: 10,
+    value: 0.5,
+  });
+  expect(() => run(moved, { type: "join", from: "k", to: k2! })).toThrow(
+    "their keyframes or volume points were changed after the cut",
   );
 });
 

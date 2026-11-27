@@ -185,10 +185,11 @@ export function ProjectTimeline({
         };
         let parked: number | null = null;
         let saved = () => {};
+        let note = "";
         void editTimeline(
           projectId,
           label,
-          (current) => commands(current, target),
+          (current) => commands(current, target, (text) => (note = text)),
           undefined,
           (next, built) => {
             const frame = editedPlayhead(next, built);
@@ -201,6 +202,8 @@ export function ProjectTimeline({
           heldKey,
         ).then((accepted) => {
           saved();
+          if (accepted && note)
+            showToast(note, null, { tone: "info", transient: true });
           if (
             !accepted &&
             parked !== null &&
