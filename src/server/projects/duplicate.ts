@@ -466,7 +466,8 @@ async function cloneFile(
  * Large files: clones first, then byte copies after a free-space check, with progress. Never hard
  * links: an agent or tool rewriting a file in place in the copy must not change the original.
  * `optional` files, the carried cache, give way instead of failing the copy: when one goes
- * missing or changes, or there is space for the rest but not for them. Returns those dropped.
+ * missing or changes, or there is space for the rest but not for them, including when the disk
+ * fills while they copy. Returns those dropped.
  */
 async function copyLarge(
   root: string,
@@ -482,10 +483,10 @@ async function copyLarge(
     try {
       await copy();
     } catch (error) {
-      const gone =
+      const givesWay =
         (error instanceof HttpError && error.status === 409) ||
-        hasCode(error, "ENOENT", "ENOTDIR", "ELOOP");
-      if (!isOptional.has(entry) || !gone || signal.aborted) throw error;
+        hasCode(error, "ENOENT", "ENOTDIR", "ELOOP", "ENOSPC", "EDQUOT");
+      if (!isOptional.has(entry) || !givesWay || signal.aborted) throw error;
       dropped.add(entry);
       await rm(join(stage, entry.path), { force: true });
     }
