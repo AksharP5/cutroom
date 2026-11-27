@@ -948,7 +948,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       for (const [from, to] of mergeRanges(
         removing.map((clip) => [clip.start, clipEnd(clip)] as const),
       ).toReversed()) {
-        reportRemovedTime(clips, tracks, () => from, to - from, report);
+        // Linked partners leave with their targets; only other clips count as cuts.
+        reportRemovedTime(clips, tracks, () => from, to - from, report, ids);
         next = removeTime(
           next,
           tracks,

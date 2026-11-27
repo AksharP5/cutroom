@@ -2919,3 +2919,35 @@ test("Paste Attributes replaces the animation tracks and skips speed ramps on ei
     });
   }
 });
+
+test("an agent ripple delete reports other tracks it cuts, not the target's linked sound", () => {
+  const state = timeline(
+    [
+      clip("picture", 0, 0, 60, { link: "pair" }),
+      clip("sound", 1, 0, 60, { kind: "audio", link: "pair" }),
+      clip("music", 2, 0, 300, { kind: "audio" }),
+    ],
+    [
+      { index: 0 },
+      { index: 1, kind: "audio" },
+      { index: 2, kind: "audio", name: "Music" },
+    ],
+  );
+  const cuts: [number, string, number][] = [];
+  const result = applyAll(
+    state,
+    [
+      CommandSchema.parse({
+        type: "remove",
+        clipIds: ["picture"],
+        ripple: true,
+      }),
+    ],
+    {
+      newId: countingIds,
+      onRippleCut: (track, name, frames) => cuts.push([track, name, frames]),
+    },
+  );
+  expect(cuts).toEqual([[2, "Music", 60]]);
+  expect(positions(result)).toEqual({ music: [2, 0, 240] });
+});

@@ -643,7 +643,7 @@ export function createTimelineRoutes(
     const factual = joinEditLabels(summaries, "Edited timeline");
     const summary = factual + cutSuffix + agentLabel;
     // Encode before any project write or history window. A label failure cannot follow a saved edit.
-    const encodedSummary = encodeURIComponent(factual + agentLabel);
+    const encodedSummary = encodeURIComponent(summary);
     const markers =
       html === current.source.content &&
       batch.commands.every(
