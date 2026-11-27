@@ -285,6 +285,23 @@ export const ExportJobSchema = z.object({
   encoder: z.enum(["libx264", "h264_nvenc"]).optional(),
 });
 
+export const ResolveExportJobSchema = ExportJobSchema.pick({
+  jobId: true,
+  projectId: true,
+  name: true,
+  status: true,
+  progress: true,
+  stage: true,
+  error: true,
+  startedAt: true,
+  finishedAt: true,
+}).extend({
+  format: z.literal("resolve"),
+  outputPath: z.string().nullable(),
+  result: ResolveExportSchema.optional(),
+});
+export type ResolveExportJob = z.infer<typeof ResolveExportJobSchema>;
+
 /**
  * Marks are half-open in the engine. A lone mark never silently shortens the export.
  * Out past the end (left there by a ripple delete) stops at the end, as playback does.

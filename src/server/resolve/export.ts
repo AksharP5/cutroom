@@ -240,10 +240,14 @@ export async function exportResolve(
   options: {
     directory?: string;
     copyMedia: boolean;
+    signal?: AbortSignal;
+    onAssemble?: () => void;
     /** Renders one layer as a ProRes 4444 MOV in `directory`, answering its path. */
     render?: (
       layer: LayerTrack,
       output: { directory: string; filename: string },
+      index: number,
+      total: number,
     ) => Promise<string>;
   },
 ): Promise<ResolveExport> {
@@ -268,6 +272,7 @@ export async function exportResolve(
       `Resolve timeline import cannot keep the editable speed ramp on "${oneLine(label(ramped))}". Choose MP4 or MOV to keep the ramp in the rendered video. To rebuild it in Resolve, import the clip at a constant speed and add the speed points with Retime Controls.`,
     );
   const found = await clipMedia(source);
+  options.signal?.throwIfAborted();
 
   if (requested === own) {
     directory = await projectStatePath(source.project, renders, true);
@@ -276,7 +281,9 @@ export async function exportResolve(
   const stem = safeName(source.name, "Cut");
   const folder = await claimFolder(directory, `${stem} Resolve`);
   try {
-    return await writePackage(source, options, stem, folder, found);
+    const result = await writePackage(source, options, stem, folder, found);
+    options.signal?.throwIfAborted();
+    return result;
   } catch (error) {
     // The folder is this export's own, so a failure leaves nothing half-written behind.
     await rm(folder, { recursive: true, force: true });
@@ -328,7 +335,9 @@ async function writePackage(
         .map((clip) => clip.id),
     ),
   );
+  options.signal?.throwIfAborted();
   if (options.copyMedia) await copyMedia(join(folder, "Media"), media);
+  options.signal?.throwIfAborted();
 
   // What Resolve can't open renders with transparency, a MOV per track, each clip its own cut of it.
   const { fps } = source.timeline;
@@ -359,14 +368,17 @@ async function writePackage(
   const layerNotes: string[] = [];
   if (layers.length) await mkdir(join(folder, "Layers"));
   const layerCounts = new Map<number, number>();
-  for (const layer of layers) {
+  for (const [index, layer] of layers.entries()) {
+    options.signal?.throwIfAborted();
     const count = (layerCounts.get(layer.track) ?? 0) + 1;
     layerCounts.set(layer.track, count);
     const filename = `${trackName(layer.track)}${count > 1 ? `-${count}` : ""}.mov`;
-    const path = await options.render!(layer, {
-      directory: join(folder, "Layers"),
-      filename,
-    });
+    const path = await options.render!(
+      layer,
+      { directory: join(folder, "Layers"), filename },
+      index,
+      layers.length,
+    );
     const facts = await probeMedia(path);
     if (!facts?.video)
       throw new Error(`The ${filename} layer could not be read back.`);
@@ -383,6 +395,8 @@ async function writePackage(
         : `${trackName(layer.track)}'s titles, scenes and other clips Resolve can't open are rendered with transparency in Layers/${filename}, one clip each.`,
     );
   }
+  options.signal?.throwIfAborted();
+  options.onAssemble?.();
   const timelineIn = replaced.size
     ? {
         ...source.timeline,

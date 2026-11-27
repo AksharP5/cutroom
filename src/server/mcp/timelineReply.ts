@@ -121,6 +121,7 @@ type AgentClip = ReturnType<typeof agentTimeline>["clips"][number];
 /** A complete clip in the compact format. Omit its defaults only in snapshots. */
 function compactClip(clip: AgentClip) {
   const {
+    id,
     playbackRate,
     hasAudio,
     enabled,
@@ -133,6 +134,7 @@ function compactClip(clip: AgentClip) {
     ...fields
   } = clip;
   return {
+    id,
     ...Object.fromEntries(
       Object.entries<unknown>(fields).filter(([, value]) => value != null),
     ),
@@ -281,6 +283,25 @@ function compactClipChanges(
   };
 }
 
+// Leave room for the MCP envelope, history ID, and the separate human-readable edit line.
+const EDIT_RESULT_BUDGET = 14 * 1024;
+const fitsEditBudget = (result: unknown) => {
+  const json = JSON.stringify(result);
+  return (
+    Buffer.byteLength(json) + Buffer.byteLength(JSON.stringify(json)) <=
+    EDIT_RESULT_BUDGET
+  );
+};
+const counts = (delta?: {
+  added?: unknown[];
+  changed?: unknown[];
+  removed?: unknown[];
+}) => ({
+  added: delta?.added?.length ?? 0,
+  changed: delta?.changed?.length ?? 0,
+  removed: delta?.removed?.length ?? 0,
+});
+
 /**
  * What a timeline edit changed, so an agent can keep editing without reading the whole
  * timeline again. Added clips are complete, so new razor and insert ids are here.
@@ -306,12 +327,7 @@ export function editReply(
   );
   const clips = diff(old.clips, timeline.clips, "id");
   const changes = {
-    clips:
-      clips &&
-      (format === "compact" ||
-      (format === "auto" && !fullTimeline && !fitsClipBudget(clips))
-        ? compactClipChanges(clips, old.clips)
-        : clips),
+    clips,
     tracks,
     markers: diff(old.markers, timeline.markers, "id"),
     authoredAudioGroups: diff(
@@ -350,7 +366,7 @@ export function editReply(
           warning: versionShortReason(version, timeline.fps),
         });
     }
-  return {
+  const result = {
     revision: after.revision,
     composition: after.composition,
     changes,
@@ -367,6 +383,55 @@ export function editReply(
       agentChanges: after.agentChanges,
     }),
   };
+  if (
+    format === "legacy" ||
+    (format === "auto" && (fullTimeline || fitsEditBudget(result)))
+  )
+    return result;
+
+  const compact = {
+    ...result,
+    changes: {
+      ...changes,
+      clips: clips && compactClipChanges(clips, old.clips),
+    },
+  };
+  return compact;
+}
+
+export function boundedEditReply(result: ReturnType<typeof editReply>) {
+  if (fitsEditBudget(result)) return result;
+  const { changes, skippedClips, warnings, ...metadata } = result;
+  const { clips, tracks, markers, authoredAudioGroups, ...values } = changes;
+  const shifted = clips && "shifted" in clips ? clips.shifted : undefined;
+  const summary = {
+    ...metadata,
+    ...values,
+    changeCounts: {
+      clips: {
+        ...counts(clips),
+        changed:
+          (clips?.changed?.length ?? 0) +
+          (shifted?.reduce((total, { ids }) => total + ids.length, 0) ?? 0),
+      },
+      tracks: counts(tracks),
+      markers: counts(markers),
+      authoredAudioGroups: counts(authoredAudioGroups),
+      skippedClips: skippedClips?.length ?? 0,
+      warnings: warnings?.length ?? 0,
+    },
+    guidance:
+      "Read affected frame windows or tracks with timeline_read for the saved values and clip IDs.",
+  };
+  const addedClipIds = clips?.added?.map(({ id }) => id);
+  const withFeedback = {
+    ...summary,
+    skippedClips,
+    warnings,
+  };
+  const bounded = fitsEditBudget(withFeedback) ? withFeedback : summary;
+  const withIds = { ...bounded, addedClipIds };
+  return addedClipIds && fitsEditBudget(withIds) ? withIds : bounded;
 }
 
 /** Clips and markers overlapping the half-open frame range `[from, to)`, on the given tracks. */

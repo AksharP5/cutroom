@@ -559,7 +559,7 @@ test("a 1,000-clip MCP read gives track spans and its ripple returns every affec
   }
 });
 
-test("a project of a few hundred clips reads and ripples in the original shape by default", async () => {
+test("a project of a few hundred clips keeps detailed reads and compresses uniform ripple shifts", async () => {
   const mcp = await connect();
   try {
     // About 530 bytes a clip, as on a real dialogue edit, so 300 clips stay under the summary limit.
@@ -583,7 +583,11 @@ test("a project of a few hundred clips reads and ripples in the original shape b
     const edit = z
       .object({
         changes: z.object({
-          clips: z.looseObject({ changed: z.array(z.looseObject({})) }),
+          clips: z.object({
+            shifted: z.array(
+              z.object({ by: z.number(), ids: z.array(z.string()) }),
+            ),
+          }),
         }),
       })
       .parse(
@@ -592,9 +596,9 @@ test("a project of a few hundred clips reads and ripples in the original shape b
           commands: [{ type: "remove", clipIds: ["shot-0"], ripple: true }],
         }),
       );
-    expect(edit.changes.clips).not.toHaveProperty("shifted");
-    expect(edit.changes.clips.changed).toHaveLength(299);
-    expect(edit.changes.clips.changed[0]).toEqual({ id: "shot-1", start: 0 });
+    expect(edit.changes.clips.shifted).toEqual([
+      { by: -30, ids: Array.from({ length: 299 }, (_, i) => `shot-${i + 1}`) },
+    ]);
   } finally {
     await mcp.close();
   }
@@ -901,6 +905,189 @@ test("Accept All scopes review to the composition or project and preserves notes
       (await mcp.read({ composition: "scene.html", clipEdits: true }))
         .clipEdits,
     ).toContainEqual({ ...scene, accepted: true });
+  } finally {
+    await mcp.close();
+  }
+});
+
+test("large timeline edits report counts within a bounded MCP reply", async () => {
+  const mcp = await connect();
+  try {
+    await writeFile(
+      join(mcp.project.path, "index.html"),
+      '<main data-composition-id="main" data-fps="30" data-duration="500"><video id="take" src="take.mp4" data-start="0" data-duration="500" data-track-index="0"></video></main>',
+    );
+    const { revision } = await mcp.read();
+    const reply = await mcp.client.callTool({
+      name: "timeline_edit",
+      arguments: {
+        projectId: mcp.project.id,
+        expectedRevision: revision,
+        commands: Array.from({ length: 450 }, (_, i) => ({
+          type: "split",
+          at: (i + 1) * 30,
+        })),
+      },
+    });
+    expect(reply.isError).not.toBe(true);
+    const bytes = Buffer.byteLength(JSON.stringify(reply));
+    console.log(`450 splits: ${bytes} bytes`);
+    expect(bytes).toBeLessThanOrEqual(16 * 1024);
+    const saved = z
+      .object({ result: z.object({ revision: z.string() }) })
+      .parse(reply.structuredContent);
+    expect(reply.structuredContent).toMatchObject({
+      historyId: expect.any(String),
+      result: {
+        revision: saved.result.revision,
+        changeCounts: { clips: { added: 450, changed: 1, removed: 0 } },
+        guidance: expect.stringContaining("timeline_read"),
+      },
+    });
+    const editor = TimelineViewSchema.parse(
+      await (await mcp.request(`/projects/${mcp.project.id}/timeline`)).json(),
+    );
+    expect(editor.revision).toBe(saved.result.revision);
+    expect(editor.timeline.clips).toHaveLength(451);
+  } finally {
+    await mcp.close();
+  }
+});
+
+test("history_list pages back from the newest entries without changing session undo", async () => {
+  const mcp = await connect();
+  try {
+    let { revision } = await mcp.read();
+    for (const frame of [1, 2, 3, 4, 5, 6]) {
+      const result = z.object({ revision: z.string() }).parse(
+        await mcp.result("timeline_edit", {
+          expectedRevision: revision,
+          commands: [{ type: "setMarker", frame, label: `Cue ${frame}` }],
+        }),
+      );
+      revision = result.revision;
+    }
+    const page = z.object({
+      entries: z.array(
+        z.object({ id: z.string(), label: z.string(), mine: z.boolean() }),
+      ),
+      nextBefore: z.string().nullable(),
+      nextUndo: z.object({ id: z.string() }),
+    });
+    const history = async (args: Record<string, unknown>) => {
+      const reply = await mcp.client.callTool({
+        name: "history_list",
+        arguments: { projectId: mcp.project.id, limit: 2, ...args },
+      });
+      expect(reply.isError).not.toBe(true);
+      console.log(
+        `history page: ${Buffer.byteLength(JSON.stringify(reply))} bytes`,
+      );
+      const result = z
+        .object({ result: z.unknown() })
+        .parse(reply.structuredContent).result;
+      expect(
+        z.object({ entries: z.array(z.unknown()) }).parse(result).entries,
+      ).toHaveLength(2);
+      return page.parse(result);
+    };
+    const newest = await history({});
+    const older = await history({ before: newest.nextBefore });
+    expect(newest.entries.map(({ label }) => label)).toEqual([
+      "Set marker at 00:00:00:05",
+      "Set marker at 00:00:00:06",
+    ]);
+    expect(older.entries.map(({ label }) => label)).toEqual([
+      "Set marker at 00:00:00:03",
+      "Set marker at 00:00:00:04",
+    ]);
+    expect(older.entries.every(({ mine }) => mine)).toBe(true);
+    expect(older.nextUndo).toEqual(newest.nextUndo);
+    expect(newest.nextUndo.id).toBe(newest.entries[1]?.id);
+    const owner = await (
+      await mcp.request(`/projects/${mcp.project.id}/history`)
+    ).json();
+    expect(
+      z.object({ entries: z.array(z.unknown()) }).parse(owner).entries.length,
+    ).toBeGreaterThanOrEqual(6);
+  } finally {
+    await mcp.close();
+  }
+});
+
+test("media_list groups 1,000 clip uses by file and returns a page", async () => {
+  const mcp = await connect();
+  try {
+    const sources = ["a.wav", "b.wav", "c.wav"];
+    const audio = Bun.spawnSync([
+      "ffmpeg",
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "anullsrc=r=8000:cl=mono",
+      "-t",
+      "1",
+      join(mcp.project.path, sources[0]!),
+    ]);
+    expect(audio.exitCode, audio.stderr.toString()).toBe(0);
+    const wav = await readFile(join(mcp.project.path, sources[0]!));
+    await Promise.all(
+      sources
+        .slice(1)
+        .map((src) => writeFile(join(mcp.project.path, src), wav)),
+    );
+    const html = Array.from(
+      { length: 1000 },
+      (_, i) =>
+        `<audio id="clip-${i}" src="${sources[i % sources.length]}" data-start="${i}" data-duration="1" data-track-index="1"></audio>`,
+    ).join("");
+    await writeFile(
+      join(mcp.project.path, "index.html"),
+      `<main data-composition-id="main" data-duration="1000">${html}</main>`,
+    );
+    const page = z.object({
+      media: z.array(
+        z.object({
+          mediaPath: z.string(),
+          kind: z.literal("audio"),
+          uses: z.number(),
+        }),
+      ),
+      total: z.number(),
+      nextOffset: z.number().nullable(),
+    });
+    const list = async (offset: number) => {
+      const reply = await mcp.client.callTool({
+        name: "media_list",
+        arguments: { projectId: mcp.project.id, limit: 2, offset },
+      });
+      expect(reply.isError).not.toBe(true);
+      const bytes = Buffer.byteLength(JSON.stringify(reply));
+      console.log(`media page: ${bytes} bytes`);
+      expect(bytes).toBeLessThan(4096);
+      return z.object({ result: page }).parse(reply.structuredContent).result;
+    };
+    expect(await list(0)).toEqual({
+      media: [
+        { mediaPath: "a.wav", kind: "audio", uses: 334 },
+        { mediaPath: "b.wav", kind: "audio", uses: 333 },
+      ],
+      total: 3,
+      nextOffset: 2,
+    });
+    expect(await list(2)).toEqual({
+      media: [{ mediaPath: "c.wav", kind: "audio", uses: 333 }],
+      total: 3,
+      nextOffset: null,
+    });
+    const owner = await (
+      await mcp.request(`/projects/${mcp.project.id}/media`)
+    ).json();
+    expect(
+      z.object({ media: z.array(z.unknown()) }).parse(owner).media,
+    ).toHaveLength(1000);
   } finally {
     await mcp.close();
   }

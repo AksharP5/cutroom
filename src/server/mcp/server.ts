@@ -16,7 +16,9 @@ import {
   CreateProjectSchema,
   CutWordsSchema,
   DuplicateTimelineSchema,
+  HistoryPageSchema,
   ImportProjectSchema,
+  MediaSourcesPageSchema,
   NewTimelineSchema,
   RenameProjectSchema,
   RenameTimelineSchema,
@@ -357,11 +359,14 @@ export function createMcpServer(options: McpOptions = {}) {
     "media_list",
     {
       description:
-        "List local audio and video clips with source element IDs and timing. A video the browser cannot decode, such as HEVC, ProRes or DNxHR, has proxy: the editing copy the preview plays, made in the background from the moment it is asked for (queued, running with progress 0 to 1, done, or failed with error). While it runs the preview plays the clip piece by piece, making the part at the playhead first; timeline_view and export read the original file and are unaffected.",
-      inputSchema: project,
+        "List local audio and video used in compositions, one row per file, with its use count and any editing proxy status. Defaults to 25 files, up to 100. Pass nextOffset as offset for the next page. Use timeline_read for clip IDs and timing, or media_files to find unused files.",
+      inputSchema: { ...project, ...MediaSourcesPageSchema.shape },
       annotations: readOnly,
     },
-    (input) => request(`/projects/${id(input.projectId)}/media`),
+    ({ projectId, limit, offset }) =>
+      request(
+        `/projects/${id(projectId)}/media/sources?${new URLSearchParams({ limit: String(limit), offset: String(offset) })}`,
+      ),
   );
   registry.registerTool(
     "media_import",
@@ -695,11 +700,14 @@ export function createMcpServer(options: McpOptions = {}) {
     "history_list",
     {
       description:
-        "Read the project's shared history and this session's next undo and redo.",
-      inputSchema: project,
+        "Read the newest page of project history and this session's next undo and redo. Defaults to 20 entries, up to 100. Entries within a page run oldest to newest. Pass nextBefore as before for the next older page.",
+      inputSchema: { ...project, ...HistoryPageSchema.shape },
       annotations: readOnly,
     },
-    (input) => request(`/projects/${id(input.projectId)}/history`),
+    ({ projectId, limit, before }) =>
+      request(
+        `/projects/${id(projectId)}/history?${new URLSearchParams({ limit: String(limit), ...(before && { before }) })}`,
+      ),
   );
   for (const action of ["undo", "redo"] as const) {
     registry.registerTool(

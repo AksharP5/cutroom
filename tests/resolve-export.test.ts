@@ -12,7 +12,10 @@ import {
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { ResolveExportSchema } from "../src/shared/export";
+import {
+  ResolveExportJobSchema,
+  ResolveExportSchema,
+} from "../src/shared/export";
 import { voiceoverWav } from "../src/shared/voiceover";
 import { readCube } from "../src/server/grade/luts";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
@@ -305,12 +308,35 @@ test.skipIf(!Bun.which("ffmpeg"))(
             }),
           );
 
+      const completed = async (args: Record<string, unknown>) => {
+        const started = await call({ format: "resolve", ...args });
+        expect(started.isError, JSON.stringify(started.content)).not.toBe(true);
+        const { jobId } = z
+          .object({ jobId: z.string() })
+          .parse(started.structuredContent?.result);
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          const reply = await client.callTool({
+            name: "export_status",
+            arguments: { jobId },
+          });
+          const job = z
+            .object({ result: ResolveExportJobSchema })
+            .parse(reply.structuredContent).result;
+          if (job.status === "rendering") {
+            await Bun.sleep(25);
+            continue;
+          }
+          expect(job.status, job.error ?? undefined).toBe("complete");
+          return ResolveExportSchema.parse(job.result);
+        }
+        throw new Error("Resolve export did not complete.");
+      };
+
       const directory = join(f.directory, "deliveries");
       await mkdir(directory);
       await writeFile(join(directory, "keep.txt"), "untouched");
-      const first = await call({ format: "resolve", directory });
-      expect(first.isError, JSON.stringify(first.content)).not.toBe(true);
-      const result = ResolveExportSchema.parse(first.structuredContent!.result);
+      const result = await completed({ directory });
       // The project's name can't make a path: its slash becomes part of one folder name.
       expect(result.outputPath).toBe(join(directory, "Night-shoot Resolve"));
       expect((await readdir(directory)).sort()).toEqual([
@@ -350,10 +376,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       expect(summary).toContain("outside.mp4");
 
       // A second export never touches the first; copied media sits in the new folder.
-      const second = ResolveExportSchema.parse(
-        (await call({ format: "resolve", directory, copyMedia: true }))
-          .structuredContent!.result,
-      );
+      const second = await completed({ directory, copyMedia: true });
       expect(second.outputPath).toBe(join(directory, "Night-shoot Resolve 2"));
       expect((await readdir(join(second.outputPath, "Media"))).sort()).toEqual([
         "blue.mp4",

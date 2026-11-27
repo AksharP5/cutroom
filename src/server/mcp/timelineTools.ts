@@ -12,6 +12,7 @@ import { TimelineDestinationsSchema } from "../../shared/timeline/view";
 import type { RequestOptions } from "./server";
 import {
   TimelineReplyFormatSchema,
+  boundedEditReply,
   editReply,
   readTimelineReply,
 } from "./timelineReply";
@@ -257,7 +258,7 @@ export function registerTimelineTools(
     {
       description:
         "Apply a batch of timeline commands as one undo step, in order and atomically: a command that cannot apply exactly fails the whole batch, naming its index. Pass the revision from timeline_read; stale revisions are refused. Fields mean what timeline_read says. Use setFormat {width, height, fps: {num, den}} on its own to change picture size and snap each clip edge to the new grid while preserving source timing, or preview it with timeline_format_preview. setFormat always returns the complete timeline at the new rate, with every clip field. " +
-        "The reply has the next revision and only what changed: changes.clips, changes.tracks, changes.markers and changes.authoredAudioGroups each list added (complete, so new clip IDs from razor, insert and paste and generated audio group IDs are here), changed (the id or index with the new values of changed fields; null means cleared) and removed (ids or indexes), plus range, duration, fps, size and main when they change. skippedClips names clips an auto-select razor left whole, with the reason. notices explains adjustments such as a Slow-mo hit limited by the source. warnings names clips on an edited track that track gain skips; tell the user, and keep their authored group. For other edits a reply is compact when replyFormat is compact, or when its clip changes pass 256 KiB of JSON. In a compact reply, clip additions omit defaults as in timeline_read, and moved clips may not be in changes.clips.changed: 16 or more clips whose only change is the same shift in start are listed in changes.clips.shifted as {by, ids}, so read both lists, adding by frames to each listed clip's previous start. Other changes give the new values, including explicit resets. The last text line says what the edit did. Pass fullTimeline: true to also get every clip, or use replyFormat: legacy if you need the original delta shape. " +
+        "The reply has the next revision and only what changed: changes.clips, changes.tracks, changes.markers and changes.authoredAudioGroups each list added (complete, so new clip IDs from razor, insert and paste and generated audio group IDs are here), changed (the id or index with the new values of changed fields; null means cleared) and removed (ids or indexes), plus range, duration, fps, size and main when they change. skippedClips names clips an auto-select razor left whole, with the reason. notices explains adjustments such as a Slow-mo hit limited by the source. warnings names clips on an edited track that track gain skips; tell the user, and keep their authored group. The default can return a summary with changeCounts and addedClipIds when they fit. Read the affected windows with timeline_read for details. Use replyFormat: compact for the full compact delta. In a compact reply, clip additions omit defaults as in timeline_read, and moved clips may not be in changes.clips.changed: 16 or more clips whose only change is the same shift in start are listed in changes.clips.shifted as {by, ids}, so read both lists, adding by frames to each listed clip's previous start. Other changes give the new values, including explicit resets. The last text line says what the edit did. Pass fullTimeline: true to also get every clip, or use replyFormat: legacy if you need the original delta shape. " +
         "Linked clips edit together. Agent ripples keep all unlocked tracks in sync, including tracks with auto-select off. The reply and Changes row name every other track that was cut. rippleCuts gives each track index and name, cut count, and framesRemoved. A ripple refuses when a participating clip cannot be cut exactly. Removing time through the middle of a text element or still image shortens it; video, audio and sub-compositions split. Tracks stay when emptied; removeTrack removes an unlocked empty one. A cutting command's ids names its new pieces, keyed by source clip id in cut order (a ripple through several ranges cuts last range first); an id ever used in the project is refused with duplicate_id. " +
         "Use freeze {clipId, at} to insert a silent, two-second still at an interior frame of a local video. Linked audio resumes with the right half. " +
         'For a lower third, name or heading, insert a title: clip {kind: "title", text, duration, title}, with a title.size that suits the composition (default 64 px). Its entrance stays on the clip\'s first frame and its exit on the last through every edit; a razor keeps the entrance on the first piece and the exit on the second. Verify setClip text with timeline_view, since other scripts can replace the words. ' +
@@ -266,7 +267,7 @@ export function registerTimelineTools(
       inputSchema: CommandBatchSchema.extend({
         projectId: input.projectId,
         replyFormat: TimelineReplyFormatSchema.default("auto").describe(
-          "auto keeps the original shape until clip changes pass 256 KiB of JSON; compact omits defaults on added clips and groups 16 or more uniform shifts into changes.clips.shifted; legacy keeps the original clip fields and per-clip changes",
+          "auto (default) keeps the reply small, with a summary if needed; compact returns the entire compact delta; legacy returns the entire original delta",
         ),
         fullTimeline: z
           .boolean()
@@ -307,13 +308,18 @@ export function registerTimelineTools(
               projectId,
               ...data,
             }),
-          reply: (result) =>
-            editReply(
+          reply: (result) => {
+            const complete = formatChanged || fullTimeline || !exact;
+            const delta = editReply(
               before.view,
               TimelineViewSchema.parse(result),
-              formatChanged || fullTimeline || !exact,
+              complete,
               exact && !formatChanged ? replyFormat : "legacy",
-            ),
+            );
+            return replyFormat === "auto" && !complete
+              ? boundedEditReply(delta)
+              : delta;
+          },
         },
       );
       if (result.isError || !backgrounds.length) return result;

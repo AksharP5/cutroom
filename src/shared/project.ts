@@ -279,6 +279,16 @@ export const MediaClipSchema = z.object({
 });
 export const MediaListSchema = z.object({ media: z.array(MediaClipSchema) });
 
+export const MediaSourcesPageSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(25),
+  offset: z.number().int().nonnegative().default(0),
+});
+
+export const HistoryPageSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(20),
+  before: z.string().min(1).max(128).optional(),
+});
+
 export type Point = z.infer<typeof PointSchema>;
 export type Annotation = z.infer<typeof AnnotationSchema>;
 export type AnnotationInput = z.input<typeof AnnotationInputSchema>;
