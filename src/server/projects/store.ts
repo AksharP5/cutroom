@@ -173,13 +173,19 @@ export const projectSlug = (name: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "") || "project";
 
-const committedEntries = new AsyncLocalStorage<{ id?: string }>();
+type EditReceipt = { id?: string; warnings: string[] };
+const editReceipt = new AsyncLocalStorage<EditReceipt>();
 
-/** Runs a request and returns the newest history entry its writes committed, so the editor can address its next Undo. */
-export async function trackCommittedEntry(run: () => Promise<void>) {
-  const committed: { id?: string } = {};
-  await committedEntries.run(committed, run);
-  return committed.id;
+/** Collects the history entry and bookkeeping warnings for this request's saved edits. */
+export async function trackEditReceipt(run: () => Promise<void>) {
+  const receipt: EditReceipt = { warnings: [] };
+  await editReceipt.run(receipt, run);
+  return receipt;
+}
+
+export function reportEditWarning(warning: string, error: unknown) {
+  console.warn(warning, error instanceof Error ? error.message : String(error));
+  editReceipt.getStore()?.warnings.push(warning);
 }
 
 export async function createProjectStore(options: {
@@ -381,14 +387,35 @@ export async function createProjectStore(options: {
       try {
         value = await ownWrites.run(scope, change);
         finished = true;
-        project.updatedAt = new Date().toISOString();
-        await saveRegistry();
       } finally {
-        entry = await window.close();
+        entry = await window.close().catch((error: unknown) => {
+          const recorded = ledger.list().find(({ id }) => id === window.id);
+          if (finished) {
+            reportEditWarning(
+              recorded
+                ? "Saved, but Cutroom could not finish maintaining Undo history."
+                : "Saved, but this edit could not be recorded in Undo history.",
+              error,
+            );
+          } else {
+            console.warn(
+              "Cutroom could not close the edit's history window:",
+              error,
+            );
+          }
+          return recorded ?? null;
+        });
       }
+      project.updatedAt = new Date().toISOString();
+      await saveRegistry().catch((error: unknown) =>
+        console.warn(
+          "Cutroom could not update the project registry after saving an edit:",
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
       return { value, entry };
     }).then((result) => {
-      const committed = committedEntries.getStore();
+      const committed = editReceipt.getStore();
       // Ordinary Undo skips imports, so they never become the editor's next target.
       if (committed && result.entry && result.entry.category !== "import")
         committed.id = result.entry.id;

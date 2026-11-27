@@ -16,8 +16,11 @@ import { createMediaImportRoutes } from "./projects/mediaImportRoutes";
 import { sweepMediaImports } from "./projects/mediaImport";
 import { createDuplicateRoutes, sweepDuplicates } from "./projects/duplicate";
 import type { Project } from "../shared/project";
-import { createProjectStore, trackCommittedEntry } from "./projects/store";
-import { EDIT_HISTORY_HEADER } from "../shared/timeline/schema";
+import { createProjectStore, trackEditReceipt } from "./projects/store";
+import {
+  EDIT_HISTORY_HEADER,
+  EDIT_WARNING_HEADER,
+} from "../shared/timeline/schema";
 import { createTimelineRoutes } from "./timeline/routes";
 import { createCaptionRoutes } from "./captions/routes";
 import { createWorkspaceRoutes } from "./workspace";
@@ -118,9 +121,11 @@ export async function createApp(
     await next();
   });
   app.use("/api/*", async (c, next) => {
-    const entryId = await trackCommittedEntry(next);
+    const { id: entryId, warnings } = await trackEditReceipt(next);
     if (entryId && !c.res.headers.has(EDIT_HISTORY_HEADER))
       c.header(EDIT_HISTORY_HEADER, entryId);
+    if (c.res.ok && warnings.length)
+      c.header(EDIT_WARNING_HEADER, warnings.join(" "));
   });
   app.onError((error, c) => {
     if (error instanceof HttpError)
