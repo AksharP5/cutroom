@@ -32,6 +32,10 @@ async function setup() {
 describe("HyperFrames editor integration", () => {
   test("serves real project files, self-hosted runtime, and a seekable preview", async () => {
     const { api, project } = await setup();
+    // The HyperFrames CLI finds Cutroom's server through this list when agents read the selection.
+    const listed = await api.request("/projects");
+    expect(listed.status).toBe(200);
+    expect(await listed.text()).toContain(project.id);
     const resolved = await api.request(`/projects/${project.id}`);
     expect(await resolved.text()).toContain('"index.html"');
     const runtime = await api.request("/runtime.js");

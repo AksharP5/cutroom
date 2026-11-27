@@ -1,7 +1,7 @@
 /*
   The base reset Cutroom's styles are written on: Tailwind CSS v4.3.5 preflight
   (MIT, licenses/TAILWIND-PREFLIGHT.txt), unchanged except that its theme lookups
-  read Cutroom's font tokens. styles.css imports it into the `base` cascade layer,
+  read Cutroom's font tokens and enabled buttons get a pointer cursor. styles.css imports it into the `base` cascade layer,
   so every unlayered rule wins over it.
 */
 

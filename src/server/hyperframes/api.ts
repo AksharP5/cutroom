@@ -184,12 +184,13 @@ function scheduleFileSettle(_path: string, read: () => Promise<void>) {
 }
 
 /**
- * The HyperFrames Studio routes Cutroom serves: the project listing, preview documents and
+ * The HyperFrames Studio routes Cutroom serves: the project list (the HyperFrames CLI finds
+ * Cutroom's server through it) and each project's files, preview documents and
  * assets, frame captures, lint, the selection agents read, uploads and render jobs. Its file
  * writers, catalog, fonts and media tools have Cutroom counterparts under /api/cutroom.
  */
 const studioRoutes: readonly (readonly [method: string, path: RegExp])[] = [
-  ["GET", /^projects\/[^/]+$/],
+  ["GET", /^projects(?:\/[^/]+)?$/],
   ["GET", /^projects\/[^/]+\/(?:preview|lint|selection)$/],
   ["GET", /^projects\/[^/]+\/(?:preview|thumbnail)\/./],
   ["PUT", /^projects\/[^/]+\/selection$/],
@@ -2079,7 +2080,8 @@ export function createHyperframesApi(
   });
   const studio = createStudioApi(adapter);
   const onlyStudioRoutes: MiddlewareHandler = (c, next) => {
-    const route = /\/((?:projects|render)\/.*)$/.exec(c.req.path)?.[1] ?? "";
+    const route =
+      /\/((?:projects|render)(?:\/.*)?)$/.exec(c.req.path)?.[1] ?? "";
     const method = c.req.method === "HEAD" ? "GET" : c.req.method;
     if (
       !studioRoutes.some(

@@ -48,7 +48,7 @@ The viewer zoom, export quality, agent conversation/provider/model and Script fo
 
 The shell and the editor share `src/client/workspace.ts`, a store for the inspector and code panel's visibility, export state, the open composition's frame rate and size, and the chat panel's agent availability.
 
-`createHyperframesApi` mounts the Studio server's API behind `studioRoutes`, the list of its routes Cutroom calls: the project listing, preview documents and assets, frame captures, lint, the selection agents read, uploads, and render jobs. Every other Studio route answers 404, including its file writers, catalog, and history. Cutroom's routes under `/api/cutroom` do that work inside the source-write boundary.
+`createHyperframesApi` mounts the Studio server's API behind `studioRoutes`, the list of its routes Cutroom calls: the project list, which the `hyperframes preview --context` command agents run uses to find Cutroom's server, each project's files, preview documents and assets, frame captures, lint, the selection agents read, uploads, and render jobs. Every other Studio route answers 404, including its file writers, catalog, and history. Cutroom's routes under `/api/cutroom` do that work inside the source-write boundary.
 
 Keep the HyperFrames packages on the same version. An upgrade must review each source transform, run the editing and preview/export tests, and inspect the workspace in a real browser. A successful build alone is insufficient.
 
