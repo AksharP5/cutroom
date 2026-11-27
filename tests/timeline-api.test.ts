@@ -2239,3 +2239,64 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
     }
   },
 );
+
+test("a range delete's change row reads as one edit at its In point", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  try {
+    await writeFile(
+      join(project.path, "index.html"),
+      `<main data-composition-id="main" data-duration="10" data-fps="30">
+  <video id="talk" src="talk.mp4" data-link="lk" data-start="0" data-duration="10" data-track-index="0"></video>
+  <audio id="talk-sound" src="talk.mp4" data-link="lk" data-start="0" data-duration="10" data-track-index="1"></audio>
+  <audio id="music" src="music.wav" data-start="0" data-duration="10" data-track-index="2"></audio>
+</main>
+`,
+    );
+    const base = `/projects/${project.id}`;
+    const before = TimelineViewSchema.parse(
+      await (await fixture.request(`${base}/timeline`)).json(),
+    );
+    // What Shift+X sends with In at 3 s and Out at 4 s.
+    const edit = await fixture.request(`${base}/commands`, "POST", {
+      expectedRevision: before.revision,
+      commands: [
+        { type: "removeRange", from: 90, to: 120, ripple: true },
+        { type: "setRange", in: null, out: null },
+      ],
+    });
+    expect(edit.status).toBe(200);
+    const after = TimelineViewSchema.parse(await edit.json());
+    // The history entry, and so an undo refusal, names the delete alone.
+    const history = z
+      .object({ entries: z.array(z.object({ label: z.string() })) })
+      .parse(await (await fixture.request(`${base}/history`)).json());
+    expect(history.entries.at(-1)?.label).toBe(
+      "Ripple deleted 1 s at 00:00:03:00",
+    );
+    const { rows } = z
+      .object({ rows: z.array(z.looseObject({})) })
+      .parse(
+        await (
+          await fixture.request(
+            `${base}/timeline/changes?composition=index.html`,
+            "POST",
+            { view: "inspector" },
+          )
+        ).json(),
+      );
+    const picture = after.timeline.clips.find(
+      (clip) => clip.track === 0 && clip.start === 90,
+    );
+    expect(rows).toEqual([
+      expect.objectContaining({
+        label: "Ripple deleted 1 s at 00:00:03:00",
+        more: null,
+        frame: 90,
+        revealClipId: picture?.id,
+      }),
+    ]);
+  } finally {
+    await fixture.close();
+  }
+});

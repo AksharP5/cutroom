@@ -9,6 +9,7 @@ import { takesTransition } from "../../shared/timeline/transition";
 import { resolveClip } from "../../shared/timeline/clipTiming";
 import { frameShowing, frames, sourceAt } from "../../shared/timeline/piece";
 import { TimelineError } from "../../shared/timeline/errors";
+import { EditHint } from "./feedback";
 import { activeVersion } from "../../shared/timeline/versions";
 import { hasRamp } from "../../shared/timeline/speed";
 import type {
@@ -288,17 +289,15 @@ const removeSelection =
           ]
         : [];
     }
-    // With nothing selected, Resolve takes In to Out off the auto-select tracks and clears the marks.
-    const { in: from, out: to } = timeline.range;
-    if (
-      target.selection.size ||
-      target.editPoint ||
-      from === null ||
-      to === null
-    ) {
+    if (target.selection.size || target.editPoint) {
       const clipIds = selectedIn(timeline, target).map((clip) => clip.id);
       return clipIds.length ? [{ type: "remove", clipIds, ripple }] : [];
     }
+    // With nothing selected, Resolve takes In to Out off the auto-select tracks and clears the marks.
+    const { in: from, out: to } = timeline.range;
+    if (from === null && to === null) return [];
+    if (to === null) throw new EditHint("Mark an Out point.");
+    if (from === null) throw new EditHint("Mark an In point.");
     return [
       { type: "removeRange", from, to, ripple },
       { type: "setRange", in: null, out: null },

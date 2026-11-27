@@ -1510,6 +1510,8 @@ export const ClipEditSchema = z.object({
   composition: z.string(),
   label: z.string(),
   batchLabels: z.array(z.string()).optional(),
+  /** Where the change is on the timeline, for an edit that names a frame rather than clips. */
+  frame: z.number().int().nonnegative().optional(),
   by: z.enum(["human", "agent"]),
   agentName: z.string().optional(),
   at: z.string(),

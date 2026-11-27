@@ -221,6 +221,13 @@ test("With In and Out marked and nothing selected, X lifts and Shift+X ripple de
     { type: "remove", clipIds: ["b"], ripple: true },
   ]);
   expect(press("editDelete", closed, 45, ["gone"])).toEqual([]);
+  // One mark alone says which one is missing, rather than doing nothing.
+  const onlyIn = { ...timeline, range: { in: 30, out: null } };
+  expect(() => press("editDelete", onlyIn, 45)).toThrow("Mark an Out point.");
+  const onlyOut = { ...timeline, range: { in: null, out: 45 } };
+  expect(() => press("editBackspace", onlyOut, 45)).toThrow(
+    "Mark an In point.",
+  );
 });
 
 test("Alt+D turns each selected clip on or off, and M adds one marker at the playhead", () => {

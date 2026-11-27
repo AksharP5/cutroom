@@ -60,11 +60,22 @@ export function overwriteFeedback(
 }
 
 /**
- * Names the tracks a range delete cut besides the picture and the sound linked to it, such as a
- * music bed, since those are easy to miss. Cutting only the picture and its sound is silent.
+ * A key refused because a step is missing, such as marking an Out point: one neutral sentence
+ * saying what to do, not an error.
  */
-export function rangeFeedback(before: Timeline, commands: readonly Command[]) {
-  const names = new Set<string>();
+export class EditHint extends Error {}
+
+/**
+ * What a range delete cut besides the picture, so nothing is lost unseen: every other track it cut,
+ * such as B-roll, a title or a music bed, and the transitions it removed or shortened. The picture
+ * is the lowest video track it cut, with the sound linked to it; cutting only those is silent.
+ */
+export function rangeFeedback(
+  before: Timeline,
+  after: Timeline,
+  commands: readonly Command[],
+) {
+  const named = new Set<number>();
   for (const command of commands) {
     if (command.type !== "removeRange") continue;
     const tracks = rangeTracks(before, command.ripple);
@@ -74,23 +85,51 @@ export function rangeFeedback(before: Timeline, commands: readonly Command[]) {
         clip.start < command.to &&
         clipEnd(clip) > command.from,
     );
-    const kind = (index: number) =>
-      before.tracks.find((track) => track.index === index)?.kind;
-    const pictures = new Set(
+    const video = new Set(
+      before.tracks
+        .filter((track) => track.kind === "video")
+        .map((track) => track.index),
+    );
+    const picture = Math.min(
+      ...cut.flatMap((clip) => (video.has(clip.track) ? [clip.track] : [])),
+    );
+    const links = new Set(
       cut.flatMap((clip) =>
-        kind(clip.track) === "video" && clip.link ? [clip.link] : [],
+        clip.track === picture && clip.link ? [clip.link] : [],
       ),
     );
-    for (const clip of cut) {
-      if (kind(clip.track) === "video") continue;
-      if (clip.link && pictures.has(clip.link)) continue;
-      const track = before.tracks.find((track) => track.index === clip.track);
-      if (track) names.add(track.name || trackLabel(before, track.index));
-    }
+    for (const clip of cut)
+      if (clip.track !== picture && !(clip.link && links.has(clip.link)))
+        named.add(clip.track);
   }
-  if (!names.size) return "";
-  const list = [...names];
-  return `Also cut ${list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list.at(-1)}` : list[0]}.`;
+  const tracks = before.tracks
+    .filter((track) => named.has(track.index))
+    .toSorted(
+      (a, b) =>
+        Number(a.kind !== "video") - Number(b.kind !== "video") ||
+        a.index - b.index,
+    )
+    .map((track) => track.name || trackLabel(before, track.index));
+  const next = new Map(after.clips.map((clip) => [clip.id, clip]));
+  let removed = 0;
+  let shortened = 0;
+  if (commands.some((command) => command.type === "removeRange"))
+    for (const clip of before.clips) {
+      if (!clip.transitionIn) continue;
+      const left = next.get(clip.id)?.transitionIn;
+      if (!left) removed++;
+      else if (left.duration < clip.transitionIn.duration) shortened++;
+    }
+  const transitions = (count: number) =>
+    count === 1 ? "a transition" : `${count} transitions`;
+  return [
+    tracks.length &&
+      `Also cut ${tracks.length > 1 ? `${tracks.slice(0, -1).join(", ")} and ${tracks.at(-1)}` : tracks[0]}.`,
+    removed && `Removed ${transitions(removed)}.`,
+    shortened && `Shortened ${transitions(shortened)}.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** Report actual ripple consequences. Same-track followers alone are an obvious, silent edit. */

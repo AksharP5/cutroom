@@ -34,7 +34,7 @@ export function ChangeList({
   clipIds?: readonly string[];
   /** Rows shown before "Show all"; pending agent work is always shown. */
   limit: number;
-  /** Each row's clip start. Left out where every row is the same clip. */
+  /** Each row's clip start, or the frame its change is at. Left out where every row is the same clip. */
   times?: boolean;
   /**
    * Keep the rows that are showing, so nothing moves under a pointer or a field in use. Rows
@@ -146,7 +146,10 @@ export function ChangeList({
               {clip && times && (
                 <time>
                   <TimecodeText
-                    timecode={formatTimecode(clip.start, timeline.fps)}
+                    timecode={formatTimecode(
+                      edit.frame ?? clip.start,
+                      timeline.fps,
+                    )}
                   />
                 </time>
               )}
@@ -163,7 +166,7 @@ export function ChangeList({
                   type="button"
                   className="inspector-change"
                   title={title}
-                  onClick={() => reveal(clip.id, clip.start)}
+                  onClick={() => reveal(clip.id, edit.frame ?? clip.start)}
                 >
                   {text}
                 </button>

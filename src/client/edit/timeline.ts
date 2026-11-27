@@ -45,6 +45,7 @@ import {
   outsideChanges,
   outsideMessage,
   overwriteFeedback,
+  EditHint,
   rangeFeedback,
   rippleFeedback,
 } from "./feedback";
@@ -391,10 +392,12 @@ function clearOutsideNotice() {
 }
 
 let refusedAt = 0;
+let hinted = "";
 
-function showRefusal() {
+function showRefusal(tone: "error" | "info" = "error") {
   refusedAt = performance.now();
-  showToast(lastToast);
+  hinted = tone === "info" ? lastToast : "";
+  showToast(lastToast, null, { tone });
 }
 
 /**
@@ -406,7 +409,7 @@ export function clearRefusal(event: Event) {
   if (
     toast &&
     toast === lastToast &&
-    toastTone === "error" &&
+    (toastTone === "error" || toast === hinted) &&
     refusedAt < event.timeStamp
   )
     showToast("");
@@ -1250,7 +1253,7 @@ export async function editTimeline(
     ) => {
       feedback =
         overwriteFeedback(before, after, commands) ||
-        rangeFeedback(before, commands) ||
+        rangeFeedback(before, after, commands) ||
         rippleFeedback(before, after, commands, clipboards);
     };
     updateFeedback(commands, view.timeline, timeline);
@@ -1412,7 +1415,7 @@ export async function editTimeline(
       view.timeline,
     );
     if (!draft?.invalidated || useWorkspace.getState().toast !== lastToast)
-      showRefusal();
+      showRefusal(error instanceof EditHint ? "info" : "error");
     return accepted;
   } finally {
     saved.resolve();

@@ -974,6 +974,21 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         );
       const tracks = rangeTracks(timeline, command.ripple, !!batch.onRippleCut);
       if (!command.ripple) {
+        for (const clip of clips) {
+          if (
+            !tracks.has(clip.track) ||
+            clip.start >= to ||
+            clipEnd(clip) <= from
+          )
+            continue;
+          const reason =
+            clip.start < from && clipEnd(clip) > to
+              ? clip.sourceRestrictions?.copy
+              : clip.start >= from && clipEnd(clip) <= to
+                ? clip.sourceRestrictions?.remove
+                : undefined;
+          if (reason) refuseRippleCut(clip, timeline, false, "lift");
+        }
         let next = clips;
         for (const track of tracks)
           next = clearRange(next, track, from, to, fps, mint);
@@ -3254,12 +3269,13 @@ function refuseRippleCut(
   clip: Clip,
   timeline: Timeline,
   allUnlocked = false,
+  edit: "ripple" | "lift" = "ripple",
 ): never {
   const track = trackLabel(timeline, clip.track);
   const name = clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
   throw new TimelineError(
     "unsupported",
-    `${name} on ${track} can't be cut here. ${allUnlocked ? "Lock" : "Turn off auto-select on"} ${track} to ripple without it.`,
+    `${name} on ${track} can't be cut here. ${allUnlocked ? "Lock" : "Turn off auto-select on"} ${track} to ${edit} without it.`,
   );
 }
 

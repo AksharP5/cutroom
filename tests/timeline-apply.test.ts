@@ -2179,6 +2179,25 @@ test("removeRange takes a range off the auto-select tracks, as In and Out with n
   expect(() =>
     run(state, { type: "removeRange", from: 45, to: 45, ripple: true }),
   ).toThrow("The range must end after it starts.");
+  // A clip the source animates by id cannot be cut, and a lift says so as a ripple does.
+  const animated = timeline(
+    [
+      ...state.clips.filter((item) => item.track !== 3),
+      clip("anim", 3, 0, 90, {
+        kind: "element",
+        src: null,
+        mediaStart: null,
+        sourceRestrictions: { copy: "Animated by id." },
+      }),
+    ],
+    [...avTracks, { index: 2, kind: "audio", name: "Music" }, { index: 3 }],
+  );
+  for (const ripple of [false, true])
+    expect(() =>
+      run(animated, { type: "removeRange", from: 30, to: 45, ripple }),
+    ).toThrow(
+      `anim on V2 can't be cut here. Turn off auto-select on V2 to ${ripple ? "ripple" : "lift"} without it.`,
+    );
 });
 
 test("closeGap refuses what Resolve refuses: a clip in the gap, a locked track, and no gap", () => {
