@@ -33,8 +33,9 @@ test("timeline_view draws alternating far seeks in one long source", async ({
     "drawbox=color=blue:t=fill:enable=gte(t\\,900),select=not(eq(mod(n\\,5)\\,2))",
     "-fps_mode",
     "vfr",
+    // AAC priming would start the file before zero, and move the boundary off 900 s.
     "-c:a",
-    "aac",
+    "pcm_s16le",
     "-c:v",
     "libx265",
     "-preset",
