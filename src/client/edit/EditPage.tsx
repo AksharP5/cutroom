@@ -770,6 +770,15 @@ export function EditPage({
         >
           <ArrowClockwise size={16} />
         </button>
+        {history.historyUnavailable && (
+          <span
+            className="edit-history-unavailable"
+            role="status"
+            title={history.historyUnavailable}
+          >
+            Undo is unavailable
+          </span>
+        )}
         <span className="edit-separator" />
         <InspectorToggle />
         <ExportControl projectId={projectId} projectName={projectName} />

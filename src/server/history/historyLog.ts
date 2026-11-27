@@ -14,6 +14,8 @@ import {
 import { dirname } from "node:path";
 import { replaceFileAtomically } from "@hyperframes/core/atomic-file";
 
+export class HistoryLogReadError extends Error {}
+
 export interface HistoryWho {
   kind: "person" | "agent" | "outside";
   /** Shown in the History list: "You", the agent's name, "Outside". */
@@ -96,9 +98,12 @@ export function readLog(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Could not read the project history log: ${detail}`, {
-      cause: error,
-    });
+    throw new HistoryLogReadError(
+      `Could not read the project history log: ${detail}`,
+      {
+        cause: error,
+      },
+    );
   }
   const log: HistoryLog = { baseline: new Map(), entries: [], pins: new Set() };
   const lines = text.split("\n");

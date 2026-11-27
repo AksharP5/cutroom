@@ -562,7 +562,13 @@ export function createReviewService(store: ProjectStore) {
 
   /** Project the active history onto the ledger. Undo changes visibility, never approval. */
   const readLedger = async (project: Project, ledger: Ledger) => {
-    const history = await store.history(project);
+    const history = await store.historyIfAvailable(project);
+    if (!history)
+      return {
+        history,
+        // Only show rows we can verify without knowing which entries were undone.
+        entries: ledger.edits.filter((entry) => entry.historyId === undefined),
+      };
     const undone = new Set(
       history
         .list()
@@ -690,12 +696,13 @@ export function createReviewService(store: ProjectStore) {
     const { items, state } = await reconcileState(project);
     const { history, entries } = await readLedger(project, state.ledger);
     const entry = commit
-      ? history.list().find(({ id }) => id === commit.id)
-      : await store.serializeMutation(project, async () => {
+      ? history?.list().find(({ id }) => id === commit.id)
+      : history &&
+        (await store.serializeMutation(project, async () => {
           // A checkpoint closes open windows. Wait for admitted app writes to finish first.
           await history.checkpoint();
           return history.list().at(-1);
-        });
+        }));
     const noteIds = actor
       ? items
           .filter(
@@ -1190,7 +1197,7 @@ export function createReviewService(store: ProjectStore) {
         action.type === "complete" && action.revision === undefined
           ? {
               ...action,
-              revision: store.readHistory(project).list().at(-1)?.id,
+              revision: store.readHistory(project)?.list().at(-1)?.id,
             }
           : action;
       const items = await update(project, (items, document) => {
