@@ -17,6 +17,8 @@ export interface MediaDrag {
   seconds: number;
   /** Seconds into the file where that part begins. */
   start?: number;
+  /** The probed video codec, if already known when opening the Source viewer. */
+  codec?: string;
   hasAudio: boolean;
   format?: ProjectFormat;
   /** A Library item, which the server copies into the project as it lands. */

@@ -89,6 +89,29 @@ test("each video track renders what Resolve can't open in one layer; zooms stay 
   ]);
 });
 
+test("titles minutes apart on one track render as separate layers", () => {
+  const timeline = edit();
+  const later = {
+    ...timeline.clips.find((clip) => clip.id === "bye")!,
+    id: "later",
+    start: 30 * 60,
+  };
+  const layers = layerTracks(
+    { ...timeline, clips: [...timeline.clips, later] },
+    new Set(["shot"]),
+  ).filter(({ flatten }) => !flatten);
+  expect(
+    layers.map(({ start, end, clips }) => ({
+      start,
+      end,
+      clips: clips.map((clip) => clip.id),
+    })),
+  ).toEqual([
+    { start: 30, end: 85, clips: ["hello", "bye"] },
+    { start: 1800, end: 1810, clips: ["later"] },
+  ]);
+});
+
 test("a layer render shows only its own clips, silent, over a clear background", () => {
   const html = `<!doctype html><html><head><style>main{background:#000}</style></head><body>
 <main data-composition-id='a"b' data-width="320" data-height="240" data-duration="3" style="background:#111">

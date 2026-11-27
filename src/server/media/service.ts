@@ -10,14 +10,18 @@ import {
   utimes,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { fileFingerprint } from "../../shared/media";
+import {
+  MediaInfoSchema,
+  fileFingerprint,
+  makesProxy,
+} from "../../shared/media";
 import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
 import type { JobState } from "../../shared/jobs";
 import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
 import { projectStatePath } from "../projects/path";
-import { FilmstripSchema, MediaInfoSchema, PiecesSchema } from "./protocol";
+import { FilmstripSchema, PiecesSchema } from "./protocol";
 import type { MediaKind, MediaTask, Pieces, RampTask } from "./protocol";
 import { RUN_MARGIN_SAMPLES } from "../../shared/timeline/rampRuns";
 import type { RampRun } from "../../shared/timeline/rampRuns";
@@ -28,7 +32,6 @@ import {
   proxySamplesFile,
 } from "./pieces";
 import { startMediaWorker } from "./process";
-import { makesProxy } from "./settings";
 import { probeNvenc } from "../hyperframes/nvenc";
 import type { z } from "zod";
 
@@ -86,6 +89,7 @@ const artifacts = {
   peaks: "peaks.bin",
   filmstrip: "filmstrip.json",
   frame: "frame.jpg",
+  thumbnail: "frame.jpg",
   scrub: "scrub.mp4",
   proxy: "proxy.mp4",
   pieces: "pieces.json",
@@ -103,13 +107,15 @@ const priority = {
   filmstrip: 3,
   pcm: 3,
   scrub: 4,
+  thumbnail: 4,
 } satisfies Record<MediaKind, number>;
 /** Each kind's recipe; a new one keys new cache entries. */
 const recipe = {
-  probe: "media-v9",
+  probe: "media-v11",
   peaks: "media-v6",
   filmstrip: "media-v6",
   frame: "media-v6",
+  thumbnail: "media-v1",
   scrub: "media-v7",
   proxy: "media-v8",
   pieces: "media-v12",
@@ -125,7 +131,11 @@ const wanted = (job: MediaJob) =>
   !!job.work &&
   (job.work.waiting > 0 || performance.now() - job.work.polledAt < 3000);
 const background = (kind: MediaKind) =>
-  kind === "filmstrip" || kind === "scrub" || kind === "ramp" || kind === "pcm";
+  kind === "filmstrip" ||
+  kind === "scrub" ||
+  kind === "ramp" ||
+  kind === "pcm" ||
+  kind === "thumbnail";
 
 export type MediaService = ReturnType<typeof createMediaService>;
 export type RampPins = { hold(file: string): void; release(): void };
@@ -561,12 +571,18 @@ export function createMediaService(
         throw new HttpError(422, "The media has no video stream.");
       if ((kind === "proxy" || kind === "pieces") && !makesProxy(info.video!))
         throw new HttpError(422, "This video needs no editing proxy.");
-      if (kind === "frame") {
+      if (kind === "frame" || kind === "thumbnail") {
         if (!info.video)
           throw new HttpError(422, "The media has no video stream.");
-        frame = Math.floor(time * info.video.fps + 1e-7);
-        time = frame / info.video.fps;
-        if (time >= info.video.duration && info.video.duration > 0)
+        const { fps, duration, start = 0, proxyOffset = 0 } = info.video;
+        const videoStart = Math.max(0, start - proxyOffset);
+        if (kind === "thumbnail") {
+          time = videoStart + Math.min(0.1, Math.max(0, duration - 1 / fps));
+        } else {
+          frame = Math.floor(time * fps + 1e-7);
+          time = frame / fps;
+        }
+        if (time >= videoStart + duration && duration > 0)
           throw new HttpError(400, "The frame time is outside the video.");
       }
     }
@@ -584,7 +600,11 @@ export function createMediaService(
     await mkdir(await projectPath(project, ".cutroom", true), {
       recursive: true,
     });
-    const cache = await projectPath(project, ".cutroom/cache", true);
+    // Browsing a folder can make a probe and thumbnail per video. Neither uses the proxy budget.
+    const tier =
+      kind === "probe" ? "/probes" : kind === "thumbnail" ? "/thumbnails" : "";
+    const cachePath = `.cutroom/cache${tier}`;
+    const cache = await projectStatePath(project, cachePath, true);
     await mkdir(cache, { recursive: true });
     // A run is one file in its own tier, kept within a byte budget rather than an entry count.
     // Its folder is app state: a link there is refused, so no write or removal leaves it.
@@ -599,7 +619,7 @@ export function createMediaService(
           : null
         : await projectPath(
             project,
-            `.cutroom/cache/${key}/${artifacts[kind]}`,
+            `${cachePath}/${key}/${artifacts[kind]}`,
           ).catch((error: unknown) => {
             if (error instanceof HttpError && error.status === 404) return null;
             throw error;
@@ -607,12 +627,11 @@ export function createMediaService(
     // A run is keyed by where it starts, so a file too short for this request is made again
     // longer under the same key. The stretcher is causal: the samples it had stay the same.
     const short = ramp && cached && !(await covers(cached, ramp.frames));
-    if (cached && ramp && !short) {
-      // Marks the run as recently used for the budget.
-      const now = new Date();
-      await utimes(cached, now, now).catch(() => {});
-    }
-    if (cached && !short)
+    if (cached && !short) {
+      if (ramp || cached === join(directory, artifacts[kind])) {
+        const now = new Date();
+        await utimes(directory, now, now).catch(() => {});
+      }
       return {
         key,
         artifact: cached,
@@ -623,6 +642,7 @@ export function createMediaService(
         pieces,
         state: { status: "done", progress: 1 },
       };
+    }
     if (closing)
       throw new HttpError(503, "The media service is shutting down.");
     for (const [key, job] of jobs)

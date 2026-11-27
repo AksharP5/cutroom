@@ -1,4 +1,42 @@
 import { z } from "zod";
+import { ProjectRateSchema } from "./projectFormat.ts";
+
+export const MediaInfoSchema = z.object({
+  channels: z.number().int().positive().optional(),
+  duration: z.number().positive().optional(),
+  video: z
+    .object({
+      width: z.number().int().positive(),
+      height: z.number().int().positive(),
+      pixelAspect: z.number().positive(),
+      fps: z.number().positive(),
+      matchFps: ProjectRateSchema.optional(),
+      duration: z.number().nonnegative(),
+      /** First picture's time on the timeline's media clock. */
+      start: z.number().nonnegative().optional(),
+      /** Subtract this from a media time to seek on FFmpeg's relative clock. */
+      proxyOffset: z.number().optional(),
+      codec: z.string(),
+      alpha: z.boolean(),
+      hdr: z.boolean(),
+    })
+    .optional(),
+});
+export type MediaInfo = z.infer<typeof MediaInfoSchema>;
+
+/** Codecs Chromium decodes in software on every platform it ships on. */
+const browserCodecs = new Set(["h264", "vp8", "vp9", "av1"]);
+export const needsVideoProxy = (codec: string) => !browserCodecs.has(codec);
+/**
+ * Whether the preview plays this video from Cutroom's editing proxy: an opaque SDR video in a
+ * codec Chromium cannot decode, such as HEVC, ProRes or DNxHR. HyperFrames' own transcoder keeps
+ * transparent and HDR video, since its proxies keep alpha and tone-map as export does.
+ */
+export const makesProxy = (video: {
+  codec: string;
+  alpha: boolean;
+  hdr: boolean;
+}) => needsVideoProxy(video.codec) && !video.alpha && !video.hdr;
 
 // Mirrors the formats the upload route validates. `.ts` transport streams are left out so
 // TypeScript files in a project are never listed as video.

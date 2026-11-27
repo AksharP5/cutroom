@@ -504,7 +504,43 @@ function replayPlan(
         for (const row of later)
           for (const { path } of row.files) conflict.add(path);
       }
-      if (document && document.after !== currentDocument) {
+      if (document && document.after === currentDocument) {
+        // Compare the authored inverse with both sides of later edits. Returning to
+        // the same bytes still claims any fields those edits changed along the way.
+        for (const { entry, files } of later) {
+          if (entry.undoes || entry.who.kind === "outside") continue;
+          const newer = files.find(({ path }) => path === document.path);
+          if (!newer) continue;
+          if (
+            movingMedia ||
+            entry.incomplete ||
+            !document.before ||
+            !document.after ||
+            !newer.before ||
+            !newer.after
+          ) {
+            conflict.add(document.path);
+            break;
+          }
+          const [before, after, ...versions] = await Promise.all(
+            [document.before, document.after, newer.before, newer.after].map(
+              (hash) => cache.document(hash, blobs.get(hash)),
+            ),
+          );
+          if (
+            !before?.success ||
+            !after?.success ||
+            versions.some(
+              (version) =>
+                !version?.success ||
+                reverseDocument(before.data, after.data, version.data) === null,
+            )
+          ) {
+            conflict.add(document.path);
+            break;
+          }
+        }
+      } else if (document) {
         if (
           !movingMedia &&
           document.before &&

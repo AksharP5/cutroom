@@ -1,3 +1,4 @@
+import { fetchPictureSource, mediaAssetUrl } from "../mediaAsset";
 import {
   FOOTAGE_PIXEL_LIMIT,
   PipelineResponseSchema,
@@ -12,6 +13,7 @@ import {
 import { framesBefore } from "../../shared/timeline/transition";
 import { useVersions } from "../edit/versions";
 import { localMediaPath } from "../../shared/media";
+import { isTimelinePath } from "../../shared/sourcePaths";
 import { useGradeBypass, usePreviewGrade } from "../edit/preview";
 import { acquireGrades } from "./grades";
 import type { GradeTexture } from "./grades";
@@ -26,13 +28,9 @@ import type { Appearance, Shown } from "./layers";
 import { sourceCache } from "./sources";
 import { usePipeline } from "./setting";
 import { chromeColourGuess } from "../../shared/videoColour";
-import { pictureAt, secondsOf } from "../../shared/timeline/piece";
+import { secondsOf } from "../../shared/timeline/piece";
 import type { SourceTime } from "../../shared/timeline/piece";
-import {
-  pictureSeek,
-  readPictureSource,
-  timePicture,
-} from "../../shared/timeline/pictureSource";
+import { pictureTime } from "../../shared/timeline/pictureSource";
 import type { PictureSource } from "../../shared/timeline/pictureSource";
 import { useWorkspace } from "../workspace";
 import { clipMatteState, useMatteView, useMattes } from "../edit/mattes";
@@ -54,23 +52,6 @@ interface Source {
   intrinsic: { width: number; height: number };
   /** The file's pictures as export selects them, or null to show them at their own times. */
   pictures: PictureSource | null;
-}
-
-/**
- * Where a decoder finds the picture export writes: at an exact source time when the piece gives
- * one, else at a time asked with the runtime's lead.
- */
-function pictureTime(
-  pictures: PictureSource | null,
-  asked: number,
-  source?: SourceTime,
-) {
-  if (!pictures) return asked;
-  const ordinal =
-    source === undefined
-      ? timePicture(pictures.index, asked)
-      : pictureAt(pictures.index, source);
-  return ordinal === null ? asked : pictureSeek(pictures.index, ordinal);
 }
 
 /** The frame a source shows at a media time: the one export writes there. */
@@ -228,14 +209,10 @@ export function attachPipeline(
   };
   // A file the server cannot index shows its frames at their own times.
   const pictureSources = sourceCache((path) =>
-    fetch(
-      `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/frames?path=${encodeURIComponent(path)}`,
-      { signal: closing.signal },
-    )
-      .then(async (response) =>
-        response.ok ? readPictureSource(await response.json()) : null,
-      )
-      .catch(() => null),
+    fetchPictureSource(
+      mediaAssetUrl(projectId, "frames", path),
+      closing.signal,
+    ),
   );
   const media = sourceCache(async (src) => {
     const path = localMediaPath("index.html", src);
@@ -658,7 +635,7 @@ export function attachPipeline(
   const drawFrame = async (drawingPlan: Plan) => {
     const { view, selection } = useTimeline.getState();
     const { frame, state } = useTransport.getState();
-    if (!view || view.composition !== "index.html") return;
+    if (!view || !isTimelinePath(view.composition)) return;
     const auditionAtDraw = useVersions.getState();
     const alternate = prepareAudition(view, frame, state.kind === "playing");
     const { draft } = usePreviewGrade.getState();
@@ -1028,14 +1005,15 @@ export function attachPipeline(
     const view = useTimeline.getState().view;
     // The timeline's first read starts the plan's.
     if (!view) return;
-    if (view.composition !== "index.html") {
+    // Every root-level timeline plays through it; a scene in a folder stays with HyperFrames.
+    if (!isTimelinePath(view.composition)) {
       plan = null;
-      return stop("only the entry composition plays through it");
+      return stop("only a timeline plays through it, not a scene");
     }
     let response: ReturnType<typeof PipelineResponseSchema.parse>;
     try {
       const request = await fetch(
-        `/api/cutroom/projects/${encodeURIComponent(projectId)}/pipeline`,
+        `/api/cutroom/projects/${encodeURIComponent(projectId)}/pipeline?composition=${encodeURIComponent(view.composition)}`,
         { signal: closing.signal },
       );
       response = PipelineResponseSchema.parse(await request.json());

@@ -1508,6 +1508,7 @@ export const TAB_ORIGIN_HEADER = "x-cutroom-tab-origin";
 export const GROUPED_EDIT_HEADER = "x-cutroom-grouped-edit";
 /** On a command batch's answer: what the edit did, naming its clips, URI-encoded. */
 export const EDIT_SUMMARY_HEADER = "x-cutroom-edit-summary";
+export const EDIT_WARNING_HEADER = "x-cutroom-edit-warning";
 export const EDIT_HISTORY_HEADER = "x-cutroom-history-entry";
 export const TabOriginSchema = z.uuid();
 

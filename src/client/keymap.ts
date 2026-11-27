@@ -490,6 +490,11 @@ export const keymap = {
     label: "Change clip duration",
     keys: ["Ctrl+D"],
   },
+  clipRetimeControls: {
+    area: "Edit",
+    label: "Show speed curve",
+    keys: ["Ctrl+R"],
+  },
   clipResetRetime: {
     area: "Edit",
     label: "Reset speed",

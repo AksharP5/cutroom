@@ -102,6 +102,7 @@ import {
 } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
+import { isTimelinePath } from "../../shared/sourcePaths";
 import {
   createThumbnailRenderer,
   thumbnailRendererVersion,
@@ -110,7 +111,7 @@ import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { createRenderIndex } from "./renders";
 import { renderCacheConfig } from "./renderCache";
 import type { ExportRequest } from "./jobs";
-import { timedCaptureMedia } from "./captureWorkload";
+import { loadedMedia, timedCaptureMedia } from "./captureWorkload";
 import { measureLoudness } from "../timeline/audio";
 import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
@@ -159,6 +160,7 @@ import { parseFps } from "@hyperframes/core";
 import {
   PROXY_PIECE_PARAM,
   framesOf,
+  projectVideo,
   proxyExposedHeaders,
   proxyPreview,
   proxySamplesPreview,
@@ -435,18 +437,17 @@ export function createHyperframesApi(
               );
               return works;
             }),
-    workload: async (id, composition, sourceOverride) => {
+    workload: async (id, composition, sourceOverride, sound) => {
       const { parsed, timeline } = await readComposition(id, composition);
+      // The document the browsers render, which an export may have narrowed.
+      const html = sourceOverride ?? parsed.html;
       return {
-        mediaClips: timeline.clips.filter(
-          (clip) => clip.kind === "video" || isAudioKind(clip.kind),
-        ).length,
+        mediaClips: loadedMedia(html, sound),
         durationFrames: timeline.duration,
         fps: timeline.fps,
-        timedMedia:
-          composition === "index.html"
-            ? timedCaptureMedia(sourceOverride ?? parsed.html)
-            : undefined,
+        timedMedia: isTimelinePath(composition)
+          ? timedCaptureMedia(html, sound)
+          : undefined,
       };
     },
     published: async (id, path) =>
@@ -1293,6 +1294,15 @@ export function createHyperframesApi(
     const id = c.req.param("id");
     if (!(await resolveProject(id))) return c.notFound();
     const url = new URL(c.req.url);
+    // Source uses HyperFrames' copy for files Cutroom leaves to its HDR and alpha handling.
+    const source = url.searchParams.get("source");
+    if (source !== null) {
+      const path = await projectVideo(await store.get(id), source);
+      url.pathname = `/api/projects/${encodeURIComponent(id)}/preview/${path.split("/").map(encodeURIComponent).join("/")}`;
+      url.searchParams.delete("source");
+      url.searchParams.set("hf-proxy", "auto");
+      return c.redirect(isolatedPreview(id, url.href));
+    }
     // A sub-composition previews as its own document, as Studio's drill-in does.
     const requested = url.searchParams.get("composition");
     url.searchParams.delete("composition");
@@ -1595,7 +1605,8 @@ export function createHyperframesApi(
                 project,
                 relative(project.path, canonical),
                 {
-                  name: url.pathname.slice(url.pathname.lastIndexOf("/") + 1),
+                  pieceUri: (piece) =>
+                    `${url.pathname.slice(url.pathname.lastIndexOf("/") + 1)}?hf-proxy=h264&${PROXY_PIECE_PARAM}=${piece}`,
                   piece: url.searchParams.get(PROXY_PIECE_PARAM),
                   signal: c.req.raw.signal,
                 },

@@ -72,7 +72,8 @@ export async function capturePictures(
   projectDir: string | undefined,
   fps: Fps,
   timelineEnd: number | undefined,
-  range: { start: number; end: number } | undefined,
+  /** The composition frames drawn, in order; every frame when undefined. */
+  frames: readonly { start: number; end: number }[] | undefined,
   signal: AbortSignal | undefined,
 ) {
   // Streams read remotely by a distributed renderer still use its range decoder.
@@ -106,17 +107,25 @@ export async function capturePictures(
     ? resolvePiece(authored, fps, source.end?.time)
     : picturePiece({ ...video, end, playbackRate }, fps, source);
   if (video.loop && !piece.loop?.length) return null;
-  const first = Math.max(0, Number(piece.frames.start), range?.start ?? 0);
   const sceneEnd =
     timelineEnd !== undefined && Number.isFinite(timelineEnd)
       ? Number(firstFrame(decodeLocal(attrMicros(timelineEnd), fps), fps))
       : Infinity;
-  const last = Math.min(
-    Number(piece.frames.end),
-    range?.end ?? Infinity,
-    sceneEnd,
-  );
-  const selected = picturesAt(piece, source, fps, first, last);
+  const shown = {
+    start: Math.max(0, Number(piece.frames.start)),
+    end: Math.min(Number(piece.frames.end), sceneEnd),
+  };
+  // The clip's frames that are drawn: within its own span and the frames captured.
+  const runs = (frames ?? [shown]).flatMap(({ start, end }) => {
+    const from = Math.max(start, shown.start);
+    const to = Math.min(end, shown.end);
+    return to > from ? [{ start: from, end: to }] : [];
+  });
+  const first = runs[0]?.start ?? shown.start;
+  const selected = runs.flatMap((run, index) => [
+    ...Array<null>(run.start - (runs[index - 1]?.end ?? first)).fill(null),
+    ...picturesAt(piece, source, fps, run.start, run.end),
+  ]);
   const ordinals = [
     ...new Set(
       selected.flatMap((ordinal) => (ordinal === null ? [] : [ordinal])),

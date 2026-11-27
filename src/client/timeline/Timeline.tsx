@@ -14,13 +14,14 @@ import { isAudioKind } from "../../shared/timeline/schema";
 import { SelectMenu } from "../components/SelectMenu";
 import { voiceoverTrack } from "../../shared/voiceover";
 import { ClipMix, mixBody } from "./mix";
-import { ClipSpeed } from "./ClipSpeed";
+import { ClipSpeed, useSpeedShown } from "./ClipSpeed";
 import { hasRamp } from "../../shared/timeline/speed";
 import { TrackGain } from "./TrackGain";
 import { getAudioFxDef } from "@hyperframes/core/audio-fx";
 import { AudioMeters } from "./meters";
 import {
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -938,6 +939,7 @@ export function Timeline({
       .join("\n"),
   );
   const offline = useMemo(() => new Set(offlineIds.split("\n")), [offlineIds]);
+  const speedShown = useSpeedShown((state) => state.ids);
   const offsets = useMemo(
     () => syncOffsets({ clips: timeline.clips, fps: timeline.fps }),
     [timeline.clips, timeline.fps],
@@ -1144,17 +1146,34 @@ export function Timeline({
     });
   }, [frames, fps.num, fps.den]);
 
+  // Only mounted points on this or the previous frame get a DOM write.
+  const markSpeedPlayhead = useCallback((frame: number) => {
+    const matches = lanes.current?.querySelectorAll<HTMLElement>(
+      `[data-speed-frame="${frame}"], [data-speed-frame][data-on]`,
+    );
+    for (const point of matches ?? [])
+      point.toggleAttribute(
+        "data-on",
+        Number(point.dataset.speedFrame) === frame,
+      );
+  }, []);
+
+  useLayoutEffect(() => {
+    markSpeedPlayhead(clock.frame());
+  }, [clock, timeline, mounted, speedShown, markSpeedPlayhead]);
+
   useEffect(() => {
     const write = () => {
       const frame = clock.frame();
       playhead.current?.style.setProperty("--f", String(frame));
       playheadHead.current?.style.setProperty("--f", String(frame));
+      markSpeedPlayhead(frame);
       if (!scrubbing.current)
         viewport.current?.follow(frame, clock.direction());
     };
     write();
     return clock.subscribe(write);
-  }, [clock]);
+  }, [clock, markSpeedPlayhead]);
 
   useEffect(() => {
     if (!recording) return;
@@ -1550,7 +1569,9 @@ export function Timeline({
                       {rowClips
                         .filter(
                           ({ clip }) =>
-                            !isAudioKind(clip.kind) && hasRamp(clip),
+                            !isAudioKind(clip.kind) &&
+                            clip.mediaStart !== null &&
+                            (hasRamp(clip) || speedShown.has(clip.id)),
                         )
                         .map(({ clip, row }) => (
                           <ClipSpeed

@@ -40,7 +40,7 @@ import type {
 import { pendingEdit } from "../../shared/timeline/reviewChanges";
 import type { AcceptRowSchema } from "../../shared/timeline/reviewChanges";
 import { HttpError } from "../../shared/errors";
-import { ProjectDocumentError, isMissing } from "./store";
+import { ProjectDocumentError, isMissing, reportEditWarning } from "./store";
 import type { ProjectStore } from "./store";
 import { clipVersions, compositionVersions, missingSignature } from "./changes";
 import type { ClipVersions } from "./changes";
@@ -1002,26 +1002,33 @@ export function createReviewService(store: ProjectStore) {
             )
           : new Map<string | null, string>();
         const { value, entry } = await work();
-        const after = await clipVersions(project, composition);
-        const changed = new Set(
-          [...before.keys(), ...after.keys()].filter(
-            (id) => before.get(id) !== after.get(id),
-          ),
-        );
-        if (!changed.size) return value;
-        await recordEdits(
-          project,
-          state,
-          [{ composition, before, after, changed, baselines }],
-          actor,
-          noteIds,
-          entry,
-          typeof options.label === "function"
-            ? options.label(value)
-            : options.label,
-          options.batchLabels?.(value),
-          options.origin,
-        );
+        try {
+          const after = await clipVersions(project, composition);
+          const changed = new Set(
+            [...before.keys(), ...after.keys()].filter(
+              (id) => before.get(id) !== after.get(id),
+            ),
+          );
+          if (!changed.size) return value;
+          await recordEdits(
+            project,
+            state,
+            [{ composition, before, after, changed, baselines }],
+            actor,
+            noteIds,
+            entry,
+            typeof options.label === "function"
+              ? options.label(value)
+              : options.label,
+            options.batchLabels?.(value),
+            options.origin,
+          );
+        } catch (error) {
+          reportEditWarning(
+            "Saved, but Cutroom could not record the review changes.",
+            error,
+          );
+        }
         return value;
       }),
     clipChanges: (project: Project, composition: string) =>

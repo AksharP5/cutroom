@@ -26,7 +26,14 @@ import type {
   Timeline,
   TimelineView,
 } from "../../shared/timeline/schema";
-import { ApiError, api, json, onCommittedEntry, tabOrigin } from "../api";
+import {
+  ApiError,
+  api,
+  json,
+  onCommittedEntry,
+  onEditWarning,
+  tabOrigin,
+} from "../api";
 import { clipName, trackRows } from "../timeline/math";
 import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
@@ -108,6 +115,10 @@ onCommittedEntry((projectId, entryId) => {
   committedHere.add(entryId);
   unobservedNoteHistory.delete(projectId);
   unobservedTimelineHistory = { projectId, entryId };
+});
+onEditWarning((projectId, warning) => {
+  if (useTimeline.getState().projectId === projectId)
+    showToast(warning, null, { tone: "info" });
 });
 const historyControls = (projectId: string) =>
   pending.some((edit) => edit.projectId === projectId)

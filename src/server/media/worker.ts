@@ -7,7 +7,6 @@ import { encodePeaks, peakSampleRate } from "./peaks";
 import {
   FilmstripSchema,
   MediaEventSchema,
-  MediaInfoSchema,
   MediaTaskSchema,
   PiecesSchema,
 } from "./protocol";
@@ -20,11 +19,16 @@ import {
   proxySamplesFile,
   streamBoxes,
 } from "./pieces";
-import { mediaSettings } from "../../shared/media";
+import { MediaInfoSchema, mediaSettings } from "../../shared/media";
 import { proxyFilter, scaleFilter, scrubFilter, tileWidth } from "./settings";
 import { chromeColourGuess } from "../hyperframes/videoColour";
 import { localMediaInputOptions } from "./input";
-import { mediaClock, mediaStreamsArgs, sourcePictures } from "./pictureIndex";
+import {
+  mediaClock,
+  mediaClockOrigin,
+  mediaStreamsArgs,
+  sourcePictures,
+} from "./pictureIndex";
 import {
   AUDIO_SAMPLE_RATE,
   fraction,
@@ -172,7 +176,7 @@ try {
       "error",
       ...localMediaInputOptions,
       "-show_entries",
-      "format=duration:stream=codec_type,codec_name,pix_fmt,color_transfer,channels,width,height,avg_frame_rate,r_frame_rate,sample_aspect_ratio,duration:stream_tags=alpha_mode:stream_side_data=rotation",
+      "format=format_name,start_time,duration:stream=codec_type,codec_name,pix_fmt,color_transfer,channels,width,height,avg_frame_rate,r_frame_rate,sample_aspect_ratio,start_time,duration:stream_tags=alpha_mode,DURATION:stream_disposition=attached_pic:stream_side_data=rotation",
       "-of",
       "json",
       task.source,
@@ -185,24 +189,40 @@ try {
             codec_name: z.string().optional(),
             pix_fmt: z.string().optional(),
             color_transfer: z.string().optional(),
-            tags: z.object({ alpha_mode: z.string().optional() }).optional(),
+            tags: z
+              .object({
+                alpha_mode: z.string().optional(),
+                DURATION: z.string().optional(),
+              })
+              .optional(),
             channels: z.number().optional(),
             width: z.number().optional(),
             height: z.number().optional(),
             avg_frame_rate: z.string().optional(),
             r_frame_rate: z.string().optional(),
             sample_aspect_ratio: z.string().optional(),
+            start_time: z.string().optional(),
             duration: z.string().optional(),
+            disposition: z.object({ attached_pic: z.number() }).optional(),
             side_data_list: z
               .array(z.object({ rotation: z.number().optional() }))
               .optional(),
           }),
         ),
-        format: z.object({ duration: z.string().optional() }),
+        format: z.object({
+          format_name: z.string().optional(),
+          start_time: z.string().optional(),
+          duration: z.string().optional(),
+        }),
       })
       .parse(JSON.parse(z.string().parse(raw)));
     const audio = probe.streams.find((stream) => stream.codec_type === "audio");
-    const video = probe.streams.find((stream) => stream.codec_type === "video");
+    const streams = probe.streams.filter(
+      (stream) =>
+        (stream.codec_type === "audio" || stream.codec_type === "video") &&
+        !stream.disposition?.attached_pic,
+    );
+    const video = streams.find((stream) => stream.codec_type === "video");
     const rotated =
       Math.abs(
         video?.side_data_list?.find((data) => data.rotation !== undefined)
@@ -214,14 +234,42 @@ try {
     const reportedFps =
       rational(video?.avg_frame_rate, "/") ||
       rational(video?.r_frame_rate, "/");
+    const duration = Number(probe.format.duration);
+    const { zero } = mediaClockOrigin(streams, probe.format.format_name);
+    const formatStart = Number(probe.format.start_time) || 0;
+    const reportedStart = Number(video?.start_time);
+    const streamStart = Number.isFinite(reportedStart)
+      ? reportedStart
+      : formatStart;
+    const mediaStart = Math.max(0, streamStart - secondsOf(zero));
+    // Matroska can carry a track's end as a tag instead of a stream duration.
+    const trackEnd = video?.tags?.DURATION?.split(":").reduce(
+      (seconds, part) => seconds * 60 + Number(part),
+      0,
+    );
+    const declaredDuration = Number(video?.duration);
+    const streamDuration =
+      declaredDuration > 0
+        ? declaredDuration
+        : (trackEnd ?? streamStart) - streamStart;
     const info = MediaInfoSchema.parse({
+      duration:
+        Number.isFinite(duration) && duration > 0 ? duration : undefined,
       channels: audio?.channels,
       video: video && {
         width: rotated ? video.height : video.width,
         height: rotated ? video.width : video.height,
         pixelAspect: rotated ? 1 / aspect : aspect,
         fps: reportedFps || 30,
-        duration: Number(video.duration ?? probe.format.duration ?? 0),
+        duration:
+          Number.isFinite(streamDuration) && streamDuration > 0
+            ? streamDuration
+            : Math.max(
+                0,
+                (duration || 0) - Math.max(0, streamStart - formatStart),
+              ),
+        start: mediaStart,
+        proxyOffset: formatStart - secondsOf(zero),
         matchFps: matchProjectRate(reportedFps),
         codec: video.codec_name ?? "unknown",
         alpha: transparent(video),
@@ -645,7 +693,7 @@ try {
           },
         );
       }
-    } else if (task.kind === "frame") {
+    } else if (task.kind === "frame" || task.kind === "thumbnail") {
       await run([
         ...ffmpeg,
         ...localMediaInputOptions,

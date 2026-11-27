@@ -933,14 +933,22 @@ export function createTimelineRoutes(
       ),
     );
   });
-  // Which clips the viewer's footage pipeline may draw; only the entry composition has one.
+  // Which clips the viewer's footage pipeline may draw on a timeline; scenes in folders have none.
   api.get("/projects/:id/pipeline", async (c) => {
     const project = await store.get(c.req.param("id"));
     c.header("cache-control", "no-store");
     try {
+      const composition = canonicalProjectPath(
+        c.req.query("composition") ?? "index.html",
+      );
+      if (!isTimelinePath(composition))
+        throw new HttpError(
+          400,
+          "Only a timeline plays through the footage pipeline.",
+        );
       const { source, parsed, footageRefusals, footageColours } = await read(
         project,
-        "index.html",
+        composition,
       );
       const libraries = new Set<string>();
       await Promise.all(

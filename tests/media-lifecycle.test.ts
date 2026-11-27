@@ -230,6 +230,32 @@ test.skipIf(!Bun.which("ffmpeg"))(
 );
 
 test.skipIf(!Bun.which("ffmpeg"))(
+  "a cold probe gets the next worker before queued Media thumbnails",
+  async () => {
+    const f = await controlledFixture("frames");
+    try {
+      await f.media.request(f.project, "frame.mp4", "frame", 1);
+      await f.media.request(f.project, "frame.mp4", "frame", 2);
+      expect(
+        (await f.media.request(f.project, "one.mp4", "thumbnail")).state.status,
+      ).toBe("queued");
+      await writeFile(join(f.project.path, "new.mp4"), "source");
+      expect(
+        (await f.media.request(f.project, "new.mp4", "probe")).state.status,
+      ).toBe("queued");
+      await writeFile(`${f.release}-1`, "release worker");
+      const probe = await until(
+        () => f.media.request(f.project, "new.mp4", "probe"),
+        (result) => !!result.artifact,
+      );
+      expect(probe.state.status).toBe("done");
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test.skipIf(!Bun.which("ffmpeg"))(
   "missing streams are rejected from cached probe info without asset workers",
   async () => {
     const f = await controlledFixture("no-stream");

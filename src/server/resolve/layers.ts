@@ -22,11 +22,15 @@ export interface LayerTrack {
   flatten: boolean;
 }
 
+/** A layer render takes about ten seconds to start, as long as capturing ten seconds of nothing. */
+const LAYER_GAP_SECONDS = 10;
+
 const isZoomLayer = (clip: Clip) =>
   clip.adjustment && clip.region?.effect === "zoom";
 
 /**
- * Render each track's ordinary graphics together. An adjustment replaces lower
+ * Render each track's ordinary graphics together, in one file per stretch of nearby clips. An
+ * adjustment replaces lower
  * tracks only for its own cut, so render it separately from transparent graphics.
  */
 export function layerTracks(
@@ -59,14 +63,23 @@ export function layerTracks(
     if (clips) clips.push(clip);
     else byTrack.set(clip.track, [clip]);
   }
+  // Clips further apart than a layer render's startup costs get their own file, so a track
+  // of titles minutes apart never captures the empty minutes between them.
+  const apart = Math.round(
+    (LAYER_GAP_SECONDS * timeline.fps.num) / timeline.fps.den,
+  );
   for (const [track, clips] of byTrack) {
-    layers.push({
-      track,
-      start: Math.min(...clips.map((clip) => clip.start)),
-      end: Math.max(...clips.map((clip) => clip.start + clip.duration)),
-      clips: clips.toSorted((a, b) => a.start - b.start),
-      flatten: false,
-    });
+    let layer: LayerTrack | undefined;
+    for (const clip of clips.toSorted((a, b) => a.start - b.start)) {
+      const end = clip.start + clip.duration;
+      if (layer && clip.start - layer.end <= apart) {
+        layer.clips.push(clip);
+        layer.end = Math.max(layer.end, end);
+        continue;
+      }
+      layer = { track, start: clip.start, end, clips: [clip], flatten: false };
+      layers.push(layer);
+    }
   }
   return layers.sort((a, b) => a.track - b.track || a.start - b.start);
 }

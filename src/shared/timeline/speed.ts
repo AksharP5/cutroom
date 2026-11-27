@@ -166,6 +166,10 @@ export function speedCurve(clip: Clip, fps: Fps): readonly CurveSample[] {
 const LOG_MIN = Math.log10(MIN_PLAYBACK_RATE);
 const LOG_MAX = Math.log10(MAX_PLAYBACK_RATE);
 
+/** The speed a fraction of the way down the log scale, the inverse of `speedLevel`. */
+export const speedAtLevel = (level: number) =>
+  10 ** (LOG_MAX - level * (LOG_MAX - LOG_MIN));
+
 /** How far down the speed scale a speed sits, 0 at 1000% to 1 at 10%, on a log scale. */
 export const speedLevel = (speed: number) =>
   (LOG_MAX -
@@ -232,10 +236,13 @@ function withRateLane(automation: string | null, rate?: HfAutomationLane) {
 /** Put one speed curve on the timeline clock, keeping each file's source time at the anchor. */
 export function speedProjection(
   target: Clip,
-  clips: readonly Clip[],
+  candidates: readonly Clip[],
   fps: Fps,
   anchorFrame = target.start,
 ) {
+  const clips = target.link
+    ? candidates.filter((clip) => clip.link === target.link)
+    : [target];
   const anchor = frames(anchorFrame, fps);
   const previous = clips.map((clip) => ({
     clip,
@@ -427,4 +434,57 @@ export function mostSpeed(
     else high = middle;
   }
   return Math.floor(low * 100) / 100;
+}
+
+/** Keep a drag inside the sources, freezing the horizontal move if speed alone cannot fit it. */
+export function limitSpeedPoint(
+  project: ReturnType<typeof speedProjection>,
+  points: readonly SpeedInput[],
+  index: number,
+  original: SpeedPoint,
+  fps: Fps,
+) {
+  const requested = points[index]!;
+  if (!project(points).some((clip) => speedSourceLimit(clip, fps) === "after"))
+    return null;
+  const place = (frame: number, speed: number) =>
+    points.map((point, at) =>
+      at === index ? { ...point, frame, speed } : point,
+    );
+  const fits = (frame: number, speed: number) =>
+    project(place(frame, speed)).every(
+      (clip) => speedSourceLimit(clip, fps) === null,
+    );
+  const speed = Math.min(requested.speed, original.speed);
+  if (requested.speed > speed && fits(requested.frame, speed)) {
+    let low = speed;
+    let high = requested.speed;
+    while (high - low > 0.005) {
+      const middle = (low + high) / 2;
+      if (fits(requested.frame, middle)) low = middle;
+      else high = middle;
+    }
+    // Keep the exact starting rate if there is less than one percent of headroom.
+    const max = Math.max(speed, Math.floor(low * 100) / 100);
+    return {
+      points: place(requested.frame, max),
+      hint: `Source ends. ${Math.round(max * 100)}% is the most this point can go.`,
+    };
+  }
+  if (requested.frame === original.frame || !fits(original.frame, speed))
+    return null;
+  let near = original.frame;
+  let far = requested.frame;
+  const towardsEnd = near < far;
+  while (Math.abs(far - near) > 1) {
+    const middle = (near + far) / 2;
+    const frame = towardsEnd ? Math.floor(middle) : Math.ceil(middle);
+    if (frame === near) break;
+    if (fits(frame, speed)) near = frame;
+    else far = frame;
+  }
+  return {
+    points: place(near, speed),
+    hint: "Source ends.",
+  };
 }

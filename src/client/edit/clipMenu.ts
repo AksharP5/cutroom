@@ -1,3 +1,5 @@
+import { useSpeedShown } from "../timeline/ClipSpeed";
+import { hasRamp } from "../../shared/timeline/speed";
 import { resettable } from "./keys";
 import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
@@ -118,6 +120,16 @@ export function clipMenuItems({
       : []),
     ...(pictures.length || sound.length
       ? [
+          {
+            action: "clipRetimeControls" as const,
+            disabled: !pictures.length,
+            checked:
+              pictures.length > 0 &&
+              pictures.every(
+                (clip) =>
+                  hasRamp(clip) || useSpeedShown.getState().ids.has(clip.id),
+              ),
+          },
           {
             action: "clipResetRetime" as const,
             disabled: !resettable(clips).length,

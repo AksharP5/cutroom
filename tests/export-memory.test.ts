@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { planCaptureBrowsers } from "../src/server/hyperframes/exportMemory";
 import {
+  captureDocument,
   countCaptureMedia,
+  loadedMedia,
   timedCaptureMedia,
 } from "../src/server/hyperframes/captureWorkload";
 
@@ -39,6 +41,74 @@ test("capture memory follows selected runs in export time, including transition 
       runs,
     ),
   ).toBe(4);
+});
+
+test("a capture document keeps its elements and detaches only idle video sources", () => {
+  const html = `<!doctype html><html><head></head><body><main data-composition-id="main">
+  <video id="early" muted src="early.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="0" data-duration="10"></video>
+  <video id="intro" muted src="intro.mp4" data-start="0" data-duration="8"></video>
+  <video id="under" muted src="under.mp4" data-start="10" data-duration="10"></video>
+  <video id="late" muted src="late.mp4" data-start="20" data-duration="10" data-transition-in="dissolve" data-transition-in-duration="1"></video>
+  <video id="after" muted src="after.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="40" data-duration="10"></video>
+  <video id="voice" src="voice.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="40" data-duration="10"></video>
+  <img id="still" src="still.png" data-start="0" data-duration="5">
+  <audio id="sound" data-start="0" data-duration="50"></audio>
+  <div id="title" class="clip" data-start="intro + 10" data-duration="1.5"><span>Title</span></div>
+  </main></body></html>`;
+  // A title from 18 s to 19.5 s at 60 fps.
+  const kept = captureDocument(html, [{ start: 1080, end: 1170 }], {
+    num: 60,
+    den: 1,
+  });
+  expect(
+    [...kept.matchAll(/ id="([a-z]+)"/g)].map((match) => match[1]),
+  ).toEqual(
+    // The dissolve into "late" can show it a second early.
+    [
+      "early",
+      "intro",
+      "under",
+      "late",
+      "after",
+      "voice",
+      "still",
+      "sound",
+      "title",
+    ],
+  );
+  expect(kept).toContain('id="early" muted data-cutroom-idle-src="early.mp4"');
+  expect(kept).toContain('id="after" muted data-cutroom-idle-src="after.mp4"');
+  expect(kept).toContain('id="intro" muted src="intro.mp4"');
+  expect(kept).toContain('id="late" muted src="late.mp4"');
+  expect(kept).toContain('id="still" src="still.png"');
+  expect(kept).toContain('id="voice" src="voice.mp4"');
+  expect(loadedMedia(kept, true)).toBe(5);
+  expect(kept).toContain(
+    '<div id="title" class="clip" data-start="intro + 10"',
+  );
+  for (const layout of ["position:static", "width:auto", "height:auto"]) {
+    const styled = html.replace(
+      "</head>",
+      `<style>#early{${layout} !important}</style></head>`,
+    );
+    expect(
+      captureDocument(styled, [{ start: 1080, end: 1170 }], {
+        num: 60,
+        den: 1,
+      }),
+    ).toBe(styled);
+  }
+});
+
+test("capture browsers are charged for the media they load, not disabled clips or refused sound", () => {
+  const html = `<!doctype html><html><head></head><body><main data-composition-id="main">
+  <video data-start="0" data-duration="2"></video>
+  <video data-start="2" data-duration="2" data-hidden></video>
+  <audio data-start="0" data-duration="4"></audio>
+  <div data-hidden><video data-start="4" data-duration="2"></video></div>
+  </main></body></html>`;
+  expect(loadedMedia(html, true)).toBe(2);
+  expect(loadedMedia(html, false)).toBe(1);
 });
 
 test("a 280-clip timeline starts one capture browser where HyperFrames started five", () => {
