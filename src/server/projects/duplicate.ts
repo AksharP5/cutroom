@@ -39,7 +39,13 @@ import {
   matchesMatteSource,
   readMatteManifest,
 } from "../matte/manifest";
+import {
+  mediaFingerprint,
+  playbackCacheEntry,
+  playbackCaches,
+} from "../media/cacheKeys";
 import { projectMutationGuard } from "./authorization";
+import { projectStatePath, unavailableProjectFile } from "./path";
 import { onCopyQueue, stagedName } from "./mediaImport";
 import { reviewNotesOnly } from "./review";
 import type { ReviewService } from "./review";
@@ -63,8 +69,8 @@ const SWEEP_AGE_MS = 10 * 60 * 1000;
 const SMALL_BYTES = 1024 * 1024;
 /**
  * The original's history, outputs, trash and cache. The copy starts its own history, so these
- * would only point at entries it does not have. Cache keys name the source file's inode and
- * times, which a copy never matches, so the copy makes its own.
+ * would only point at entries it does not have. Cache keys name the source file's path, inode and
+ * times, which a copy never matches: `findCache` brings the entries the copy can use.
  */
 const LEFT_BEHIND = new Set([
   ".hyperframes",
@@ -100,15 +106,19 @@ const cannotClone = (error: unknown) =>
 type FileEntry = {
   kind: "file";
   path: string;
-  identity: string;
-  size: bigint;
-  mtimeMs: number;
+  info: BigIntStats;
   mode: number;
 };
 type Entry =
   | { kind: "directory"; path: string; mode: number }
   | { kind: "link"; path: string; target: string }
   | FileEntry;
+const fileEntry = (path: string, info: BigIntStats): FileEntry => ({
+  kind: "file",
+  path,
+  info,
+  mode: Number(info.mode & 0o777n),
+});
 
 /** "<name> copy", then "<name> copy 2" and on, within the 120 characters a project name allows. */
 export function copyName(name: string, taken: Iterable<string>) {
@@ -174,17 +184,7 @@ async function snapshot(root: string) {
   for await (const { path, absolute, info } of walk(root, skip)) {
     const mode = Number(info.mode & 0o777n);
     if (info.isDirectory()) entries.push({ kind: "directory", path, mode });
-    else if (info.isFile())
-      entries.push({
-        kind: "file",
-        path,
-        identity: sourceIdentity(info),
-        size: info.size,
-        mtimeMs:
-          Number(info.mtimeNs / 1_000_000n) +
-          Number(info.mtimeNs % 1_000_000n) / 1_000_000,
-        mode,
-      });
+    else if (info.isFile()) entries.push(fileEntry(path, info));
     else if (info.isSymbolicLink()) {
       if (isAbsolute(await readlink(absolute))) continue;
       const resolved = await realpath(absolute).catch(() => null);
@@ -233,8 +233,10 @@ async function rebaseMatteManifest(stage: string, entries: Entry[]) {
     if (
       !source ||
       !matchesMatteSource(matte, {
-        size: Number(source.size),
-        mtimeMs: source.mtimeMs,
+        size: Number(source.info.size),
+        mtimeMs:
+          Number(source.info.mtimeNs / 1_000_000n) +
+          Number(source.info.mtimeNs % 1_000_000n) / 1_000_000,
       }) ||
       (matte.file && !files.has(matte.file))
     ) {
@@ -263,6 +265,129 @@ async function rebaseMatteManifest(stage: string, entries: Entry[]) {
   await rename(partial, path);
 }
 
+type Carried = {
+  file: FileEntry;
+  cache: (typeof playbackCaches)[number];
+  /** The entry's folder, under the original's key until `rekeyCache` names it for the copy. */
+  folder: string;
+  files: FileEntry[];
+};
+
+/**
+ * The original's finished playback entries, a probe, piece plan, editing proxy and picture
+ * index, for each file in the copy, with their folders made in the stage. `copyLarge` copies
+ * their files, so the copy plays at once instead of encoding them again.
+ */
+async function findCache(root: string, stage: string, entries: Entry[]) {
+  const found: Carried[] = [];
+  // The media service refuses a linked `.cutroom`, so the copy's must be a real folder.
+  if (
+    !entries.some(
+      ({ kind, path }) => kind === "directory" && path === ".cutroom",
+    )
+  )
+    return found;
+  const folders = new Map<string, Promise<string | null>>();
+  const resolve = (folder: string) => {
+    let resolved = folders.get(folder);
+    if (!resolved) {
+      resolved = projectStatePath({ path: root }, folder).catch(
+        (error: unknown) => {
+          if (unavailableProjectFile(error)) return null;
+          throw error;
+        },
+      );
+      folders.set(folder, resolved);
+    }
+    return resolved;
+  };
+  for (const file of entries) {
+    if (file.kind !== "file") continue;
+    for (const cache of playbackCaches) {
+      const entry = playbackCacheEntry(cache, join(root, file.path), file.info);
+      const from = await resolve(entry.folder);
+      if (!from) continue;
+      const folder = `${entry.folder}/${entry.key}`;
+      const files = await entryFiles(
+        join(from, entry.key),
+        folder,
+        entry.files,
+      );
+      if (!files) continue;
+      await mkdir(join(stage, folder), { recursive: true });
+      found.push({ file, cache, folder, files });
+    }
+  }
+  return found;
+}
+
+/**
+ * A cache entry's files, or null unless all are there. Each is renamed into place whole when it
+ * is made, so a file that is there is complete.
+ */
+async function entryFiles(from: string, folder: string, names: string[]) {
+  const handle = await open(from, directoryFlags).catch((error: unknown) => {
+    if (hasCode(error, "ENOENT", "ENOTDIR", "ELOOP")) return null;
+    throw error;
+  });
+  if (!handle) return null;
+  try {
+    const pinned = pinnedDirectory(from, handle.fd);
+    const files: FileEntry[] = [];
+    for (const name of names) {
+      const info = await lstat(join(pinned, name), { bigint: true }).catch(
+        (error: unknown) => {
+          if (hasCode(error, "ENOENT")) return null;
+          throw error;
+        },
+      );
+      if (!info?.isFile()) return null;
+      files.push(fileEntry(`${folder}/${name}`, info));
+    }
+    return files;
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * The carried entries the copy can use: every file copied, and the file they were made from
+ * still as the walk saw it, so the copy holds those bytes. The others are removed.
+ */
+async function keptCache(
+  root: string,
+  stage: string,
+  found: Carried[],
+  dropped: Set<FileEntry>,
+) {
+  const kept: Carried[] = [];
+  for (const entry of found) {
+    const path = join(root, entry.file.path);
+    const now = await lstat(path, { bigint: true }).catch(() => null);
+    if (
+      now &&
+      mediaFingerprint(path, now) === mediaFingerprint(path, entry.file.info) &&
+      !entry.files.some((file) => dropped.has(file))
+    )
+      kept.push(entry);
+    else await rm(join(stage, entry.folder), { recursive: true, force: true });
+  }
+  return kept;
+}
+
+/** Renames carried entries to the keys of the copy's files once at `destination`. */
+async function rekeyCache(
+  stage: string,
+  destination: string,
+  carried: Carried[],
+) {
+  for (const { file, cache, folder } of carried) {
+    const info = await lstat(join(stage, file.path), { bigint: true });
+    const entry = playbackCacheEntry(cache, join(destination, file.path), info);
+    await rename(join(stage, folder), join(stage, entry.folder, entry.key));
+  }
+}
+
 const changed = (entry: FileEntry) =>
   new HttpError(
     409,
@@ -281,7 +406,8 @@ async function openSource(root: string, entry: FileEntry) {
     const info = await file.stat({ bigint: true });
     if (
       !info.isFile() ||
-      (!UNPINNED.has(entry.path) && sourceIdentity(info) !== entry.identity)
+      (!UNPINNED.has(entry.path) &&
+        sourceIdentity(info) !== sourceIdentity(entry.info))
     )
       throw changed(entry);
   };
@@ -339,6 +465,8 @@ async function cloneFile(
 /**
  * Large files: clones first, then byte copies after a free-space check, with progress. Never hard
  * links: an agent or tool rewriting a file in place in the copy must not change the original.
+ * `optional` files, the carried cache, give way instead of failing the copy: when one goes
+ * missing or changes, or there is space for the rest but not for them. Returns those dropped.
  */
 async function copyLarge(
   root: string,
@@ -346,15 +474,37 @@ async function copyLarge(
   files: FileEntry[],
   signal: AbortSignal,
   progress: (copied: number, total: number) => void,
+  optional: FileEntry[] = [],
 ) {
-  const copies: FileEntry[] = [];
-  for (const entry of files) {
+  const dropped = new Set<FileEntry>();
+  const isOptional = new Set(optional);
+  const attempt = async (entry: FileEntry, copy: () => Promise<void>) => {
+    try {
+      await copy();
+    } catch (error) {
+      const gone =
+        (error instanceof HttpError && error.status === 409) ||
+        hasCode(error, "ENOENT", "ENOTDIR", "ELOOP");
+      if (!isOptional.has(entry) || !gone || signal.aborted) throw error;
+      dropped.add(entry);
+      await rm(join(stage, entry.path), { force: true });
+    }
+  };
+  let copies: FileEntry[] = [];
+  for (const entry of [...files, ...optional]) {
     signal.throwIfAborted();
-    if (!(await cloneFile(root, stage, entry, "none"))) copies.push(entry);
+    await attempt(entry, async () => {
+      if (!(await cloneFile(root, stage, entry, "none"))) copies.push(entry);
+    });
   }
-  const total = copies.reduce((sum, { size }) => sum + size, 0n);
-  if (!total) return;
+  const bytes = () => copies.reduce((sum, { info }) => sum + info.size, 0n);
+  if (!bytes()) return dropped;
   const { bavail, bsize } = await statfs(stage, { bigint: true });
+  if (bytes() > bavail * bsize) {
+    for (const entry of copies) if (isOptional.has(entry)) dropped.add(entry);
+    copies = copies.filter((entry) => !dropped.has(entry));
+  }
+  const total = bytes();
   if (total > bavail * bsize)
     throw new HttpError(
       409,
@@ -365,34 +515,42 @@ async function copyLarge(
   progress(0, Number(total));
   for (const entry of copies) {
     signal.throwIfAborted();
-    const { file, unchanged } = await openSource(root, entry);
     const start = copied;
-    try {
-      const to = join(stage, entry.path);
-      await pipeline(
-        file.createReadStream({ autoClose: false, highWaterMark: 1024 * 1024 }),
-        async function* (chunks: AsyncIterable<Buffer>) {
-          for await (const chunk of chunks) {
-            copied += chunk.length;
-            if (copied - start > Number(entry.size)) throw changed(entry);
-            if (performance.now() - reported >= 75) {
-              reported = performance.now();
-              progress(copied, Number(total));
+    await attempt(entry, async () => {
+      const { file, unchanged } = await openSource(root, entry);
+      try {
+        const to = join(stage, entry.path);
+        await pipeline(
+          file.createReadStream({
+            autoClose: false,
+            highWaterMark: 1024 * 1024,
+          }),
+          async function* (chunks: AsyncIterable<Buffer>) {
+            for await (const chunk of chunks) {
+              copied += chunk.length;
+              if (copied - start > Number(entry.info.size))
+                throw changed(entry);
+              if (performance.now() - reported >= 75) {
+                reported = performance.now();
+                progress(copied, Number(total));
+              }
+              yield chunk;
             }
-            yield chunk;
-          }
-        },
-        createWriteStream(to, { flags: "wx", mode: 0o600 }),
-        { signal },
-      );
-      if (copied - start !== Number(entry.size)) throw changed(entry);
-      await unchanged();
-      await chmod(to, entry.mode);
-    } finally {
-      await file.close();
-    }
+          },
+          createWriteStream(to, { flags: "wx", mode: 0o600 }),
+          { signal },
+        );
+        if (copied - start !== Number(entry.info.size)) throw changed(entry);
+        await unchanged();
+        await chmod(to, entry.mode);
+      } finally {
+        await file.close();
+      }
+    });
+    copied = start + Number(entry.info.size);
   }
   progress(copied, Number(total));
+  return dropped;
 }
 
 /**
@@ -578,7 +736,7 @@ export function createDuplicateRoutes(
               relative(dirname(entry.path), entry.target) || ".",
               to,
             );
-          else if (entry.size <= SMALL_BYTES || UNPINNED.has(entry.path))
+          else if (entry.info.size <= SMALL_BYTES || UNPINNED.has(entry.path))
             await cloneFile(source, stage, entry, "copy");
           else later.push(entry);
         }
@@ -594,8 +752,9 @@ export function createDuplicateRoutes(
 
     void (async () => {
       try {
-        await onCopyQueue(() =>
-          copyLarge(
+        const carried = await onCopyQueue(async () => {
+          const found = await findCache(root, stage, snapshotCopy.entries);
+          const dropped = await copyLarge(
             root,
             stage,
             snapshotCopy.large,
@@ -607,8 +766,10 @@ export function createDuplicateRoutes(
                   progress: copied / total,
                 });
             },
-          ),
-        );
+            found.flatMap(({ files }) => files),
+          );
+          return keptCache(root, stage, found, dropped);
+        });
         signal.throwIfAborted();
         await rebaseMatteManifest(stage, snapshotCopy.entries);
         signal.throwIfAborted();
@@ -630,12 +791,14 @@ export function createDuplicateRoutes(
             },
           );
         }
-        await rename(staging!, destination).catch(async (error: unknown) => {
-          await rmdir(destination).catch((cleanup: unknown) =>
-            console.warn(`Could not remove ${destination}:`, cleanup),
-          );
-          throw error;
-        });
+        await rekeyCache(stage, destination, carried)
+          .then(() => rename(staging!, destination))
+          .catch(async (error: unknown) => {
+            await rmdir(destination).catch((cleanup: unknown) =>
+              console.warn(`Could not remove ${destination}:`, cleanup),
+            );
+            throw error;
+          });
         // Listed only once complete and named. The marker stays until then.
         let copy: Project;
         try {
