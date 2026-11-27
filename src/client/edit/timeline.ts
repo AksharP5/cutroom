@@ -45,6 +45,7 @@ import {
   outsideChanges,
   outsideMessage,
   overwriteFeedback,
+  rangeFeedback,
   rippleFeedback,
 } from "./feedback";
 import { editLabel } from "../../shared/timeline/labels";
@@ -633,6 +634,7 @@ function name(commands: Command[], timeline: Timeline, composition: string) {
       command.type !== "trim" &&
       command.type !== "trimPlayhead" &&
       command.type !== "remove" &&
+      command.type !== "removeRange" &&
       command.type !== "move"
     ) {
       current = apply(current, command);
@@ -1248,6 +1250,7 @@ export async function editTimeline(
     ) => {
       feedback =
         overwriteFeedback(before, after, commands) ||
+        rangeFeedback(before, commands) ||
         rippleFeedback(before, after, commands, clipboards);
     };
     updateFeedback(commands, view.timeline, timeline);

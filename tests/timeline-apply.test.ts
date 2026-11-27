@@ -2107,6 +2107,80 @@ test("closeGap closes a gap on every auto-select track and keeps sound in sync",
   ).toBe("Close the 1 s gap on V1 at 00:00:01:00");
 });
 
+test("removeRange takes a range off the auto-select tracks, as In and Out with nothing selected", () => {
+  const music = clip("music", 2, 0, 90, {
+    kind: "audio",
+    hasAudio: true,
+    src: "music.wav",
+    mediaStart: 0,
+    sourceDuration: 10,
+  });
+  const lowerThird = clip("lower-third", 3, 0, 90, { mediaStart: null });
+  const state = timeline(
+    [...talk("a", 0, 90, 0), music, lowerThird],
+    [...avTracks, { index: 2, kind: "audio" }, { index: 3, locked: true }],
+  );
+  // A pause from 1 s to 1.5 s.
+  const rippled = run(state, {
+    type: "removeRange",
+    from: 30,
+    to: 45,
+    ripple: true,
+  });
+  expect(positions(rippled)).toEqual({
+    a: [0, 0, 30],
+    "a-2": [0, 30, 45],
+    "a-sound": [1, 0, 30],
+    "a-sound-2": [1, 30, 45],
+    music: [2, 0, 30],
+    "music-2": [2, 30, 45],
+    "lower-third": [3, 0, 90],
+  });
+  // The words after the pause follow straight on, in sync with their sound.
+  const after = rippled.clips.filter((item) => item.start === 30);
+  expect(after.map((item) => item.mediaStart)).toEqual([1.5, 1.5, 1.5]);
+  expect(new Set(after.map((item) => item.link)).size).toBe(2);
+
+  const lifted = run(state, {
+    type: "removeRange",
+    from: 30,
+    to: 45,
+    ripple: false,
+  });
+  expect(positions(lifted)).toMatchObject({
+    "a-2": [0, 45, 45],
+    "music-2": [2, 45, 45],
+    "lower-third": [3, 0, 90],
+  });
+
+  // Music with auto-select off stays whole, and agents cut it too, naming the track.
+  const off = timeline(state.clips, [
+    ...avTracks,
+    { index: 2, kind: "audio", autoSelect: false, name: "Music" },
+    { index: 3, locked: true },
+  ]);
+  const command = CommandSchema.parse({
+    type: "removeRange",
+    from: 30,
+    to: 45,
+    ripple: true,
+  });
+  expect(positions(run(off, command)).music).toEqual([2, 0, 90]);
+  const cuts: [number, string, number][] = [];
+  const agent = applyAll(off, [command], {
+    newId: countingIds,
+    onRippleCut: (track, name, frames) => cuts.push([track, name, frames]),
+  });
+  expect(positions(agent)["music-2"]).toEqual([2, 30, 45]);
+  expect(cuts).toEqual([[2, "Music", 15]]);
+  expect(editLabel([command], state, "", "pending")).toBe(
+    "Ripple delete 00:00:01:00 to 00:00:01:15",
+  );
+  expect(() =>
+    run(state, { type: "removeRange", from: 45, to: 45, ripple: true }),
+  ).toThrow("The range must end after it starts.");
+});
+
 test("closeGap refuses what Resolve refuses: a clip in the gap, a locked track, and no gap", () => {
   const music = clip("music", 2, 20, 50, {
     kind: "audio",

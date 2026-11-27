@@ -195,6 +195,10 @@ export function editLabel(
         return pending
           ? `${command.ripple ? "Ripple delete" : "Lift"} ${target(command.clipIds)}`
           : `${command.ripple ? "Ripple deleted" : "Lifted"} ${named ? target(command.clipIds) : "clips"}`;
+      case "removeRange":
+        return pending
+          ? `${command.ripple ? "Ripple delete" : "Lift"} ${time(command.from)} to ${time(command.to)}`
+          : `${command.ripple ? "Ripple deleted" : "Lifted"} ${span(command.to - command.from)} at ${time(command.from)}`;
       case "freeze":
         if (command.mode === "replace")
           return `${pending ? "Hold" : "Held"} ${named ? target([command.clipId]) : "the clip"} on the frame at ${time(command.at)}`;

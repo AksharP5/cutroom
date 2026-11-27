@@ -12,6 +12,7 @@ import {
   outsideChanges,
   outsideMessage,
   overwriteFeedback,
+  rangeFeedback,
   rippleFeedback,
 } from "../src/client/edit/feedback";
 import { addStarterClips } from "./starter-clips";
@@ -381,4 +382,22 @@ test("outside notices retain the caller name", () => {
   expect(outsideMessage(change.changes, new Set([change.actor]))).toBe(
     "Checkpoint moved 1 clip.",
   );
+});
+
+test("a range delete names the tracks it cut besides the picture and its sound", () => {
+  const talk =
+    '<video id="talk" src="talk.mp4" data-link="lk" data-start="0" data-duration="10" data-track-index="0"></video>' +
+    '<audio id="talk-sound" src="talk.mp4" data-link="lk" data-start="0" data-duration="10" data-track-index="1"></audio>';
+  const music =
+    '<audio id="music" src="music.wav" data-start="0" data-duration="10" data-track-index="2"></audio>';
+  const pause = [
+    CommandSchema.parse({
+      type: "removeRange",
+      from: 30,
+      to: 45,
+      ripple: true,
+    }),
+  ];
+  expect(rangeFeedback(parsed(talk), pause)).toBe("");
+  expect(rangeFeedback(parsed(talk + music), pause)).toBe("Also cut A2.");
 });

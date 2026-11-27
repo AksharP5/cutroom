@@ -497,6 +497,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         command.type === "trim" ||
         command.type === "trimPlayhead" ||
         command.type === "remove" ||
+        command.type === "removeRange" ||
         command.type === "move"
         ? (command.ids ?? {})
         : {},
@@ -961,6 +962,39 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           !!report,
         );
       }
+      assertRippleSync(timeline, next, tracks, copies);
+      return { ...timeline, clips: next };
+    }
+    case "removeRange": {
+      const { from, to } = command;
+      if (to <= from)
+        throw new TimelineError(
+          "out_of_bounds",
+          "The range must end after it starts.",
+        );
+      const tracks = rangeTracks(timeline, command.ripple, !!batch.onRippleCut);
+      if (!command.ripple) {
+        let next = clips;
+        for (const track of tracks)
+          next = clearRange(next, track, from, to, fps, mint);
+        return { ...timeline, clips: next };
+      }
+      const report = rippleObserver(
+        timeline,
+        [...rangeTracks(timeline, false)],
+        batch.onRippleCut,
+      );
+      reportRemovedTime(clips, tracks, () => from, to - from, report);
+      const next = removeTime(
+        clips,
+        tracks,
+        () => from,
+        to - from,
+        timeline,
+        mint,
+        undefined,
+        !!report,
+      );
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
@@ -2843,6 +2877,21 @@ function skipAutoClips(
   return skipped;
 }
 
+/**
+ * The tracks a range delete cuts, as Resolve's Delete with In and Out marked: unlocked tracks with
+ * auto-select on. An agent's ripple cuts every unlocked track, to keep them in sync.
+ */
+export function rangeTracks(
+  timeline: Timeline,
+  ripple: boolean,
+  agent = false,
+): Set<number> {
+  const own = timeline.tracks
+    .filter((track) => track.autoSelect && !track.locked)
+    .map((track) => track.index);
+  return ripple ? rippleTracks(timeline, own, agent) : new Set(own);
+}
+
 /** Owner edits follow auto-select. Agent ripples reach all unlocked tracks. */
 function rippleTracks(
   timeline: Timeline,
@@ -2954,7 +3003,7 @@ function shiftAfter(
 }
 
 /** A track as its header names it: V1 for the first video track, A2 for the second audio one. */
-function trackLabel(timeline: Timeline, index: number) {
+export function trackLabel(timeline: Timeline, index: number) {
   const kind = timeline.tracks.find((track) => track.index === index)!.kind;
   const number = timeline.tracks.filter(
     (track) => track.kind === kind && track.index <= index,

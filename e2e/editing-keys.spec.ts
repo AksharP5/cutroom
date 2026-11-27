@@ -162,6 +162,38 @@ test("Q, W, E and Shift+X cut a sequence, each one undo step", async ({
   }
 });
 
+test("I, O and Shift+X with nothing selected ripple delete the range in one undo step", async ({
+  page,
+  request,
+}) => {
+  const { clips, read, seek } = await open(page, request, "Range delete");
+  const initial = await clips();
+  await seek("0200");
+  await page.keyboard.press("i");
+  await seek("0414");
+  await page.keyboard.press("o");
+  await expect
+    .poll(async () => (await read()).timeline.range)
+    .toEqual({
+      in: 60,
+      out: 135,
+    });
+  await page.keyboard.press("Shift+X");
+  await expect.poll(clips).toEqual([
+    ["shot-1", 0, 60],
+    ["shot-2", 60, 45],
+    ["shot-3", 105, 90],
+    ["shot-4", 195, 90],
+  ]);
+  expect((await read()).timeline.range).toEqual({ in: null, out: null });
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:02:00",
+  );
+  await page.keyboard.press("Control+z");
+  await expect.poll(clips).toEqual(initial);
+  expect((await read()).timeline.range).toEqual({ in: 60, out: 135 });
+});
+
 test("Q on a later shot parks at its start before the server answers and preserves a later seek", async ({
   page,
   request,

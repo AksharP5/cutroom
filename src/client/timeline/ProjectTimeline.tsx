@@ -16,7 +16,7 @@ import {
 } from "../../shared/timeline/tracks";
 import { addTitleCommands } from "../edit/addTitle";
 import { addLayerCommands } from "../edit/regionCommands";
-import { addTransition, editKeys, trimmedPlayhead } from "../edit/keys";
+import { addTransition, editKeys, editedPlayhead } from "../edit/keys";
 import { useTextEdit } from "../edit/preview";
 import { showSource, useSource } from "../edit/source";
 import {
@@ -191,7 +191,7 @@ export function ProjectTimeline({
           (current) => commands(current, target),
           undefined,
           (next, built) => {
-            const frame = trimmedPlayhead(next, built);
+            const frame = editedPlayhead(next, built);
             if (frame === null) return;
             saved = transport.follow(frame);
             // A trim at the end shortens the timeline, and the transport parks on its last frame.

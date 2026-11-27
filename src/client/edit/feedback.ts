@@ -6,7 +6,12 @@ import type {
 } from "../../shared/timeline/schema";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { clipName } from "../../shared/timeline/labels";
-import { gapAt } from "../../shared/timeline/apply";
+import {
+  clipEnd,
+  gapAt,
+  rangeTracks,
+  trackLabel,
+} from "../../shared/timeline/apply";
 
 /**
  * Names what an overwrite took. A clip replaced whole is always named. One that lost only part
@@ -52,6 +57,40 @@ export function overwriteFeedback(
       ? names.join(" and ")
       : `${names[0]} and ${names.length - 1} others`;
   return `Replaced ${detail}.`;
+}
+
+/**
+ * Names the tracks a range delete cut besides the picture and the sound linked to it, such as a
+ * music bed, since those are easy to miss. Cutting only the picture and its sound is silent.
+ */
+export function rangeFeedback(before: Timeline, commands: readonly Command[]) {
+  const names = new Set<string>();
+  for (const command of commands) {
+    if (command.type !== "removeRange") continue;
+    const tracks = rangeTracks(before, command.ripple);
+    const cut = before.clips.filter(
+      (clip) =>
+        tracks.has(clip.track) &&
+        clip.start < command.to &&
+        clipEnd(clip) > command.from,
+    );
+    const kind = (index: number) =>
+      before.tracks.find((track) => track.index === index)?.kind;
+    const pictures = new Set(
+      cut.flatMap((clip) =>
+        kind(clip.track) === "video" && clip.link ? [clip.link] : [],
+      ),
+    );
+    for (const clip of cut) {
+      if (kind(clip.track) === "video") continue;
+      if (clip.link && pictures.has(clip.link)) continue;
+      const track = before.tracks.find((track) => track.index === clip.track);
+      if (track) names.add(track.name || trackLabel(before, track.index));
+    }
+  }
+  if (!names.size) return "";
+  const list = [...names];
+  return `Also cut ${list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list.at(-1)}` : list[0]}.`;
 }
 
 /** Report actual ripple consequences. Same-track followers alone are an obvious, silent edit. */

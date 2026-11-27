@@ -70,6 +70,7 @@ export function editAnchors(
         type === "setTransitions" ||
         type === "paste" ||
         type === "remove" ||
+        type === "removeRange" ||
         type === "trim" ||
         type === "trimPlayhead" ||
         type === "roll" ||
