@@ -43,12 +43,6 @@ export function previewRuntimeScript() {
       "Cutroom's scene variable adapter no longer matches HyperFrames 0.9.26. Review the runtime adapter before upgrading.",
     );
   const runtimeChanges = [
-    // Capture reads one exact source picture at a time. Only the live editor needs an
-    // editing proxy of the full recording.
-    [
-      'function Aa(e,t=null,n="reactive",r){if(Vt.has(e)',
-      'function Aa(e,t=null,n="reactive",r){if(rl(document)&&t?.browserHostile)return;if(Vt.has(e)',
-    ],
     // At rest the bridge polls for duration changes. Each element.getAnimations() can
     // flush style across the composition, even when the element is far from the playhead.
     // Take one animation snapshot for both adapters, then look up effects by their target.
@@ -94,9 +88,11 @@ export function previewRuntimeScript() {
     ["d=nP().then(g=>pP(e,c,g))", "d=pP(e,c,null)"],
     // The clip can leave the window or be parked by the footage pipeline while a proxy
     // request is pending. Use the same preload hint for initial swaps and quality changes.
+    // Capture reads one exact source picture at a time. Only the live editor needs an
+    // editing proxy of the full recording.
     [
       'function Aa(e,t=null,n="reactive",r){if(Vt.has(e)',
-      'function cutroomCanProxy(e){return e.preload!=="none"&&!window.__cutroomParkedMedia?.has(e)}function Aa(e,t=null,n="reactive",r){if(!cutroomCanProxy(e)||Vt.has(e)',
+      'function cutroomCanProxy(e){return e.preload!=="none"&&!window.__cutroomParkedMedia?.has(e)}function Aa(e,t=null,n="reactive",r){if(rl(document)&&t?.browserHostile)return;if(!cutroomCanProxy(e)||Vt.has(e)',
     ],
     [
       'live:()=>e.isConnected&&e.getAttribute("src")===a&&(!r||cn===l)',
@@ -241,8 +237,15 @@ export function previewRuntimeScript() {
       seed,
       '||o.unshift({kind:"set",time:n.scheduledAt,value:(r??_h)(rn(e,n.elapsed,t))}),i?.kind==="ramp"&&e.points[0].t>n.elapsed&&o.splice(1,0,{kind:"ramp",time:n.scheduledAt+(e.points[0].t-n.elapsed)/n.rate,value:(r??_h)(e.points[0].v)}),o}',
     );
-  for (const [before, after] of [...runtimeChanges, ...auditionChanges])
+  // Each change must still find its text after the ones before it, or two changes to the
+  // same text would silently drop the later one.
+  for (const [before, after] of [...runtimeChanges, ...auditionChanges]) {
+    if (script.split(before).length !== 2)
+      throw new Error(
+        `Cutroom's runtime changes overlap near ${before.slice(0, 64)}.`,
+      );
     script = script.replace(before, after);
+  }
   // A mixer fader is heard while it moves, before anything is saved: a bus's fader gain, or a
   // trim after the master chain for Main. Automated faders report where their lane holds them.
   script = script.replace(
