@@ -96,6 +96,9 @@ export function previewRuntimeScript() {
       'live:()=>e.isConnected&&e.getAttribute("src")===a&&(!r||cn===l)',
       'live:()=>e.isConnected&&cutroomCanProxy(e)&&e.getAttribute("src")===a&&(!r||cn===l)',
     ],
+    // A request the clip no longer needs, as when the pipeline parks it, leaves "Preparing
+    // footage" at its last progress unless its copy stops counting.
+    ["if(!s()){OE(e),", "if(!s()){ar.delete(e)&&xm(),OE(e),"],
     [
       "function zE(e){if(!(dr(e)||!ve(e)))",
       "function zE(e){if(cutroomCanProxy(e)&&!(dr(e)||!ve(e)))",
