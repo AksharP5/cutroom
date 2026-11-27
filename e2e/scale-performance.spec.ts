@@ -232,18 +232,22 @@ for (const pipeline of [false, true]) {
       await expect.poll(historySize).toBe(1);
       const baseline = 1;
       const trims = 10;
+      // Settling is the wait for the last save after the last key: what an editor waits for
+      // once they stop pressing. Poll often enough to resolve it.
+      const settled = { timeout: 18_000, intervals: [50] };
       // A one-second step lands inside the next shot once W parks on the cut.
       const trimStart = Date.now();
+      let lastKey = trimStart;
       for (let index = 0; index < trims; index++) {
         await page.keyboard.press("Shift+ArrowRight");
         await page.keyboard.press("w");
+        lastKey = Date.now();
         await page.waitForTimeout(120);
       }
-      const keysMs = Date.now() - trimStart;
-      await expect
-        .poll(historySize, { timeout: 16_000 })
-        .toBe(baseline + trims);
+      const keysMs = lastKey - trimStart;
+      await expect.poll(historySize, settled).toBe(baseline + trims);
       const savedMs = Date.now() - trimStart;
+      const trimSettleMs = Date.now() - lastKey;
       const trimmedDurations = async () => {
         const response = await request.get(
           `/api/cutroom/projects/${project.id}/timeline?clipEdits=false`,
@@ -267,6 +271,7 @@ for (const pipeline of [false, true]) {
       ];
       expect(await trimmedDurations()).toEqual(trimmed);
       const historyMs: number[] = [];
+      const historySettleMs: number[] = [];
       for (const [key, expected] of [
         ["Control+z", baseline],
         ["Control+Shift+z", baseline + trims],
@@ -274,9 +279,11 @@ for (const pipeline of [false, true]) {
         const started = Date.now();
         for (let index = 0; index < trims; index++) {
           await page.keyboard.press(key);
+          lastKey = Date.now();
           await page.waitForTimeout(100);
         }
-        await expect.poll(historySize, { timeout: 18_000 }).toBe(expected);
+        await expect.poll(historySize, settled).toBe(expected);
+        historySettleMs.push(Date.now() - lastKey);
         if (key === "Control+z") await expect(redo).toBeEnabled();
         else await expect(redo).toBeDisabled();
         await expect(undo).toBeEnabled();
@@ -319,10 +326,23 @@ for (const pipeline of [false, true]) {
           playbackRates,
           trimKeysMs: keysMs,
           trimSavedMs: savedMs,
+          trimSettleMs,
           undoMs: historyMs[0],
           redoMs: historyMs[1],
+          undoSettleMs: historySettleMs[0],
+          redoSettleMs: historySettleMs[1],
         }),
       );
+      // When each edit parsed the document four times, a burst queued behind its own reads:
+      // the last W saved 2.4 to 4.3 s and the last Undo 3.9 to 5.5 s after the last key.
+      expect(trimSettleMs, "last W save after the last key, ms").toBeLessThan(
+        2000,
+      );
+      for (const [index, step] of ["undo", "redo"].entries())
+        expect(
+          historySettleMs[index]!,
+          `last ${step} after the last key, ms`,
+        ).toBeLessThan(2000);
     },
   );
 }
