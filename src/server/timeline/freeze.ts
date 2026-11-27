@@ -67,7 +67,7 @@ type FrozenFrame = Awaited<ReturnType<typeof prepareFrozenFrames>>[number];
  * The still of one source picture, by its ordinal: the decode seeks to the keyframe before it on
  * presentation time and checks every picture it counts, as export's extraction does.
  */
-async function extractPicture(
+export async function extractSourcePicture(
   ffmpeg: string,
   source: SourcePictures,
   ordinal: number,
@@ -131,7 +131,7 @@ async function extractPicture(
     return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   // A seek that missed the picture is decoded again from the start.
   if (!retry && decode.args.length)
-    return extractPicture(
+    return extractSourcePicture(
       ffmpeg,
       source,
       ordinal,
@@ -140,13 +140,10 @@ async function extractPicture(
       signal,
       true,
     );
-  throw new TimelineError(
-    "unsupported",
-    `Could not freeze this frame. ${
-      code === 0
-        ? "The source returned another picture."
-        : log.trim().split("\n").at(-1) || "The source returned no picture."
-    }`,
+  throw new Error(
+    code === 0
+      ? "The source returned another picture."
+      : log.trim().split("\n").at(-1) || "The source returned no picture.",
   );
 }
 
@@ -174,7 +171,20 @@ async function frozenPictures(input: FrozenFrame) {
       "There is no video picture on that frame yet.",
     );
   const read = (colour: string[]) =>
-    extractPicture(ffmpeg, source, Number(ordinal), metadata, colour, signal);
+    extractSourcePicture(
+      ffmpeg,
+      source,
+      Number(ordinal),
+      metadata,
+      colour,
+      signal,
+    ).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new TimelineError(
+        "unsupported",
+        `Could not freeze this frame. ${reason}`,
+      );
+    });
   const pictures = [{ path: frame.path, png: await read(preview) }];
   if (exportPath)
     pictures.push({ path: exportPath, png: await read(exported) });

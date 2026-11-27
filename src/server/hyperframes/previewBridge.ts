@@ -1673,6 +1673,10 @@ function installPreviewBridge(
   /** Videos a live update added, hidden until their first frame is held or they play. */
   const pendingVideos = new Set<HTMLVideoElement>();
   const FRAME_TIMEOUT = 8_000;
+  const capturePage =
+    document.querySelector(
+      'meta[name="hyperframes-studio-preview"][content="capture"]',
+    ) !== null;
   /** How long a paused picture waits for a source's picture index before holding without it. */
   const PICTURES_WAIT_MS = 400;
   /** How long a moving playhead must rest before the sources decode its exact frame. */
@@ -1891,7 +1895,10 @@ function installPreviewBridge(
     );
   };
   /** Parked media, and whether parking released media the element had loaded. */
-  const parked = new Map<HTMLMediaElement, { released: boolean }>();
+  const parked = new Map<
+    HTMLMediaElement,
+    { released: boolean; preload: HTMLMediaElement["preload"] }
+  >();
   win.__cutroomParkedMedia = parked;
   // Chromium can report HAVE_ENOUGH_DATA even for a WAV with no PCM payload.
   const invalidRamp = (audio: HTMLAudioElement, duration: number) =>
@@ -1990,7 +1997,8 @@ function installPreviewBridge(
       media.pause();
       media.srcObject = new MediaStream();
     }
-    parked.set(media, { released });
+    const entry = { released, preload: media.preload };
+    parked.set(media, entry);
     if (media instanceof HTMLVideoElement) {
       if (holds.has(media)) removeHold(media);
       const grading = win.__hf?.colorGrading;
@@ -2010,7 +2018,14 @@ function installPreviewBridge(
       networkState: value(() => HTMLMediaElement.NETWORK_IDLE),
       seeking: value(() => false),
       paused: value(() => paused),
-      preload: { configurable: true, get: () => "none", set: () => {} },
+      // Keep the runtime's preload window up to date without opening a decoder.
+      preload: {
+        configurable: true,
+        get: () => entry.preload,
+        set: (preload: HTMLMediaElement["preload"]) => {
+          entry.preload = preload;
+        },
+      },
       play: {
         configurable: true,
         value: () => {
@@ -2039,11 +2054,11 @@ function installPreviewBridge(
     const paused = media.paused;
     parked.delete(media);
     for (const name of PARKED) Reflect.deleteProperty(media, name);
+    media.preload = load ? "auto" : entry.preload;
     if (entry.released) media.srcObject = null;
     // Load where the runtime will want it, its media start for a clip still to come, so the
     // cut never waits for a seek.
     if (load) {
-      media.preload = "auto";
       const time = expectedMediaTime(media);
       if (time !== null) mediaTime.set.call(media, time);
     } else if (media instanceof HTMLVideoElement && media.isConnected && paused)
@@ -2215,7 +2230,10 @@ function installPreviewBridge(
         const confirmed = sample ? decoded?.confirmed : undefined;
         if (
           (sample && Math.abs(frame.timestamp - sample.start * 1e6) > 2) ||
+          // Capture's source index already proved this picture. The compositor's callback
+          // can still report the previous frame when a headless page reuses a decoder.
           (decoded &&
+            !(capturePage && picture) &&
             !(
               presented !== undefined &&
               Math.abs(frame.timestamp - presented) <= 1
@@ -2280,11 +2298,13 @@ function installPreviewBridge(
       if (canvas.style.transition !== "none") canvas.style.transition = "none";
       // Keep the source aspect ratio so the browser applies object-fit and
       // object-position exactly as it does to the replaced video element.
-      let a = video.videoWidth;
-      let b = video.videoHeight;
+      const sourceWidth = video.videoWidth || frame.displayWidth;
+      const sourceHeight = video.videoHeight || frame.displayHeight;
+      let a = sourceWidth;
+      let b = sourceHeight;
       while (b) [a, b] = [b, a % b];
-      const unitWidth = video.videoWidth / a;
-      const unitHeight = video.videoHeight / a;
+      const unitWidth = sourceWidth / a;
+      const unitHeight = sourceHeight / a;
       const scale = Math.min(
         a,
         Math.max(
@@ -2305,12 +2325,12 @@ function installPreviewBridge(
       const width = own
         ? frame.displayWidth
         : style.objectFit === "none"
-          ? video.videoWidth
+          ? sourceWidth
           : unitWidth * scale;
       const height = own
         ? frame.displayHeight
         : style.objectFit === "none"
-          ? video.videoHeight
+          ? sourceHeight
           : unitHeight * scale;
       if (canvas.width !== width) canvas.width = width;
       if (canvas.height !== height) canvas.height = height;
@@ -2338,14 +2358,7 @@ function installPreviewBridge(
       }
     }
   };
-  /** Videos the composition shows, read without this bridge's suppression. */
-  /**
-   * A video in a codec this browser cannot decode, such as HEVC or ProRes, until HyperFrames'
-   * runtime swaps in the editing proxy the server is making. Until then it plays only its sound,
-   * or fails to load, and has no picture to wait for.
-   */
-  const awaitingProxy = (video: HTMLVideoElement) => {
-    if (!video.error && (!video.readyState || video.videoWidth)) return false;
+  const browserHostile = (video: HTMLVideoElement) => {
     const path = decodeURIComponent(
       new URL(video.currentSrc || video.src, location.href).pathname,
     );
@@ -2353,6 +2366,12 @@ function installPreviewBridge(
       ([media, facts]) => facts.browserHostile && path.endsWith(media),
     );
   };
+  /** The editor can carry on while an unsupported source's editing proxy is made. */
+  const awaitingProxy = (video: HTMLVideoElement) =>
+    !!(video.error || (video.readyState && !video.videoWidth)) &&
+    browserHostile(video);
+  const captureFromSource = (video: HTMLVideoElement) =>
+    capturePage && browserHostile(video) && scrubPath(video) !== null;
   document.addEventListener(
     "loadedmetadata",
     (event) => {
@@ -2386,7 +2405,7 @@ function installPreviewBridge(
           checkOpacity: true,
           checkVisibilityCSS: true,
         }) &&
-        !awaitingProxy(video),
+        (captureFromSource(video) || !awaitingProxy(video)),
     );
     for (const video of hidden) video.setAttribute("data-cutroom-held", "");
     return videos;
@@ -2456,10 +2475,18 @@ function installPreviewBridge(
     try {
       await Promise.race([
         (async () => {
-          await waitForSeek();
+          // The capture draws unsupported local sources from their exact indexed picture.
+          // Waiting for the runtime's pending whole-video proxy would hold every frame behind it.
+          await waitForSeek(capturePage ? { videoFrames: false } : undefined);
           for (;;) {
             if (!current()) return;
-            const videos = visibleVideos();
+            const showing = visibleVideos();
+            const originals = capturePage
+              ? showing.filter(captureFromSource)
+              : [];
+            const videos = originals.length
+              ? showing.filter((video) => !originals.includes(video))
+              : showing;
             const failed = videos.find((video) => video.error);
             if (failed)
               throw new Error(
@@ -2481,10 +2508,10 @@ function installPreviewBridge(
             if (!current()) return;
             // The footage pipeline can take a video while its index loads; it no longer shows
             // natively, so look again at which videos do before checking where they rest.
-            const showing = visibleVideos();
+            const nowShowing = visibleVideos();
             if (
-              showing.length !== videos.length ||
-              showing.some((video, index) => video !== videos[index])
+              nowShowing.length !== showing.length ||
+              nowShowing.some((video, index) => video !== showing[index])
             )
               continue;
             // An index that just came moved its videos; their frames are on the way.
@@ -2596,8 +2623,20 @@ function installPreviewBridge(
               continue;
             }
             try {
+              if (originals.length) {
+                const captured = await Promise.allSettled(
+                  originals.map(async (video) => {
+                    frames.set(video, await captureSourceFrame(video));
+                  }),
+                );
+                const failed = captured.find(
+                  (result) => result.status === "rejected",
+                );
+                if (failed) throw failed.reason;
+              }
+              if (!current()) return;
               for (const [video] of holds) {
-                if (!videos.includes(video)) removeHold(video);
+                if (!showing.includes(video)) removeHold(video);
               }
               for (const [video, frame] of frames) {
                 showHold(video, frame, false);
@@ -2972,6 +3011,30 @@ function installPreviewBridge(
         : (sample.start + sample.next) / 2 - lead;
     return Math.max(sample.start + lead, Math.min(target, firstHalf));
   };
+  const captureSourceFrame = async (video: HTMLVideoElement) => {
+    const path = scrubPath(video);
+    const source = path ? await loadPictures(video) : null;
+    const rest = restingPicture(video);
+    const ordinal =
+      rest?.ordinal ??
+      (source && pictures.timePicture(source.index, mediaTime.get.call(video)));
+    if (!path || ordinal === null)
+      throw new Error(
+        "The preview could not find the source picture to capture.",
+      );
+    const query = new URLSearchParams({ path, ordinal: String(ordinal) });
+    const response = await fetch(`${capability}capture-picture?${query}`, {
+      signal: AbortSignal.timeout(FRAME_TIMEOUT),
+    });
+    if (!response.ok)
+      throw new Error(`Could not capture ${path}: ${await response.text()}`);
+    const bitmap = await createImageBitmap(await response.blob());
+    try {
+      return new VideoFrame(bitmap, { timestamp: 0 });
+    } finally {
+      bitmap.close();
+    }
+  };
   const clampMediaTime = (media: HTMLMediaElement, target: number) =>
     Math.min(
       target,
@@ -3220,11 +3283,18 @@ function installPreviewBridge(
     win.__player?.pause();
     seekRuntime(time);
     win.gsap?.ticker?.tick?.();
-    await refreshPicture();
-    // Repaint the native video after the exact frame is held. Screenshots use its
-    // colour conversion, which can differ from canvas for untagged sources.
+    let drawing = refreshPicture();
+    for (;;) {
+      await drawing;
+      if (drawing === picture) break;
+      drawing = picture;
+    }
+    // Screenshots use Chromium's native colour conversion for videos it can decode.
+    // Keep the indexed original in place for a source Chromium cannot decode.
     await paint();
-    for (const video of holds.keys()) removeHold(video);
+    for (const video of holds.keys()) {
+      if (!captureFromSource(video)) removeHold(video);
+    }
   };
   const releasePlaying = (video: HTMLVideoElement) => {
     const hold = holds.get(video);

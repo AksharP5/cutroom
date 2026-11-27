@@ -111,6 +111,7 @@ import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { createRenderIndex } from "./renders";
 import { renderCacheConfig } from "./renderCache";
 import type { ExportRequest } from "./jobs";
+import { captureStill } from "./captureStill";
 import { loadedMedia, timedCaptureMedia } from "./captureWorkload";
 import { measureLoudness } from "../timeline/audio";
 import { probeNvenc } from "./nvenc";
@@ -1353,6 +1354,20 @@ export function createHyperframesApi(
       headers.set("X-Content-Type-Options", "nosniff");
       headers.set("Referrer-Policy", "no-referrer");
     };
+    if (path === "capture-picture") {
+      const response = await captureStill(
+        await store.get(projectId),
+        c.req.query(),
+        c.req.raw.signal,
+      ).catch(
+        (error: unknown) =>
+          new Response(error instanceof Error ? error.message : String(error), {
+            status: error instanceof HttpError ? error.status : 422,
+          }),
+      );
+      isolate(response.headers);
+      return response;
+    }
     if (path === "frames") {
       const response = await framesOf(
         await store.get(projectId),
@@ -2085,17 +2100,18 @@ export function createHyperframesApi(
   });
   api.get("/projects/:id/history", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const history = await store.history(project);
+    const history = await store.historyIfAvailable(project);
     const {
       nextUndo: back,
       nextRedo: forward,
       entries,
+      historyUnavailable,
     } = await historySummary(
       project,
-      history.list(),
+      history?.list(),
       historyActor(reviews, c, project).who,
     );
-    return c.json({ entries, back, forward });
+    return c.json({ entries, back, forward, historyUnavailable });
   });
   api.post("/projects/:id/history/checkpoint", async (c) => {
     const project = await store.get(c.req.param("id"));

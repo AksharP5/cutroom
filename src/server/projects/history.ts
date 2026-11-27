@@ -38,6 +38,7 @@ import { mediaRemoveLabel } from "./mediaTrash";
 import { projectPath, projectWritePath } from "./path";
 import { readHistorySkips, recordHistorySkip } from "./historySkips";
 import type { ReviewService } from "./review";
+import { HISTORY_UNAVAILABLE } from "./store";
 
 export const HistoryRequestSchema = z.strictObject({
   entryId: z.string().min(1).max(128).optional(),
@@ -178,10 +179,20 @@ export function historyCandidate(
 
 export async function historySummary(
   project: Project,
-  entries: readonly Entry[],
+  entries: readonly Entry[] | undefined,
   who: HistoryWho,
   page?: z.output<typeof HistoryPageSchema>,
 ) {
+  if (!entries)
+    return {
+      historyUnavailable: HISTORY_UNAVAILABLE,
+      entries: [],
+      canUndo: false,
+      canRedo: false,
+      nextUndo: null,
+      nextRedo: null,
+      nextBefore: page ? null : undefined,
+    };
   const end = page?.before
     ? entries.findIndex(({ id }) => id === page.before)
     : entries.length;

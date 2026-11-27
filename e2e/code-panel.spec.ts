@@ -1,10 +1,12 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
 import type { APIRequestContext, Page } from "@playwright/test";
+import { openProjectHistory } from "../src/server/history/projectHistory";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
 
 /** Three cards far enough apart that showing the last one scrolls the source. */
@@ -53,6 +55,87 @@ async function find(
   await page.keyboard.press("Enter");
   await page.keyboard.press("Escape");
 }
+
+test("an unreadable history log leaves the editor open and source saves working", async ({
+  page,
+  request,
+}) => {
+  test.skip(process.platform === "win32" || process.getuid?.() === 0);
+  const { project, index } = await cardsProject(request);
+  const historyRoot = resolve(
+    process.env.CUTROOM_E2E_DIR ?? ".cutroom-dev/e2e",
+    "data",
+    "history",
+  );
+  const prepared = await openProjectHistory({
+    projectDir: project.path,
+    historyRoot,
+  });
+  await prepared.close();
+  const log = join(historyRoot, prepared.projectId, "log.jsonl");
+  const originalLog = await readFile(log, "utf8");
+  const originalSource = await readFile(index, "utf8");
+  const route = `/api/cutroom/projects/${project.id}`;
+  await chmod(log, 0o000);
+  try {
+    const timeline = await request.get(`${route}/timeline`);
+    expect(timeline.status(), await timeline.text()).toBe(200);
+    const { revision } = TimelineViewSchema.parse(await timeline.json());
+    const edit = await request.post(`${route}/commands`, {
+      data: {
+        expectedRevision: revision,
+        commands: [{ type: "setTrack", index: 0, name: "Edited track" }],
+      },
+    });
+    expect(edit.status(), await edit.text()).toBe(200);
+    expect(
+      TimelineViewSchema.parse(await edit.json()).timeline.tracks,
+    ).toContainEqual(
+      expect.objectContaining({ index: 0, name: "Edited track" }),
+    );
+    const history = await request.get(`${route}/history`);
+    expect(history.status()).toBe(200);
+    expect(await history.json()).toMatchObject({
+      canUndo: false,
+      canRedo: false,
+      entries: [],
+    });
+    expect(
+      (await request.post(`${route}/history/undo`, { data: {} })).status(),
+    ).toBe(503);
+
+    await page.goto(`/#project/${project.id}`);
+    const code = await openCode(page);
+    await expect(
+      page.getByRole("status").filter({ hasText: "Undo is unavailable" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Undo", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Redo", exact: true }),
+    ).toBeDisabled();
+    await find(page, code, "Card one");
+    await page.keyboard.type("Card saved without Undo");
+    await expect(code.getByText("Edited", { exact: true })).toBeVisible();
+    await page.keyboard.press("Control+s");
+    await expect(code.getByText("Edited", { exact: true })).toHaveCount(0);
+    expect(await readFile(index, "utf8")).toBe(
+      originalSource.replace("Card one", "Card saved without Undo"),
+    );
+    await expect(
+      page.frameLocator("iframe[data-live]").locator("#card-1"),
+    ).toHaveText("Card saved without Undo");
+  } finally {
+    await chmod(log, 0o644);
+  }
+  expect(await readFile(log, "utf8")).toBe(originalLog);
+  await page.reload();
+  await expect(page.locator("[data-clip]")).toHaveCount(3);
+  await expect(
+    page.getByText("Undo is unavailable", { exact: true }),
+  ).toHaveCount(0);
+});
 
 test("the code panel saves an edit as one undo step, and the preview and buffer follow it", async ({
   page,

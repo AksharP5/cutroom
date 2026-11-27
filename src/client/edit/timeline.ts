@@ -84,6 +84,7 @@ let clipboardTask = Promise.resolve();
 
 const HistoryTargetSchema = z.object({ id: z.string(), label: z.string() });
 const HistorySchema = z.object({
+  historyUnavailable: z.string().optional(),
   canUndo: z.boolean(),
   canRedo: z.boolean(),
   nextUndo: HistoryTargetSchema.nullable(),
@@ -121,6 +122,7 @@ onEditWarning((projectId, warning) => {
     showToast(warning, null, { tone: "info" });
 });
 const historyControls = (projectId: string) =>
+  !confirmedHistory.historyUnavailable &&
   pending.some((edit) => edit.projectId === projectId)
     ? pendingEditHistory
     : confirmedHistory;
@@ -1422,6 +1424,12 @@ export function stepHistory(
   withEntries?: string[],
   skip?: true,
 ) {
+  if (
+    useTimeline.getState().projectId === projectId &&
+    confirmedHistory.historyUnavailable
+  )
+    return Promise.resolve(false);
+
   const nextId = (history: typeof emptyHistory) =>
     (step === "undo" ? history.nextUndo : history.nextRedo)?.id ?? null;
   // A press targets the history shown at that moment. Steps behind a local save or

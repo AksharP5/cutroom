@@ -640,7 +640,7 @@ export function createProjectRoutes(
   api.get("/projects/:id/history", async (c) => {
     const project = await store.get(c.req.param("id"));
     const { who } = historyActor(reviews, c, project);
-    const history = await store.history(project);
+    const history = await store.historyIfAvailable(project);
     const { limit, before } = c.req.query();
     const page =
       limit === undefined && before === undefined
@@ -649,7 +649,7 @@ export function createProjectRoutes(
             limit: limit === undefined ? undefined : Number(limit),
             before,
           });
-    return c.json(await historySummary(project, history.list(), who, page));
+    return c.json(await historySummary(project, history?.list(), who, page));
   });
   for (const direction of ["undo", "redo"] as const) {
     api.post(`/projects/:id/history/${direction}`, async (c) => {
