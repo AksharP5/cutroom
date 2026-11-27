@@ -11,6 +11,7 @@ import {
   readFileSync,
   writeSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { replaceFileAtomically } from "@hyperframes/core/atomic-file";
 
@@ -72,6 +73,7 @@ export interface HistoryLog {
   pins: Set<string>;
   keepsLedger?: boolean;
   unterminated?: true;
+  damagedSource?: Buffer;
 }
 
 export type LogRecord =
@@ -81,20 +83,30 @@ export type LogRecord =
 
 function parseRecord(line: string): LogRecord | null {
   try {
-    return JSON.parse(line);
+    const record: LogRecord | null = JSON.parse(line);
+    if (record?.type === "baseline") return record;
+    if (record?.type === "entry" && Array.isArray(record.entry?.files))
+      return record;
+    if (
+      record?.type === "pin" &&
+      typeof record.id === "string" &&
+      typeof record.pinned === "boolean"
+    )
+      return record;
+    return null;
   } catch {
     return null;
   }
 }
 
-/** `onUnreadable` hears of a damaged line; a torn last line (a crash mid-append) is expected and dropped quietly. */
+/** Untouched bytes are retained if a later rewrite would omit a damaged record. */
 export function readLog(
   file: string,
   onUnreadable: (line: number) => void,
 ): HistoryLog | null {
-  let text: string;
+  let source: Buffer;
   try {
-    text = readFileSync(file, "utf-8");
+    source = readFileSync(file);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     const detail = error instanceof Error ? error.message : String(error);
@@ -106,13 +118,36 @@ export function readLog(
     );
   }
   const log: HistoryLog = { baseline: new Map(), entries: [], pins: new Set() };
-  const lines = text.split("\n");
-  lines.forEach((line, index) => {
-    const record = line ? parseRecord(line) : null;
-    if (record) applyRecord(log, record);
-    else if (line && index < lines.length - 1) onUnreadable(index + 1);
-    if (line && index === lines.length - 1) log.unterminated = true;
-  });
+  const lines = source.toString("utf8").split("\n");
+  let hasBaseline = false;
+  const brokenBaseline = () =>
+    new HistoryLogReadError(
+      `The project history log has a damaged baseline: ${file}`,
+    );
+  for (const [index, line] of lines.entries()) {
+    if (!line.trim()) continue;
+    const record = parseRecord(line);
+    if (!hasBaseline && record?.type !== "baseline") throw brokenBaseline();
+    const atEnd = index === lines.length - 1;
+    if (atEnd) log.unterminated = true;
+    if (!record) {
+      log.damagedSource = source;
+      if (!atEnd) onUnreadable(index + 1);
+      continue;
+    }
+    if (record.type === "baseline") {
+      if (
+        !record.files ||
+        typeof record.files !== "object" ||
+        Array.isArray(record.files) ||
+        Object.values(record.files).some((hash) => typeof hash !== "string")
+      )
+        throw brokenBaseline();
+      hasBaseline = true;
+    }
+    applyRecord(log, record);
+  }
+  if (!hasBaseline) throw brokenBaseline();
   return log;
 }
 
@@ -161,11 +196,21 @@ export function writeLog(file: string, log: HistoryLog): void {
     ...[...log.pins].map((id) => ({ type: "pin" as const, id, pinned: true })),
   ];
   mkdirSync(dirname(file), { recursive: true });
+  if (log.damagedSource) {
+    let source = log.damagedSource;
+    try {
+      source = readFileSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    replaceFileAtomically(`${file}.damaged-${randomUUID()}`, source, 0o600);
+  }
   replaceFileAtomically(
     file,
     records.map((r) => `${JSON.stringify(r)}\n`).join(""),
     0o644,
   );
+  delete log.damagedSource;
 }
 
 function applyEntry(

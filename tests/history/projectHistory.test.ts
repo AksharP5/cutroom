@@ -1830,6 +1830,63 @@ describe("openProjectHistory", () => {
     ]);
   });
 
+  it.each(["a torn tail", "a legacy media ledger"])(
+    "backs up the damaged log before rewriting it for %s",
+    async (rewrite) => {
+      const { history, write, projectDir, historyRoot } = await project({
+        "index.html": "v1",
+      });
+      const edited = await change(history, you, "Second", () =>
+        write("index.html", "v2"),
+      );
+      await history.close();
+      const home = join(historyRoot, history.projectId);
+      const log = join(home, "log.jsonl");
+      if (rewrite === "a legacy media ledger") asWrittenBy("0.8.123", log);
+      const [baseline, ...entries] = readFileSync(log, "utf8").split("\n");
+      const damaged = Buffer.concat([
+        Buffer.from(`${baseline}\n`),
+        Buffer.from([0xff, 0x0a]),
+        Buffer.from(
+          entries.join("\n") +
+            (rewrite === "a torn tail" ? '{"type":"entry"' : ""),
+        ),
+      ]);
+      writeFileSync(log, damaged);
+
+      const reopened = await open(projectDir, historyRoot);
+      expect(reopened.list().map(({ id }) => id)).toEqual([edited.id]);
+      const backups = readdirSync(home).filter((name) =>
+        name.startsWith("log.jsonl.damaged-"),
+      );
+      expect(backups).toHaveLength(1);
+      expect(readFileSync(join(home, backups[0]!))).toEqual(damaged);
+      expect(readFileSync(log).includes(0xff)).toBe(false);
+    },
+  );
+
+  it.each(['{"type":"baseline"', '{"type":"baseline","files":[]}'])(
+    "refuses a corrupt starting baseline %s and keeps the original log",
+    async (broken) => {
+      const { history, write, projectDir, historyRoot } = await project({
+        "index.html": "v1",
+      });
+      await change(history, you, "Second", () => write("index.html", "v2"));
+      await history.close();
+      const log = join(historyRoot, history.projectId, "log.jsonl");
+      const original = readFileSync(log, "utf8");
+      const damaged = original.replace(/^[^\n]*/, broken);
+      writeFileSync(log, damaged);
+
+      await expect(open(projectDir, historyRoot)).rejects.toThrow(/baseline/i);
+      expect(readFileSync(log, "utf8")).toBe(damaged);
+      writeFileSync(log, original);
+      const repaired = await open(projectDir, historyRoot);
+      await repaired.restore(START, you);
+      expect(inside(projectDir, "index.html")).toBe("v1");
+    },
+  );
+
   it("refuses a history-id that is anything else, so a project cannot pick where history is written", async () => {
     const projectDir = tempDir("hf-history-project-");
     const historyRoot = tempDir("hf-history-root-");
