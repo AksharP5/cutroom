@@ -1895,7 +1895,10 @@ function installPreviewBridge(
     );
   };
   /** Parked media, and whether parking released media the element had loaded. */
-  const parked = new Map<HTMLMediaElement, { released: boolean }>();
+  const parked = new Map<
+    HTMLMediaElement,
+    { released: boolean; preload: HTMLMediaElement["preload"] }
+  >();
   win.__cutroomParkedMedia = parked;
   // Chromium can report HAVE_ENOUGH_DATA even for a WAV with no PCM payload.
   const invalidRamp = (audio: HTMLAudioElement, duration: number) =>
@@ -1994,7 +1997,8 @@ function installPreviewBridge(
       media.pause();
       media.srcObject = new MediaStream();
     }
-    parked.set(media, { released });
+    const entry = { released, preload: media.preload };
+    parked.set(media, entry);
     if (media instanceof HTMLVideoElement) {
       if (holds.has(media)) removeHold(media);
       const grading = win.__hf?.colorGrading;
@@ -2014,7 +2018,14 @@ function installPreviewBridge(
       networkState: value(() => HTMLMediaElement.NETWORK_IDLE),
       seeking: value(() => false),
       paused: value(() => paused),
-      preload: { configurable: true, get: () => "none", set: () => {} },
+      // Keep the runtime's preload window up to date without opening a decoder.
+      preload: {
+        configurable: true,
+        get: () => entry.preload,
+        set: (preload: HTMLMediaElement["preload"]) => {
+          entry.preload = preload;
+        },
+      },
       play: {
         configurable: true,
         value: () => {
@@ -2043,11 +2054,11 @@ function installPreviewBridge(
     const paused = media.paused;
     parked.delete(media);
     for (const name of PARKED) Reflect.deleteProperty(media, name);
+    media.preload = load ? "auto" : entry.preload;
     if (entry.released) media.srcObject = null;
     // Load where the runtime will want it, its media start for a clip still to come, so the
     // cut never waits for a seek.
     if (load) {
-      media.preload = "auto";
       const time = expectedMediaTime(media);
       if (time !== null) mediaTime.set.call(media, time);
     } else if (media instanceof HTMLVideoElement && media.isConnected && paused)
