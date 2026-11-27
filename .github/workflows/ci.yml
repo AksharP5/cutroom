@@ -1,11 +1,17 @@
 name: CI
 
+# A PR runs once, on the merge with main; main runs again after each landing.
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -73,7 +79,7 @@ jobs:
           PWTEST_SHARD_WEIGHTS: "36:25:21:18"
         run: bun run test:e2e --shard="$SHARD" --reporter=list,./e2e/teardown-watchdog.ts --global-timeout=1620000
       - if: matrix.suite == 'performance'
-        run: bun run test:perf --reporter=list
+        run: bun run test:perf --reporter=list --retries=0
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -82,3 +88,11 @@ jobs:
             test-results/
             playwright-report/
           retention-days: 7
+
+  # The one check main's ruleset requires, so the matrix can change without editing the rule.
+  gate:
+    if: always()
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - run: test "${{ needs.verify.result }}" = success

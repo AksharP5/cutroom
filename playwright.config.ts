@@ -14,6 +14,8 @@ export default defineConfig({
   // Let shards split large specs at test boundaries without adding runner contention.
   fullyParallel: true,
   workers: 1,
+  // CI retries a failed test once and reports a pass on retry as flaky; local runs never retry.
+  retries: process.env.CI ? 1 : 0,
   ...(process.env.CUTROOM_E2E_DIR
     ? { outputDir: resolve(testRoot, "results") }
     : {}),
