@@ -45,7 +45,11 @@ import {
   readProjectHistory,
   type ProjectHistory,
 } from "../../src/server/history/projectHistory";
-import { START, type HistoryWho } from "../../src/server/history/historyLog";
+import {
+  HistoryLogReadError,
+  START,
+  type HistoryWho,
+} from "../../src/server/history/historyLog";
 import { openBlobStore } from "../../src/server/history/blobStore";
 
 const you: HistoryWho = { kind: "person", name: "You" };
@@ -403,9 +407,12 @@ describe("openProjectHistory", () => {
       writeFileSync(adopting, pending);
       chmodSync(adopting, 0o000);
       try {
-        await expect(open(projectDir, historyRoot)).rejects.toThrow(
-          /EACCES.*adopting.json/,
+        // The editor keeps the project editable, without Undo, on this error.
+        const refused = await open(projectDir, historyRoot).catch(
+          (error: unknown) => error,
         );
+        expect(refused).toBeInstanceOf(HistoryLogReadError);
+        expect(String(refused)).toMatch(/EACCES.*adopting.json/);
       } finally {
         if (existsSync(adopting)) chmodSync(adopting, 0o644);
       }

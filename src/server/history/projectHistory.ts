@@ -68,6 +68,7 @@ import {
   START,
   baselineRecord,
   foldOldest,
+  HistoryLogReadError,
   manifestAround,
   manifestAt,
   readLog,
@@ -824,14 +825,25 @@ class Engine {
   }
 
   readAdopting(): Set<string> {
+    const file = join(this.home, "adopting.json");
     let raw: string;
     try {
-      raw = readFileSync(join(this.home, "adopting.json"), "utf-8");
+      raw = readFileSync(file, "utf-8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
-      throw error;
+      throw new HistoryLogReadError(
+        `Could not read pending media adoption: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
     }
-    return new Set(z.array(z.string()).parse(JSON.parse(raw)));
+    try {
+      return new Set(z.array(z.string()).parse(JSON.parse(raw)));
+    } catch (error) {
+      throw new HistoryLogReadError(
+        `Pending media adoption is damaged: ${file}`,
+        { cause: error },
+      );
+    }
   }
 
   saveStatCache(): void {
