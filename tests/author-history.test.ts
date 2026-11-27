@@ -382,6 +382,94 @@ test("an interrupted replay and torn log tail recover without changing history I
   }
 });
 
+const documentRoundTrips: {
+  label: string;
+  commands: CommandInput[];
+  overlaps: boolean;
+}[] = [
+  {
+    label: "leaves a track the agent renamed away and back",
+    commands: [
+      { type: "setTrack", index: 0, name: "Agent's track" },
+      { type: "setTrack", index: 0, name: "Owner's track" },
+    ],
+    overlaps: true,
+  },
+  {
+    label: "works after an unrelated track round trip",
+    commands: [
+      { type: "setTrack", index: 1, name: "Agent's other track" },
+      { type: "setTrack", index: 1, name: "Other track" },
+    ],
+    overlaps: false,
+  },
+];
+
+for (const { label, commands, overlaps } of documentRoundTrips) {
+  test(`owner Undo ${label}`, async () => {
+    const fixture = await projectFixture();
+    try {
+      fixture.app.route(
+        "/api/cutroom",
+        createTimelineRoutes(fixture.store, fixture.review),
+      );
+      const project = await fixture.store.create({ name: "Track ownership" });
+      await addStarterClips(project);
+      const base = `/api/cutroom/projects/${project.id}`;
+      const agent = externalHistoryCredential();
+      const edit = async (command: CommandInput, credential?: string) => {
+        const { revision } = TimelineViewSchema.parse(
+          await (await fixture.app.request(`${base}/timeline`)).json(),
+        );
+        const response = await fixture.app.request(`${base}/commands`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(credential && { [AGENT_HEADER]: credential }),
+          },
+          body: JSON.stringify({
+            expectedRevision: revision,
+            commands: [command],
+          }),
+        });
+        expect(response.status, await response.text()).toBe(200);
+      };
+      const read = () => readFile(join(project.path, "cutroom.json"), "utf8");
+      const undo = (credential?: string) =>
+        fixture.app.request(`${base}/history/undo`, {
+          method: "POST",
+          ...(credential && { headers: { [AGENT_HEADER]: credential } }),
+        });
+
+      await edit({ type: "setTrack", index: 1, name: "Other track" }, agent);
+      await edit({ type: "setTrack", index: 0, name: "Owner's track" });
+      const ownerBytes = await read();
+      for (const command of commands) await edit(command, agent);
+      expect(await read()).toBe(ownerBytes);
+
+      const result = await undo();
+      expect(result.status, await result.clone().text()).toBe(
+        overlaps ? 409 : 200,
+      );
+      if (overlaps) {
+        expect(await result.json()).toMatchObject({
+          conflict: { files: ["cutroom.json"] },
+        });
+        expect(await read()).toBe(ownerBytes);
+        for (const _command of commands) {
+          const theirs = await undo(agent);
+          expect(theirs.status, await theirs.text()).toBe(200);
+        }
+        const yours = await undo();
+        expect(yours.status, await yours.text()).toBe(200);
+      }
+      expect(await read()).not.toContain("Owner's track");
+    } finally {
+      await fixture.close();
+    }
+  });
+}
+
 test("selective undo and redo keep independent fields and markers in the same files", async () => {
   const fixture = await projectFixture();
   fixture.app.route(
