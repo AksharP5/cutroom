@@ -148,6 +148,13 @@ export const PreviewFrameStatusSchema = z.object({
   error: z.string().nullable(),
 });
 
+/** Whether a video waits for a piece of its editing proxy, so the picture lacks its frame. */
+export const PreviewFootageSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("footage-pending"),
+  pending: z.boolean(),
+});
+
 export const ClipBoxSchema = z.object({
   source: z.literal("cutroom-preview"),
   type: z.literal("clip-box"),

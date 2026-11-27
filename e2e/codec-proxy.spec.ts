@@ -784,3 +784,84 @@ for (const { pipeline, supersede } of [
     await expect(page.getByText("did not draw")).toHaveCount(0);
   });
 }
+
+test("a recording placed while its proxy is made shows the new timeline at once and its frame when the piece comes", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(150_000);
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Fresh take", width: 640, height: 360 },
+      })
+    ).json(),
+  );
+  // The owner records Matroska, which Chromium never plays itself.
+  await promisify(execFile)("ffmpeg", [
+    ...["-v", "error", "-i", await makeLongRecording()],
+    ...["-c", "copy", join(project.path, "take.mkv")],
+  ]);
+  // A long take's proxy is still being made when it is placed. Source and the footage pipeline
+  // are told so, as they would be, so the preview's request starts it.
+  await page.route(
+    (url) =>
+      url.pathname.endsWith("/media/proxy") ||
+      url.pathname.endsWith("/media/editing-proxy"),
+    (route) =>
+      route.fulfill({
+        status: 202,
+        headers: { "retry-after": "1", "cache-control": "no-store" },
+        json: { key: "making", job: { status: "running", progress: 0 } },
+      }),
+  );
+  // F10 leaves the playhead on the take's last frame, 3:59;29, in a piece a busy machine can
+  // take minutes to make. Hold its request and say it is not made.
+  const piece = Promise.withResolvers<void>();
+  let waitingForPiece = false;
+  await page.route(
+    (url) =>
+      url.pathname.includes("/preview/") &&
+      Number(url.searchParams.get("cutroom-piece")) >= 55,
+    async (route) => {
+      waitingForPiece = true;
+      await piece.promise;
+      await route.continue();
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname.endsWith("/proxy-samples") &&
+      Number(url.searchParams.get("at")) >= 220,
+    async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        json: { ...(await response.json()), made: false },
+      });
+    },
+  );
+  await page.goto(`/#project/${project.id}`);
+  const take = page
+    .getByRole("region", { name: "Media", exact: true })
+    .getByRole("listitem", { name: "take.mkv" });
+  await expect(take).toHaveAttribute("draggable", "true");
+  await take.dblclick();
+  await expect(page.getByRole("group", { name: "Source" })).toBeVisible();
+  await page.keyboard.press("F10");
+  const stage = page.locator(".edit-stage");
+  try {
+    await expect.poll(() => waitingForPiece, { timeout: 30_000 }).toBe(true);
+    // The placed take replaces the empty timeline without waiting for the piece, and the
+    // viewer does not claim the playhead's frame until it shows.
+    await expect(
+      page.frameLocator("iframe[data-live]").locator("video"),
+    ).toHaveCount(1);
+    await expect(stage).not.toHaveAttribute("data-preview-ready");
+  } finally {
+    piece.resolve();
+  }
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  expect(await shownFrame(page, 16)).toBe(7199);
+  await expect(page.getByText("did not")).toHaveCount(0);
+});

@@ -179,6 +179,7 @@ export function Viewer({
           mixedRevision === revision) &&
         preview !== null &&
         !preview.hasAttribute("data-seek-pending") &&
+        !preview.hasAttribute("data-footage-pending") &&
         (!pipelineActive ||
           state.kind !== "stopped" ||
           (canvas?.dataset.frame === String(frame) &&
@@ -193,6 +194,7 @@ export function Viewer({
       attributes: true,
       attributeFilter: [
         "data-seek-pending",
+        "data-footage-pending",
         "data-frame",
         "data-standin",
         "data-live",
