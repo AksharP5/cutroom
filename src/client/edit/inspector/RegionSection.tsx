@@ -14,7 +14,7 @@ import type {
 } from "../../../shared/timeline/region";
 import { REGION_NAMES } from "../../../shared/timeline/labels";
 import type { Clip, Fps } from "../../../shared/timeline/schema";
-import { EditorToolsContext } from "../../editor/EditorTools";
+import { EditorToolsContext } from "../editorTools";
 import { editTimeline } from "../timeline";
 import { zoomBoxAt } from "../regionCommands";
 import { Row } from "./TitleSection";

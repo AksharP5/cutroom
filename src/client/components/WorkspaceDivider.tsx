@@ -5,9 +5,7 @@ const widthKey = "cutroom.leftWidth";
 
 export function WorkspaceDivider() {
   const handle = useRef<HTMLDivElement>(null);
-  const dockedInspector = useWorkspace(
-    (state) => state.newEditor && state.inspector,
-  );
+  const dockedInspector = useWorkspace((state) => state.inspector);
 
   useLayoutEffect(() => {
     const divider = handle.current;

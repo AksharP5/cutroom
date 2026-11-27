@@ -1,63 +1,7 @@
 /* Every value comes from tokens.css. This file only arranges them. */
+@import "./reset.css" layer(base);
 @import "./tokens.css";
 @import "./edit/inspector/inspector.css";
-
-/* The embedded editor reads these names. */
-:root {
-  --color-bg-0: var(--surface-ground);
-  --color-bg-1: var(--surface-ground);
-  --color-bg-2: var(--surface-panel);
-  --color-surface: var(--surface-panel);
-  --color-surface-alt: var(--surface-panel);
-  --color-input: var(--surface-raised);
-  --color-raised: var(--surface-float);
-  --color-hover: var(--overlay-hover);
-  --color-press: var(--overlay-press);
-  --color-border: var(--line);
-  --color-hairline: var(--line-subtle);
-  --color-border-strong: var(--line-strong);
-  --color-border-input: var(--line);
-  --color-text-0: var(--text-primary);
-  --color-text-1: var(--text-primary);
-  --color-text-body: var(--text-primary);
-  --color-text-2: var(--text-secondary);
-  --color-text-3: var(--text-secondary);
-  --color-text-muted: var(--text-secondary);
-  --color-text-4: var(--text-tertiary);
-  --color-text-5: var(--text-tertiary);
-  --color-text-off: var(--text-tertiary);
-  --color-accent: var(--selection);
-  --color-accent-hover: var(--text-secondary);
-  --color-accent-ink: var(--text-primary);
-  --color-on-accent: var(--surface-ground);
-  --color-on: var(--surface-active);
-  --color-on-hover: var(--surface-active);
-  --color-ring: var(--focus-ring-color);
-  --color-selection: var(--selection);
-  --color-playhead: var(--playhead);
-  --color-media: var(--clip-video);
-  --color-container: var(--clip-comp);
-  --radius-sm: var(--radius-control);
-  --radius-md: var(--radius-control);
-  --radius-lg: var(--radius-float);
-  --shadow-btn-primary: none;
-  --panel-shell-bg: var(--surface-ground);
-  --panel-card-bg: var(--surface-panel);
-  --panel-card-border: var(--line);
-  --panel-strip-bg: var(--surface-panel);
-  --timeline-shell-bg: var(--surface-panel);
-  --timeline-row-bg: var(--surface-lane-video);
-  --timeline-gutter-bg: var(--surface-panel);
-  --timeline-clip-radius: var(--radius-clip);
-  --timeline-clip-shadow: none;
-  --timeline-clip-label-shadow: none;
-  --timeline-clip-selection: var(--selection);
-  --timeline-clip-audio-bg: var(--clip-audio-body);
-  --timeline-clip-audio-border: var(--clip-audio);
-  --timeline-clip-audio-bg-hover: var(--clip-audio-head);
-  --timeline-clip-audio-bg-dragging: var(--clip-audio-head);
-  --timeline-playhead-glow: transparent;
-}
 
 * {
   box-sizing: border-box;
@@ -65,8 +9,15 @@
 [hidden] {
   display: none !important;
 }
+/* Nothing scrolls the page: a focus or scrollIntoView inside a panel must not move the shell. */
+#root {
+  width: 100vw;
+  height: 100dvh;
+  overflow: clip;
+}
 body {
   margin: 0;
+  overflow: hidden;
   font-family: var(--font-sans);
   font-size: var(--type-sm);
   line-height: var(--leading-body);
@@ -170,7 +121,6 @@ kbd,
   .select-label,
   .logo-button,
   .project-switcher,
-  .tool-button,
   .note-seek,
   .note-thumb,
   .chat-tool summary,
@@ -224,7 +174,6 @@ kbd,
   .primary-button,
   .secondary-button,
   .send-button,
-  .tool-button,
   .logo-button,
   .project-switcher,
   .status-bar > button,
@@ -536,12 +485,6 @@ option {
   min-height: 0;
   display: grid;
   gap: 1px;
-  grid-template:
-    "editor" minmax(0, 1fr)
-    "status" var(--size-status)
-    / minmax(0, 1fr);
-}
-.workspace.with-work-panel {
   position: relative;
   grid-template:
     "media editor" auto
@@ -2311,67 +2254,6 @@ option {
 .review-composition-changes li + li {
   margin-top: 4px;
 }
-.review-draft {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  padding: 12px 14px;
-  border-bottom: var(--stroke-hair) solid var(--line-subtle);
-}
-.review-draft-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.review-draft-heading > span {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-secondary);
-}
-.review-draft-heading > span svg {
-  width: 14px;
-  height: 14px;
-}
-.review-draft textarea {
-  width: 100%;
-  min-height: 72px;
-  font-size: var(--type-md);
-  line-height: var(--leading-chat);
-}
-.review-draft .primary-button {
-  align-self: flex-end;
-}
-.annotation-frame {
-  position: relative;
-  display: block;
-  width: 100%;
-  overflow: hidden;
-  border-radius: var(--radius-clip);
-  background: var(--surface-ground);
-  box-shadow: 0 0 0 var(--stroke-hair) var(--line);
-}
-.annotation-frame img {
-  display: block;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  object-fit: contain;
-}
-.annotation-frame svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-.annotation-frame path {
-  fill: none;
-  stroke: var(--human);
-  stroke-width: var(--stroke-pencil);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
 .review-group-head {
   display: flex;
   align-items: center;
@@ -2828,78 +2710,12 @@ option {
   padding: 12px 0;
   color: var(--text-secondary);
 }
-.transcription-status progress,
-.cutroom-loading-status progress {
+.transcription-status progress {
   width: 100%;
   height: 2px;
   accent-color: var(--text-primary);
 }
 
-/* Editor tool row */
-.editor-header {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  height: var(--size-tool-row);
-  padding: 0 6px;
-  border-bottom: var(--stroke-hair) solid var(--line-subtle);
-  background: var(--surface-panel);
-}
-.editor-tools,
-.editor-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-width: 0;
-}
-.editor-header-actions {
-  flex: none;
-}
-.mode-switch {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.tool-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: var(--size-tool-button);
-  padding: 0 8px;
-  border-radius: var(--radius-control);
-  color: var(--text-secondary);
-  font-weight: var(--weight-medium);
-}
-.tool-button svg {
-  width: 15px;
-  height: 15px;
-}
-.tool-button:hover {
-  color: var(--text-primary);
-}
-.tool-button[aria-pressed="true"] {
-  background: var(--surface-active);
-  color: var(--text-primary);
-}
-.tool-button kbd {
-  margin-left: 2px;
-  color: var(--text-tertiary);
-  font-size: var(--type-2xs);
-  font-weight: var(--weight-medium);
-}
-.editor-toolbar-separator {
-  width: 1px;
-  height: 16px;
-  margin: 0 4px;
-  background: var(--line);
-}
-.editor-export-button {
-  margin-left: 4px;
-  height: 24px;
-  padding: 0 9px;
-}
 .editor-loading,
 .editor-failure {
   flex: 1;
@@ -2927,60 +2743,6 @@ option {
   height: 1px;
   background: var(--line-strong);
 }
-.cutroom-loading-status {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 24px;
-}
-.cutroom-loading-status small {
-  color: var(--text-secondary);
-  font-size: var(--type-xs);
-}
-.cutroom-loading-status progress {
-  width: 128px;
-}
-.cutroom-editor {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  --studio-preview-bg: var(--surface-ground);
-}
-.cutroom-editor > div:first-child {
-  flex: 1;
-  min-height: 0;
-  background: var(--surface-ground);
-}
-.cutroom-editor .hf-dock {
-  --dv-tab-font-size: var(--type-sm);
-  --dv-tabs-and-actions-container-font-size: var(--type-sm);
-}
-.cutroom-editor .hf-dock .dv-groupview {
-  border: 0;
-  border-radius: 0;
-}
-.cutroom-editor [data-studio-fullscreen-target]:not(:fullscreen) {
-  border: 0;
-  border-radius: 0;
-}
-.cutroom-editor
-  .dv-groupview:has([data-tab-panel-id="preview"][aria-selected="true"]) {
-  border: 0;
-  background: transparent;
-}
-.cutroom-editor
-  .dv-groupview:has([data-tab-panel-id="preview"][aria-selected="true"])
-  .hf-dock-tab-fill,
-.cutroom-editor
-  .dv-groupview:has([data-tab-panel-id="preview"][aria-selected="true"])
-  .dv-tabs-and-actions-container {
-  background: transparent;
-}
-
 /* Welcome and dialogs */
 .welcome {
   flex: 1;
@@ -3367,26 +3129,9 @@ option {
     height: calc(var(--size-media-row) * 6 + 8px);
   }
 }
-@media (--drawer) {
-  .tool-button {
-    padding: 0 6px;
-  }
-  .tool-button kbd {
-    display: none;
-  }
-}
 @media (--rail) {
-  .workspace.with-work-panel {
+  .workspace {
     grid-template-columns: var(--width-left-min) minmax(0, 1fr);
-  }
-  .tool-button {
-    width: 28px;
-    justify-content: center;
-    padding: 0;
-  }
-  .tool-button span,
-  .editor-files-button span {
-    display: none;
   }
 }
 

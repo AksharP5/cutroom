@@ -1,9 +1,7 @@
-import { hint } from "../src/client/keymap";
 import { expect, test } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import type { AgentSession } from "../src/shared/agent";
-import { embeddedEditor } from "./embedded";
 
 async function agentConfiguration(page: Page) {
   await page.route("**/api/cutroom/agents/capabilities?**", (route) =>
@@ -322,92 +320,4 @@ test("streamed deltas remain ordered through the final idle event", async ({
   await expect(page.getByRole("button", { name: /^Model:/ })).toBeEnabled();
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   await expect(page.locator(".message-assistant")).toHaveCount(0);
-});
-
-test("a frame capture finishing in an old project cannot clear a new project's draft", async ({
-  page,
-  request,
-}) => {
-  await embeddedEditor(page);
-  await agentConfiguration(page);
-  const first = ProjectSchema.parse(
-    await (
-      await request.post("/api/cutroom/projects", {
-        data: { name: "Capture one" },
-      })
-    ).json(),
-  );
-  const second = ProjectSchema.parse(
-    await (
-      await request.post("/api/cutroom/projects", {
-        data: { name: "Capture two" },
-      })
-    ).json(),
-  );
-  await page.goto(`/#project/${first.id}`);
-  const image = await page.evaluate(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 2;
-    canvas.height = 2;
-    return canvas.toDataURL("image/png").split(",")[1] ?? "";
-  });
-  let release = () => {};
-  const captured = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let entered = () => {};
-  const started = new Promise<void>((resolve) => {
-    entered = resolve;
-  });
-  await page.route(
-    `**/api/projects/${first.id}/thumbnail/**`,
-    async (route) => {
-      if (route.request().resourceType() !== "fetch") return route.fallback();
-      entered();
-      await captured;
-      await route.fulfill({
-        contentType: "image/png",
-        body: Buffer.from(image, "base64"),
-      });
-    },
-  );
-  try {
-    await page
-      .getByRole("button", { name: hint("cutroomComment"), exact: true })
-      .click();
-    await page
-      .getByLabel("Pin a comment on the composition")
-      .click({ position: { x: 50, y: 50 } });
-    await page
-      .getByLabel("What should change?", { exact: true })
-      .fill("The first project's saved note");
-    await page.getByRole("button", { name: "Add note", exact: true }).click();
-    await started;
-    await page.evaluate((id) => {
-      location.hash = `project/${id}`;
-    }, second.id);
-    await expect(
-      page.getByRole("button", { name: "Capture two", exact: true }),
-    ).toBeVisible();
-    await page
-      .getByRole("button", { name: hint("cutroomComment"), exact: true })
-      .click();
-    await page
-      .getByLabel("Pin a comment on the composition")
-      .click({ position: { x: 80, y: 70 } });
-    const draft = page.getByLabel("What should change?", { exact: true });
-    await draft.fill("Keep the second project's draft");
-    release();
-    await expect
-      .poll(async () => {
-        const document = (await (
-          await request.get(`/api/cutroom/projects/${first.id}/document`)
-        ).json()) as { annotations: unknown[] };
-        return document.annotations.length;
-      })
-      .toBe(1);
-    await expect(draft).toHaveValue("Keep the second project's draft");
-  } finally {
-    release();
-  }
 });

@@ -6,7 +6,7 @@ Cutroom's original code is MIT-licensed. Dependencies retain their own licenses;
 
 The public `@hyperframes/*` packages and `hyperframes` CLI are pinned to version 0.9.26 from [heygen-com/hyperframes](https://github.com/heygen-com/hyperframes). The public framework is Apache-2.0 licensed; its license is preserved in [licenses/HYPERFRAMES.txt](licenses/HYPERFRAMES.txt).
 
-`build/studioPlugin.ts` adapts the published editor source at build time. The adaptations replace the header, splash, transport icons, and agent handoff; remove hosted catalog and feedback UI; disable telemetry; connect external file changes to Cutroom; and preserve source synchronization, save conflicts, and project navigation. Every transform checks its source match and package version. Capture and rendering adapters build on the public Studio server and CLI implementations.
+Cutroom does not ship the `@hyperframes/studio` editor. Capture and rendering adapters build on the public Studio server and CLI implementations.
 
 Cutroom does not include code or assets extracted from the proprietary HyperFrames desktop application. HyperFrames and HeyGen names describe dependency provenance, not affiliation or endorsement.
 
@@ -48,7 +48,9 @@ Instrument Sans and Martian Mono are vendored in `src/client/fonts/` as variable
 
 The Cutroom logo, mark, favicons, and application icon are original Cutroom assets.
 
-Phosphor icons retain the MIT license of `@phosphor-icons/react`. React, Hono, Zustand, Vite, CodeMirror and Lezer (the code panel's editor, the same versions the embedded editor uses), and other dependencies retain the license files in their installed packages.
+Phosphor icons retain the MIT license of `@phosphor-icons/react`. React, Hono, Zustand, Vite, CodeMirror and Lezer (the code panel's editor), and other dependencies retain the license files in their installed packages.
+
+`src/client/reset.css` is Tailwind CSS v4.3.5's preflight stylesheet, MIT-licensed, with its theme lookups replaced by Cutroom's font tokens and a pointer cursor on enabled buttons. Its notice is preserved in [licenses/TAILWIND-PREFLIGHT.txt](licenses/TAILWIND-PREFLIGHT.txt).
 
 Lightning CSS 1.33.0 parses and rewrites the inspector's inline opacity styles. Its MPL-2.0 license is retained in `node_modules/lightningcss/LICENSE`, including in the production package. The dependency source is unchanged.
 

@@ -48,20 +48,14 @@ import { ContextMenuHost, revealAction } from "./components/ContextMenu";
 import { ShortcutSheet } from "./components/ShortcutSheet";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { saveReviewNote } from "./review";
-import { EditorToolsContext } from "./editor/EditorTools";
+import { EditorToolsContext } from "./edit/editorTools";
 import { ScriptPanel } from "./components/ScriptPanel";
 import { StatusBar } from "./components/StatusBar";
 import { WorkspaceDivider } from "./components/WorkspaceDivider";
 import { clearToasts, showToast, useWorkspace } from "./workspace";
-import { actionFor, focusPanel, keymap, useKeymap } from "./keymap";
-import type { Action } from "./keymap";
+import { focusPanel, keymap, useKeymap } from "./keymap";
 import { usePipeline } from "./pipeline/setting";
 
-const Editor = lazy(() =>
-  import("./editor/CutroomEditor").then((module) => ({
-    default: module.CutroomEditor,
-  })),
-);
 const EditPage = lazy(() =>
   import("./edit/EditPage").then((module) => ({ default: module.EditPage })),
 );
@@ -123,23 +117,14 @@ export function App() {
   const [mode, setMode] = useState<EditorMode>("select");
   const [sourceRevision, setSourceRevision] = useState(0);
   const [panel, setPanel] = useState<"review" | "script">("review");
-  const [reviewState, setReviewState] = useState<{
-    projectId: string;
-    draft: EditorReviewDraft;
-  } | null>(null);
-  const reviewDraft =
-    reviewState?.projectId === projectId ? reviewState.draft : null;
   const [promptState, setPromptState] = useState<{
     projectId: string;
     text: string;
   } | null>(null);
   const prompt = promptState?.projectId === projectId ? promptState.text : null;
-  const [workPanel, setWorkPanel] = useState<"agent" | "notebook" | null>(
-    "agent",
-  );
+  const [workPanel, setWorkPanel] = useState<"agent" | "notebook">("agent");
   const chatVisible = workPanel === "agent";
   const notebookVisible = workPanel === "notebook";
-  const newEditor = useWorkspace((state) => state.newEditor);
   const footagePipeline = usePipeline((state) => state.enabled);
   const newNotes = projectDocument.items.filter(
     (item) => item.review.status === "open",
@@ -152,7 +137,6 @@ export function App() {
     (item) => item.review.status === "working",
   );
   const tabs = useRef<HTMLElement>(null);
-  const lastPanel = useRef<"agent" | "notebook">("agent");
   const indicator = useRef<HTMLSpanElement>(null);
   const activeTab = chatVisible ? 0 : panel === "review" ? 1 : 2;
   const [dialog, setDialog] = useState<
@@ -208,7 +192,7 @@ export function App() {
   useLayoutEffect(() => {
     const nav = tabs.current;
     const bar = indicator.current;
-    if (!nav || !bar || !workPanel) return;
+    if (!nav || !bar) return;
     const place = () => {
       const tab = nav.querySelectorAll("button")[activeTab];
       if (!tab) return;
@@ -220,7 +204,7 @@ export function App() {
     const ready = requestAnimationFrame(() => (bar.dataset.ready = ""));
     void document.fonts.ready.then(place);
     return () => cancelAnimationFrame(ready);
-  }, [activeTab, workPanel, project?.id, waiting]);
+  }, [activeTab, project?.id, waiting]);
 
   const loadProjects = useCallback(async () => {
     const request = ++projectListRequest.current;
@@ -294,7 +278,6 @@ export function App() {
   useEffect(() => {
     projectOpening.current = null;
     setCreating(false);
-    setReviewState(null);
     attachmentResolve.current?.resolve(null);
     attachmentResolve.current = null;
     setPicker((current) => (current === "directory" ? current : null));
@@ -363,21 +346,6 @@ export function App() {
         // A drag in the timeline takes Esc for itself.
         if (useWorkspace.getState().gesture) return;
         setMode("select");
-        setReviewState(null);
-      }
-      // Cutroom's own editor binds its tools in its keymap.
-      if (useWorkspace.getState().newEditor) return;
-      const modes: Partial<Record<Action, EditorMode>> = {
-        editPointer: "select",
-        cutroomDraw: "draw",
-        cutroomComment: "comment",
-      };
-      const action = actionFor(event);
-      const mode = action && modes[action];
-      if (mode) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        setMode(mode);
       }
     }
     window.addEventListener("keydown", key, true);
@@ -397,7 +365,7 @@ export function App() {
       return;
     projectOpening.current = null;
     setCreating(false);
-    window.location.hash = `project/${encodeURIComponent(next.id)}?v=1&rc=1&tv=1`;
+    window.location.hash = `project/${encodeURIComponent(next.id)}`;
     setProjectId(next.id);
     setDialog(null);
     clearToasts();
@@ -406,16 +374,6 @@ export function App() {
   const onContext = useCallback((value: EditorContext) => {
     context.current = value;
   }, []);
-  const onReview = useCallback(
-    (value: EditorReviewDraft) => {
-      if (!projectId || activeProjectId.current !== projectId) return;
-      setReviewState({ projectId, draft: value });
-      setPanel("review");
-      setWorkPanel("notebook");
-      setMode("select");
-    },
-    [projectId],
-  );
   /** Shows a note in the Review panel, as a click on its timeline pin does. */
   const openReview = useCallback((id: string) => {
     setPanel("review");
@@ -466,42 +424,21 @@ export function App() {
   );
   const seek = useCallback(async (time: number, compositionPath?: string) => {
     const expectedProject = activeProjectId.current;
-    if (useWorkspace.getState().newEditor) {
-      const [
-        { transport, useTransport },
-        { openComposition },
-        { useTimeline },
-      ] = await Promise.all([
+    const [{ transport, useTransport }, { openComposition }, { useTimeline }] =
+      await Promise.all([
         import("./edit/transport"),
         import("./edit/compositions"),
         import("./edit/timeline"),
       ]);
-      if (!expectedProject || activeProjectId.current !== expectedProject)
-        return;
-      // A note opens its composition before seeking to its frame.
-      if (
-        compositionPath &&
-        compositionPath !== useTimeline.getState().composition
-      )
-        openComposition(expectedProject, compositionPath, time);
-      else transport.seek(toFrames(time, useTransport.getState().fps));
-      return;
-    }
-    const { seekEditor } = await import("./editor/CutroomEditor");
-    if (activeProjectId.current === expectedProject)
-      seekEditor(time, compositionPath);
-  }, []);
-  const changed = useCallback(async () => {
-    await refreshDocument();
-    // Cutroom's own editor reloads from the project's change events.
+    if (!expectedProject || activeProjectId.current !== expectedProject) return;
+    // A note opens its composition before seeking to its frame.
     if (
-      activeProjectId.current !== projectId ||
-      useWorkspace.getState().newEditor
+      compositionPath &&
+      compositionPath !== useTimeline.getState().composition
     )
-      return;
-    const { refreshEditor } = await import("./editor/CutroomEditor");
-    refreshEditor();
-  }, [projectId, refreshDocument]);
+      openComposition(expectedProject, compositionPath, time);
+    else transport.seek(toFrames(time, useTransport.getState().fps));
+  }, []);
   // The server adds the review queue digest to each message.
   function getContext() {
     return JSON.stringify(
@@ -646,19 +583,17 @@ export function App() {
           />
         ))
       ) : (
-        <main className={`workspace ${workPanel ? "with-work-panel" : ""}`}>
-          {workPanel && <WorkspaceDivider />}
+        <main className="workspace">
+          <WorkspaceDivider />
           <MediaPanel
             key={project.id}
             projectId={project.id}
             projectPath={project.path}
-            hidden={!workPanel}
           />
           <section
             id="work-panel"
             className="work-panel"
             aria-label="Project workspace"
-            hidden={!workPanel}
           >
             <nav
               className="workspace-tabs"
@@ -716,15 +651,6 @@ export function App() {
                     visible={panel === "review" && notebookVisible}
                     items={projectDocument.items}
                     reviewError={projectDocument.reviewError}
-                    draft={reviewDraft}
-                    onCancel={() => setReviewState(null)}
-                    onSave={async (body) => {
-                      if (!reviewDraft) return;
-                      await saveNote(reviewDraft, body);
-                      setReviewState((current) =>
-                        current?.draft === reviewDraft ? null : current,
-                      );
-                    }}
                     onSeek={(item) =>
                       void seek(item.time, item.compositionPath)
                     }
@@ -768,7 +694,7 @@ export function App() {
                     projectId={project.id}
                     revision={`${projectDocument.transcriptVersion}:${sourceRevision}`}
                     visible={panel === "script" && notebookVisible}
-                    onChange={changed}
+                    onChange={refreshDocument}
                     onSeek={seek}
                     onAsk={ask}
                   />
@@ -818,18 +744,7 @@ export function App() {
             />
           </section>
           <section className="editor-workspace" aria-label="Video editor">
-            <EditorToolsContext.Provider
-              value={{
-                mode,
-                setMode,
-                focused: !workPanel,
-                focusEditor: () =>
-                  setWorkPanel((value) => {
-                    if (value) lastPanel.current = value;
-                    return value ? null : lastPanel.current;
-                  }),
-              }}
-            >
+            <EditorToolsContext.Provider value={{ mode, setMode }}>
               <EditorBoundary key={project.id}>
                 <Suspense
                   fallback={
@@ -839,25 +754,15 @@ export function App() {
                     </div>
                   }
                 >
-                  {newEditor ? (
-                    <EditPage
-                      projectId={project.id}
-                      projectName={project.name}
-                      notes={projectDocument.items}
-                      onContext={onContext}
-                      onSaveNote={saveNote}
-                      onOpenNote={openReview}
-                      projectPath={project.path}
-                    />
-                  ) : (
-                    <Editor
-                      projectId={project.id}
-                      mode={mode}
-                      onContext={onContext}
-                      onReview={onReview}
-                      onAskAgent={ask}
-                    />
-                  )}
+                  <EditPage
+                    projectId={project.id}
+                    projectName={project.name}
+                    notes={projectDocument.items}
+                    onContext={onContext}
+                    onSaveNote={saveNote}
+                    onOpenNote={openReview}
+                    projectPath={project.path}
+                  />
                 </Suspense>
               </EditorBoundary>
             </EditorToolsContext.Provider>
@@ -1046,24 +951,6 @@ export function App() {
             </section>
             <section>
               <h3>Editor</h3>
-              <label className="settings-toggle">
-                <input
-                  type="checkbox"
-                  checked={newEditor}
-                  onChange={(event) => {
-                    if (
-                      useWorkspace.getState().beforeProjectChange?.() === false
-                    )
-                      return;
-                    useWorkspace.setState({ newEditor: event.target.checked });
-                  }}
-                />
-                New editor
-              </label>
-              <p>
-                Cutroom's own viewer, timeline, inspector, and code panel. Turn
-                it off for the embedded HyperFrames editor.
-              </p>
               <label className="settings-toggle">
                 <input
                   type="checkbox"

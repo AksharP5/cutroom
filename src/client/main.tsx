@@ -1,7 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { IconContext } from "@phosphor-icons/react";
-import "@upstream-studio/styles/studio.css";
 import "./styles.css";
 import { App } from "./App";
 

@@ -1,9 +1,8 @@
 import { z } from "zod";
-import { hint } from "../src/client/keymap";
+import { keymap } from "../src/client/keymap";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
-import { embeddedEditor } from "./embedded";
 
 const viewports = [
   { width: 956, height: 1050 },
@@ -32,7 +31,7 @@ async function openWorkspace(page: Page, request: APIRequestContext) {
   );
   await page.goto(`/#project/${project.id}`);
   await expect(
-    page.frameLocator("hyperframes-player iframe").last().locator("#headline"),
+    page.frameLocator("iframe[data-live]").locator("#headline"),
   ).toHaveText(project.name);
   await page.evaluate(() => document.fonts.ready);
 }
@@ -87,8 +86,6 @@ async function expectReadable(locator: Locator) {
   expect(contrast).toBeGreaterThanOrEqual(4.5);
 }
 
-test.beforeEach(({ page }) => embeddedEditor(page));
-
 for (const viewport of viewports) {
   test(`workspace keeps the preview and controls usable at ${viewport.width}×${viewport.height}`, async ({
     page,
@@ -97,7 +94,7 @@ for (const viewport of viewports) {
     await page.setViewportSize(viewport);
     await openWorkspace(page, request);
 
-    const preview = page.locator("hyperframes-player iframe").last();
+    const preview = page.locator("iframe[data-live]");
     await expectOnScreen(preview, page);
     const bounds = await preview.boundingBox();
     expect(bounds?.width).toBeGreaterThanOrEqual(320);
@@ -110,14 +107,18 @@ for (const viewport of viewports) {
       page.getByRole("button", { name: "Agent", exact: true }),
       page.getByRole("button", { name: "Review", exact: true }),
       page.getByRole("button", { name: "Script", exact: true }),
-      page.getByRole("button", { name: hint("editPointer"), exact: true }),
-      page.getByRole("button", { name: hint("cutroomDraw"), exact: true }),
-      page.getByRole("button", { name: hint("cutroomComment"), exact: true }),
-      page.getByRole("button", { name: "Toggle project files", exact: true }),
-      page.getByRole("button", { name: "Toggle inspector", exact: true }),
+      ...(["editPointer", "cutroomDraw", "cutroomComment"] as const).map(
+        (action) =>
+          page.getByRole("button", {
+            name: `${keymap[action].label} ${keymap[action].keys[0]}`,
+            exact: true,
+          }),
+      ),
+      page.getByRole("button", { name: "Code", exact: true }),
+      page.getByRole("button", { name: "Inspector", exact: true }),
       page.getByRole("button", { name: "Export", exact: true }),
       page.getByRole("button", { name: "Import media", exact: true }),
-      page.getByRole("button", { name: "Play", exact: true }),
+      page.getByRole("button", { name: "Play forward", exact: true }),
       page.getByRole("button", { name: /^Model:/ }),
       page.getByLabel("Message your agent", { exact: true }),
     ]) {
@@ -160,11 +161,9 @@ for (const viewport of viewports) {
     await composer.fill("A clear message on the dark workspace.");
     await expectReadable(composer);
     await expectReadable(
-      page.getByRole("button", { name: "Play", exact: true }),
+      page.getByRole("button", { name: "Play forward", exact: true }),
     );
-    await expectReadable(
-      page.getByRole("button", { name: "Playback speed", exact: true }),
-    );
+    await expectReadable(page.getByRole("button", { name: /^Current time/ }));
     await expect(page.getByRole("button", { name: /theme/i })).toHaveCount(0);
     await page.screenshot({
       path: testInfo.outputPath(`workspace-${viewport.width}.png`),
@@ -194,50 +193,23 @@ for (const viewport of viewports) {
   });
 }
 
-test("review and agent drafts survive workspace tabs, panels, and resizing", async ({
+test("an agent draft survives workspace tabs and resizing", async ({
   page,
   request,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openWorkspace(page, request);
   const agentDraft = "Keep this unsent editing request.";
-  const reviewDraft = "Keep this review draft while I inspect the workspace.";
   const composer = page.getByLabel("Message your agent", { exact: true });
   await composer.fill(agentDraft);
-  await page
-    .getByRole("button", { name: hint("cutroomComment"), exact: true })
-    .click();
-  await page
-    .getByLabel("Pin a comment on the composition")
-    .click({ position: { x: 100, y: 80 } });
-  const note = page.getByLabel("What should change?", { exact: true });
-  await note.fill(reviewDraft);
   await page.getByRole("button", { name: "Script", exact: true }).click();
-  await page.getByRole("button", { name: "Agent", exact: true }).click();
-  await expect(composer).toHaveValue(agentDraft);
   await page.getByRole("button", { name: "Review", exact: true }).click();
-  await expect(note).toHaveValue(reviewDraft);
-
-  await page.getByRole("button", { name: "Focus editor", exact: true }).click();
   await page.setViewportSize({ width: 956, height: 1050 });
-  await page.getByRole("button", { name: "Focus editor", exact: true }).click();
-  await expect(note).toHaveValue(reviewDraft);
-  await expectOnScreen(note, page);
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await expect(composer).toHaveValue(agentDraft);
   await expectOnScreen(composer, page);
-  await page.getByRole("button", { name: "Focus editor", exact: true }).click();
   await page.setViewportSize({ width: 1720, height: 1050 });
-  await page.getByRole("button", { name: "Focus editor", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Toggle project files", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Toggle project files", exact: true })
-    .click();
   await expect(composer).toHaveValue(agentDraft);
-  await page.getByRole("button", { name: "Review", exact: true }).click();
-  await expect(note).toHaveValue(reviewDraft);
 });
 
 test("Settings copies both named folder paths and keeps the external agent command", async ({

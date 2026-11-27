@@ -14,7 +14,7 @@ import { clearAudioAutomation, clipFades } from "../../../shared/timeline/mix";
 import { z } from "zod";
 import { toFrames } from "../../../shared/timeline/apply";
 import { api, json } from "../../api";
-import { EditorToolsContext } from "../../editor/EditorTools";
+import { EditorToolsContext } from "../editorTools";
 import { trackRows } from "../../timeline/math";
 import {
   focusByKeyboard,

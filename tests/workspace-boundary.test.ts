@@ -129,8 +129,8 @@ test("every mutation requires an explicit workspace Origin, and MCP refuses any 
   for (const path of [
     "/api/cutroom/projects",
     "/api/cutroom/agents/sessions/test/responses",
-    "/api/projects/test/files/index.html",
-    "/api/telemetry",
+    "/api/projects/test/upload",
+    "/api/projects/test/render",
     "/mcp",
   ]) {
     for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
