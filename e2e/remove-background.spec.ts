@@ -22,6 +22,14 @@ const points = [
 ] as const;
 const lower: [number, number, number] = [64, 160, 192];
 const subject: [number, number, number] = [230, 180, 60];
+const redSubject = [235, 70, 85] as const;
+
+type SubjectEncoding = {
+  height: number;
+  matrix: "bt709" | "smpte170m";
+  range: "tv" | "pc";
+  tagged: boolean;
+};
 
 /**
  * A plain colour on V1 and, on V2, a yellow disc over a dark checked background: the stub model
@@ -29,7 +37,10 @@ const subject: [number, number, number] = [230, 180, 60];
  */
 async function projectWithSubject(
   request: APIRequestContext,
-  { behind = false } = {},
+  {
+    behind = false,
+    encoding,
+  }: { behind?: boolean; encoding?: SubjectEncoding } = {},
 ) {
   const project = ProjectSchema.parse(
     await (
@@ -38,13 +49,14 @@ async function projectWithSubject(
       })
     ).json(),
   );
-  const encode = (input: string, output: string) =>
+  const encode = (
+    input: string,
+    output: string,
+    filter = "format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv",
+  ) =>
     ffmpeg("ffmpeg", [
       ...["-v", "error", "-f", "lavfi", "-i", input],
-      ...[
-        "-vf",
-        "format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv",
-      ],
+      ...["-vf", filter],
       ...[
         "-c:v",
         "libx264",
@@ -57,12 +69,20 @@ async function projectWithSubject(
       ],
       join(project.path, output),
     ]);
-  const disc = "lt(hypot(X-320\\,Y-180)\\,100)";
+  const subjectHeight = encoding?.height ?? height;
+  const subjectWidth = (subjectHeight * 16) / 9;
+  const [red, green, blue] = encoding ? redSubject : subject;
+  const disc = "lt(hypot(X-W/2\\,Y-H/2)\\,H*100/360)";
+  const sourceTag = encoding?.tagged ? encoding.matrix : "unknown";
+  const sourceFilter =
+    encoding &&
+    `scale=out_color_matrix=${encoding.matrix}:out_range=${encoding.range},format=yuv420p,setparams=colorspace=${sourceTag}:color_primaries=${sourceTag}:color_trc=${sourceTag}:range=${encoding.tagged ? encoding.range : "unknown"}`;
   await Promise.all([
     encode("color=0x40a0c0:s=640x360:r=30:d=4", "lower.mp4"),
     encode(
-      `color=black:s=640x360:r=30:d=4,format=rgb24,geq=r='if(${disc}\\,230\\,40+20*mod(floor(X/40)+floor(Y/40)\\,2))':g='if(${disc}\\,180\\,40)':b='if(${disc}\\,60\\,70)'`,
+      `color=black:s=${subjectWidth}x${subjectHeight}:r=30:d=4,format=rgb24,geq=r='if(${disc}\\,${red}\\,40+20*mod(floor(X/40)+floor(Y/40)\\,2))':g='if(${disc}\\,${green}\\,40)':b='if(${disc}\\,${blue}\\,70)'`,
       "subject.mp4",
+      sourceFilter,
     ),
   ]);
   await writeFile(
@@ -250,6 +270,46 @@ test("text behind a cutout: the title on V2 shows around the subject on V3, in t
   console.log("Text behind subject RGB error", { viewer, exported });
   expect(Math.max(...errors)).toBeLessThanOrEqual(8);
 });
+
+for (const [name, matrix, height, tagged, range] of [
+  ["BT.601", "smpte170m", 360, true, "tv"],
+  ["BT.709", "bt709", 360, true, "tv"],
+  ["untagged HD", "bt709", 720, false, "tv"],
+  ["full range", "bt709", 360, true, "pc"],
+] as const) {
+  test(`a ${name} cutout keeps its preview colours in the MP4`, async ({
+    page,
+    request,
+  }) => {
+    const project = await projectWithSubject(request, {
+      behind: true,
+      encoding: { height, matrix, range, tagged },
+    });
+    await page.goto("/#project/" + project.id);
+    await waitForPreview(page, { timing: true });
+    await seekFrame(page, at);
+    await expect(page.locator(".edit-stage")).toHaveAttribute(
+      "data-pipeline",
+      "on",
+    );
+    await expect
+      .poll(
+        async () => {
+          const [foreground, background] = await viewerPixels(page);
+          return near(foreground!, redSubject, 18) && near(background!, lower);
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+    const [preview] = await viewerPixels(page, [points[0]]);
+    const [exported] = await exportedPixels(request, project, [points[0]]);
+    console.log("Cutout RGB", { name, preview, exported });
+    expect(
+      near(exported!, preview!, 6),
+      `preview ${preview}, MP4 ${exported}`,
+    ).toBe(true);
+  });
+}
 
 test("Shrink and Soften draw while they move, save once, and match the MP4; Show matte shows the matte", async ({
   page,

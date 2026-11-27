@@ -132,8 +132,19 @@ test("timeline_edit adds a freeze clip with its PNG through the typed MCP comman
     expect(ffmpeg.exitCode).toBe(0);
     await writeFile(
       join(mcp.project.path, "index.html"),
-      `<main data-composition-id="main" data-width="96" data-height="54" data-fps="30" data-duration="2"><video id="picture" src="source.mp4" muted data-start="0" data-duration="2" data-track-index="0" style="object-fit:cover"></video></main>`,
+      `<main data-composition-id="main" data-width="96" data-height="54" data-fps="30" data-duration="2">
+        <video id="picture" src="source.mp4" muted data-start="0" data-duration="2" data-track-index="0" style="object-fit:cover"></video>
+        <div class="clip" id="heading" data-start="0" data-duration="2" data-track-index="1">Heading</div>
+        <div class="clip" id="locked" data-start="0" data-duration="2" data-track-index="2">Locked</div>
+      </main>`,
     );
+    await mcp.result("timeline_edit", {
+      expectedRevision: (await mcp.read()).revision,
+      commands: [
+        { type: "setTrack", index: 1, name: "Titles", autoSelect: false },
+        { type: "setTrack", index: 2, locked: true },
+      ],
+    });
     const before = await mcp.read();
     // The export variant is written second. A collision must leave the HTML and
     // the preview asset untouched, and keep the file the edit did not create.
@@ -167,7 +178,7 @@ test("timeline_edit adds a freeze clip with its PNG through the typed MCP comman
             clipId: "picture",
             at: 24,
             id: "still",
-            ids: { picture: ["tail"] },
+            ids: { picture: ["tail"], heading: ["heading-tail"] },
           },
         ],
       }),
@@ -183,6 +194,12 @@ test("timeline_edit adds a freeze clip with its PNG through the typed MCP comman
         style: { objectFit: "cover" },
       },
       { id: "tail", start: 84, duration: 36, mediaStart: 0.8 },
+      { id: "heading", start: 0, duration: 24 },
+      { id: "heading-tail", start: 84, duration: 36 },
+      { id: "locked", start: 0, duration: 60 },
+    ]);
+    expect(edited.rippleCuts).toEqual([
+      { track: 1, name: "Titles", count: 1, framesRemoved: 0 },
     ]);
     expect(
       await Bun.file(
@@ -267,6 +284,7 @@ test("timeline_edit holds VFR predecessors and the final picture across a longer
         type: "freeze",
         clipId: `v${index}`,
         at: 1,
+        mode: "replace",
         id: `still${index}`,
       })),
     });
