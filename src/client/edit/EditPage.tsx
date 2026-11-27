@@ -16,7 +16,7 @@ import {
 import { z } from "zod";
 import type { EditorContext } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
-import { clipEnd, frameTime } from "../../shared/timeline/apply";
+import { clipEnd, frameTime, toFrames } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
 import { EditorToolsContext } from "../editor/EditorTools";
 import {
@@ -32,6 +32,7 @@ import {
 } from "../keymap";
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
+import { selectedSpan } from "../timeline/selection";
 import { subscribeProjectEvents } from "../api";
 import {
   NO_COMPOSITION_ROOT,
@@ -494,6 +495,19 @@ export function EditPage({
     controlFastReverse: () =>
       player.dispatch({ type: "shuttle", dir: "reverse", fast: true }),
     controlStop: () => jog.press("stop"),
+    controlPlayAroundToPlayAroundCurrentSelection: () => {
+      const { frame, fps } = playing();
+      const view = useTimeline.getState().view;
+      const span = (!sourceShown &&
+        view &&
+        selectedSpan(view.timeline, useTimeline.getState().selection)) || {
+        from: frame,
+        to: frame,
+      };
+      // Resolve's default pre-roll and post-roll.
+      const roll = toFrames(2, fps);
+      player.playAround(span.from - roll, span.to + roll);
+    },
     controlStepReverse: () => player.step(-1),
     controlStepForward: () => player.step(1),
     controlLargeStepReverse: () => player.step(-second()),

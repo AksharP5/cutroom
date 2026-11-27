@@ -125,6 +125,8 @@ export function createTransport() {
   let tick = 0;
   let follows = 0;
   let origin = { frame: 0, at: 0 };
+  /** One pass of Play Around: plays `first` to `end`, then the playhead goes back to `back`. */
+  let around: { first: number; end: number; back: number } | null = null;
 
   const clamp = (frame: number) =>
     Math.max(0, Math.min(get().duration - 1, frame));
@@ -144,6 +146,7 @@ export function createTransport() {
   /** Playback wraps inside the range while loop is on, and otherwise runs the whole length. */
   function bounds() {
     const { loop, range, duration, span } = get();
+    if (around) return around;
     if (span) return { first: span.first, end: Math.min(span.end, duration) };
     return loop
       ? { first: range.in ?? 0, end: Math.min(range.out ?? duration, duration) }
@@ -151,6 +154,7 @@ export function createTransport() {
   }
 
   function park(frame: number, held: Hold = false) {
+    around = null;
     cancelAnimationFrame(tick);
     player?.pause();
     set({ state: stopped, frame, held });
@@ -185,6 +189,7 @@ export function createTransport() {
     )
       frame = end;
     const loops = get().loop || get().span !== null;
+    if (frame >= end && around) return park(around.back);
     if (frame >= end) {
       if (loops) restart(first);
       else return park(end - 1);
@@ -244,7 +249,23 @@ export function createTransport() {
       );
     },
     dispatch(event: TransportEvent) {
+      around = null;
       run(transition(get().state, event));
+    },
+    /**
+     * Plays `first` to `end` once and puts the playhead back where it was, as Resolve's Play
+     * Around does. Any other playback or seek ends it where it is.
+     */
+    playAround(first: number, end: number) {
+      const { frame, duration } = get();
+      if (!duration) return;
+      park(clamp(first));
+      around = {
+        first: get().frame,
+        end: Math.min(Math.max(end, first + 1), duration),
+        back: frame,
+      };
+      run({ kind: "playing" });
     },
     /** Moves the playhead and stops playback; the latest seek wins. */
     seek(frame: number) {
