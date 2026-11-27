@@ -388,6 +388,42 @@ test("a click on GPU footage selects the clip the viewer draws", async ({
   );
 });
 
+test("a duplicated timeline plays its footage through the pipeline, as the original does", async ({
+  page,
+  request,
+}) => {
+  const created = await project(
+    request,
+    { num: 30, den: 1 },
+    () =>
+      `<video id="picture" src="a.mp4" muted data-start="0" data-duration="3" data-track-index="0" style="${fill}"></video>`,
+  );
+  await numbered(join(created.path, "a.mp4"), "30/1");
+  // A duplicate is another timeline at the project root.
+  await copyFile(
+    join(created.path, "index.html"),
+    join(created.path, "Cut 2.html"),
+  );
+  await page.goto(`/#project/${created.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-pipeline", "on");
+  const media = page.getByRole("region", { name: "Media", exact: true });
+  await media.getByRole("button", { name: /^Compositions/ }).click();
+  await media
+    .getByRole("list", { name: "Compositions" })
+    .locator('[data-path="Cut 2.html"]')
+    .dblclick();
+  await expect(
+    page.getByRole("navigation", { name: "Composition" }),
+  ).toHaveText("Cut 2");
+  await expect(stage).toHaveAttribute("data-pipeline", "on");
+  await typeFrame(page, 45, 30);
+  await expect(page.locator(".edit-pipeline")).toHaveAttribute(
+    "data-frame",
+    "45",
+  );
+});
+
 test("the default viewer shows footage when WebGL2 is unavailable", async ({
   page,
   request,
@@ -682,7 +718,11 @@ test("a ripple delete keeps the new footage visible while the old preview is ret
     await deleted.click();
     await typeFrame(page, 15, 30);
     const plan = page.waitForResponse(async (response) => {
-      if (!response.url().endsWith("/pipeline") || !response.ok()) return false;
+      if (
+        !new URL(response.url()).pathname.endsWith("/pipeline") ||
+        !response.ok()
+      )
+        return false;
       const { plan } = PipelineResponseSchema.parse(await response.json());
       return "drawable" in plan && !Object.hasOwn(plan.drawable, "v0");
     });
@@ -736,21 +776,26 @@ test("an older drawable plan cannot turn the footage pipeline back on", async ({
   const old = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let first = true;
-  await page.route(`**${base}/pipeline`, async (route) => {
-    if (!first) return route.continue();
-    first = false;
-    try {
-      const response = await route.fetch();
-      const { plan } = PipelineResponseSchema.parse(await response.json());
-      expect("drawable" in plan && Object.keys(plan.drawable)).toEqual(["v0"]);
-      old.resolve();
-      await release.promise;
-      await route.fulfill({ response });
-    } catch (error) {
-      old.reject(error);
-      throw error;
-    }
-  });
+  await page.route(
+    (url) => url.pathname === `${base}/pipeline`,
+    async (route) => {
+      if (!first) return route.continue();
+      first = false;
+      try {
+        const response = await route.fetch();
+        const { plan } = PipelineResponseSchema.parse(await response.json());
+        expect("drawable" in plan && Object.keys(plan.drawable)).toEqual([
+          "v0",
+        ]);
+        old.resolve();
+        await release.promise;
+        await route.fulfill({ response });
+      } catch (error) {
+        old.reject(error);
+        throw error;
+      }
+    },
+  );
   await page.addInitScript(() => {
     if (window === window.top)
       localStorage.setItem("cutroom.footagePipeline", "true");
@@ -783,8 +828,8 @@ test("an older drawable plan cannot turn the footage pipeline back on", async ({
     await expect(preview.locator("#v0")).toHaveCSS("opacity", "0");
     await expect(stage).toHaveAttribute("data-preview-ready");
     const expected = await picture.screenshot();
-    const reply = page.waitForResponse((response) =>
-      response.url().endsWith(`${base}/pipeline`),
+    const reply = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === `${base}/pipeline`,
     );
     release.resolve();
     await (await reply).finished();

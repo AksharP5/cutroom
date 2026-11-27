@@ -140,10 +140,13 @@ for (const mode of [
         ? Promise.withResolvers<void>()
         : undefined;
     if (releasePipeline) {
-      await page.route("**/pipeline", async (route) => {
-        await releasePipeline.promise;
-        await route.continue();
-      });
+      await page.route(
+        (url) => url.pathname.endsWith("/pipeline"),
+        async (route) => {
+          await releasePipeline.promise;
+          await route.continue();
+        },
+      );
       await page.addInitScript(() => {
         if (window === parent) {
           addEventListener("message", (event) => {

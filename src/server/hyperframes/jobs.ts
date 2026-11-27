@@ -31,6 +31,7 @@ import {
 } from "./ownedDirectories";
 import { pruneFrameCache } from "./renderCache";
 import { HttpError } from "../../shared/errors";
+import { isTimelinePath } from "../../shared/sourcePaths";
 import { createJobMachine } from "../../shared/jobs";
 import type { ExportFormat, ExportOptions } from "../../shared/export";
 import { ExportStageSchema, compositionExportName } from "../../shared/export";
@@ -149,7 +150,7 @@ async function directPlan(
     [
       // Transparent formats draw over a transparent page, which the planner's page colour isn't.
       [options.format !== "mp4", "it is not an MP4"],
-      [entry !== "index.html", "it renders a sub-composition"],
+      [!isTimelinePath(entry), "it renders a scene, not a timeline"],
       [options.outputResolution, "it changes the output size"],
       [output?.retimed, "it changes the frame rate"],
       [

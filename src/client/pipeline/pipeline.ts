@@ -13,6 +13,7 @@ import {
 import { framesBefore } from "../../shared/timeline/transition";
 import { useVersions } from "../edit/versions";
 import { localMediaPath } from "../../shared/media";
+import { isTimelinePath } from "../../shared/sourcePaths";
 import { useGradeBypass, usePreviewGrade } from "../edit/preview";
 import { acquireGrades } from "./grades";
 import type { GradeTexture } from "./grades";
@@ -634,7 +635,7 @@ export function attachPipeline(
   const drawFrame = async (drawingPlan: Plan) => {
     const { view, selection } = useTimeline.getState();
     const { frame, state } = useTransport.getState();
-    if (!view || view.composition !== "index.html") return;
+    if (!view || !isTimelinePath(view.composition)) return;
     const auditionAtDraw = useVersions.getState();
     const alternate = prepareAudition(view, frame, state.kind === "playing");
     const { draft } = usePreviewGrade.getState();
@@ -1004,14 +1005,15 @@ export function attachPipeline(
     const view = useTimeline.getState().view;
     // The timeline's first read starts the plan's.
     if (!view) return;
-    if (view.composition !== "index.html") {
+    // Every root-level timeline plays through it; a scene in a folder stays with HyperFrames.
+    if (!isTimelinePath(view.composition)) {
       plan = null;
-      return stop("only the entry composition plays through it");
+      return stop("only a timeline plays through it, not a scene");
     }
     let response: ReturnType<typeof PipelineResponseSchema.parse>;
     try {
       const request = await fetch(
-        `/api/cutroom/projects/${encodeURIComponent(projectId)}/pipeline`,
+        `/api/cutroom/projects/${encodeURIComponent(projectId)}/pipeline?composition=${encodeURIComponent(view.composition)}`,
         { signal: closing.signal },
       );
       response = PipelineResponseSchema.parse(await request.json());
