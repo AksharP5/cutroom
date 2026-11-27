@@ -1459,7 +1459,7 @@ for (const [name, command, expectedPicture] of [
     ],
   ],
 ] satisfies [string, CommandInput, (string | number)[][]][]) {
-  test(`${name} returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks`, async () => {
+  test(`${name} preserves atomic refusal and uses the editor or agent track policy`, async () => {
     const fixture = await timelineFixture();
     const { project } = fixture;
     const server = Bun.serve({
@@ -1500,18 +1500,24 @@ for (const [name, command, expectedPicture] of [
         code: "unsupported",
         command: 0,
       });
-      const refused = await client.callTool({
-        name: "timeline_edit",
-        arguments: {
-          fullTimeline: true,
-          projectId: project.id,
-          expectedRevision: before.revision,
-          commands: [command],
-        },
-      });
+      const mcpEdit = (expectedRevision: string) =>
+        client.callTool({
+          name: "timeline_edit",
+          arguments: {
+            fullTimeline: true,
+            projectId: project.id,
+            expectedRevision,
+            commands: [command],
+          },
+        });
+      const agentReason = reason.replace(
+        "Turn off auto-select on V2",
+        "Lock V2",
+      );
+      const refused = await mcpEdit(before.revision);
       expect(refused.isError).toBe(true);
       expect(refused.content).toEqual([
-        { type: "text", text: expect.stringContaining(reason) },
+        { type: "text", text: expect.stringContaining(agentReason) },
       ]);
       expect(await read()).toEqual(before);
       expect(await fixture.files()).toEqual(files);
@@ -1521,17 +1527,36 @@ for (const [name, command, expectedPicture] of [
       });
       expect(optOut.status).toBe(200);
       const optedOut = await read();
-      const edited = result.parse(
-        await client.callTool({
-          name: "timeline_edit",
-          arguments: {
-            fullTimeline: true,
-            projectId: project.id,
-            expectedRevision: optedOut.revision,
-            commands: [command],
-          },
-        }),
-      ).structuredContent.result;
+      const ownerCommand =
+        command.type === "insert"
+          ? { ...command, clip: { ...command.clip, id: "owner-inserted" } }
+          : command;
+      const owner = await fixture.request(`${api}/commands`, "POST", {
+        expectedRevision: optedOut.revision,
+        commands: [ownerCommand],
+      });
+      expect(owner.status).toBe(200);
+      const ownerEdit = TimelineViewSchema.parse(await owner.json());
+      expect(
+        ownerEdit.timeline.clips.filter(({ track }) => track === 1),
+      ).toEqual(before.timeline.clips.filter(({ track }) => track === 1));
+      await fixture.request(`${api}/history/undo`, "POST", {});
+      expect((await read()).timeline).toEqual(optedOut.timeline);
+
+      const stillRefused = await mcpEdit((await read()).revision);
+      expect(stillRefused.isError).toBe(true);
+      expect(stillRefused.content).toEqual([
+        { type: "text", text: expect.stringContaining(agentReason) },
+      ]);
+      expect((await read()).timeline).toEqual(optedOut.timeline);
+      const lock = await fixture.request(`${api}/commands`, "POST", {
+        expectedRevision: (await read()).revision,
+        commands: [{ type: "setTrack", index: 1, locked: true }],
+      });
+      expect(lock.status).toBe(200);
+      const locked = await read();
+      const edited = result.parse(await mcpEdit(locked.revision))
+        .structuredContent.result;
       expect(edited.skippedClips ?? []).toEqual([]);
       expect(
         edited.timeline.clips
@@ -1543,6 +1568,8 @@ for (const [name, command, expectedPicture] of [
       );
       expect((await read()).timeline).toEqual(edited.timeline);
       await stepMcp(client, project.id);
+      expect((await read()).timeline).toEqual(locked.timeline);
+      await fixture.request(`${api}/history/undo`, "POST", {});
       expect((await read()).timeline).toEqual(optedOut.timeline);
       await fixture.request(`${api}/history/undo`, "POST", {});
       expect((await read()).timeline).toEqual(before.timeline);
