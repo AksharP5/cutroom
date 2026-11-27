@@ -80,14 +80,16 @@ jobs:
         run: bun run test:e2e --shard="$SHARD" --reporter=list,./e2e/teardown-watchdog.ts --global-timeout=1620000
       - if: matrix.suite == 'performance'
         run: bun run test:perf --reporter=list --retries=0
+      # Also keep a flaky test's failed first attempt.
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: ${{ !cancelled() }}
         with:
           name: browser-failure-${{ strategy.job-index }}
           path: |
             test-results/
             playwright-report/
           retention-days: 7
+          if-no-files-found: ignore
 
   # The one check main's ruleset requires, so the matrix can change without editing the rule.
   gate:
