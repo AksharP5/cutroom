@@ -667,6 +667,10 @@ Measured on November 27, 2026 on a shared machine, in process through the API ro
 | 1,000 | Ripple delete |      191 ms |     121 ms |       255 ms |       94 ms |                453 ms |               214 ms |
 | 1,000 | W             |      204 ms |     119 ms |       236 ms |       95 ms |                445 ms |               213 ms |
 
+## Edit bursts at 1,000 clips
+
+An editor presses W or Undo several times a second, and each edit saves one after another. `e2e/scale-performance.spec.ts` presses ten W trims 120 ms apart, then ten Undos and ten Redos 100 ms apart, on the 1,000-clip fixture with GPU playback off and on, and times how long the last one takes to save after the last key. The performance job fails when that wait passes 2 s. On a loaded desktop it was 2.4 to 4.3 s for W and 3.9 to 5.5 s for Undo before each revision was parsed once.
+
 ## Trim preview
 
 The 400-clip roll check sends 540 pointer updates over 180 displayed frames per run, with all clips mounted at Fit. Each run must send more than ten seeks, send no more seeks than displayed frames, and keep at most one seek in flight. These assertions gate seek coalescing independently of runner speed.
