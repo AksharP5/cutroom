@@ -2200,6 +2200,43 @@ test("removeRange takes a range off the auto-select tracks, as In and Out with n
     );
 });
 
+test("join puts a razored clip and its sound back together, and refuses pieces that do not continue", () => {
+  const state = timeline(talk("a", 0, 90, 0), avTracks);
+  const cut = run(state, { type: "split", at: 30, clipIds: ["a"] });
+  expect(positions(cut)).toMatchObject({ a: [0, 0, 30], "a-2": [0, 30, 60] });
+  const joined = run(cut, { type: "join", from: "a", to: "a-2" });
+  expect(joined.clips).toEqual(state.clips);
+
+  // Once a pause is ripple deleted, the source jumps at the cut.
+  const pause = run(state, {
+    type: "removeRange",
+    from: 30,
+    to: 45,
+    ripple: true,
+  });
+  expect(() => run(pause, { type: "join", from: "a", to: "a-2" })).toThrow(
+    "Can't join these pieces of talk.mp4: the second does not pick up the source where the first ends, or a setting differs.",
+  );
+  const quieter = run(cut, {
+    type: "setClip",
+    clipId: "a-sound-2",
+    volume: 0.5,
+  });
+  expect(() => run(quieter, { type: "join", from: "a", to: "a-2" })).toThrow(
+    "or a setting differs",
+  );
+  const locked = timeline(cut.clips, [
+    { index: 0, kind: "video" },
+    { index: 1, kind: "audio", locked: true },
+  ]);
+  expect(() => run(locked, { type: "join", from: "a", to: "a-2" })).toThrow(
+    "Track A1 is locked.",
+  );
+  expect(() => run(cut, { type: "join", from: "a-2", to: "a" })).toThrow(
+    "does not start where",
+  );
+});
+
 test("closeGap refuses what Resolve refuses: a clip in the gap, a locked track, and no gap", () => {
   const music = clip("music", 2, 20, 50, {
     kind: "audio",

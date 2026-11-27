@@ -94,6 +94,7 @@ const clipsOf = (command: Command) => {
       return command.clipIds ?? [];
     case "roll":
     case "swap":
+    case "join":
       return [command.from, command.to];
     case "trim":
     case "freeze":

@@ -32,6 +32,7 @@ import {
 } from "../keymap";
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
+import { gapStarts } from "../timeline/selection";
 import { subscribeProjectEvents } from "../api";
 import {
   NO_COMPOSITION_ROOT,
@@ -433,6 +434,18 @@ export function EditPage({
     showSource(false);
     transport.seek(frame);
   };
+  /** Gaps are the timeline's, so their keys show it even while a source is up. */
+  const gap = (
+    to: (starts: number[], frame: number) => number | undefined,
+    side: "before" | "after",
+  ) => {
+    const view = useTimeline.getState().view;
+    if (!view) return;
+    const frame = to(gapStarts(view.timeline), transport.use.getState().frame);
+    if (frame === undefined) return void notice(`No gap ${side} the playhead.`);
+    showSource(false);
+    transport.seek(frame);
+  };
   /** [ and ] step through the selected clips' keyframes, or every clip's when none is selected. */
   const keyframe = (
     to: (frames: number[], frame: number) => number | undefined,
@@ -522,6 +535,10 @@ export function EditPage({
         return void notice("No keyframe at the playhead on this clip.");
       void editTimeline(projectId, "Delete keyframe", () => commands);
     },
+    controlGapPrev: () =>
+      gap((starts, frame) => starts.findLast((at) => at < frame), "before"),
+    controlGapNext: () =>
+      gap((starts, frame) => starts.find((at) => at > frame), "after"),
     controlMarkersPrev: () =>
       marker(
         (frames, frame) => frames.findLast((at) => at < frame),

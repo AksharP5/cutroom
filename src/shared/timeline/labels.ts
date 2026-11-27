@@ -211,6 +211,8 @@ export function editLabel(
           if (command.mode === "replace")
             return `${pending ? "Hold" : "Held"} ${named ? target([command.clipId]) : "the clip"} on the frame at ${time(command.at)}`;
           return `${pending ? "Freeze" : "Froze"} ${named ? target([command.clipId]) : "frame"} at ${time(command.at)}`;
+        case "join":
+          return `${pending ? "Join" : "Joined"} ${named ? target([command.from, command.to]) : "clips"} at ${time(clips.find((clip) => clip.id === command.to)?.start ?? 0)}`;
         case "closeGap": {
           const gap = timeline && gapAt(timeline, command.track, command.at);
           return `${pending ? "Close" : "Closed"} ${gap ? `the ${span(gap.to - gap.from)} gap` : "the gap"} on ${trackName(command.track)}${gap ? ` at ${time(gap.from)}` : ""}`;

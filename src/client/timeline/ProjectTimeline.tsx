@@ -365,6 +365,7 @@ export function ProjectTimeline({
     editCopy: () => clipboard("copy"),
     editPasteAttributes: () => clipboard("attributes"),
     editCut: () => clipboard("cut"),
+    editRippleCut: () => clipboard("rippleCut"),
     editPaste: () => clipboard("overwrite"),
     editPasteInsert: () => clipboard("insert"),
     ...(Object.fromEntries(edits) as Partial<Record<Action, () => void>>),

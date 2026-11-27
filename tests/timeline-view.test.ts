@@ -34,6 +34,7 @@ import { localMediaPath, sourceUrl } from "../src/shared/media";
 import {
   clickSelection,
   emptySelection,
+  gapStarts,
   marqueeSelection,
   pruneSelection,
   selectionAtPlayhead,
@@ -733,4 +734,18 @@ test("a ramped clip's filmstrip and waveform show the source it plays, not a str
   expect(
     rampSourceSeconds(clip("plain", 0, 0, 150), fps30, 0, 1, 4),
   ).toBeNull();
+});
+
+test("gap keys stop where each auto-select track's empty time starts", () => {
+  const state = timeline(
+    [
+      clip("a", 0, 30, 30),
+      clip("b", 0, 90, 30),
+      clip("c", 1, 0, 200),
+      clip("d", 2, 0, 10),
+      clip("e", 2, 50, 10),
+    ],
+    [track(0), track(1), track(2, { autoSelect: false })],
+  );
+  expect(gapStarts(state)).toEqual([0, 60]);
 });

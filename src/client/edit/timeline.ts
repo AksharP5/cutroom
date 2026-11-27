@@ -1715,7 +1715,7 @@ export const hasClipboard = (projectId: string) => clipboardIds.has(projectId);
 /** Clipboard keys serialize copy/cut/paste, including a paste pressed before copy has answered. */
 export function clipboardEdit(
   projectId: string,
-  action: "copy" | "cut" | "overwrite" | "insert" | "attributes",
+  action: "copy" | "cut" | "rippleCut" | "overwrite" | "insert" | "attributes",
   at: number,
 ) {
   const { selection, view } = useTimeline.getState();
@@ -1723,8 +1723,12 @@ export function clipboardEdit(
   const seen = view?.timeline;
   clipboardTask = clipboardTask
     .then(async () => {
-      if (action === "copy" || action === "cut") {
-        if (!clipIds.length || !seen) return;
+      if (action === "copy" || action === "cut" || action === "rippleCut") {
+        if (!seen) return;
+        if (!clipIds.length) {
+          if (action === "rippleCut") showToast("Select clips to ripple cut.");
+          return;
+        }
         const targets = copyClips(seen, clipIds);
         const copied = await enqueue(async () => {
           const view = await read(projectId);
@@ -1753,11 +1757,11 @@ export function clipboardEdit(
               : clipIds[0]!,
           fps: seen.fps,
         });
-        if (action === "cut")
+        if (action !== "copy")
           await editTimeline(
             projectId,
-            "Cut clips",
-            () => [{ type: "remove", clipIds, ripple: false }],
+            action === "cut" ? "Cut clips" : "Ripple cut clips",
+            () => [{ type: "remove", clipIds, ripple: action === "rippleCut" }],
             seen,
           );
         return;

@@ -610,6 +610,44 @@ const cycleVersion =
     return [];
   };
 
+/**
+ * Alt+\ joins a through edit: the selected cut, the cut between two selected clips, or else the
+ * cut at the playhead on unlocked auto-select tracks. The engine takes linked partners along and
+ * says why when the pieces do not continue each other.
+ */
+const join = (timeline: Timeline, target: EditTarget): CommandInput[] => {
+  const point =
+    target.editPoint && clipsAtEditPoint(timeline, target.editPoint);
+  const selected = selectedIn(timeline, target);
+  const candidates = point
+    ? [point.to].filter((clip) => clip !== undefined)
+    : selected.length
+      ? selected
+      : autoSelectAt(timeline, target.frame).filter(
+          (clip) => clip.start === target.frame,
+        );
+  // The engine joins linked partners with their clip, so each linked group is named once.
+  const links = new Set<string>();
+  const commands = candidates.flatMap((to): CommandInput[] => {
+    const from = timeline.clips.find(
+      (clip) =>
+        clip.track === to.track &&
+        clipEnd(clip) === to.start &&
+        (point
+          ? clip.id === point.from?.id
+          : !selected.length || target.selection.has(clip.id)),
+    );
+    if (!from || (to.link !== null && links.has(to.link))) return [];
+    if (to.link !== null) links.add(to.link);
+    return [{ type: "join", from: from.id, to: to.id }];
+  });
+  if (commands.length) return commands;
+  throw new TimelineError(
+    "not_found",
+    "Nothing to join. Select a cut between two pieces of a clip, or put the playhead on it.",
+  );
+};
+
 /** Clips with a speed to reset: a ramp, or a constant speed other than 100%. */
 export const resettable = (clips: readonly Clip[]) =>
   clips.filter(
@@ -673,6 +711,7 @@ export const editKeys = {
   },
   editBladeRazor: { label: "Razor", commands: razor },
   editM2SplitClip: { label: "Split", commands: razor },
+  editM2JoinClip: { label: "Join clips", commands: join },
   editBackspace: { label: "Lift", commands: removeSelection(false) },
   editDelete: { label: "Ripple delete", commands: removeSelection(true) },
   editClipEnabled: {

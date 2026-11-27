@@ -194,6 +194,38 @@ test("I, O and Shift+X with nothing selected ripple delete the range in one undo
   expect((await read()).timeline.range).toEqual({ in: 60, out: 135 });
 });
 
+test("Ctrl+Shift+X ripple cuts a shot for pasting, and Ctrl+Alt+' finds the gap a lift leaves", async ({
+  page,
+  request,
+}) => {
+  const { timeline, clips, seek } = await open(page, request, "Ripple cut");
+  await timeline.locator('[data-clip="shot-2"]').click();
+  await page.keyboard.press("Control+Shift+X");
+  await expect.poll(clips).toEqual([
+    ["shot-1", 0, 90],
+    ["shot-3", 90, 90],
+    ["shot-4", 180, 90],
+  ]);
+  await seek("0600");
+  await page.keyboard.press("Control+Shift+V");
+  await expect
+    .poll(async () => (await clips()).map(([, start]) => start))
+    .toEqual([0, 90, 180, 270]);
+
+  await timeline.locator('[data-clip="shot-3"]').click();
+  await page.keyboard.press("x");
+  await expect.poll(async () => (await clips()).length).toBe(3);
+  await seek("0000");
+  await page.keyboard.press("Control+Alt+'");
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:03:00",
+  );
+  await page.keyboard.press("Control+Alt+'");
+  await expect(page.locator(".toast")).toContainText(
+    "No gap after the playhead.",
+  );
+});
+
 test("Q on a later shot parks at its start before the server answers and preserves a later seek", async ({
   page,
   request,
