@@ -45,7 +45,11 @@ import {
   readProjectHistory,
   type ProjectHistory,
 } from "../../src/server/history/projectHistory";
-import { START, type HistoryWho } from "../../src/server/history/historyLog";
+import {
+  HistoryLogReadError,
+  START,
+  type HistoryWho,
+} from "../../src/server/history/historyLog";
 import { openBlobStore } from "../../src/server/history/blobStore";
 
 const you: HistoryWho = { kind: "person", name: "You" };
@@ -389,6 +393,37 @@ describe("openProjectHistory", () => {
     await reopened.flush();
     expect(reopened.list()).toEqual([]);
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "keeps pending media adoption when its list cannot be read",
+    async () => {
+      const { history, write, projectDir, historyRoot } = await project({
+        "index.html": "A",
+      });
+      await history.close();
+      write("clip.bin", Buffer.alloc(2 * 1024 ** 2, 7));
+      const adopting = join(historyRoot, history.projectId, "adopting.json");
+      const pending = '["clip.bin"]';
+      writeFileSync(adopting, pending);
+      chmodSync(adopting, 0o000);
+      try {
+        // The editor keeps the project editable, without Undo, on this error.
+        const refused = await open(projectDir, historyRoot).catch(
+          (error: unknown) => error,
+        );
+        expect(refused).toBeInstanceOf(HistoryLogReadError);
+        expect(String(refused)).toMatch(/EACCES.*adopting.json/);
+      } finally {
+        if (existsSync(adopting)) chmodSync(adopting, 0o644);
+      }
+      expect(readFileSync(adopting, "utf8")).toBe(pending);
+      const reopened = await open(projectDir, historyRoot);
+      await waitFor(() =>
+        expect(reopened.peek(START)).toHaveProperty(["clip.bin"]),
+      );
+      expect(reopened.list()).toEqual([]);
+    },
+  );
 
   it("a log 0.8.123 wrote without a ledger takes none in, and one made later while closed is a change", async () => {
     const { history, write, projectDir, historyRoot } = await project(
