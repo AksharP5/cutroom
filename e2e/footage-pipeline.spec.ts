@@ -376,9 +376,15 @@ test("a click on GPU footage selects the clip the viewer draws", async ({
       page
         .frameLocator("iframe[data-live]")
         .locator("#picture")
-        .evaluate((video: HTMLVideoElement) => video.preload),
+        .evaluate((video: HTMLVideoElement) =>
+          (
+            window as unknown as {
+              __cutroomParkedMedia: ReadonlyMap<HTMLMediaElement, unknown>;
+            }
+          ).__cutroomParkedMedia.has(video),
+        ),
     )
-    .toBe("none");
+    .toBe(true);
   await page
     .getByRole("application", { name: "Picture", exact: true })
     .click({ position: { x: 60, y: 60 } });
