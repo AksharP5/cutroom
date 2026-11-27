@@ -68,6 +68,7 @@ import {
   START,
   baselineRecord,
   foldOldest,
+  HistoryLogReadError,
   manifestAround,
   manifestAt,
   readLog,
@@ -613,6 +614,7 @@ class Engine {
 
   async start(log: HistoryLog | null): Promise<void> {
     if (!log) return this.firstOpen();
+    const left = this.readAdopting();
     this.log = withoutHiddenPaths(log);
     if (log.unterminated) this.persistLog();
     await this.reclaimUncopied();
@@ -627,7 +629,6 @@ class Engine {
       });
     }
     await this.recoverReplay();
-    const left = this.readAdopting();
     const unadopted = (file: { path: string }) =>
       left.has(file.path) && !this.tracked.has(file.path);
     this.adoptMediaInBackground(
@@ -824,14 +825,24 @@ class Engine {
   }
 
   readAdopting(): Set<string> {
+    const file = join(this.home, "adopting.json");
+    let raw: string;
     try {
-      return new Set(
-        JSON.parse(
-          readFileSync(join(this.home, "adopting.json"), "utf-8"),
-        ) as string[],
+      raw = readFileSync(file, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+      throw new HistoryLogReadError(
+        `Could not read pending media adoption: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
       );
-    } catch {
-      return new Set();
+    }
+    try {
+      return new Set(z.array(z.string()).parse(JSON.parse(raw)));
+    } catch (error) {
+      throw new HistoryLogReadError(
+        `Pending media adoption is damaged: ${file}`,
+        { cause: error },
+      );
     }
   }
 

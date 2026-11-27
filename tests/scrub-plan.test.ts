@@ -262,7 +262,7 @@ test("changing the project frame rate keeps every sample's source (#377)", () =>
   }
 });
 
-test("a 1,000-clip dialogue timeline plans in under 10 ms", () => {
+test("a 1,000-clip dialogue timeline plans in under 20 ms", () => {
   // Cut from three recordings at 60 fps: a fade on every fifth clip, 2x on every twentieth, a
   // ramp on every hundredth, and a dissolve on every fourth cut.
   const ramp = ` data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":1},{"t":1,"v":1.5}]}]}'`;
@@ -310,7 +310,9 @@ test("a 1,000-clip dialogue timeline plans in under 10 ms", () => {
   );
   console.log(`1,000-clip scrub plan: ${fastest.toFixed(2)} ms`);
   expect(plan(timeline)).toHaveLength(1000);
-  expect(fastest).toBeLessThan(10);
+  // CI's runners take about 6 or 10.5 ms, depending on the CPU they get. Planning ramps
+  // entry by entry, the regression this guards against, took 73 ms.
+  expect(fastest).toBeLessThan(20);
 });
 
 async function ffmpeg(args: string[]) {
