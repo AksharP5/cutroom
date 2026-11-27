@@ -189,7 +189,8 @@ export function createTransport() {
     )
       frame = end;
     const loops = get().loop || get().span !== null;
-    if (frame >= end && around) return park(around.back);
+    // Loop repeats Play Around, as in Resolve; otherwise one pass returns the playhead.
+    if (frame >= end && around && !get().loop) return park(around.back);
     if (frame >= end) {
       if (loops) restart(first);
       else return park(end - 1);
@@ -254,17 +255,19 @@ export function createTransport() {
     },
     /**
      * Plays `first` to `end` once and puts the playhead back where it was, as Resolve's Play
-     * Around does. Any other playback or seek ends it where it is.
+     * Around does, or over and over while Loop is on. Pressed again during a pass, it plays
+     * that pass again from its start. Any other playback or seek ends it where it is.
      */
     playAround(first: number, end: number) {
       const { frame, duration } = get();
       if (!duration) return;
-      park(clamp(first));
-      around = {
-        first: get().frame,
+      const pass = around ?? {
+        first: clamp(first),
         end: Math.min(Math.max(end, first + 1), duration),
         back: frame,
       };
+      park(pass.first);
+      around = pass;
       run({ kind: "playing" });
     },
     /** Moves the playhead and stops playback; the latest seek wins. */
