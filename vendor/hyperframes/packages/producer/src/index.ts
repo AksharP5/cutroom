@@ -1,0 +1,206 @@
+/**
+ * @hyperframes/producer
+ *
+ * Generic HTML-to-video rendering engine using Chrome's BeginFrame API.
+ * Framework-agnostic: works with GSAP, Lottie, Three.js, CSS animations,
+ * or any web content via configurable page contracts and hooks.
+ */
+
+export {
+  REFERENCE_BACKGROUND_FIELD,
+  referenceBackgroundResult,
+  createReferenceBackgroundRecorder,
+  readReferenceBackground,
+  type ReferenceBackground,
+  type ReferenceBackgroundResult,
+} from "@hyperframes/engine";
+
+// ── Main rendering pipeline ─────────────────────────────────────────────────
+export {
+  createRenderJob,
+  executeRenderJob,
+  resolveRenderDebugDir,
+  RenderCancelledError,
+  RenderQualityError,
+  applyRenderWarningPolicy,
+  type RenderConfig,
+  type RenderConfigInput,
+  type RenderJob,
+  type RenderStatus,
+  type RenderOutcome,
+  type RenderStrictness,
+  type RenderWarning,
+  type RenderPerfSummary,
+  type ProgressCallback,
+} from "./services/renderOrchestrator.js";
+export {
+  renderSpan,
+  RenderSpanUnsupportedError,
+  spanFrameRange,
+  type RenderSpanResult,
+} from "./services/distributed/renderSpan.js";
+export { extractSafeRenderErrorCode } from "./services/safeRenderErrorCode.js";
+export {
+  RENDER_JOB_DIR,
+  createOwnedRenderDir,
+  listAbandonedRenderDirs,
+} from "./services/render/renderDirOwner.js";
+export {
+  RENDER_REQUEST_VERSION,
+  createRenderRequest,
+  distributedConfigFromRequest,
+  parseRenderRequest,
+  renderConfigFromRequest,
+  renderRequestFromDistributedConfig,
+  serializeRenderRequest,
+  type CreateRenderRequestInput,
+  type DistributedRenderOptions,
+  type RenderRequest,
+  type RenderRequestOptions,
+} from "./renderRequest.js";
+export {
+  type BrowserDiagnosticSummary,
+  type RenderCaptureObservability,
+  type RenderObservabilitySummary,
+  type RenderObservationData,
+  type RenderObservationEvent,
+  type RenderObservationStatus,
+} from "./services/render/observability.js";
+
+// ── HTML asset localization ─────────────────────────────────────────────────
+// Rewrite remote <img>/<video>/<audio>/@font-face to same-origin local paths
+// before capture. Shared by render and `validate` so both resolve assets alike.
+export {
+  localizeRemoteMediaSources,
+  localizeRemoteImageSources,
+  localizeRemoteFontFaces,
+} from "./services/htmlCompiler.js";
+
+// ── Frame capture (lower-level) ─────────────────────────────────────────────
+export {
+  createCaptureSession,
+  initializeSession,
+  closeCaptureSession,
+  captureFrame,
+  captureFrameToBuffer,
+  getCompositionDuration,
+  getCapturePerfSummary,
+  // Transient-vs-genuine init failure classifier — re-exported so standalone
+  // helpers can reuse the render pipeline's canonical retry gating instead of
+  // re-deriving it.
+  isTransientBrowserError,
+  prepareCaptureSessionForReuse,
+  type CaptureOptions,
+  type CaptureSession,
+  type CaptureResult,
+  type CapturePerfSummary,
+  type BeforeCaptureHook,
+} from "./services/frameCapture.js";
+
+// ── File server ─────────────────────────────────────────────────────────────
+export {
+  createFileServer,
+  type FileServerOptions,
+  type FileServerHandle,
+} from "./services/fileServer.js";
+
+export { prepareAnimatedGifInputs } from "./services/animatedGifPrep.js";
+export { prepareHeifImageInputs } from "./services/heifImagePrep.js";
+
+// ── Video frame injection (Hyperframes-specific hook) ───────────────────────
+export { createVideoFrameInjector } from "@hyperframes/engine";
+
+// ── Configuration ───────────────────────────────────────────────────────────
+export { resolveConfig, DEFAULT_CONFIG, type ProducerConfig } from "./config.js";
+
+// ── Logger ──────────────────────────────────────────────────────────────────
+export {
+  type ProducerLogger,
+  type LogLevel,
+  createConsoleLogger,
+  defaultLogger,
+} from "./logger.js";
+
+// ── Server ──────────────────────────────────────────────────────────────────
+export {
+  createRenderHandlers,
+  createProducerApp,
+  startServer,
+  type HandlerOptions,
+  type ServerOptions,
+  type RenderHandlers,
+} from "./server.js";
+
+// ── Utilities ───────────────────────────────────────────────────────────────
+export { normalizeErrorMessage } from "./utils/errorMessage.js";
+export { collectRenderMedia, type RenderMedia } from "./services/renderMediaCollector.js";
+export { mediaProfileMatchesElementType } from "./services/assetMediaType.js";
+// Font localization: fetch + embed @font-face rules for requested families
+// (including those declared only via a remote <link>) so a bundled composition
+// renders with the real font instead of a fallback, regardless of network
+// timing. The render pipeline runs this in its compile stage; the CLI audit
+// paths (snapshot/check) reuse it so their captures match the render.
+export {
+  FONT_FETCH_FAILED,
+  FONT_FETCH_UNAVAILABLE,
+  FontFetchError,
+  FontFetchUnavailableError,
+  injectDeterministicFontFaces,
+  type FontFetchErrorCode,
+  type FontFetchRetryPolicy,
+  type InjectDeterministicFontFacesOptions,
+} from "@hyperframes/core/fonts/embed";
+export { quantizeTimeToFrame } from "./utils/parityContract.js";
+export { resolveRenderPaths, type RenderPaths } from "./utils/paths.js";
+
+export {
+  prepareHyperframeLintBody,
+  runHyperframeLint,
+  type PreparedHyperframeLintInput,
+} from "./services/hyperframeLint.js";
+
+// ── Distributed render primitives ───────────────────────────────────────────
+// The full surface lives at `@hyperframes/producer/distributed`; we
+// additionally re-export the three activity functions + their result
+// types here so callers that pin `@hyperframes/producer` don't need a
+// separate subpath import.
+export {
+  assemble,
+  assembleV2,
+  PLAN_PROTOCOL_V2,
+  PLAN_PROTOCOL_UNSUPPORTED,
+  PLAN_V2_ARTIFACT_LAYOUT,
+  PLAN_V2_HASH_SCHEMA,
+  PLAN_V2_INTEGRITY_UNRECOVERABLE,
+  PLAN_V2_MATERIALIZATION_MARKER,
+  PLAN_V2_SCHEMA_VERSION,
+  createPlanV2FromExecutionPlan,
+  getPlanV2ExecutionPlanHash,
+  listPlanV2ArtifactsForTarget,
+  materializePlanV2Target,
+  planV2,
+  planV2WithPublisher,
+  PlanV2IntegrityError,
+  PlanProtocolUnsupportedError,
+  readPlanV2Manifest,
+  publishPlanV2FromExecutionPlan,
+  renderChunk,
+  renderChunkV2,
+  validatePlanV2MaterializedTarget,
+  type AssembleResult,
+  type ChunkRenderer,
+  type ChunkResult,
+  type EffectiveChunkResult,
+  type DistributedRenderConfig,
+  type PlanProtocolDescriptor,
+  type PlanProtocolV2Descriptor,
+  type PlanV2Artifact,
+  type PlanV2Limitations,
+  type PlanV2Manifest,
+  type PlanV2MaterializationResult,
+  type PlanV2MaterializationTarget,
+  type PlanV2Result,
+  type PlanV2WithPublisherOptions,
+  type PlanV2ArtifactPublisher,
+  type PlanV2PublishBlob,
+} from "./distributed.js";

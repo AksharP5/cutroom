@@ -15,7 +15,7 @@ Download the [Linux release](https://github.com/AksharP5/cutroom/releases), extr
 
 ### From source
 
-Requires Bun 1.4.4 or newer, Node.js 22.18 or newer, FFmpeg, and a Chromium-compatible browser.
+Requires Bun 1.4.4 or newer, Node.js 22.18 or newer, Git, FFmpeg, and a Chromium-compatible browser. The first install builds the bundled HyperFrames packages.
 
 ```sh
 bun install --frozen-lockfile

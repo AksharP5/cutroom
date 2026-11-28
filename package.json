@@ -8,10 +8,15 @@
   "engines": {
     "bun": ">=1.4.4"
   },
+  "workspaces": [
+    "vendor/@hyperframes/*"
+  ],
   "scripts": {
+    "postinstall": "bun run build:hyperframes",
+    "build:hyperframes": "bun scripts/build-hyperframes.ts",
     "dev": "bun scripts/dev.ts",
     "start": "bun src/server/index.ts",
-    "build": "vite build",
+    "build": "bun run build:hyperframes && vite build",
     "check": "tsc --noEmit",
     "test": "bun test tests",
     "test:e2e": "bun run build && playwright test --grep-invert @performance",
@@ -40,10 +45,11 @@
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.40.0",
     "@fontsource/ibm-plex-sans": "5.3.0",
-    "@hyperframes/core": "0.9.26",
-    "@hyperframes/parsers": "0.9.26",
-    "@hyperframes/producer": "0.9.26",
-    "@hyperframes/studio-server": "0.9.26",
+    "@hyperframes/core": "workspace:*",
+    "@hyperframes/engine": "workspace:*",
+    "@hyperframes/parsers": "workspace:*",
+    "@hyperframes/producer": "workspace:*",
+    "@hyperframes/studio-server": "workspace:*",
     "@lezer/highlight": "1.2.5",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@phosphor-icons/react": "2.1.10",
@@ -72,11 +78,6 @@
     "prettier": "3.9.10",
     "typescript": "7.0.2",
     "vite": "6.4.2"
-  },
-  "patchedDependencies": {
-    "@hyperframes/core@0.9.26": "patches/@hyperframes+core@0.9.26.patch",
-    "@hyperframes/producer@0.9.26": "patches/@hyperframes+producer@0.9.26.patch",
-    "@hyperframes/studio-server@0.9.26": "patches/@hyperframes%2Fstudio-server@0.9.26.patch"
   },
   "trustedDependencies": [
     "electron"

@@ -1,0 +1,58 @@
+/**
+ * Shared primitives for scanning and rewriting asset paths in HTML/CSS.
+ *
+ * Used by: rewriteSubCompPaths (core), collectExternalAssets (producer),
+ * localizeExternalAssets (CLI publish).
+ */
+
+import { isAbsolute, relative, resolve } from "node:path";
+
+/**
+ * Regex matching CSS `url(...)` references — captures the quote style and the
+ * raw URL. The URL group is anchored to non-whitespace at both ends so the
+ * surrounding `\s*` can never overlap it (avoids polynomial-ReDoS backtracking);
+ * the captured value is whitespace-bounded already, matching the old behavior
+ * after callers `.trim()` it.
+ */
+export const CSS_URL_RE = /\burl\(\s*(["']?)([^)"'\s](?:[^)"']*[^)"'\s])?)\1\s*\)/g;
+
+/** Attributes that may contain relative asset paths. */
+export const PATH_ATTRS = ["src", "href"] as const;
+
+const URL_SCHEME_OF_TWO_OR_MORE_CHARS_RE = /^[a-z][a-z0-9+.-]+:/i;
+
+/** Returns true for URLs/prefixes that should never be rewritten. */
+export function isNonRelativeUrl(val: string): boolean {
+  return (
+    !val ||
+    val.startsWith("http://") ||
+    val.startsWith("https://") ||
+    val.startsWith("//") ||
+    val.startsWith("data:") ||
+    val.startsWith("#") ||
+    val.startsWith("/") ||
+    URL_SCHEME_OF_TWO_OR_MORE_CHARS_RE.test(val)
+  );
+}
+
+/**
+ * Cross-platform containment check: is `childPath` inside `parentPath`?
+ * Equality counts as "inside".
+ */
+const LEADING_PARENT_SEGMENT_RE = /^\.\.(?:[\\/]|$)/;
+
+export function isPathInside(childPath: string, parentPath: string): boolean {
+  const absChild = resolve(childPath);
+  const absParent = resolve(parentPath);
+  if (absChild === absParent) return true;
+  const rel = relative(absParent, absChild);
+  return rel !== "" && !LEADING_PARENT_SEGMENT_RE.test(rel) && !isAbsolute(rel);
+}
+
+export {
+  decodeCssEscapes,
+  decodeWellFormedEscapes,
+  decodedUrlPath,
+  splitUrlSuffix,
+  encodeUrlPath,
+} from "./utils/urlPath.js";
