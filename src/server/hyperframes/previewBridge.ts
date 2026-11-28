@@ -2374,11 +2374,17 @@ function installPreviewBridge(
    * proxy exists, and each one's frame is held when its piece comes.
    */
   const unmade = new Set<HTMLVideoElement>();
+  const runtimeHold = () =>
+    document.documentElement.hasAttribute("data-hf-preview-seek-hold");
+  const hasPendingFootage = (visible?: HTMLVideoElement[]) =>
+    unmade.size > 0 &&
+    // Until the runtime commits the seek, visibility still describes the old picture.
+    (runtimeHold() ||
+      (visible ?? visibleVideos(true)).some((video) => unmade.has(video)));
   let footagePending = false;
   /** Tells the editor whether the picture lacks a frame that is still being made. */
   const reportUnmade = () => {
-    const pending =
-      unmade.size > 0 && visibleVideos(true).some((video) => unmade.has(video));
+    const pending = hasPendingFootage();
     if (footagePending === pending) return;
     footagePending = pending;
     parent.postMessage(
@@ -2583,9 +2589,12 @@ function installPreviewBridge(
               await new Promise((resolve) => requestAnimationFrame(resolve));
             }
           })();
+          const layout = waitForSeek(
+            capturePage ? { videoFrames: false } : undefined,
+          );
           try {
             await Promise.race([
-              waitForSeek(capturePage ? { videoFrames: false } : undefined),
+              layout,
               unmadeFound.then(() =>
                 settled || !current()
                   ? undefined
@@ -2594,6 +2603,20 @@ function installPreviewBridge(
             ]);
           } finally {
             settled = true;
+          }
+          if (!current()) return;
+          if (unmade.size && runtimeHold()) {
+            reportUnmade();
+            void layout.then(
+              () => {
+                if (current() && !runtimeHold())
+                  void refreshPicture().catch(reportFrameFailure);
+              },
+              (reason) => {
+                if (current()) reportFrameFailure(reason);
+              },
+            );
+            return;
           }
           for (;;) {
             if (!current()) return;
@@ -2780,10 +2803,7 @@ function installPreviewBridge(
               if (redrawGrade) grading?.redraw();
               exactVersion = version;
               frameStatus(null);
-              if (
-                footagePending &&
-                !nowVisible.some((video) => unmade.has(video))
-              ) {
+              if (footagePending && !hasPendingFootage(nowVisible)) {
                 await paint();
                 if (!current()) return;
               }
@@ -3369,7 +3389,7 @@ function installPreviewBridge(
     // The runtime shows the last picture until each newly active clip has loaded, so
     // only then does visibility name the clips at this time.
     const deadline = performance.now() + 1000;
-    while (document.documentElement.hasAttribute("data-hf-preview-seek-hold")) {
+    while (runtimeHold()) {
       if (version !== pictureVersion) return true;
       if (performance.now() > deadline) return false;
       await new Promise((resolve) => requestAnimationFrame(resolve));

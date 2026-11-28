@@ -1065,11 +1065,20 @@ test("a recording placed while its proxy is made shows the new timeline at once 
       "data-standin",
     );
     expect(await shownFrame(page, 16)).toBe(0xffff);
+    // Return while the decoder is still waiting. The white gap can remain on screen,
+    // but it is only a stand-in for the clip under the new playhead.
+    await seekFrame(page, 930);
+    await expect(preparing).toBeVisible();
+    await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+      "data-standin",
+      "true",
+    );
+    await expect(stage).not.toHaveAttribute("data-preview-ready");
+    expect(await shownFrame(page, 16)).toBe(0xffff);
   } finally {
     hold.release.resolve();
   }
   hold = holdPiece(-1);
-  await seekFrame(page, 930);
   await expect(stage).toHaveAttribute("data-preview-ready");
   await expect(preparing).toBeHidden();
   expect(await shownFrame(page, 16)).toBe(900);
