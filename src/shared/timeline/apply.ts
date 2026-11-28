@@ -974,13 +974,22 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         );
       const tracks = rangeTracks(timeline, command.ripple, !!batch.onRippleCut);
       if (!command.ripple) {
-        for (const clip of clips) {
-          if (
-            !tracks.has(clip.track) ||
-            clip.start >= to ||
-            clipEnd(clip) <= from
-          )
-            continue;
+        const targets = clips.filter(
+          (clip) =>
+            tracks.has(clip.track) && clip.start < to && clipEnd(clip) > from,
+        );
+        const protectedPartner = withPartners(clips, targets).find(
+          (clip) => !tracks.has(clip.track),
+        );
+        if (protectedPartner) {
+          const { track } = protectedPartner;
+          const locked = trackAt(track)?.locked;
+          throw new TimelineError(
+            locked ? "locked" : "unsupported",
+            `Can't lift the range while linked clip ${protectedPartner.id} is on ${locked ? "locked" : "auto-select-off"} track ${trackLabel(timeline, track)}.`,
+          );
+        }
+        for (const clip of targets) {
           const reason =
             clip.start < from && clipEnd(clip) > to
               ? clip.sourceRestrictions?.copy

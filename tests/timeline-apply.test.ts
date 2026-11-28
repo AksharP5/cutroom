@@ -2200,6 +2200,20 @@ test("removeRange takes a range off the auto-select tracks, as In and Out with n
     );
 });
 
+test("a marked lift refuses if it would leave protected linked sound behind", () => {
+  for (const locked of [false, true]) {
+    const state = timeline(talk("a", 30, 30, 0), [
+      { index: 0, kind: "video" },
+      { index: 1, kind: "audio", autoSelect: false, locked },
+    ]);
+    expect(() =>
+      run(state, { type: "removeRange", from: 20, to: 70, ripple: false }),
+    ).toThrow(
+      `Can't lift the range while linked clip a-sound is on ${locked ? "locked" : "auto-select-off"} track A1.`,
+    );
+  }
+});
+
 test("closeGap refuses what Resolve refuses: a clip in the gap, a locked track, and no gap", () => {
   const music = clip("music", 2, 20, 50, {
     kind: "audio",
