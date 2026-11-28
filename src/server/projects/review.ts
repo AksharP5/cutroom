@@ -595,6 +595,7 @@ export function createReviewService(store: ProjectStore) {
     label?: string,
     batchLabels?: string[],
     origin?: string,
+    frame?: number,
   ) => {
     const ledger = writableLedger(state.ledger);
     appendEdit(
@@ -602,6 +603,7 @@ export function createReviewService(store: ProjectStore) {
       {
         historyId: entry?.id,
         label: entry?.label ?? "Edited source",
+        frame,
         at: new Date().toISOString(),
         by: actor ? "agent" : "human",
         agentName: actor
@@ -954,6 +956,7 @@ export function createReviewService(store: ProjectStore) {
         create?: boolean;
         label?: string | ((result: T) => string);
         batchLabels?: (result: T) => string[] | undefined;
+        frame?: (result: T) => number | undefined;
         origin?: string;
       } = {},
     ) =>
@@ -1029,6 +1032,7 @@ export function createReviewService(store: ProjectStore) {
               : options.label,
             options.batchLabels?.(value),
             options.origin,
+            options.frame?.(value),
           );
         } catch (error) {
           reportEditWarning(

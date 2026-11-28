@@ -75,6 +75,7 @@ import {
 import {
   editLabel,
   joinEditLabels,
+  ridesAlong,
   rippleCutSuffix,
 } from "../../shared/timeline/labels";
 import {
@@ -451,6 +452,7 @@ export function createTimelineRoutes(
               summaries.splice(-2);
             }
             applied.push(command);
+            if (ridesAlong(command, batch.commands)) return;
             labels.push(editLabel([command], before, "Edited timeline"));
             summaries.push(
               editLabel([command], before, "Edited timeline", "done"),
@@ -677,6 +679,9 @@ export function createTimelineRoutes(
       summary,
       encodedSummary,
       formatPreview: plan?.preview,
+      // A range delete's row sits at its In point, where the cut is.
+      frame: batch.commands.find((command) => command.type === "removeRange")
+        ?.from,
       batchLabels:
         cutSuffix ||
         summaries.length > 1 ||
@@ -877,19 +882,22 @@ export function createTimelineRoutes(
     const order = new Map(
       timeline.clips
         .toSorted((a, b) => a.start - b.start)
-        .map((clip, index) => [clip.id, index]),
+        .map((clip, index) => [clip.id, { clip, index }]),
     );
     const rows: InspectorChange[] = ledgerChanges(clipEdits, selected).map(
       ({ members, ...row }) => {
-        let revealClipId: string | undefined;
-        let earliest = Infinity;
-        for (const { clipId } of members) {
-          if (clipId === null) continue;
-          const index = order.get(clipId);
-          if (index === undefined || index >= earliest) continue;
-          earliest = index;
-          revealClipId = clipId;
-        }
+        // The row reveals its earliest clip, or for a change at a frame, the first one from there.
+        const clips = members
+          .flatMap(({ clipId }) =>
+            clipId === null ? [] : (order.get(clipId) ?? []),
+          )
+          .toSorted((a, b) => a.index - b.index)
+          .map(({ clip }) => clip);
+        const revealClipId = (
+          clips.find(
+            (clip) => row.frame === undefined || clip.start >= row.frame,
+          ) ?? clips[0]
+        )?.id;
         return { ...row, revealClipId };
       },
     );
@@ -1269,6 +1277,7 @@ export function createTimelineRoutes(
               summary: prepared.summary,
               encodedSummary: prepared.encodedSummary,
               batchLabels: prepared.batchLabels,
+              frame: prepared.frame,
             },
           };
         },
@@ -1276,6 +1285,7 @@ export function createTimelineRoutes(
         {
           label: (result) => result.summary,
           batchLabels: (result) => result.batchLabels,
+          frame: (result) => result.frame,
           origin: echoOrigin,
         },
       );

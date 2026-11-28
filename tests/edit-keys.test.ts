@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { applyAll, normalizeTimeline } from "../src/shared/timeline/apply";
 import { CommandSchema } from "../src/shared/timeline/schema";
 import type { Clip, Timeline, Track } from "../src/shared/timeline/schema";
-import { editKeys, matchFrame, trimmedPlayhead } from "../src/client/edit/keys";
+import { editKeys, matchFrame, editedPlayhead } from "../src/client/edit/keys";
 import { countingIds } from "./clip-ids";
 
 const clip = (
@@ -151,11 +151,11 @@ test("Q parks at the surviving start and W at the new end, including a later cli
     ["trimRippleEndToPlayhead", 150, 150],
   ] as const) {
     const commands = press(key, timeline, frame);
-    expect(trimmedPlayhead(apply(timeline, commands), commands)).toBe(expected);
+    expect(editedPlayhead(apply(timeline, commands), commands)).toBe(expected);
   }
-  expect(trimmedPlayhead(timeline, [])).toBeNull();
+  expect(editedPlayhead(timeline, [])).toBeNull();
   expect(
-    trimmedPlayhead(timeline, press("editBladeRazor", timeline, 60)),
+    editedPlayhead(timeline, press("editBladeRazor", timeline, 60)),
   ).toBeNull();
 });
 
@@ -195,6 +195,39 @@ test("X lifts and Shift+X ripple deletes the selection, and do nothing without o
   expect(press("editClipEnabled", lifted, 0, ["a", "b"])).toEqual([
     { type: "setClip", clipId: "a", enabled: false },
   ]);
+});
+
+test("With In and Out marked and nothing selected, X lifts and Shift+X ripple deletes the range", () => {
+  const timeline = { ...sequence(musicOff), range: { in: 30, out: 45 } };
+  for (const [key, ripple] of [
+    ["editBackspace", false],
+    ["editDelete", true],
+  ] as const) {
+    const commands = press(key, timeline, 45);
+    expect(commands).toEqual([
+      { type: "removeRange", from: 30, to: 45, ripple },
+      { type: "setRange", in: null, out: null },
+    ]);
+    const edited = apply(timeline, commands);
+    expect(edited.range).toEqual({ in: null, out: null });
+    expect(editedPlayhead(edited, commands)).toBe(30);
+  }
+  // Clips after the range close up; the music with auto-select off keeps its place and length.
+  const closed = apply(timeline, press("editDelete", timeline, 45));
+  expect(starts(closed)).toMatchObject({ b: 85, title: 185, music: 0 });
+  expect(closed.clips.find((item) => item.id === "music")?.duration).toBe(300);
+  // A selection, even of clips already gone, keeps the key on the selection.
+  expect(press("editDelete", timeline, 45, ["b"])).toEqual([
+    { type: "remove", clipIds: ["b"], ripple: true },
+  ]);
+  expect(press("editDelete", closed, 45, ["gone"])).toEqual([]);
+  // One mark alone says which one is missing, rather than doing nothing.
+  const onlyIn = { ...timeline, range: { in: 30, out: null } };
+  expect(() => press("editDelete", onlyIn, 45)).toThrow("Mark an Out point.");
+  const onlyOut = { ...timeline, range: { in: null, out: 45 } };
+  expect(() => press("editBackspace", onlyOut, 45)).toThrow(
+    "Mark an In point.",
+  );
 });
 
 test("Alt+D turns each selected clip on or off, and M adds one marker at the playhead", () => {

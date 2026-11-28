@@ -162,6 +162,82 @@ test("Q, W, E and Shift+X cut a sequence, each one undo step", async ({
   }
 });
 
+test("I, O and Shift+X with nothing selected ripple delete the range in one undo step", async ({
+  page,
+  request,
+}) => {
+  const { clips, read, seek } = await open(page, request, "Range delete");
+  const initial = await clips();
+  await seek("0200");
+  await page.keyboard.press("i");
+  await seek("0414");
+  await page.keyboard.press("o");
+  await expect
+    .poll(async () => (await read()).timeline.range)
+    .toEqual({
+      in: 60,
+      out: 135,
+    });
+  await page.keyboard.press("Shift+X");
+  await expect.poll(clips).toEqual([
+    ["shot-1", 0, 60],
+    ["shot-2", 60, 45],
+    ["shot-3", 105, 90],
+    ["shot-4", 195, 90],
+  ]);
+  expect((await read()).timeline.range).toEqual({ in: null, out: null });
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:02:00",
+  );
+  await page.keyboard.press("Control+z");
+  await expect.poll(clips).toEqual(initial);
+  expect((await read()).timeline.range).toEqual({ in: 60, out: 135 });
+});
+
+for (const [key, at] of [
+  ["x", 90],
+  ["Shift+X", 165],
+] as const)
+  test(`${key} preserves a clip inserted before the marked edit saves`, async ({
+    page,
+    request,
+  }) => {
+    const { agent, clips, hold, read, seek } = await open(
+      page,
+      request,
+      "Concurrent range edit",
+    );
+    await seek("0200");
+    await page.keyboard.press("i");
+    await seek("0414");
+    await page.keyboard.press("o");
+    const range = { in: 60, out: 135 };
+    await expect.poll(async () => (await read()).timeline.range).toEqual(range);
+    const release = await hold();
+    await page.keyboard.press(key);
+    const after = await agent([
+      {
+        type: "insert",
+        at,
+        track: 2,
+        clip: {
+          kind: "title",
+          id: "late-title",
+          text: "New title",
+          duration: 15,
+        },
+      },
+    ]);
+    release();
+    await expect(page.locator(".toast")).toContainText(
+      "An agent changed those clips first.",
+    );
+    expect(await clips()).toEqual(
+      after.map(({ id, start, duration }) => [id, start, duration]),
+    );
+    expect((await read()).timeline.range).toEqual(range);
+  });
+
 test("Q on a later shot parks at its start before the server answers and preserves a later seek", async ({
   page,
   request,

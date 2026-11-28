@@ -29,6 +29,7 @@ const entrySchema = ClipEditSchema.pick({
   agentName: true,
   at: true,
   label: true,
+  frame: true,
 }).extend({
   noteIds: z.array(z.string()),
   // Ordered catalog indexes. A pair denotes an inclusive run of adjacent indexes.
@@ -163,6 +164,7 @@ export function describeMember(member: Member, resolved: boolean): ClipEdit {
     composition: target.composition,
     label: entry.labels?.[ordinal] ?? entry.label,
     batchLabels: entry.batches?.[ordinal],
+    frame: entry.frame,
     historyId: entry.historyId,
     by: entry.by,
     agentName: entry.agentName,

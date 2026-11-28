@@ -919,6 +919,20 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .describe("Lift or ripple delete clips and their linked partners."),
   z
     .object({
+      type: z.literal("removeRange"),
+      from: frame.describe("First timeline frame to remove"),
+      to: frame.describe("Frame after the last one to remove"),
+      ripple: z
+        .boolean()
+        .default(false)
+        .describe("Close the removed time instead of leaving a gap"),
+      ids: pieceIds,
+    })
+    .describe(
+      "Lift or ripple delete a time range on unlocked tracks with auto-select on, cutting the clips across its edges, as In and Out with nothing selected. Agent ripples cut and close the range on all unlocked tracks.",
+    ),
+  z
+    .object({
       type: z.literal("closeGap"),
       track: frame,
       at: frame.describe("Any frame inside the gap"),
@@ -1496,6 +1510,8 @@ export const ClipEditSchema = z.object({
   composition: z.string(),
   label: z.string(),
   batchLabels: z.array(z.string()).optional(),
+  /** Where the change is on the timeline, for an edit that names a frame rather than clips. */
+  frame: z.number().int().nonnegative().optional(),
   by: z.enum(["human", "agent"]),
   agentName: z.string().optional(),
   at: z.string(),
