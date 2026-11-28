@@ -112,6 +112,17 @@ Drawing on the picture uses `--stroke-pencil` 3px on `--stroke-pencil-casing` 7p
 From back to front, the layer tokens are clip 1, selected clip 2, range lines 3, playhead 4, track heads 5, popover 20, toast 30, scrim 40, and modal 41.
 Use the existing layer by role. Shared menus and dialogs use the browser's top layer via popover and dialog, respectively.
 
+### Timeline clip detail
+
+A picture clip shows its name strip when its timeline span reaches 48 px. Below that width the
+picture takes the full height under the rail. Narrow tiles crop around the center of the source
+frame. Audio keeps its waveform under the rail and puts its name over the waveform when it fits.
+Point at a clip between 6 and 48 px wide or select it to read its own name at a narrower zoom.
+
+Adjacent narrow clips from one source share a name and clip count at the run's visible left edge.
+When the clips average under 6 px across the run, the filmstrip or waveform continues across the
+cuts. Each cut leaves a notch in the rail, and each clip can still be selected and edited on its own.
+
 ## Motion
 
 Motion confirms an action or shows a completed edit. Animate transform and opacity only. Use shorter exits than entrances.

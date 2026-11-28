@@ -1,4 +1,5 @@
-import { clipEnd } from "../../shared/timeline/apply";
+import { applyAll, clipEnd, TimelineError } from "../../shared/timeline/apply";
+import { CommandSchema } from "../../shared/timeline/schema";
 import type {
   Clip,
   CommandInput,
@@ -57,6 +58,16 @@ function occupants(timeline: Timeline, range: Clip) {
   );
 }
 
+function changedClips(
+  before: Timeline,
+  after: ReadonlyMap<string, Clip>,
+  targets?: ReadonlySet<string>,
+) {
+  return before.clips.filter(
+    (clip) => targets?.has(clip.id) || !sameClip(clip, after.get(clip.id)),
+  );
+}
+
 /** Changed clips and the occupancy of overwrite destinations, including empty ranges. */
 export function editAnchors(
   before: Timeline,
@@ -70,6 +81,7 @@ export function editAnchors(
         type === "setTransitions" ||
         type === "paste" ||
         type === "remove" ||
+        type === "removeRange" ||
         type === "trim" ||
         type === "trimPlayhead" ||
         type === "roll" ||
@@ -133,10 +145,15 @@ export function editAnchors(
     }),
   );
   return {
-    clips: before.clips.filter(
-      (clip) => targets.has(clip.id) || !sameClip(clip, clips.get(clip.id)),
-    ),
+    clips: changedClips(before, clips, targets),
     destinations,
+    ...(commands.some(({ type }) => type === "removeRange") && {
+      rangeEdit: {
+        before,
+        commands: commands.map((command) => CommandSchema.parse(command)),
+        changedIds: new Set(changedClips(before, clips).map(({ id }) => id)),
+      },
+    }),
   };
 }
 
@@ -148,11 +165,35 @@ export function anchorsChanged(
   const clips = new Map(timeline.clips.map((clip) => [clip.id, clip]));
   if (anchors.clips.some((seen) => !sameClip(seen, clips.get(seen.id))))
     return true;
-  return anchors.destinations.some(
-    ({ range, clips: seen }) =>
-      occupants(timeline, range).length !== seen.length ||
-      seen.some((clip) => !sameClip(clip, clips.get(clip.id))),
-  );
+  if (
+    anchors.destinations.some(
+      ({ range, clips: seen }) =>
+        occupants(timeline, range).length !== seen.length ||
+        seen.some((clip) => !sameClip(clip, clips.get(clip.id))),
+    )
+  )
+    return true;
+  const range = anchors.rangeEdit;
+  if (!range || range.before === timeline) return false;
+  if (
+    range.commands.some(({ type }) => type === "setRange") &&
+    !sameValue(range.before.range, timeline.range)
+  )
+    return true;
+  // A marked edit has no list of targets in its command. Recheck everything it
+  // would touch, including clips on newly occupied tracks and ripple followers.
+  try {
+    const result = applyAll(timeline, range.commands);
+    const after = new Map(result.clips.map((clip) => [clip.id, clip]));
+    const changed = changedClips(timeline, after);
+    return (
+      changed.length !== range.changedIds.size ||
+      changed.some(({ id }) => !range.changedIds.has(id))
+    );
+  } catch (error) {
+    if (error instanceof TimelineError) return true;
+    throw error;
+  }
 }
 
 /**

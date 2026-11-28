@@ -33,11 +33,12 @@ export interface BlobStore {
   reference(absPath: string): Promise<string>;
   has(hash: string): boolean;
   read(hash: string): Promise<Buffer>;
-  /** Writes the blob's bytes to `absPath` by clone-or-copy and rename, so a reader never sees half a file. */
+  /** Writes by clone-or-copy and rename. `afterReplace` runs only after the atomic replacement. */
   writeTo(
     hash: string,
     absPath: string,
     beforeReplace?: () => void,
+    afterReplace?: () => void,
   ): Promise<void>;
   bytes(): number;
   size(hash: string): number;
@@ -102,6 +103,7 @@ async function cloneOrCopy(
   to: string,
   hash: string,
   beforeReplace?: () => void,
+  afterReplace?: () => void,
 ): Promise<void> {
   await mkdir(dirname(to), { recursive: true });
   const temp = atomicTempPath(to);
@@ -114,7 +116,9 @@ async function cloneOrCopy(
     } catch (error) {
       if (!isWindowsHold(error)) throw error;
       await writeInPlace(temp, to, hash);
+      return;
     }
+    afterReplace?.();
   } finally {
     await rm(temp, { force: true });
   }
@@ -254,8 +258,8 @@ export async function openBlobStore(dir: string): Promise<BlobStore> {
     reference: (absPath) => hashFile(absPath),
     has: (hash) => sizes.has(hash) || asideSizes.has(hash),
     read: (hash) => readFile(pathOf(hash)),
-    writeTo: async (hash, absPath, beforeReplace) =>
-      cloneOrCopy(pathOf(hash), absPath, hash, beforeReplace),
+    writeTo: async (hash, absPath, beforeReplace, afterReplace) =>
+      cloneOrCopy(pathOf(hash), absPath, hash, beforeReplace, afterReplace),
     async release(held) {
       for (const [hash, path] of held) {
         holds.get(hash)?.delete(path);

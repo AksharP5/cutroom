@@ -497,6 +497,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         command.type === "trim" ||
         command.type === "trimPlayhead" ||
         command.type === "remove" ||
+        command.type === "removeRange" ||
         command.type === "move"
         ? (command.ids ?? {})
         : {},
@@ -961,6 +962,63 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           !!report,
         );
       }
+      assertRippleSync(timeline, next, tracks, copies);
+      return { ...timeline, clips: next };
+    }
+    case "removeRange": {
+      const { from, to } = command;
+      if (to <= from)
+        throw new TimelineError(
+          "out_of_bounds",
+          "The range must end after it starts.",
+        );
+      const tracks = rangeTracks(timeline, command.ripple, !!batch.onRippleCut);
+      if (!command.ripple) {
+        const targets = clips.filter(
+          (clip) =>
+            tracks.has(clip.track) && clip.start < to && clipEnd(clip) > from,
+        );
+        const protectedPartner = withPartners(clips, targets).find(
+          (clip) => !tracks.has(clip.track),
+        );
+        if (protectedPartner) {
+          const { track } = protectedPartner;
+          const locked = trackAt(track)?.locked;
+          throw new TimelineError(
+            locked ? "locked" : "unsupported",
+            `Can't lift the range while linked clip ${protectedPartner.id} is on ${locked ? "locked" : "auto-select-off"} track ${trackLabel(timeline, track)}.`,
+          );
+        }
+        for (const clip of targets) {
+          const reason =
+            clip.start < from && clipEnd(clip) > to
+              ? clip.sourceRestrictions?.copy
+              : clip.start >= from && clipEnd(clip) <= to
+                ? clip.sourceRestrictions?.remove
+                : undefined;
+          if (reason) refuseRippleCut(clip, timeline, false, "lift");
+        }
+        let next = clips;
+        for (const track of tracks)
+          next = clearRange(next, track, from, to, fps, mint);
+        return { ...timeline, clips: next };
+      }
+      const report = rippleObserver(
+        timeline,
+        [...rangeTracks(timeline, false)],
+        batch.onRippleCut,
+      );
+      reportRemovedTime(clips, tracks, () => from, to - from, report);
+      const next = removeTime(
+        clips,
+        tracks,
+        () => from,
+        to - from,
+        timeline,
+        mint,
+        undefined,
+        !!report,
+      );
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
@@ -2843,6 +2901,21 @@ function skipAutoClips(
   return skipped;
 }
 
+/**
+ * The tracks a range delete cuts, as Resolve's Delete with In and Out marked: unlocked tracks with
+ * auto-select on. An agent's ripple cuts every unlocked track, to keep them in sync.
+ */
+export function rangeTracks(
+  timeline: Timeline,
+  ripple: boolean,
+  agent = false,
+): Set<number> {
+  const own = timeline.tracks
+    .filter((track) => track.autoSelect && !track.locked)
+    .map((track) => track.index);
+  return ripple ? rippleTracks(timeline, own, agent) : new Set(own);
+}
+
 /** Owner edits follow auto-select. Agent ripples reach all unlocked tracks. */
 function rippleTracks(
   timeline: Timeline,
@@ -2954,7 +3027,7 @@ function shiftAfter(
 }
 
 /** A track as its header names it: V1 for the first video track, A2 for the second audio one. */
-function trackLabel(timeline: Timeline, index: number) {
+export function trackLabel(timeline: Timeline, index: number) {
   const kind = timeline.tracks.find((track) => track.index === index)!.kind;
   const number = timeline.tracks.filter(
     (track) => track.kind === kind && track.index <= index,
@@ -3205,12 +3278,13 @@ function refuseRippleCut(
   clip: Clip,
   timeline: Timeline,
   allUnlocked = false,
+  edit: "ripple" | "lift" = "ripple",
 ): never {
   const track = trackLabel(timeline, clip.track);
   const name = clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
   throw new TimelineError(
     "unsupported",
-    `${name} on ${track} can't be cut here. ${allUnlocked ? "Lock" : "Turn off auto-select on"} ${track} to ripple without it.`,
+    `${name} on ${track} can't be cut here. ${allUnlocked ? "Lock" : "Turn off auto-select on"} ${track} to ${edit} without it.`,
   );
 }
 

@@ -12,6 +12,7 @@ import {
   outsideChanges,
   outsideMessage,
   overwriteFeedback,
+  rangeFeedback,
   rippleFeedback,
 } from "../src/client/edit/feedback";
 import { addStarterClips } from "./starter-clips";
@@ -381,4 +382,52 @@ test("outside notices retain the caller name", () => {
   expect(outsideMessage(change.changes, new Set([change.actor]))).toBe(
     "Checkpoint moved 1 clip.",
   );
+});
+
+test("a range delete names every track it cut besides the picture and its sound", () => {
+  const talk =
+    '<video id="talk" src="talk.mp4" data-link="lk" data-start="0" data-duration="10" data-track-index="0"></video>' +
+    '<audio id="talk-sound" src="talk.mp4" data-link="lk" data-start="0" data-duration="10" data-track-index="1"></audio>';
+  const music =
+    '<audio id="music" src="music.wav" data-start="0" data-duration="10" data-track-index="2"></audio>';
+  const broll =
+    '<video id="broll" src="broll.mp4" data-link="b" data-start="0.5" data-duration="2" data-track-index="3"></video>' +
+    '<audio id="broll-sound" src="broll.mp4" data-link="b" data-start="0.5" data-duration="2" data-track-index="4"></audio>';
+  const title =
+    '<div id="title" data-start="1" data-duration="1" data-track-index="5">Hello</div>';
+  const notice = (body: string, from = 30, to = 45) => {
+    const before = parsed(body);
+    const commands = [
+      CommandSchema.parse({ type: "removeRange", from, to, ripple: true }),
+    ];
+    return rangeFeedback(before, applyAll(before, commands), commands);
+  };
+  expect(notice(talk)).toBe("");
+  expect(notice(talk + music)).toBe("Also cut A2.");
+  // B-roll above the picture is cut with its sound, and both are named, as is a title.
+  expect(notice(talk + broll + title)).toBe("Also cut V2, V3 and A2.");
+  // With no picture under the range, the lowest video track cut is the picture.
+  expect(notice(broll + title, 30, 45)).toBe("Also cut V2.");
+});
+
+test("a range delete says when it removed or shortened a transition", () => {
+  const shots =
+    '<video id="a" src="a.mp4" data-start="0" data-duration="2" data-track-index="0"></video>' +
+    '<video id="b" src="b.mp4" data-start="2" data-duration="2" data-media-start="1" data-track-index="0"></video>';
+  const before = applyAll(parsed(shots), [
+    CommandSchema.parse({
+      type: "setTransition",
+      from: "a",
+      to: "b",
+      transition: { kind: "dissolve", duration: 20 },
+    }),
+  ]);
+  const notice = (from: number, to: number) => {
+    const commands = [
+      CommandSchema.parse({ type: "removeRange", from, to, ripple: true }),
+    ];
+    return rangeFeedback(before, applyAll(before, commands), commands);
+  };
+  expect(notice(55, 75)).toBe("Removed a transition.");
+  expect(notice(0, 10)).toBe("");
 });

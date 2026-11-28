@@ -15,3 +15,9 @@ artifacts/
 
 # Private-port Playwright config copies made for local runs
 pw.scratch.config.ts
+
+vendor/@hyperframes/.build-id
+vendor/@hyperframes/*/docs/
+vendor/@hyperframes/*/schemas/
+vendor/@hyperframes/*/LICENSE
+vendor/@hyperframes/*/README.md

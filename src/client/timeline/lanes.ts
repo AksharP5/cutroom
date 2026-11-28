@@ -55,7 +55,14 @@ import type {
   Preview,
   Tool,
 } from "./gesture";
-import { LENGTH_MIN_WIDTH, clipsByTrack, rowsBetween } from "./math";
+import {
+  LENGTH_MIN_WIDTH,
+  RUN_MAX_WIDTH,
+  clipName,
+  clipNamed,
+  clipsByTrack,
+  rowsBetween,
+} from "./math";
 import type { Row, RowLayout, TrackClips } from "./math";
 import { addFromLibrary } from "../edit/library";
 import { toFrames } from "../../shared/timeline/apply";
@@ -80,6 +87,8 @@ export interface LaneGestureOptions {
   /** The timeline's clips by track, as the canvas draws them outside a drag. */
   tracks: ReadonlyMap<number, TrackClips>;
   imageSources: ReadonlyMap<string, string>;
+  /** Clips whose file is gone. */
+  offline: ReadonlySet<string>;
   selection: Selection;
   linkedSelection: boolean;
   tool: Tool;
@@ -173,6 +182,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const hoverBox = useRef<HTMLElement>(null);
   /** The hovered clip's label, which shows a name that rests hidden (timeline.css). */
   const hoverLabel = useRef<HTMLElement | null>(null);
+  /** The name of a hovered clip that is too narrow for a label of its own. */
+  const hoverTag = useRef<HTMLDivElement>(null);
   /** Snap targets for the blade's hover, made again when the timeline or playhead changes. */
   const hoverTargets = useRef<{
     timeline: Timeline;
@@ -494,6 +505,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       fps: shown.fps,
       imageSources: latest.current.imageSources,
       mix: trackMix(shown),
+      offline: latest.current.offline,
     });
   }
 
@@ -914,18 +926,47 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const row = clip && rowOf(clip.track);
     const ppf = view()?.ppf;
     const id = clip && row && ppf ? clip.id : null;
+    const label = !id
+      ? null
+      : id === hovered.current && hoverLabel.current?.isConnected
+        ? hoverLabel.current
+        : (latest.current.lanes.current?.querySelector<HTMLElement>(
+            `[data-clip-label="${CSS.escape(id)}"]`,
+          ) ?? null);
+    if (label !== hoverLabel.current) {
+      hoverLabel.current?.removeAttribute("data-hover");
+      hoverLabel.current = label;
+      label?.setAttribute("data-hover", "");
+    }
     if (id !== hovered.current) {
       hovered.current = id;
-      hoverLabel.current?.removeAttribute("data-hover");
-      hoverLabel.current = id
-        ? (latest.current.lanes.current?.querySelector<HTMLElement>(
-            `[data-clip-label="${CSS.escape(id)}"]`,
-          ) ?? null)
-        : null;
-      hoverLabel.current?.setAttribute("data-hover", "");
       element.toggleAttribute("data-hover", id !== null);
     }
+    const tag = hoverTag.current;
+    // A clip too narrow to point at alone is left to the name of its run.
+    const bare =
+      !!clip &&
+      !!row &&
+      !!ppf &&
+      !hoverLabel.current?.querySelector(".tl-name") &&
+      !clipNamed(clip.duration, ppf) &&
+      clip.duration * ppf >= RUN_MAX_WIDTH;
+    if (tag && tag.dataset.clipTag !== (bare ? clip.id : undefined)) {
+      tag.hidden = !bare;
+      if (bare) {
+        tag.dataset.clipTag = clip.id;
+        tag.dataset.kind = clip.kind;
+        tag.className = `tl-label tag hover on-${row.track.kind}`;
+        tag.children[0]!.textContent = clipName(clip);
+        tag.children[1]!.textContent = formatTimecode(
+          clip.duration,
+          latest.current.timeline.fps,
+        );
+      } else delete tag.dataset.clipTag;
+    }
     if (!clip || !row || !ppf) return;
+    if (tag && bare)
+      tag.style.transform = `translate(${clip.start * ppf}px, ${row.top}px)`;
     const transform = `translate(${clip.start * ppf}px, ${row.top + 1}px) scale(${Math.max(1, clip.duration * ppf - 1)}, ${row.height - 2})`;
     if (hoverTransform.current !== transform) {
       hoverTransform.current = transform;
@@ -1507,7 +1548,16 @@ export function useLaneGestures(options: LaneGestureOptions) {
       onDragLeave,
       onDrop,
     },
-    marks: { snapLine, bladeLine, ghost, readout, marquee, pieces, hoverBox },
+    marks: {
+      snapLine,
+      bladeLine,
+      ghost,
+      readout,
+      marquee,
+      pieces,
+      hoverBox,
+      hoverTag,
+    },
     held,
     /** The view scrolled or zoomed: a drag under way is drawn again from where the pointer is. */
     refresh() {

@@ -751,6 +751,7 @@ export async function replayHistory(
   actor: Actor,
   direction: Direction,
   input: z.output<typeof HistoryRequestSchema>,
+  published?: Parameters<ProjectHistory["revert"]>[2]["published"],
 ) {
   const { who } = actor;
   let label: string | undefined;
@@ -1061,7 +1062,7 @@ export async function replayHistory(
                   throw new ReplaySnapshotChanged();
                 return plan;
               },
-              { requestId, writeToken: crypto.randomUUID() },
+              { requestId, writeToken: crypto.randomUUID(), published },
             );
             if (result.ok && result.repeated && direction === "redo") {
               const undoId = result.entry?.undoes;

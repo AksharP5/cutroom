@@ -9,11 +9,15 @@ import { normalizeTimeline } from "../src/shared/timeline/apply";
 import type { Clip, Timeline, Track } from "../src/shared/timeline/schema";
 import {
   MAX_PPF,
+  clipNameZoom,
+  clipNameZooms,
+  clipNamed,
+  clipRuns,
   clipsByTrack,
   clipsInRange,
   cssEasing,
   cssMilliseconds,
-  filmTiles,
+  filmTileOffsets,
   fitPpf,
   frameAt,
   frameStep,
@@ -27,6 +31,7 @@ import {
   sliderToZoom,
   sourceSecondsPerPixel,
   tickStep,
+  tileTime,
   trackRows,
   zoomToSlider,
 } from "../src/client/timeline/math";
@@ -38,6 +43,7 @@ import {
   pruneSelection,
   selectionAtPlayhead,
   selectionFromPlayhead,
+  selectedSpan,
 } from "../src/client/timeline/selection";
 
 const fps30 = { num: 30, den: 1 };
@@ -110,6 +116,36 @@ const timeline = (clips: Clip[], tracks: Track[]): Timeline =>
     markers: [],
     range: { in: null, out: null },
   });
+
+test("clip names and grouping switch at the exact projected widths", () => {
+  const clips = [clip("a", 0, 0, 96), clip("b", 0, 96, 48)];
+  const zooms = clipNameZooms(clips);
+  expect(clipNamed(96, clipNameZoom(zooms, 0.499))).toBe(false);
+  expect(clipNamed(96, clipNameZoom(zooms, 0.5))).toBe(true);
+  expect(clipNamed(48, clipNameZoom(zooms, 0.999))).toBe(false);
+  expect(clipNamed(48, clipNameZoom(zooms, 1))).toBe(true);
+  expect(clipRuns(clips, 0.499).map((run) => run.clips)).toEqual([clips]);
+  expect(clipRuns(clips, 0.5)).toEqual([]);
+});
+
+test("same-source drawings stop at an intervening clip, overlap, gap or source change", () => {
+  const a = clip("a", 0, 0, 4);
+  const b = clip("b", 0, 4, 4, { mediaStart: 12 });
+  const overlap = clip("overlap", 0, 6, 3, { src: "other.mp4" });
+  const skipped = clip("skipped", 0, 8, 4, { src: "other.mp4" });
+  const after = clip("after", 0, 12, 4);
+  const beside = clip("beside", 0, 16, 4);
+  const gap = clip("gap", 0, 21, 4);
+  const source = clip("source", 0, 25, 4, { src: "other.mp4" });
+
+  const grouped = (clips: Clip[]) =>
+    clipRuns(clips, 1).map((run) => run.clips.map((part) => part.id));
+  expect(grouped([a, b, overlap, skipped, after, beside, gap, source])).toEqual(
+    [["after", "beside"]],
+  );
+  expect(grouped([a, clip("wide", 0, 2, 12), b, after, beside])).toEqual([]);
+  expect(grouped([a, b])).toEqual([["a", "b"]]);
+});
 
 test("the ruler picks the smallest step that keeps labels 96px apart", () => {
   // 32 px per frame: every third frame would be 96px, but 3f is not a step, so 5f.
@@ -561,6 +597,20 @@ test("a waveform is drawn from the coarsest level that still gives every pixel i
   expect(peakLevel(100)).toBe(6);
 });
 
+const filmTiles = (
+  clip: Pick<Clip, "mediaStart" | "playbackRate">,
+  width: number,
+  perPixel: number,
+  step: number,
+  from: number,
+  to: number,
+  sourceAt?: (x: number) => number,
+) =>
+  Array.from(filmTileOffsets(width, from, to), (x) => ({
+    x,
+    time: tileTime(clip, x, perPixel, step, sourceAt),
+  }));
+
 test("filmstrip tiles start on the clip's first frame and show the source from its media start", () => {
   const cut = { mediaStart: 3, playbackRate: 1 };
   // At 2 px per frame a 71px tile spans 1.18 s, so the frames shown are a second apart.
@@ -733,4 +783,32 @@ test("a ramped clip's filmstrip and waveform show the source it plays, not a str
   expect(
     rampSourceSeconds(clip("plain", 0, 0, 150), fps30, 0, 1, 4),
   ).toBeNull();
+});
+
+test("/ plays around the selected clips, gap or cut, and the playhead when nothing is selected", () => {
+  const state = timeline(
+    [clip("a", 0, 0, 60), clip("b", 0, 60, 30), clip("c", 0, 120, 30)],
+    [track(0)],
+  );
+  const selected = (ids: string[]) => ({
+    ...emptySelection,
+    ids: new Set(ids),
+  });
+  expect(selectedSpan(state, selected(["c", "a"]))).toEqual({
+    from: 0,
+    to: 150,
+  });
+  expect(
+    selectedSpan(state, {
+      ...emptySelection,
+      editPoint: { from: "a", to: "b", mode: "roll" },
+    }),
+  ).toEqual({ from: 60, to: 60 });
+  expect(
+    selectedSpan(state, {
+      ...emptySelection,
+      gap: { track: 0, from: 90, to: 120 },
+    }),
+  ).toEqual({ from: 90, to: 120 });
+  expect(selectedSpan(state, emptySelection)).toBeNull();
 });

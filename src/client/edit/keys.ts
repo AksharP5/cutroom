@@ -9,6 +9,7 @@ import { takesTransition } from "../../shared/timeline/transition";
 import { resolveClip } from "../../shared/timeline/clipTiming";
 import { frameShowing, frames, sourceAt } from "../../shared/timeline/piece";
 import { TimelineError } from "../../shared/timeline/errors";
+import { EditHint } from "./feedback";
 import { activeVersion } from "../../shared/timeline/versions";
 import { hasRamp } from "../../shared/timeline/speed";
 import type {
@@ -209,12 +210,16 @@ function trimEditPoint(
   ];
 }
 
-/** Q and W park on the new edit point, showing the first frame after the cut. */
-export function trimmedPlayhead(
+/**
+ * Where an editing key leaves the playhead. Q and W park on the new edit point, showing the first
+ * frame after the cut; a range delete parks on its In point.
+ */
+export function editedPlayhead(
   timeline: Timeline,
   commands: readonly CommandInput[],
 ) {
   const [command] = commands;
+  if (command?.type === "removeRange") return command.from;
   if (command?.type === "roll")
     return timeline.clips.find((clip) => clip.id === command.to)?.start ?? null;
   if (
@@ -284,8 +289,19 @@ const removeSelection =
           ]
         : [];
     }
-    const clipIds = selectedIn(timeline, target).map((clip) => clip.id);
-    return clipIds.length ? [{ type: "remove", clipIds, ripple }] : [];
+    if (target.selection.size || target.editPoint) {
+      const clipIds = selectedIn(timeline, target).map((clip) => clip.id);
+      return clipIds.length ? [{ type: "remove", clipIds, ripple }] : [];
+    }
+    // With nothing selected, Resolve takes In to Out off the auto-select tracks and clears the marks.
+    const { in: from, out: to } = timeline.range;
+    if (from === null && to === null) return [];
+    if (to === null) throw new EditHint("Mark an Out point.");
+    if (from === null) throw new EditHint("Mark an In point.");
+    return [
+      { type: "removeRange", from, to, ripple },
+      { type: "setRange", in: null, out: null },
+    ];
   };
 
 /** The selected clips, one from each linked group, since a slip takes the partners along. */

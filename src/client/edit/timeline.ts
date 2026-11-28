@@ -45,6 +45,8 @@ import {
   outsideChanges,
   outsideMessage,
   overwriteFeedback,
+  EditHint,
+  rangeFeedback,
   rippleFeedback,
 } from "./feedback";
 import { editLabel } from "../../shared/timeline/labels";
@@ -390,10 +392,12 @@ function clearOutsideNotice() {
 }
 
 let refusedAt = 0;
+let hinted = "";
 
-function showRefusal() {
+function showRefusal(tone: "error" | "info" = "error") {
   refusedAt = performance.now();
-  showToast(lastToast);
+  hinted = tone === "info" ? lastToast : "";
+  showToast(lastToast, null, { tone });
 }
 
 /**
@@ -405,7 +409,7 @@ export function clearRefusal(event: Event) {
   if (
     toast &&
     toast === lastToast &&
-    toastTone === "error" &&
+    (toastTone === "error" || toast === hinted) &&
     refusedAt < event.timeStamp
   )
     showToast("");
@@ -633,6 +637,7 @@ function name(commands: Command[], timeline: Timeline, composition: string) {
       command.type !== "trim" &&
       command.type !== "trimPlayhead" &&
       command.type !== "remove" &&
+      command.type !== "removeRange" &&
       command.type !== "move"
     ) {
       current = apply(current, command);
@@ -1248,6 +1253,7 @@ export async function editTimeline(
     ) => {
       feedback =
         overwriteFeedback(before, after, commands) ||
+        rangeFeedback(before, after, commands) ||
         rippleFeedback(before, after, commands, clipboards);
     };
     updateFeedback(commands, view.timeline, timeline);
@@ -1409,7 +1415,7 @@ export async function editTimeline(
       view.timeline,
     );
     if (!draft?.invalidated || useWorkspace.getState().toast !== lastToast)
-      showRefusal();
+      showRefusal(error instanceof EditHint ? "info" : "error");
     return accepted;
   } finally {
     saved.resolve();
@@ -1512,16 +1518,19 @@ export function stepHistory(
           replay = await api(
             `${project(projectId)}/history/${step}`,
             HistoryReplaySchema,
-            request,
+            {
+              ...request,
+              headers: { [TAB_ORIGIN_HEADER]: tabOrigin },
+            },
           );
         } catch (error) {
           unshow();
-          if (
-            !(error instanceof ApiError) ||
-            error.status !== 409 ||
-            useTimeline.getState().projectId !== projectId
-          )
+          if (useTimeline.getState().projectId !== projectId) throw error;
+          if (!(error instanceof ApiError) || error.status !== 409) {
+            // The step may have landed and its file event may have been recognized as our own.
+            await refreshOpenTimeline(projectId);
             throw error;
+          }
           const refusal = HistoryConflictSchema.safeParse(error.body);
           const conflict = refusal.success ? refusal.data.conflict : undefined;
           const group = conflict?.undoTogether;

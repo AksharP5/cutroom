@@ -134,6 +134,12 @@ interface Writing {
   writeToken?: string;
 }
 
+type ReplayPublished = (
+  path: string,
+  absolute: string,
+  version: string,
+) => void;
+
 interface HistoryWindowOptions {
   idleMs?: number;
   exclusive?: boolean;
@@ -237,7 +243,7 @@ export interface ProjectHistory {
   revert(
     who: HistoryWho,
     select: SelectReplay,
-    options: Writing & { requestId?: string },
+    options: Writing & { requestId?: string; published?: ReplayPublished },
   ): Promise<HistoryResult>;
   /** Makes the files equal what they were right after `point` (an entry id, or START). */
   restore(
@@ -1487,6 +1493,7 @@ class Engine {
     target: Map<string, string | null>,
     extra: Partial<HistoryEntry>,
     batch?: readonly ReplayStep[],
+    published?: ReplayPublished,
   ): Promise<HistoryEntry | null> {
     this.assertWritable();
     const changes = [...target]
@@ -1547,6 +1554,7 @@ class Engine {
             change.after,
             change.before,
             () => attempted.push(change),
+            published,
           );
         await this.sweep();
         if (
@@ -1643,6 +1651,7 @@ class Engine {
     hash: string | null,
     expected: string | null,
     publishing?: () => void,
+    published?: ReplayPublished,
   ): Promise<void> {
     this.assertWritable();
     const absolute = join(this.dir, path);
@@ -1691,7 +1700,12 @@ class Engine {
       rmSync(absolute, { force: true });
     } else {
       await removeEmptyFolders(absolute);
-      await this.blobs.writeTo(hash, absolute, publish);
+      await this.blobs.writeTo(
+        hash,
+        absolute,
+        publish,
+        published && (() => published(path, absolute, hashVersion(hash))),
+      );
     }
   }
 
@@ -1699,6 +1713,7 @@ class Engine {
     who: HistoryWho,
     select: SelectReplay,
     requestId?: string,
+    published?: ReplayPublished,
   ): Promise<HistoryResult> {
     if (existsSync(this.pendingReplay))
       throw new HistoryRefusedError(
@@ -1741,6 +1756,7 @@ class Engine {
         ...(entry.targets && { targets: entry.targets }),
       },
       plan.steps.length > 1 ? plan.steps : undefined,
+      published,
     );
     return { ok: true, entry: result };
   }
@@ -1940,8 +1956,10 @@ class Engine {
         }),
       undo: (id, { who, mode, writeToken }) =>
         this.operation(writeToken, () => this.undoNow(id, who, mode)),
-      revert: (who, select, { writeToken, requestId }) =>
-        this.operation(writeToken, () => this.revert(who, select, requestId)),
+      revert: (who, select, { writeToken, requestId, published }) =>
+        this.operation(writeToken, () =>
+          this.revert(who, select, requestId, published),
+        ),
       restore: (point, who, { writeToken } = {}) =>
         this.operation(writeToken, () =>
           this.restoreNow(point, who, `Restored: ${this.pointLabel(point)}`),

@@ -12,7 +12,7 @@ const fps = { num: 30, den: 1 };
 /** The engine benchmark's linked talking-head cuts and titles, with drawable source media. */
 export async function timelineWorkload(
   request: APIRequestContext,
-  count: 400 | 500,
+  count: 400 | 500 | 1000,
   { media, graded = false }: { media?: string; graded?: boolean } = {},
 ) {
   const project = ProjectSchema.parse(
