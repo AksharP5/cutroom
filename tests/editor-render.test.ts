@@ -36,7 +36,7 @@ async function pixel(path: string) {
 }
 
 test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
-  "a saved canvas edit appears identically in frame capture and an encoded MP4",
+  "a saved edit appears identically in frame capture and an encoded MP4",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "cutroom-render-"));
     const store = await createProjectStore({ dataDir: root });
@@ -61,25 +61,13 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
     });
     const origin = `http://127.0.0.1:${server.port}`;
     try {
-      const patch = await fetch(
-        `${origin}/api/projects/${project.id}/file-mutations/patch-element/index.html`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            target: { id: "swatch" },
-            operations: [
-              {
-                type: "inline-style",
-                property: "background",
-                value: "rgb(0, 0, 255)",
-              },
-            ],
-          }),
-        },
+      await writeFile(
+        source,
+        (await readFile(source, "utf8")).replace(
+          "rgb(255,0,0)",
+          "rgb(0, 0, 255)",
+        ),
       );
-      expect(patch.status).toBe(200);
-      expect(await readFile(source, "utf8")).toContain("rgb(0, 0, 255)");
       const frame = await fetch(
         `${origin}/api/projects/${project.id}/thumbnail/index.html?t=0.5&format=png&output=source`,
       );
@@ -142,7 +130,7 @@ test.skipIf(
           "test",
           import.meta.path,
           "-t",
-          "^a saved canvas edit",
+          "^a saved edit appears",
         ],
         {
           env: {

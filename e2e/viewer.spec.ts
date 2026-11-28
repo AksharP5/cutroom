@@ -247,12 +247,10 @@ test("a sandboxed viewer cannot navigate to an unrestricted preview and send an 
       fetch(${JSON.stringify(`http://127.0.0.1:${address.port}/collect?marker=escaped-preview`)});
     </script></body></html>`,
     );
-    // The old route remains available to the trusted parent and native clients.
-    expect((await request.get(oldPreview)).status()).toBe(200);
-    await page.addInitScript(() => {
-      if (window === window.top)
-        localStorage.setItem("cutroom.newEditor", "true");
-    });
+    // The file route answers the editor and native clients, with a document that runs no script.
+    const direct = await request.get(oldPreview);
+    expect(direct.status()).toBe(200);
+    expect(direct.headers()["content-security-policy"]).toBe("sandbox");
     await page.goto(`/#project/${project.id}`);
     await expect(
       page.frameLocator("iframe[data-live]").locator("#headline"),
@@ -331,9 +329,6 @@ test("the new viewer refuses composition API calls and parent access while remai
     })();
   </script>`;
   await writeFile(index, source.replace("</body>", `${script}</body>`));
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
   await page.goto(`/#project/${project.id}`);
   const live = page.frameLocator("iframe[data-live]");
   await expect(live.locator("main")).toHaveAttribute(

@@ -1,4 +1,3 @@
-import { hint } from "../src/client/keymap";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -10,7 +9,6 @@ import {
   ProjectSchema,
   SourceSchema,
 } from "../src/shared/project";
-import { embeddedEditor } from "./embedded";
 
 async function localAgent(page: Page) {
   await page.route("**/api/cutroom/agents/capabilities?**", (route) =>
@@ -30,7 +28,6 @@ test("a saved review note opens its own composition and frame", async ({
   page,
   request,
 }) => {
-  await embeddedEditor(page);
   await localAgent(page);
   const project = ProjectSchema.parse(
     await (
@@ -57,26 +54,20 @@ test("a saved review note opens its own composition and frame", async ({
         kind: "comment",
         body: "Change the second composition here",
         compositionPath: "second.html",
-        time: 63.25,
+        time: 63.2,
       },
     },
   );
   expect(saved.ok()).toBe(true);
   await page.goto(`/#project/${project.id}`);
-  const frame = page.frameLocator("hyperframes-player iframe").last();
+  const frame = page.frameLocator("iframe[data-live]");
   await expect(frame.locator("#headline")).toHaveText("Review navigation");
   await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.locator(".review-row .note-seek").click();
   await expect(frame.locator("#headline")).toHaveText("Second composition");
-  await expect(
-    page.getByRole("slider", { name: "Seek preview", exact: true }),
-  ).toHaveValue("63.25");
-  expect(new URLSearchParams(page.url().split("?")[1]).get("comp")).toBe(
-    "second.html",
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:01:03:06",
   );
-  await expect(
-    page.getByRole("button", { name: "Review navigation", exact: true }),
-  ).toBeVisible();
 });
 
 test("a canceled project creation cannot reopen itself or erase a later dialog", async ({
@@ -413,102 +404,6 @@ test("an anonymous second media clip keeps its script selected through a full cu
     restored.media.find((clip) => clip.elementId === canonical.elementId)
       ?.duration,
   ).toBe(canonical.duration);
-});
-
-test("saving one review draft cannot clear a newer draft in the same project", async ({
-  page,
-  request,
-}) => {
-  await embeddedEditor(page);
-  await localAgent(page);
-  const project = ProjectSchema.parse(
-    await (
-      await request.post("/api/cutroom/projects", {
-        data: { name: "Overlapping review drafts" },
-      })
-    ).json(),
-  );
-  await page.goto(`/#project/${project.id}`);
-  const png = await page.evaluate(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 2;
-    canvas.height = 2;
-    return canvas.toDataURL("image/png").split(",")[1] ?? "";
-  });
-  let entered = () => {};
-  let release = () => {};
-  const started = new Promise<void>((done) => {
-    entered = done;
-  });
-  const released = new Promise<void>((done) => {
-    release = done;
-  });
-  await page.route(
-    `**/api/projects/${project.id}/thumbnail/**`,
-    async (route) => {
-      if (route.request().resourceType() !== "fetch") return route.fallback();
-      await route.fulfill({
-        contentType: "image/png",
-        body: Buffer.from(png, "base64"),
-      });
-    },
-  );
-  // Saving now finishes before capture. Hold the annotation POST itself so the newer
-  // draft is created while the earlier save is still waiting for its answer.
-  await page.route(
-    `**/api/cutroom/projects/${project.id}/annotations`,
-    async (route) => {
-      entered();
-      await released;
-      await route.fulfill({ response: await route.fetch() });
-    },
-  );
-  try {
-    await page
-      .getByRole("button", { name: hint("cutroomComment"), exact: true })
-      .click();
-    await page
-      .getByLabel("Pin a comment on the composition")
-      .click({ position: { x: 50, y: 50 } });
-    const body = page.getByLabel("What should change?", { exact: true });
-    await body.fill("Save the earlier note");
-    await page.getByRole("button", { name: "Add note", exact: true }).click();
-    await started;
-    await expect(body).toBeDisabled();
-    await page
-      .getByRole("button", { name: hint("cutroomComment"), exact: true })
-      .click();
-    await page
-      .getByLabel("Pin a comment on the composition")
-      .click({ position: { x: 100, y: 90 } });
-    await expect(body).toBeEnabled();
-    await body.fill("Keep the new draft");
-    release();
-    await expect
-      .poll(
-        async () =>
-          (
-            await (
-              await request.get(`/api/cutroom/projects/${project.id}/document`)
-            ).json()
-          ).annotations.length,
-      )
-      .toBe(1);
-    await expect(page.locator(".review-row")).toContainText(
-      "Save the earlier note",
-    );
-    await expect(body).toHaveValue("Keep the new draft");
-    await expect(
-      page.getByRole("button", { name: "Add note", exact: true }),
-    ).toBeEnabled();
-    await page.getByRole("button", { name: "Add note", exact: true }).click();
-    await expect(page.locator(".review-row")).toHaveCount(2);
-    await expect(page.locator(".review-row").nth(1)).toContainText(
-      "Keep the new draft",
-    );
-  } finally {
-    release();
-  }
 });
 
 test("a project an agent creates after the page loads opens without a reload", async ({

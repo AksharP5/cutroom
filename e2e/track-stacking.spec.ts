@@ -371,7 +371,7 @@ test("authored utility layers and first-child styles survive a duration edit", a
     `<!doctype html><html><head><style>@layer utilities{.z-50{z-index:50}}html,body{margin:0}.box{position:absolute;inset:0;background:red}.box:first-child{background:blue}</style></head><body><main data-composition-id="main" data-width="640" data-height="360" data-duration="2"><div id="box" class="clip box z-50" data-start="0" data-duration="1" data-track-index="1"></div></main></body></html>`,
   );
   await edit([{ type: "trim", clipId: "box", edge: "end", to: 60 }]);
-  await page.goto(`/api/projects/${project.id}/preview`);
+  await page.goto(`/api/projects/${project.id}/isolated-preview`);
   await expect(page.locator("#box")).toHaveCSS("z-index", "50");
   await expect(page.locator("#box")).toHaveCSS(
     "background-color",
@@ -418,7 +418,7 @@ for (const kind of ["inline", "external"] as const) {
     await bluePicture(`${kind}-before`);
     await edit([{ type: "move", clipIds: ["scene"], by: 1 }]);
     await bluePicture(`${kind}-after-parent-move`);
-    await page.goto(`/api/projects/${project.id}/preview`);
+    await page.goto(`/api/projects/${project.id}/isolated-preview`);
     expect(
       await page
         .locator('[id="red"]')
@@ -432,7 +432,7 @@ for (const kind of ["inline", "external"] as const) {
         "scene.html",
       );
       await bluePicture("external-after-scene-edit");
-      await page.goto(`/api/projects/${project.id}/preview`);
+      await page.goto(`/api/projects/${project.id}/isolated-preview`);
       expect(
         await page
           .locator('[id="blue"]')
@@ -467,7 +467,7 @@ test("editing only an external scene keeps entry-page utility layers above its d
     [{ type: "trim", clipId: "box", edge: "end", to: 60 }],
     "scene.html",
   );
-  await page.goto(`/api/projects/${project.id}/preview`);
+  await page.goto(`/api/projects/${project.id}/isolated-preview`);
   await expect(page.locator("#box")).toHaveCSS("z-index", "50");
   await expect(
     page.locator("head > style[data-cutroom-track-layer]"),

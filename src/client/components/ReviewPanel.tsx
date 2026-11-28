@@ -6,13 +6,11 @@ import {
   ArrowUpRight,
   ChatTeardropText,
   ImageSquare,
-  PencilSimple,
   Queue,
   Trash,
   X,
 } from "@phosphor-icons/react";
 import { z } from "zod";
-import type { EditorReviewDraft } from "../../shared/editor";
 import type {
   HumanReviewActionSchema,
   ReviewItem,
@@ -22,9 +20,7 @@ import { unfinishedStatuses } from "../../shared/review";
 import { FpsSchema } from "../../shared/timeline/schema";
 import { clipName } from "../../shared/timeline/labels";
 import { api, frameTimecode } from "../api";
-import { strokePath } from "../edit/notes";
-import { frameCaptureUrl, noteNumbers, toReviewStatuses } from "../review";
-import { useFps } from "../workspace";
+import { noteNumbers, toReviewStatuses } from "../review";
 import { useTimeline } from "../edit/timeline";
 import { useProjectReviewChanges } from "../edit/reviewChanges";
 import { Modal } from "./Modal";
@@ -179,9 +175,6 @@ export function ReviewPanel({
   visible,
   items,
   reviewError,
-  draft,
-  onSave,
-  onCancel,
   onSeek,
   onAct,
   onDelete,
@@ -193,9 +186,6 @@ export function ReviewPanel({
   visible: boolean;
   items: ReviewItem[];
   reviewError?: string;
-  draft: EditorReviewDraft | null;
-  onSave: (body: string) => Promise<void>;
-  onCancel: () => void;
   onSeek: (item: ReviewItem) => void;
   onAct: (item: ReviewItem, action: HumanAction) => Promise<void>;
   onDelete: (item: ReviewItem) => Promise<void>;
@@ -211,14 +201,7 @@ export function ReviewPanel({
     hasChanges: false,
     compositionChanges: [],
   };
-  const draftFps = useFps();
   const noteFps = useNoteFps(projectId, items);
-  const [body, setBody] = useState("");
-  const [savingDraft, setSavingDraft] = useState<EditorReviewDraft | null>(
-    null,
-  );
-  const saving = draft !== null && savingDraft === draft;
-  const bodyField = useRef<HTMLTextAreaElement>(null);
   const [error, setError] = useState("");
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const details = items.find((item) => item.id === detailsId);
@@ -228,12 +211,6 @@ export function ReviewPanel({
     note: string;
   } | null>(null);
   const answerOpener = useRef<HTMLButtonElement | null>(null);
-  // Each new mark takes the typing, so note keys never reach the editor's shortcuts.
-  // A replaced mark keeps the words typed so far; only closing the note clears them.
-  useEffect(() => {
-    if (draft) bodyField.current?.focus();
-    else setBody("");
-  }, [draft]);
   const fresh = items.filter((item) => item.review.status === "open");
   const queued = items.filter((item) =>
     unfinishedStatuses.some((status) => status === item.review.status),
@@ -486,91 +463,21 @@ export function ReviewPanel({
 
   return (
     <section className="review-panel" aria-label="Review notes">
-      {draft && (
-        <form
-          className="review-draft"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!draft || !body.trim() || saving) return;
-            const submittedDraft = draft;
-            setSavingDraft(submittedDraft);
-            void run(async () => {
-              await onSave(body);
-              setBody((current) => (current === body ? "" : current));
-            }).finally(() =>
-              setSavingDraft((current) =>
-                current === submittedDraft ? null : current,
-              ),
-            );
-          }}
-        >
-          <div className="review-draft-heading">
-            <span>
-              {draft.strokes.length ? <PencilSimple /> : <ChatTeardropText />}
-              Note at{" "}
-              <span className="mono">
-                <TimecodeText timecode={frameTimecode(draft.time, draftFps)} />
-              </span>
-            </span>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="Cancel note"
-              onClick={onCancel}
-            >
-              <X />
-            </button>
-          </div>
-          <div className="annotation-frame">
-            <img
-              src={frameCaptureUrl(projectId, draft)}
-              alt="Frame for this note"
-            />
-            <svg
-              viewBox="0 0 1 1"
-              preserveAspectRatio="none"
-              aria-hidden="true"
-            >
-              {draft.strokes.map((points, index) => (
-                <path key={index} d={strokePath(points)} />
-              ))}
-            </svg>
-          </div>
-          <label className="sr-only" htmlFor="review-body">
-            What should change?
-          </label>
-          <textarea
-            id="review-body"
-            ref={bodyField}
-            disabled={saving}
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            placeholder="What should change here?"
-            rows={3}
-          />
-          <button className="primary-button" disabled={!body.trim() || saving}>
-            {saving ? "Saving…" : "Add note"}
-          </button>
-        </form>
-      )}
       {(error || reviewError) && (
         <p className="inline-error" role="alert">
           {error || reviewError}
         </p>
       )}
-      {items.length === accepted.length &&
-        !hasChanges &&
-        !draft &&
-        !reviewError && (
-          <div className="small-empty">
-            <ChatTeardropText size={25} weight="light" />
-            <h3>Start with what you see.</h3>
-            <p>
-              Draw on the picture or pin a comment. Each note stays in the queue
-              until it is done or withdrawn.
-            </p>
-          </div>
-        )}
+      {items.length === accepted.length && !hasChanges && !reviewError && (
+        <div className="small-empty">
+          <ChatTeardropText size={25} weight="light" />
+          <h3>Start with what you see.</h3>
+          <p>
+            Draw on the picture or pin a comment. Each note stays in the queue
+            until it is done or withdrawn.
+          </p>
+        </div>
+      )}
       {groups.map(([title, statuses]) => {
         const members = items.filter((item) =>
           statuses.some((status) => status === item.review.status),

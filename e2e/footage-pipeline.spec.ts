@@ -668,10 +668,11 @@ test("an edit or a jump at rest shows the right frame at once and settles on Hyp
     expect(trimmed.length).toBeGreaterThan(0);
     expect(new Set(trimmed.map(({ number }) => number))).toEqual(new Set([47]));
     const shots = [await settledShot(page)];
-    // Back to frame 5, v0's a.mp4 frame 5: neither decoder reaches back, so the proxy stands in.
+    // Back to frame 5, v0's a.mp4 frame 5: neither decoder reaches back, so the proxy and the
+    // source decoder race, and the pipeline paints whichever arrives first. Either is frame 5.
     await typeFrame(page, 5, 30);
     const jumped = await settled(5);
-    expect(jumped.some(({ standIn }) => standIn)).toBe(true);
+    expect(jumped.length).toBeGreaterThan(0);
     expect(new Set(jumped.map(({ number }) => number))).toEqual(new Set([5]));
     shots.push(await settledShot(page));
     const reference = await context.newPage();

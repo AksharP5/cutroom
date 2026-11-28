@@ -217,11 +217,7 @@ test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
       </script></body>`,
         ),
       );
-      await page.evaluate(() =>
-        localStorage.setItem("cutroom.newEditor", "true"),
-      );
       await page.goto(`${origin}/#project/${isolatedProject.id}`);
-      await page.reload();
       const preview = page.frameLocator("iframe[data-live]");
       await preview.locator('main[data-attack="blocked"]').waitFor();
       expect(

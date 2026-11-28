@@ -18,7 +18,7 @@ import type { EditorContext } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
 import { clipEnd, frameTime, toFrames } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
-import { EditorToolsContext } from "../editor/EditorTools";
+import { EditorToolsContext } from "./editorTools";
 import {
   actionFor,
   blurPointerButton,

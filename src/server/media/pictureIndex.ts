@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   mkdir,
   open,
@@ -26,6 +26,11 @@ import type { ExactTime, PictureIndex } from "../../shared/timeline/piece.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import { encodeTicks, timeText } from "../../shared/timeline/pictureSource.ts";
 import type { PictureSourceWire } from "../../shared/timeline/pictureSource.ts";
+import {
+  pictureIndexArtifact,
+  pictureIndexKey,
+  pictureRevision,
+} from "./cacheKeys.ts";
 import { localMediaInputOptions } from "./input.ts";
 
 type Packet = { pts: bigint; duration?: bigint; key: boolean };
@@ -316,9 +321,7 @@ const sources = new Map<string, Promise<SourcePictures | null>>();
 
 async function mediaRevision(path: string) {
   const info = await stat(path, { bigint: true });
-  return [path, info.size, info.mtimeNs, info.ctimeNs, info.dev, info.ino].join(
-    "\0",
-  );
+  return pictureRevision(path, info);
 }
 
 async function readCachedPictures(artifact: string) {
@@ -348,7 +351,7 @@ async function cachePictures(
       return read();
     throw error;
   }
-  const artifact = join(directory, "picture-index.json");
+  const artifact = join(directory, pictureIndexArtifact);
   const lock = join(directory, "picture-index.pending");
   // The media and render workers can meet on a cold source. Only one scans it.
   for (;;) {
@@ -412,9 +415,7 @@ export async function sourcePictures(
   const { signal, projectDir } = options;
   const original = await realpath(path);
   const revision = await mediaRevision(original);
-  const key = createHash("sha256")
-    .update(`picture-index-v2\0${revision}`)
-    .digest("hex");
+  const key = pictureIndexKey(revision);
   const memoKey = `${projectDir ?? ""}\0${key}`;
   const cached = sources.get(memoKey);
   if (cached) return cached;

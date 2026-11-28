@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { copyFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { APIRequestContext, Page } from "@playwright/test";
-import { ProjectSchema } from "../src/shared/project";
+import { DuplicateJobSchema, ProjectSchema } from "../src/shared/project";
 import { expect, test } from "./fixtures";
 
 test.use({ trace: "off" });
@@ -494,6 +494,63 @@ for (const pipeline of [false, true])
       await expect.poll(() => shownFrame(page)).toBe(frame);
     }
   });
+
+test("a fresh duplicate opens on the original's editing proxy without encoding one", async ({
+  page,
+  request,
+}) => {
+  const original = await proxyTimeline(
+    request,
+    "Duplicated recording",
+    1,
+    3,
+    () => 0,
+  );
+  const proxy = (id: string) =>
+    request.get(`/api/cutroom/projects/${id}/media/proxy?path=recording.mkv`);
+  await expect
+    .poll(async () => (await proxy(original.id)).status(), {
+      timeout: 60_000,
+    })
+    .toBe(200);
+  const started = DuplicateJobSchema.parse(
+    await (
+      await request.post(`/api/cutroom/projects/${original.id}/duplicate`)
+    ).json(),
+  );
+  let job = started;
+  await expect
+    .poll(async () => {
+      job = DuplicateJobSchema.parse(
+        await (
+          await request.get(`/api/cutroom/duplicates/${started.id}`)
+        ).json(),
+      );
+      return job.state.status;
+    })
+    .toBe("done");
+  const copy = ProjectSchema.parse(
+    await (await request.get(`/api/cutroom/projects/${job.projectId}`)).json(),
+  );
+  // An editing proxy is encoded in a `.pieces-<key>` folder of the project's cache.
+  const cache = join(copy.path, ".cutroom/cache");
+  let encoded = false;
+  const watch = setInterval(async () => {
+    const names = await readdir(cache).catch(() => []);
+    if (names.some((name) => name.startsWith(".pieces-"))) encoded = true;
+  }, 20);
+  try {
+    await page.goto(`/#project/${copy.id}`);
+    await expect(page.locator(".edit-stage")).toHaveAttribute(
+      "data-preview-ready",
+      /\d/,
+    );
+    expect((await proxy(copy.id)).status()).toBe(200);
+  } finally {
+    clearInterval(watch);
+  }
+  expect(encoded).toBe(false);
+});
 
 test("PCM audio before the first picture keeps the same proxy frames in HLS and MP4", async ({
   page,

@@ -1,7 +1,6 @@
 import { expect, test } from "./fixtures";
 import { ProjectSchema } from "../src/shared/project";
-import { hint, keymap } from "../src/client/keymap";
-import { embeddedEditor } from "./embedded";
+import { keymap } from "../src/client/keymap";
 
 test("the home screen shows the keymap's draw and comment keys", async ({
   page,
@@ -23,32 +22,6 @@ test("the home screen shows the keymap's draw and comment keys", async ({
         keys.every((key) => key.scrollWidth <= key.clientWidth),
       ),
   ).toBe(true);
-});
-
-test("embedded viewer tool hints match the keys that select them", async ({
-  page,
-  request,
-}) => {
-  await embeddedEditor(page);
-  const project = ProjectSchema.parse(
-    await (
-      await request.post("/api/cutroom/projects", {
-        data: { name: "Keymap tools" },
-      })
-    ).json(),
-  );
-  await page.goto(`/#project/${project.id}`);
-  for (const action of [
-    "cutroomDraw",
-    "cutroomComment",
-    "editPointer",
-  ] as const) {
-    const button = page.getByTitle(hint(action), { exact: true });
-    await expect(button).toBeVisible();
-    await page.keyboard.press(keymap[action].keys[0]);
-    await expect(button).toHaveAttribute("aria-pressed", "true");
-    await expect(button.locator("kbd")).toHaveText(keymap[action].keys[0]);
-  }
 });
 
 test("tool icons are named by their key, and the tooltip waits once then follows the pointer", async ({

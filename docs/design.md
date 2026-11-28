@@ -11,18 +11,18 @@ The interface shows state first, so default controls stay quiet and secondary ac
 
 [Tokens](../src/client/tokens.css) are the source of truth for colour, type, space, size, radius, stroke, layer, and motion.
 Read the tokens in component CSS and in code that draws UI. Keep fixed colours, sizes, durations, and z-index values out of components.
-[Shared styles](../src/client/styles.css) import the tokens, map them to the embedded editor's theme, and define the common controls.
+[Shared styles](../src/client/styles.css) import the tokens over a base reset and define the common controls.
 [Menu styles](../src/client/components/select-menu.css), [editor styles](../src/client/edit/edit.css), [inspector styles](../src/client/edit/inspector/inspector.css), and [timeline styles](../src/client/timeline/timeline.css) cover their own areas.
 
 Use the `@custom-media` aliases in CSS. [Vite](../vite.config.ts) expands them with Lightning CSS.
 Media queries cannot read custom properties, so script uses the mirrored `--breakpoint-*` properties where it needs the same threshold.
 Update both declarations together in `tokens.css`.
 
-| CSS alias  | Script threshold                         | What changes                                            |
-| ---------- | ---------------------------------------- | ------------------------------------------------------- |
-| `--drawer` | `--breakpoint-drawer`, below 1304px wide | Inspector becomes a drawer and starts closed.           |
-| `--rail`   | `--breakpoint-rail`, below 1024px wide   | The embedded workspace uses its compact tool treatment. |
-| `--short`  | `--breakpoint-short`, below 960px tall   | Media shows six rows and Timing starts collapsed.       |
+| CSS alias  | Script threshold                         | What changes                                      |
+| ---------- | ---------------------------------------- | ------------------------------------------------- |
+| `--drawer` | `--breakpoint-drawer`, below 1304px wide | Inspector becomes a drawer and starts closed.     |
+| `--rail`   | `--breakpoint-rail`, below 1024px wide   | The left column narrows to its minimum width.     |
+| `--short`  | `--breakpoint-short`, below 960px tall   | Media shows six rows and Timing starts collapsed. |
 
 Reuse the closest token first, by meaning and not by number: a radius token is never a gap, and an icon size is never a padding. Space inside a component uses the `--space-*` scale where a step fits and a plain pixel value where the layout needs one in between, as the shared styles already do. If a new value is needed more than once, extend the nearest scale with a name that describes its role and can be reused.
 Measure WCAG contrast for each new foreground and background pair, including interactive overlays where they apply, and record the ratios in the token comment. Keep one-off values out of the scale.
