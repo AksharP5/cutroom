@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   lstat,
   mkdir,
@@ -10,17 +9,19 @@ import {
   utimes,
 } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  MediaInfoSchema,
-  fileFingerprint,
-  makesProxy,
-} from "../../shared/media";
+import { MediaInfoSchema, makesProxy } from "../../shared/media";
 import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
 import type { JobState } from "../../shared/jobs";
 import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
 import { projectStatePath } from "../projects/path";
+import {
+  mediaArtifacts,
+  mediaCacheFolder,
+  mediaCacheKey,
+  mediaFingerprint,
+} from "./cacheKeys";
 import { FilmstripSchema, PiecesSchema } from "./protocol";
 import type { MediaKind, MediaTask, Pieces, RampTask } from "./protocol";
 import { RUN_MARGIN_SAMPLES } from "../../shared/timeline/rampRuns";
@@ -38,7 +39,7 @@ import type { z } from "zod";
 async function fingerprint(source: string) {
   const info = await stat(source, { bigint: true });
   if (!info.isFile()) throw new HttpError(400, "Choose a media file.");
-  return `${fileFingerprint(source, { size: Number(info.size), mtimeMs: Number(info.mtimeNs) / 1e6 })}\0${info.mtimeNs}\0${info.ctimeNs}\0${info.ino}\0${info.dev}`;
+  return mediaFingerprint(source, info);
 }
 type MediaResult = {
   key: string;
@@ -84,18 +85,6 @@ type MediaJob = {
   /** A ramp run an export waits for: it goes ahead of the background passes. */
   foreground?: boolean;
 };
-const artifacts = {
-  probe: "probe.json",
-  peaks: "peaks.bin",
-  filmstrip: "filmstrip.json",
-  frame: "frame.jpg",
-  thumbnail: "frame.jpg",
-  scrub: "scrub.mp4",
-  proxy: "proxy.mp4",
-  pieces: "pieces.json",
-  ramp: "ramp.wav",
-  pcm: "audio.pcm",
-} satisfies Record<MediaKind, string>;
 /** A clip with no editing proxy shows no picture at all, so its proxy comes before strips. */
 const priority = {
   frame: 0,
@@ -109,19 +98,6 @@ const priority = {
   scrub: 4,
   thumbnail: 4,
 } satisfies Record<MediaKind, number>;
-/** Each kind's recipe; a new one keys new cache entries. */
-const recipe = {
-  probe: "media-v11",
-  peaks: "media-v6",
-  filmstrip: "media-v6",
-  frame: "media-v6",
-  thumbnail: "media-v1",
-  scrub: "media-v7",
-  proxy: "media-v8",
-  pieces: "media-v12",
-  ramp: "ramp-run-v2",
-  pcm: "pcm-v1",
-} satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
 /**
  * The preview waits on this proxy: a request waits for one of its pieces, or the preview asked
@@ -501,8 +477,8 @@ export function createMediaService(
         );
       await mkdir(context.directory, { recursive: true });
       await rename(
-        join(work.directory, artifacts.proxy),
-        join(context.directory, artifacts.proxy),
+        join(work.directory, mediaArtifacts.proxy),
+        join(context.directory, mediaArtifacts.proxy),
       );
       await trimCache(context.cache, context.directory);
     } catch (error) {
@@ -592,18 +568,15 @@ export function createMediaService(
       if (!plan.artifact) return plan;
       pieces = PiecesSchema.parse(await Bun.file(plan.artifact).json());
     }
-    const key = createHash("sha256")
-      .update(
-        `${recipe[kind]}\0${kind}\0${identity}\0${ramp ? JSON.stringify(ramp.run) : (frame ?? "")}`,
-      )
-      .digest("hex");
+    const key = mediaCacheKey(
+      kind,
+      identity,
+      ramp ? JSON.stringify(ramp.run) : (frame ?? ""),
+    );
     await mkdir(await projectPath(project, ".cutroom", true), {
       recursive: true,
     });
-    // Browsing a folder can make a probe and thumbnail per video. Neither uses the proxy budget.
-    const tier =
-      kind === "probe" ? "/probes" : kind === "thumbnail" ? "/thumbnails" : "";
-    const cachePath = `.cutroom/cache${tier}`;
+    const cachePath = mediaCacheFolder(kind);
     const cache = await projectStatePath(project, cachePath, true);
     await mkdir(cache, { recursive: true });
     // A run is one file in its own tier, kept within a byte budget rather than an entry count.
@@ -619,7 +592,7 @@ export function createMediaService(
           : null
         : await projectPath(
             project,
-            `${cachePath}/${key}/${artifacts[kind]}`,
+            `${cachePath}/${key}/${mediaArtifacts[kind]}`,
           ).catch((error: unknown) => {
             if (error instanceof HttpError && error.status === 404) return null;
             throw error;
@@ -628,7 +601,7 @@ export function createMediaService(
     // longer under the same key. The stretcher is causal: the samples it had stay the same.
     const short = ramp && cached && !(await covers(cached, ramp.frames));
     if (cached && !short) {
-      if (ramp || cached === join(directory, artifacts[kind])) {
+      if (ramp || cached === join(directory, mediaArtifacts[kind])) {
         const now = new Date();
         await utimes(directory, now, now).catch(() => {});
       }
@@ -720,7 +693,7 @@ export function createMediaService(
             // Resolved again: the folder may have been replaced while the run was made.
             if ((await runFolder(project)) !== runs)
               throw new Error("The ramp audio folder moved while it was made.");
-            await rename(join(scratch, artifacts.ramp), directory);
+            await rename(join(scratch, mediaArtifacts.ramp), directory);
             await removeDirectory(scratch);
             scratch = undefined;
             await trimRuns(runs);
@@ -899,7 +872,10 @@ export function createMediaService(
       return projectPath(project, `.cutroom/cache/${key}/sprite-${sheet}.jpg`);
     },
     scrub(project: Project, key: string) {
-      return projectPath(project, `.cutroom/cache/${key}/${artifacts.scrub}`);
+      return projectPath(
+        project,
+        `.cutroom/cache/${key}/${mediaArtifacts.scrub}`,
+      );
     },
     /** A video's editing proxy job, started if it has none; null for a video that needs none. */
     async proxyState(project: Project, path: string) {

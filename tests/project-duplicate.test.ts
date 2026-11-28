@@ -363,6 +363,94 @@ describe.each(disks)("on $base", ({ base, clones }) => {
     },
   );
 
+  test.skipIf(!Bun.which("ffmpeg"))(
+    "a duplicate plays from copies of the original's finished editing proxy and picture index, leaves stale ones behind, and makes its own for footage replaced in it",
+    async () => {
+      const original = await runtime.projects.create({ name: "Proxies" });
+      // ProRes is a codec no browser decodes, so each video gets an editing proxy.
+      const make = async (project: Project, path: string, colour: string) =>
+        expect(
+          await Bun.spawn([
+            ...["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i"],
+            `color=${colour}:s=128x72:r=30:d=1`,
+            ...["-c:v", "prores_ks", join(project.path, path)],
+          ]).exited,
+        ).toBe(0);
+      const proxy = (project: Project, path: string) =>
+        request(`/projects/${project.id}/media/proxy?path=${path}`);
+      const played = async (project: Project, path: string) => {
+        for (;;) {
+          const response = await proxy(project, path);
+          if (response.status !== 202) {
+            expect(response.status).toBe(200);
+            return new Uint8Array(await response.arrayBuffer());
+          }
+          await Bun.sleep(50);
+        }
+      };
+      /** The colour of a proxy's first picture. */
+      const colour = async (bytes: Uint8Array) => {
+        const file = join(root, `${crypto.randomUUID()}.mp4`);
+        await writeFile(file, bytes);
+        const decode = Bun.spawn(
+          [
+            ...["ffmpeg", "-v", "error", "-i", file, "-frames:v", "1"],
+            ...["-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+          ],
+          { stdout: "pipe" },
+        );
+        const [red = 0, green = 0] = new Uint8Array(
+          await new Response(decode.stdout).arrayBuffer(),
+        );
+        return red > green ? "red" : "green";
+      };
+      const kept = "assets/kept.mov";
+      const changed = "assets/changed.mov";
+      await make(original, kept, "red");
+      await make(original, changed, "red");
+      await played(original, kept);
+      await played(original, changed);
+      // Its proxy and index are of the bytes it had, not the ones the copy gets.
+      await make(original, changed, "green");
+      const cached = async (project: Project) =>
+        (
+          await readdir(join(project.path, ".cutroom/cache"), {
+            recursive: true,
+          })
+        ).map((name) => join(project.path, ".cutroom/cache", name));
+      const indexes = async (project: Project) =>
+        (await cached(project)).filter((path) =>
+          path.endsWith("picture-index.json"),
+        );
+
+      const copy = await copyOf(await duplicate(original));
+      expect(await indexes(copy)).toHaveLength(1);
+      const carried = await proxy(copy, kept);
+      expect(carried.status).toBe(200);
+      const originalProxy = await played(original, kept);
+      expect(new Uint8Array(await carried.arrayBuffer())).toEqual(
+        originalProxy,
+      );
+      expect(
+        (await request(`/projects/${copy.id}/media/frames?path=${kept}`))
+          .status,
+      ).toBe(200);
+      expect(await indexes(copy)).toHaveLength(1);
+      // Copied, never linked: rewriting the copy's cache cannot reach the original's.
+      for (const path of await cached(copy)) {
+        const info = await lstat(path);
+        if (info.isFile()) expect(info.nlink).toBe(1);
+      }
+      expect((await proxy(copy, changed)).status).toBe(202);
+
+      await make(copy, kept, "green");
+      expect(await colour(await played(copy, kept))).toBe("green");
+      expect(await played(original, kept)).toEqual(originalProxy);
+      expect(await colour(originalProxy)).toBe("red");
+    },
+    60_000,
+  );
+
   test("copies are named after the original and never take a name in use", async () => {
     const original = await runtime.projects.create({ name: "Promo" });
     await addStarterClips(original);
