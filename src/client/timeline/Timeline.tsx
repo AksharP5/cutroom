@@ -59,6 +59,10 @@ import {
   LENGTH_MIN_WIDTH,
   MAX_PPF,
   clipName,
+  clipNameZoom,
+  clipNameZooms,
+  clipNamed,
+  clipRuns,
   clipsByTrack,
   clipsInRange,
   majorTicks,
@@ -70,7 +74,7 @@ import {
   trackRows,
   zoomToSlider,
 } from "./math";
-import type { FrameRange, Row, RowSizes, TickStep } from "./math";
+import type { ClipRun, FrameRange, Row, RowSizes, TickStep } from "./math";
 import { createBodies } from "./bodies";
 import type { Bodies } from "./bodies";
 import type { Tool } from "./gesture";
@@ -187,19 +191,16 @@ const pinLabels = {
   accepted: "accepted",
 } as const satisfies Record<TimelinePin["state"], string>;
 
-/** A clip name shows once its clip is this wide; timeline.css hides it below that. */
-const NAME_MIN_WIDTH = 28;
+/** A clip's gain line, speed points and keyframes show once it is this wide. */
+const MARKS_MIN_WIDTH = 28;
 
 interface Mounted {
   frames: FrameRange;
   rows: FrameRange;
   step: TickStep;
-  /**
-   * The closest zoom, in pixels per frame, before labels are mounted again: the next quarter
-   * octave. Clips too narrow to show a name anywhere below it get no label, so a zoomed-out
-   * timeline restyles one element per clip, not three.
-   */
-  labelPpf: number;
+  /** Marks use quarter-octave steps so they do not mount again on every wheel event. */
+  marksPpf: number;
+  namePpf: number;
 }
 
 function readSizes(): {
@@ -236,15 +237,18 @@ const ClipBody = memo(function ClipBody({
   row,
   selected,
   offline,
+  bare,
 }: {
   clip: Clip;
   row: Row;
   selected: boolean;
   offline: boolean;
+  /** Too narrow for a name: no name strip, so the picture has the whole height. */
+  bare: boolean;
 }) {
   return (
     <div
-      className={`tl-clip ${clip.kind} on-${row.track.kind}${clip.title ? " titled" : ""}${offline ? " offline" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}`}
+      className={`tl-clip ${clip.kind} on-${row.track.kind}${clip.title ? " titled" : ""}${bare ? " bare" : ""}${offline ? " offline" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}`}
       data-clip={clip.id}
       title={clip.label ?? clip.id}
       style={{ "--s": clip.start, "--d": clip.duration, top: 0 }}
@@ -274,6 +278,8 @@ const ClipLabel = memo(function ClipLabel({
   row,
   fps,
   timed,
+  tag = false,
+  hideName,
   selected,
   offline,
   synced,
@@ -284,6 +290,9 @@ const ClipLabel = memo(function ClipLabel({
   fps: Fps;
   /** Whether the clip can get wide enough to show its duration before labels are mounted again. */
   timed: boolean;
+  /** A selected clip too narrow for a name: its name and duration hang from its left edge. */
+  tag?: boolean;
+  hideName: boolean;
   selected: boolean;
   offline: boolean;
   /** Sound right under its own picture, which already names it: shown on hover or selection. */
@@ -293,7 +302,7 @@ const ClipLabel = memo(function ClipLabel({
 }) {
   const end = clip.start + clip.duration;
   const name = clipName(clip);
-  const className = `tl-label on-${row.track.kind}${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}${offline ? " offline" : ""}${synced ? " synced" : ""}`;
+  const className = `tl-label on-${row.track.kind}${timed ? " timed" : ""}${tag ? " tag" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}${offline ? " offline" : ""}${synced ? " synced" : ""}`;
   const style = { "--s": clip.start, "--d": clip.duration, top: 0 };
   // A title has no name strip: its words are its body.
   if (clip.title) {
@@ -328,13 +337,17 @@ const ClipLabel = memo(function ClipLabel({
       data-kind={clip.kind}
       style={style}
     >
-      <span
-        className="tl-name"
-        data-unscaled
-        style={{ "--f": clip.start, "--e": end }}
-      >
-        {name}
-      </span>
+      {!hideName && (
+        <span
+          className="tl-name"
+          data-unscaled
+          style={
+            tag ? { "--f": clip.start } : { "--f": clip.start, "--e": end }
+          }
+        >
+          {name}
+        </span>
+      )}
       {offset !== undefined && (
         <span
           className="tl-sync"
@@ -370,10 +383,36 @@ const ClipLabel = memo(function ClipLabel({
         <TimecodeText
           className="tl-length"
           data-unscaled
-          style={{ "--f": end }}
+          style={{ "--f": tag ? clip.start : end }}
           timecode={formatTimecode(clip.duration, fps)}
         />
       )}
+    </div>
+  );
+});
+
+/** One name for a run of clips too narrow to name themselves, held at the run's visible left edge. */
+const RunLabel = memo(function RunLabel({
+  run,
+  row,
+}: {
+  run: ClipRun;
+  row: Row;
+}) {
+  return (
+    <div
+      className={`tl-label run on-${row.track.kind}${row.track.locked ? " locked" : ""}${run.first.enabled ? "" : " disabled"}`}
+      data-run={run.first.id}
+      style={{ "--s": run.start, "--d": run.end - run.start, top: 0 }}
+    >
+      <span
+        className="tl-name"
+        data-unscaled
+        style={{ "--f": run.start, "--e": run.end }}
+      >
+        {clipName(run.first)}{" "}
+        <span className="tl-count">{run.clips.length} clips</span>
+      </span>
     </div>
   );
 });
@@ -904,6 +943,12 @@ export function Timeline({
     [shownTracks, rowSizes],
   );
   const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
+  const nameZooms = useMemo(
+    () => clipNameZooms(timeline.clips),
+    [timeline.clips],
+  );
+  const latestNameZooms = useRef(nameZooms);
+  latestNameZooms.current = nameZooms;
   const hasImageBindings = useMemo(
     () =>
       timeline.clips.some(
@@ -950,19 +995,18 @@ export function Timeline({
         .filter((clip) => clip.link && !isAudioKind(clip.kind))
         .map((clip) => [clip.link, clip]),
     );
-    return new Set(
-      timeline.clips
-        .filter((clip) => {
-          const picture =
-            clip.link && isAudioKind(clip.kind) && pictures.get(clip.link);
-          return (
-            picture &&
-            picture.start === clip.start &&
-            picture.duration === clip.duration
-          );
-        })
-        .map((clip) => clip.id),
-    );
+    const matches = new Map<string, Clip>();
+    for (const clip of timeline.clips) {
+      const picture =
+        clip.link && isAudioKind(clip.kind) && pictures.get(clip.link);
+      if (
+        picture &&
+        picture.start === clip.start &&
+        picture.duration === clip.duration
+      )
+        matches.set(clip.id, picture);
+    }
+    return matches;
   }, [timeline.clips]);
   const resize = useTrackResize({
     root: grid,
@@ -980,6 +1024,7 @@ export function Timeline({
         fps,
         imageSources,
         mix,
+        offline,
       });
     },
   });
@@ -997,6 +1042,7 @@ export function Timeline({
     newRows: layout.newRows,
     tracks,
     imageSources,
+    offline,
     selection,
     linkedSelection,
     tool,
@@ -1040,6 +1086,7 @@ export function Timeline({
       fps,
       imageSources,
       mix,
+      offline,
     });
     // A newly available edge destination needs the held filmstrip redrawn.
     if (trackDrag) refreshDrag.current();
@@ -1051,6 +1098,7 @@ export function Timeline({
     fps,
     imageSources,
     mix,
+    offline,
     trackDrag,
   ]);
 
@@ -1093,13 +1141,15 @@ export function Timeline({
               frames: mountedRange(current?.frames ?? null, state.frames),
               rows: mountedRange(current?.rows ?? null, state.rows),
               step: tickStep(state.ppf, state.fps),
-              labelPpf: 2 ** (Math.ceil(Math.log2(state.ppf) * 4) / 4),
+              marksPpf: 2 ** (Math.ceil(Math.log2(state.ppf) * 4) / 4),
+              namePpf: clipNameZoom(latestNameZooms.current, state.ppf),
             };
             return current &&
               current.frames === next.frames &&
               current.rows === next.rows &&
               current.step.major === next.step.major &&
-              current.labelPpf === next.labelPpf
+              current.marksPpf === next.marksPpf &&
+              current.namePpf === next.namePpf
               ? current
               : next;
           });
@@ -1239,6 +1289,32 @@ export function Timeline({
     onScrubEnd();
   }
 
+  const zoom = clipNameZoom(nameZooms, viewport.current?.state().ppf ?? 0);
+  const runs = useMemo(
+    () =>
+      new Map(
+        [...tracks].map(([index, track]) => [
+          index,
+          clipRuns(track.clips, zoom),
+        ]),
+      ),
+    [tracks, zoom],
+  );
+  const namedByPicture = (run: ClipRun) => {
+    const picture = synced.get(run.first.id);
+    if (!picture || picture.src !== run.first.src) return false;
+    return (
+      runs
+        .get(picture.track)
+        ?.some(
+          (other) =>
+            other.first.src === picture.src &&
+            other.start === run.start &&
+            other.end === run.end,
+        ) &&
+      run.clips.every((clip) => synced.get(clip.id)?.track === picture.track)
+    );
+  };
   const rows = mounted
     ? rowsBetween(layout.rows, mounted.rows.from, mounted.rows.to)
     : [];
@@ -1260,6 +1336,15 @@ export function Timeline({
           : [];
       })
     : [];
+
+  const selectedByTrack = new Map<number, number>();
+  for (const { clip } of clips) {
+    if (selection.ids.has(clip.id))
+      selectedByTrack.set(
+        clip.track,
+        (selectedByTrack.get(clip.track) ?? 0) + 1,
+      );
+  }
 
   return (
     <div className="tl">
@@ -1496,6 +1581,7 @@ export function Timeline({
                           row={row}
                           selected={selection.ids.has(clip.id)}
                           offline={offline.has(clip.id)}
+                          bare={!clipNamed(clip.duration, zoom)}
                         />
                       ))}
                   </div>
@@ -1555,7 +1641,7 @@ export function Timeline({
                           ({ clip }) =>
                             clip.hasAudio &&
                             mounted &&
-                            clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH,
+                            clip.duration * mounted.marksPpf >= MARKS_MIN_WIDTH,
                         )
                         .map(({ clip, row }) => (
                           <ClipMix
@@ -1581,7 +1667,8 @@ export function Timeline({
                             fps={timeline.fps}
                             points={
                               !!mounted &&
-                              clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH
+                              clip.duration * mounted.marksPpf >=
+                                MARKS_MIN_WIDTH
                             }
                           />
                         ))}
@@ -1662,36 +1749,75 @@ export function Timeline({
                     style={{ top: row.top, height: row.height }}
                   >
                     {mounted &&
+                      runs
+                        .get(row.track.index)
+                        ?.filter(
+                          (run) =>
+                            run.start < mounted.frames.to &&
+                            run.end > mounted.frames.from &&
+                            !namedByPicture(run),
+                        )
+                        .map((run) => (
+                          <RunLabel key={run.first.id} run={run} row={row} />
+                        ))}
+                    {mounted &&
                       clips
                         .filter((item) => item.row === row)
-                        .filter(
-                          ({ clip }) =>
-                            clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH,
-                        )
-                        .map(({ clip, row }) => (
-                          <ClipLabel
-                            key={clip.id}
-                            clip={clip}
-                            row={row}
-                            fps={fps}
-                            timed={
-                              clip.duration * mounted.labelPpf >=
-                              LENGTH_MIN_WIDTH
-                            }
-                            selected={selection.ids.has(clip.id)}
-                            offline={offline.has(clip.id)}
-                            synced={synced.has(clip.id)}
-                            offset={offsets.get(clip.id)}
-                          />
-                        ))}
+                        .map(({ clip, row }) => {
+                          const named = clipNamed(clip.duration, zoom);
+                          const selected = selection.ids.has(clip.id);
+                          const picture = synced.get(clip.id);
+                          // A narrow clip selected alone on its track says what it is.
+                          const tag =
+                            !named &&
+                            selected &&
+                            selectedByTrack.get(clip.track) === 1 &&
+                            !(
+                              picture &&
+                              picture.src === clip.src &&
+                              selection.ids.has(picture.id)
+                            );
+                          const offset = offsets.get(clip.id);
+                          const offlineClip = offline.has(clip.id);
+                          // The name strip does not control title text, sync, or version badges.
+                          const metadata =
+                            clip.duration * mounted.marksPpf >=
+                              MARKS_MIN_WIDTH &&
+                            (clip.title ||
+                              clip.textPreview ||
+                              clip.versions ||
+                              offset !== undefined ||
+                              offlineClip);
+                          return (
+                            (named || tag || metadata) && (
+                              <ClipLabel
+                                key={clip.id}
+                                clip={clip}
+                                row={row}
+                                fps={fps}
+                                timed={
+                                  tag ||
+                                  clip.duration * mounted.marksPpf >=
+                                    LENGTH_MIN_WIDTH
+                                }
+                                tag={tag}
+                                hideName={!named && !tag}
+                                selected={selected}
+                                offline={offlineClip}
+                                synced={!!picture}
+                                offset={offset}
+                              />
+                            )
+                          );
+                        })}
                     {mounted &&
                       clips
                         .filter(
                           (item) =>
                             item.row === row &&
                             item.clip.keyframes !== null &&
-                            item.clip.duration * mounted.labelPpf >=
-                              NAME_MIN_WIDTH,
+                            item.clip.duration * mounted.marksPpf >=
+                              MARKS_MIN_WIDTH,
                         )
                         .map(({ clip }) => (
                           <KeyframeMarks
@@ -1724,6 +1850,14 @@ export function Timeline({
                       )}
                   </div>
                 ))}
+                <div
+                  className="tl-label tag hover"
+                  ref={gestures.marks.hoverTag}
+                  hidden
+                >
+                  <span className="tl-name" />
+                  <span className="tl-length" />
+                </div>
               </div>
             </div>
             {timeline.clips.length === 0 && (
