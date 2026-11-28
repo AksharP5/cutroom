@@ -23,7 +23,10 @@ import type { ReviewService } from "../projects/review";
 import { z } from "zod";
 import { Hono } from "hono";
 import { planPreviewPipeline } from "../hyperframes/pipelinePlan";
-import { isPinnedGsap } from "../hyperframes/previewTimingPolicy";
+import {
+  isPinnedGsap,
+  previewTimingPolicy,
+} from "../hyperframes/previewTimingPolicy";
 import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
 import { fileContentVersion } from "@hyperframes/studio-server";
@@ -100,6 +103,7 @@ import {
   settingsOf,
 } from "./composition";
 import type { HostedComposition, ParsedComposition } from "./composition";
+import { joinSourceCheck } from "./joinSource";
 import { animationFeedback } from "./animationFeedback";
 import { mediaFacts } from "./media";
 import { prepareFrozenFrames, saveFrozenFrames } from "./freeze";
@@ -420,11 +424,24 @@ export function createTimelineRoutes(
     const hasScript = [current.parsed, ...snapshots.values()].some((source) =>
       /<script\b/i.test(source.html),
     );
+    let joinSourceRefusal;
+    if (batch.commands.some(({ type }) => type === "join")) {
+      const policy = previewTimingPolicy(project.path);
+      policy.read(
+        await projectPath(project, composition),
+        current.source.content,
+      );
+      joinSourceRefusal = joinSourceCheck(
+        current.parsed,
+        policy.contract() !== null,
+      );
+    }
     // Each command reads and writes the source map at the clip’s current frame.
     const timeline = canonicalTimeline(
       plan?.timeline ??
         applyAll(current.parsed.timeline, batch.commands, {
           composition,
+          joinSourceRefusal,
           onCreate: (id, origin) => origins.set(id, origin),
           onRippleCut: agent
             ? (track, name, framesRemoved) => {
@@ -438,6 +455,7 @@ export function createTimelineRoutes(
               }
             : undefined,
           onApply: (before, after, command) => {
+            if (command.type === "join" && before === after) return;
             // A title or text clip given versions is lifted and replaced by a scene clip that
             // plays them. That reads as one change: the versions, not the lift and the insert.
             const [lift, insert] = applied.slice(-2);
@@ -512,6 +530,8 @@ export function createTimelineRoutes(
           retired: await usedClipIds(project),
         }),
     );
+    if (!applied.length && batch.commands.every(({ type }) => type === "join"))
+      throw new TimelineError("unsupported", [...notices].join(" "));
     const freezes = new Map(
       timeline.clips.flatMap(({ id }) => {
         const origin = origins.get(id);

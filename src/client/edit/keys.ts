@@ -1,5 +1,6 @@
-import { isAudioKind } from "../../shared/timeline/schema";
+import { CommandSchema, isAudioKind } from "../../shared/timeline/schema";
 import {
+  apply,
   clipEnd,
   cutRoom,
   planBatchTransitions,
@@ -41,7 +42,12 @@ export interface EditTarget {
 interface EditKey {
   /** The undo step's name. */
   label: string;
-  commands(timeline: Timeline, target: EditTarget): CommandInput[];
+  /** `note` says what the edit left out, shown once it lands. */
+  commands(
+    timeline: Timeline,
+    target: EditTarget,
+    note?: (text: string) => void,
+  ): CommandInput[];
 }
 
 const spans = (clip: Clip, frame: number) =>
@@ -610,6 +616,69 @@ const cycleVersion =
     return [];
   };
 
+/**
+ * Alt+\ joins a through edit: the selected cut, the cut between two selected clips, or else the
+ * cut at the playhead on unlocked auto-select tracks. The engine takes linked partners along and
+ * says why when the pieces do not continue each other. Of several cuts, those that join do, and
+ * the note names the rest; when none does, the first reason refuses the key.
+ */
+const join = (
+  timeline: Timeline,
+  target: EditTarget,
+  note?: (text: string) => void,
+): CommandInput[] => {
+  const point =
+    target.editPoint && clipsAtEditPoint(timeline, target.editPoint);
+  const selected = selectedIn(timeline, target);
+  const candidates = point
+    ? [point.to].filter((clip) => clip !== undefined)
+    : selected.length
+      ? selected
+      : autoSelectAt(timeline, target.frame).filter(
+          (clip) => clip.start === target.frame,
+        );
+  // The engine joins linked partners with their clip, so each linked group is named once.
+  const links = new Set<string>();
+  const commands = candidates.flatMap(
+    (to): Extract<CommandInput, { type: "join" }>[] => {
+      const from = timeline.clips.find(
+        (clip) =>
+          clip.track === to.track &&
+          clipEnd(clip) === to.start &&
+          (point
+            ? clip.id === point.from?.id
+            : !selected.length || target.selection.has(clip.id)),
+      );
+      if (!from || (to.link !== null && links.has(to.link))) return [];
+      if (to.link !== null) links.add(to.link);
+      return [{ type: "join", from: from.id, to: to.id }];
+    },
+  );
+  if (!commands.length)
+    throw new TimelineError(
+      "not_found",
+      "Nothing to join. Select a cut between two pieces of a clip, or put the playhead on it.",
+    );
+  let joined = timeline;
+  const refusals: TimelineError[] = [];
+  const joins = commands.filter((command) => {
+    try {
+      joined = apply(joined, CommandSchema.parse(command));
+      return true;
+    } catch (error) {
+      if (!(error instanceof TimelineError)) throw error;
+      refusals.push(error);
+      return false;
+    }
+  });
+  if (!joins.length) throw refusals[0]!;
+  if (refusals.length)
+    note?.(refusals.map((refusal) => refusal.message).join(" "));
+  return joins.length > 1
+    ? joins.map((command) => ({ ...command, skipUnsupportedSource: true }))
+    : joins;
+};
+
 /** Clips with a speed to reset: a ramp, or a constant speed other than 100%. */
 export const resettable = (clips: readonly Clip[]) =>
   clips.filter(
@@ -673,6 +742,7 @@ export const editKeys = {
   },
   editBladeRazor: { label: "Razor", commands: razor },
   editM2SplitClip: { label: "Split", commands: razor },
+  editM2JoinClip: { label: "Join clips", commands: join },
   editBackspace: { label: "Lift", commands: removeSelection(false) },
   editDelete: { label: "Ripple delete", commands: removeSelection(true) },
   editClipEnabled: {

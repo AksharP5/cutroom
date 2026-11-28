@@ -14,7 +14,7 @@ import { encode, frames } from "../src/shared/timeline/piece";
 import { editLabel } from "../src/shared/timeline/labels";
 import { countingIds } from "./clip-ids";
 import { syncOffsets } from "../src/shared/timeline/sync";
-import { volumePoints } from "../src/shared/timeline/mix";
+import { volumePoints, withVolumePoints } from "../src/shared/timeline/mix";
 import { editKeys } from "../src/client/edit/keys";
 import { pasteAttributes } from "../src/client/edit/pasteAttributes";
 import { nearestEditPoint } from "../src/client/timeline/selection";
@@ -2212,6 +2212,93 @@ test("a marked lift refuses if it would leave protected linked sound behind", ()
       `Can't lift the range while linked clip a-sound is on ${locked ? "locked" : "auto-select-off"} track A1.`,
     );
   }
+});
+
+test("join puts a razored clip and its sound back together, and refuses pieces that do not continue", () => {
+  const state = timeline(talk("a", 0, 90, 0), avTracks);
+  const cut = run(state, { type: "split", at: 30, clipIds: ["a"] });
+  expect(positions(cut)).toMatchObject({ a: [0, 0, 30], "a-2": [0, 30, 60] });
+  const joined = run(cut, { type: "join", from: "a", to: "a-2" });
+  expect(joined.clips).toEqual(state.clips);
+
+  // Once a pause is ripple deleted, the source jumps at the cut.
+  const pause = run(state, {
+    type: "removeRange",
+    from: 30,
+    to: 45,
+    ripple: true,
+  });
+  expect(() => run(pause, { type: "join", from: "a", to: "a-2" })).toThrow(
+    "Can't join these pieces of talk.mp4: the second does not pick up the source where the first ends, or a setting differs.",
+  );
+  const quieter = run(cut, {
+    type: "setClip",
+    clipId: "a-sound-2",
+    volume: 0.5,
+  });
+  expect(() => run(quieter, { type: "join", from: "a", to: "a-2" })).toThrow(
+    "or a setting differs",
+  );
+  const locked = timeline(cut.clips, [
+    { index: 0, kind: "video" },
+    { index: 1, kind: "audio", locked: true },
+  ]);
+  expect(() => run(locked, { type: "join", from: "a", to: "a-2" })).toThrow(
+    "Track A1 is locked.",
+  );
+  expect(() => run(cut, { type: "join", from: "a-2", to: "a" })).toThrow(
+    "does not start where",
+  );
+});
+
+test("join carries the keyframes and volume points a razor split, unless a piece's changed since", () => {
+  const animated = timeline(
+    [
+      clip("k", 0, 0, 90, {
+        keyframes: {
+          opacity: [
+            { frame: 0, value: 0.2, ease: "linear" },
+            { frame: 60, value: 1, ease: "linear" },
+          ],
+        },
+      }),
+      clip("v", 1, 0, 90, {
+        kind: "audio",
+        hasAudio: true,
+        src: "music.wav",
+        automation: withVolumePoints(
+          null,
+          [
+            { frame: 0, gain: 1 },
+            { frame: 60, gain: 0.25 },
+          ],
+          { num: 30, den: 1 },
+        ),
+      }),
+    ],
+    avTracks,
+  );
+  const cut = run(animated, { type: "split", at: 30 });
+  const [k2, v2] = [0, 1].map(
+    (track) => cut.clips.find((item) => item.track === track && item.start)!.id,
+  );
+  const joined = run(
+    cut,
+    { type: "join", from: "k", to: k2! },
+    { type: "join", from: "v", to: v2! },
+  );
+  expect(joined.clips).toEqual(animated.clips);
+
+  const moved = run(cut, {
+    type: "setKeyframe",
+    clipId: k2!,
+    property: "opacity",
+    frame: 10,
+    value: 0.5,
+  });
+  expect(() => run(moved, { type: "join", from: "k", to: k2! })).toThrow(
+    "their keyframes or volume points were changed after the cut",
+  );
 });
 
 test("closeGap refuses what Resolve refuses: a clip in the gap, a locked track, and no gap", () => {

@@ -88,6 +88,7 @@ export function editAnchors(
         type === "slide" ||
         type === "slip" ||
         type === "swap" ||
+        type === "join" ||
         type === "setTiming" ||
         type === "setSpeed" ||
         type === "insert" ||
@@ -133,7 +134,11 @@ export function editAnchors(
     commands.flatMap((command) => {
       if (command.type === "split" || command.type === "trimPlayhead")
         return command.clipIds ?? [];
-      if (command.type === "roll" || command.type === "swap")
+      if (
+        command.type === "roll" ||
+        command.type === "swap" ||
+        command.type === "join"
+      )
         return [command.from, command.to];
       // A grade write can replace an existing wheel even if it looked unchanged
       // when the command was built. A retry must still check the intended clip.

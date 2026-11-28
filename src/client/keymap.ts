@@ -145,6 +145,18 @@ export const keymap = {
     keys: ["Shift+Down"],
     repeat: true,
   },
+  controlGapPrev: {
+    area: "Playhead",
+    label: "Previous gap",
+    keys: ["Ctrl+Alt+;"],
+    repeat: true,
+  },
+  controlGapNext: {
+    area: "Playhead",
+    label: "Next gap",
+    keys: ["Ctrl+Alt+'"],
+    repeat: true,
+  },
   controlTimelineStart: {
     area: "Playhead",
     label: "Timeline start",
@@ -170,6 +182,11 @@ export const keymap = {
     area: "Edit",
     label: "Cut clips, leaving a gap",
     keys: ["Ctrl+X"],
+  },
+  editRippleCut: {
+    area: "Edit",
+    label: "Cut clips and close the gap",
+    keys: ["Ctrl+Shift+X"],
   },
   editPaste: { area: "Edit", label: "Paste clips", keys: ["Ctrl+V"] },
   editPasteAttributes: {
@@ -417,6 +434,11 @@ export const keymap = {
     area: "Edit",
     label: "Split at the playhead",
     keys: ["Ctrl+\\"],
+  },
+  editM2JoinClip: {
+    area: "Edit",
+    label: "Join clips at a through edit",
+    keys: ["Alt+\\"],
   },
   editBackspace: {
     area: "Edit",
@@ -824,6 +846,7 @@ export function actionFor(event: KeyboardEvent): Action | null {
   if (
     (action === "editCopy" ||
       action === "editCut" ||
+      action === "editRippleCut" ||
       action === "editSelectAll") &&
     window.getSelection()?.toString()
   )

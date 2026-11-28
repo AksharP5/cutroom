@@ -185,10 +185,11 @@ export function ProjectTimeline({
         };
         let parked: number | null = null;
         let saved = () => {};
+        let note = "";
         void editTimeline(
           projectId,
           label,
-          (current) => commands(current, target),
+          (current) => commands(current, target, (text) => (note = text)),
           undefined,
           (next, built) => {
             const frame = editedPlayhead(next, built);
@@ -201,6 +202,8 @@ export function ProjectTimeline({
           heldKey,
         ).then((accepted) => {
           saved();
+          if (accepted && note)
+            showToast(note, null, { tone: "info", transient: true });
           if (
             !accepted &&
             parked !== null &&
@@ -365,6 +368,7 @@ export function ProjectTimeline({
     editCopy: () => clipboard("copy"),
     editPasteAttributes: () => clipboard("attributes"),
     editCut: () => clipboard("cut"),
+    editRippleCut: () => clipboard("rippleCut"),
     editPaste: () => clipboard("overwrite"),
     editPasteInsert: () => clipboard("insert"),
     ...(Object.fromEntries(edits) as Partial<Record<Action, () => void>>),

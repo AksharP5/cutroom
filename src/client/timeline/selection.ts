@@ -148,6 +148,25 @@ export function gapSelection(
 }
 export const emptySelection: Selection = { ids: new Set(), anchor: null };
 
+/**
+ * Where each gap starts on unlocked tracks with auto-select on, in order: the empty time before a
+ * track's first clip or between two clips, as a click on an empty lane selects it.
+ */
+export function gapStarts(timeline: Timeline) {
+  const starts = new Set<number>();
+  for (const track of timeline.tracks) {
+    if (!track.autoSelect || track.locked) continue;
+    let end = 0;
+    for (const clip of timeline.clips
+      .filter((clip) => clip.track === track.index)
+      .toSorted((a, b) => a.start - b.start)) {
+      if (clip.start > end) starts.add(end);
+      end = Math.max(end, clipEnd(clip));
+    }
+  }
+  return [...starts].toSorted((a, b) => a - b);
+}
+
 export interface ClickModifiers {
   /** Ctrl or Cmd: add or remove the clip. */
   toggle: boolean;

@@ -1,7 +1,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
@@ -237,6 +239,101 @@ for (const [key, at] of [
     );
     expect((await read()).timeline.range).toEqual(range);
   });
+
+test("Ctrl+Shift+X ripple cuts a shot for pasting, and Ctrl+Alt+' finds the gap a lift leaves", async ({
+  page,
+  request,
+}) => {
+  const { timeline, clips, seek } = await open(page, request, "Ripple cut");
+  await timeline.locator('[data-clip="shot-2"]').click();
+  await page.keyboard.press("Control+Shift+X");
+  await expect.poll(clips).toEqual([
+    ["shot-1", 0, 90],
+    ["shot-3", 90, 90],
+    ["shot-4", 180, 90],
+  ]);
+  await seek("0600");
+  await page.keyboard.press("Control+Shift+V");
+  await expect
+    .poll(async () => (await clips()).map(([, start]) => start))
+    .toEqual([0, 90, 180, 270]);
+
+  await timeline.locator('[data-clip="shot-3"]').click();
+  await page.keyboard.press("x");
+  await expect.poll(async () => (await clips()).length).toBe(3);
+  await seek("0000");
+  await page.keyboard.press("Control+Alt+'");
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:03:00",
+  );
+  await page.keyboard.press("Control+Alt+'");
+  await expect(page.locator(".toast")).toContainText(
+    "No gap after the playhead.",
+  );
+});
+
+test("Join keeps an authored outline and joins the unchanged audio cut at the same frame", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Authored join", width: 320, height: 240, duration: 4 },
+      })
+    ).json(),
+  );
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=blue:s=320x240:r=30:d=4",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:duration=4",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-c:a",
+    "aac",
+    "-shortest",
+    join(project.path, "take.mp4"),
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><head><style>html,body{margin:0}.outlined{outline:9px solid red}</style></head><body>
+<main id="main" data-composition-id="main" data-fps="30" data-width="320" data-height="240" data-duration="4">
+<video id="plain" src="take.mp4" class="clip" muted style="position:absolute;left:10px;top:10px;width:300px;height:220px" data-start="0" data-duration="2" data-track-index="0"></video>
+<video id="outlined" src="take.mp4" class="clip outlined" muted style="position:absolute;left:10px;top:10px;width:300px;height:220px" data-start="2" data-duration="2" data-media-start="2" data-track-index="0"></video>
+<audio id="audio-left" src="take.mp4" class="clip" data-start="0" data-duration="2" data-track-index="1"></audio>
+<audio id="audio-right" src="take.mp4" class="clip" data-start="2" data-duration="2" data-media-start="2" data-track-index="1"></audio>
+</main></body></html>`,
+  );
+  await page.goto(`/#project/${project.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  await expect(timeline.locator("[data-clip]")).toHaveCount(4);
+  const outline = page.frameLocator("iframe[data-live]").locator("#outlined");
+  await expect(outline).toHaveCSS("outline", "rgb(255, 0, 0) solid 9px");
+  await page.getByRole("region", { name: "Viewer" }).click();
+  await page.keyboard.press("Shift+A");
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("0200");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:02:00",
+  );
+  await page.keyboard.press("Alt+\\");
+  await expect(page.locator(".toast")).toContainText(
+    "different classes, styles, or other attributes",
+  );
+  await expect(timeline.locator("[data-clip]")).toHaveCount(3);
+  await expect(timeline.locator('[data-clip="audio-right"]')).toHaveCount(0);
+  await expect(outline).toHaveCSS("outline", "rgb(255, 0, 0) solid 9px");
+});
 
 test("Q on a later shot parks at its start before the server answers and preserves a later seek", async ({
   page,

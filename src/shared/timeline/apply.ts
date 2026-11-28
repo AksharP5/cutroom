@@ -163,6 +163,7 @@ interface Batch {
   newId: NewId;
   onSkip: (clip: Clip, reason: string) => void;
   onNotice: (notice: string) => void;
+  joinSourceRefusal?: (pairs: readonly [Clip, Clip][]) => string | undefined;
   onRippleCut?: RippleCutObserver;
 }
 /**
@@ -178,6 +179,8 @@ interface ApplyOptions {
   onSkip?: Batch["onSkip"];
   /** Feedback when an edit fits within source limits at a different speed. */
   onNotice?: Batch["onNotice"];
+  /** The server checks the authored elements for every pair in a linked join. */
+  joinSourceRefusal?: Batch["joinSourceRefusal"];
   /** Agent ripples cover every unlocked track. Observe cuts outside the command target. */
   onRippleCut?: RippleCutObserver;
   onCreate?: OnCreate;
@@ -350,6 +353,7 @@ export function apply(
     clipboards = new Map(),
     onSkip = () => {},
     onNotice = () => {},
+    joinSourceRefusal,
     onRippleCut,
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -367,6 +371,7 @@ export function apply(
     retired,
     onSkip,
     onNotice,
+    joinSourceRefusal,
     onRippleCut,
     onCreate,
     mediaLengths,
@@ -388,6 +393,7 @@ export function applyAll(
     onApply,
     onSkip = () => {},
     onNotice = () => {},
+    joinSourceRefusal,
     onRippleCut,
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -406,6 +412,7 @@ export function applyAll(
     retired,
     onSkip,
     onNotice,
+    joinSourceRefusal,
     onRippleCut,
     mediaLengths,
     silentMedia,
@@ -1021,6 +1028,37 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       );
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
+    }
+    case "join": {
+      const pairs = throughEdits(
+        clips,
+        find(command.from),
+        find(command.to),
+        fps,
+      );
+      for (const [from] of pairs)
+        if (trackAt(from.track)?.locked)
+          throw new TimelineError(
+            "locked",
+            `Track ${trackLabel(timeline, from.track)} is locked.`,
+          );
+      const reason = batch.joinSourceRefusal?.(pairs);
+      if (reason) {
+        if (!command.skipUnsupportedSource)
+          throw new TimelineError("unsupported", reason);
+        batch.onNotice(reason);
+        return timeline;
+      }
+      const joined = new Map(
+        pairs.map(([from, to]) => [from.id, joinedClip(from, to)]),
+      );
+      const gone = new Set(pairs.map(([, to]) => to.id));
+      return {
+        ...timeline,
+        clips: clips.flatMap((clip) =>
+          gone.has(clip.id) ? [] : [joined.get(clip.id) ?? clip],
+        ),
+      };
     }
     case "closeGap": {
       const track = trackAt(command.track);
@@ -3645,6 +3683,98 @@ function windowClip(
 
 const clipName = (clip: Clip) =>
   clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
+
+const joinedClip = (from: Clip, to: Clip): Clip => ({
+  ...from,
+  duration: from.duration + to.duration,
+  fadeOut: to.fadeOut,
+  transitionOut: to.transitionOut,
+});
+
+/** A value with its object keys in order and undefined fields dropped, to compare clips. */
+const canonical = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(canonical)
+    : value !== null && typeof value === "object"
+      ? Object.fromEntries(
+          Object.entries(value)
+            .filter(([, field]) => field !== undefined)
+            .toSorted(([a], [b]) => (a < b ? -1 : 1))
+            .map(([key, field]) => [key, canonical(field)]),
+        )
+      : value;
+
+/**
+ * Whether two adjacent pieces are one clip razored: the joined clip, razored at the cut, gives
+ * back both pieces, source offsets within a microsecond. Returns why not, or null.
+ */
+function notThroughEdit(from: Clip, to: Clip, fps: Fps): string | null {
+  if (from.src === null || from.mediaStart === null || from.src !== to.src)
+    return "they are not pieces of one file";
+  if (hasRamp(from) || hasRamp(to)) return "one has a speed ramp";
+  if (from.fadeOut || to.fadeIn || from.transitionOut || to.transitionIn)
+    return "there is a fade or transition at the cut";
+  // A razor leaves the first piece the whole clip's keyframes and volume points, so the joined
+  // clip carries them, and they must still continue into the second piece unchanged.
+  const whole = joinedClip(from, to);
+  const same = (piece: Clip, original: Clip, animated = true) =>
+    piece.mediaStart !== null &&
+    original.mediaStart !== null &&
+    Math.abs(piece.mediaStart - original.mediaStart) <= 1e-6 &&
+    JSON.stringify(
+      canonical({
+        ...piece,
+        id: original.id,
+        link: original.link,
+        startRef: original.startRef,
+        mediaStart: 0,
+        sourceRestrictions: undefined,
+        ...(!animated && { keyframes: null, automation: null }),
+      }),
+    ) ===
+      JSON.stringify(
+        canonical({
+          ...original,
+          mediaStart: 0,
+          sourceRestrictions: undefined,
+          ...(!animated && { keyframes: null, automation: null }),
+        }),
+      );
+  const pieces = (animated: boolean) =>
+    same(windowClip(whole, from.start, to.start, fps), from, animated) &&
+    same(windowClip(whole, to.start, clipEnd(to), fps), to, animated);
+  if (pieces(true)) return null;
+  return pieces(false)
+    ? "their keyframes or volume points were changed after the cut"
+    : "the second does not pick up the source where the first ends, or a setting differs";
+}
+
+/** The cut to join and its linked partners' cuts, all through edits, or a refusal saying why. */
+function throughEdits(clips: Clip[], from: Clip, to: Clip, fps: Fps) {
+  if (from.track !== to.track || clipEnd(from) !== to.start)
+    throw new TimelineError(
+      "unsupported",
+      `${clipName(to)} does not start where ${clipName(from)} ends.`,
+    );
+  const pairs = linkedCuts(clips, from, to);
+  const members = (link: string | null) =>
+    link === null ? 1 : clips.filter((clip) => clip.link === link).length;
+  if (members(from.link) !== pairs.length || members(to.link) !== pairs.length)
+    throw new TimelineError(
+      "unsupported",
+      `Can't join ${clipName(from)}: its linked clips are not cut at the same frame.`,
+    );
+  for (const [left, right] of pairs) {
+    const reason = notThroughEdit(left, right, fps);
+    const names =
+      clipName(left) === clipName(right)
+        ? `these pieces of ${clipName(left)}`
+        : `${clipName(left)} and ${clipName(right)}`;
+    if (reason)
+      throw new TimelineError("unsupported", `Can't join ${names}: ${reason}.`);
+  }
+  return pairs;
+}
 
 /** The cut itself, then each pair of linked partners meeting at the same frame on one track. */
 function linkedCuts(clips: Clip[], from: Clip, to: Clip): [Clip, Clip][] {

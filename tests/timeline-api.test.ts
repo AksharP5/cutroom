@@ -2240,6 +2240,154 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
   },
 );
 
+test("join refuses source-only differences and boundaries rounded to the same frame", async () => {
+  const { request, project, files, close } = await timelineFixture();
+  const api = `/projects/${project.id}`;
+  try {
+    const [left, right] = ["left", "right"].map(
+      (id, index) =>
+        `<video id="${id}" class="clip" src="source.mp4" muted style="position:absolute;inset:0" data-start="${index}" data-duration="1" data-track-index="0" data-media-start="${index}"></video>`,
+    );
+    for (const [stylesheet, incoming, reason] of [
+      [
+        "",
+        right!.replace('class="clip"', 'class="clip filtered"'),
+        "different classes",
+      ],
+      [
+        "",
+        right!.replace("inset:0", "inset:0;outline:9px solid red"),
+        "different classes",
+      ],
+      ["", right, "source timing"],
+      [
+        "#right { outline: 9px solid red }",
+        right,
+        "targets one of the source elements by ID",
+      ],
+      [
+        "video:nth-child(2) { outline: 9px solid red }",
+        right,
+        "styles that may depend on the cut",
+      ],
+    ] as const) {
+      const outgoing =
+        reason === "source timing"
+          ? left!.replace('data-duration="1"', 'data-duration="0.99"')
+          : left;
+      const html = `<style>${stylesheet}</style><main data-composition-id="main" data-duration="2" data-fps="30">${outgoing}${incoming}</main>`;
+      await writeFile(join(project.path, "index.html"), html);
+      const initial = TimelineViewSchema.parse(
+        await (await request(`${api}/timeline`)).json(),
+      );
+      expect(
+        initial.timeline.clips.map(({ start, duration }) => [start, duration]),
+      ).toEqual([
+        [0, 30],
+        [30, 30],
+      ]);
+      const saved = await request(`${api}/commands`, "POST", {
+        expectedRevision: initial.revision,
+        commands: [{ type: "join", from: "left", to: "right" }],
+      });
+      expect(saved.status).toBe(422);
+      expect(await saved.json()).toMatchObject({
+        code: "unsupported",
+        error: expect.stringContaining(reason!),
+      });
+      expect((await files())[0]).toBe(html);
+    }
+  } finally {
+    await close();
+  }
+});
+
+test("joining a managed razor restores linked keyframes, gain points, and outer fades", async () => {
+  const { request, store, review, app, close } = await projectFixture();
+  app.route("/api/cutroom", createTimelineRoutes(store, review));
+  const project = await store.create({ name: "Join", duration: 4 });
+  const source = join(project.path, "index.html");
+  const api = `/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(await (await request(`${api}/timeline`)).json());
+  const submit = async (commands: CommandInput[]) =>
+    request(`${api}/commands`, "POST", {
+      expectedRevision: (await read()).revision,
+      commands,
+    });
+  const edit = async (commands: CommandInput[]) => {
+    const response = await submit(commands);
+    const body = await response.text();
+    expect(response.status, body).toBe(200);
+    return TimelineViewSchema.parse(JSON.parse(body)).timeline.clips;
+  };
+  try {
+    const html = await readFile(source, "utf8");
+    await writeFile(
+      source,
+      html.replace(
+        /(<main[^>]*>)[\s\S]*<\/main>/,
+        '$1<video id="picture" src="source.mp4" muted data-link="pair" style="position:absolute;inset:0" data-start="0" data-duration="4" data-track-index="0"></video><audio id="sound" src="source.mp4" data-link="pair" data-start="0" data-duration="4" data-track-index="1" data-fade-in="0.3" data-fade-out="0.4"></audio></main>',
+      ),
+    );
+    const before = await edit([
+      {
+        type: "setKeyframe",
+        clipId: "picture",
+        property: "opacity",
+        frame: 10,
+        value: 0.5,
+      },
+      {
+        type: "setKeyframe",
+        clipId: "picture",
+        property: "opacity",
+        frame: 100,
+        value: 0.9,
+      },
+      {
+        type: "setClip",
+        clipId: "sound",
+        automation: {
+          volume: [
+            { frame: 0, gain: 1 },
+            { frame: 90, gain: 0.5 },
+          ],
+        },
+      },
+    ]);
+    const split = await edit([{ type: "split", at: 60, clipIds: ["picture"] }]);
+    const right = split.find(
+      ({ track, start }) => track === 0 && start === 60,
+    )!;
+    expect(
+      await edit([{ type: "join", from: "picture", to: right.id }]),
+    ).toEqual(before);
+
+    const splitAgain = await edit([
+      { type: "split", at: 60, clipIds: ["picture"] },
+    ]);
+    const nextPicture = splitAgain.find(
+      ({ track, start }) => track === 0 && start === 60,
+    )!;
+    const nextSound = splitAgain.find(
+      ({ track, start }) => track === 1 && start === 60,
+    )!;
+    await edit([{ type: "setClip", clipId: nextSound.id, fadeIn: 6 }]);
+    const afterFade = await read();
+    const refused = await submit([
+      { type: "join", from: "picture", to: nextPicture.id },
+    ]);
+    expect(refused.status).toBe(422);
+    expect(await refused.json()).toMatchObject({
+      error: expect.stringContaining("a fade or transition at the cut"),
+    });
+    expect(await read()).toEqual(afterFade);
+  } finally {
+    await close();
+  }
+});
+
 test("a range delete's change row reads as one edit at its In point", async () => {
   const fixture = await timelineFixture();
   const { project } = fixture;

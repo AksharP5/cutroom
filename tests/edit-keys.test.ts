@@ -1,7 +1,12 @@
 import { expect, test } from "bun:test";
 import { applyAll, normalizeTimeline } from "../src/shared/timeline/apply";
 import { CommandSchema } from "../src/shared/timeline/schema";
-import type { Clip, Timeline, Track } from "../src/shared/timeline/schema";
+import type {
+  Clip,
+  CommandInput,
+  Timeline,
+  Track,
+} from "../src/shared/timeline/schema";
 import { editKeys, matchFrame, editedPlayhead } from "../src/client/edit/keys";
 import { countingIds } from "./clip-ids";
 
@@ -415,4 +420,57 @@ test("match frame finds the source frame under the playhead, preferring the sele
   expect(
     matchFrame(sequence(), { selection: new Set(), frame: 30 }),
   ).toBeNull();
+});
+
+test("Alt+\\ joins the cut at the playhead, a selected cut, or the cut between selected clips", () => {
+  const withSource = (plain: Timeline) => ({
+    ...plain,
+    clips: plain.clips.map((item) =>
+      item.link === "lk"
+        ? { ...item, src: "talk.mp4", sourceDuration: 10 }
+        : item.id === "music"
+          ? { ...item, src: "music.wav", sourceDuration: 10 }
+          : item,
+    ),
+  });
+  const timeline = withSource(sequence(musicOff));
+  const cut = apply(timeline, press("editBladeRazor", timeline, 40));
+  const join: CommandInput[] = [{ type: "join", from: "a", to: "a-2" }];
+  expect(press("editM2JoinClip", cut, 40)).toEqual(join);
+  // E cuts every auto-select track, and Alt+\ there joins them all back.
+  const withMusic = withSource(sequence());
+  const everything = apply(withMusic, press("editBladeRazor", withMusic, 40));
+  expect(press("editM2JoinClip", everything, 40)).toEqual([
+    { type: "join", from: "a", to: "a-2", skipUnsupportedSource: true },
+    { type: "join", from: "music", to: "music-2", skipUnsupportedSource: true },
+  ]);
+  // A track changed since the cut is left, and the note names it; the rest still join.
+  const quieter = apply(everything, [
+    { type: "setClip", clipId: "music-2", volume: 0.5 },
+  ]);
+  const notes: string[] = [];
+  expect(
+    editKeys.editM2JoinClip.commands(
+      quieter,
+      { selection: new Set(), frame: 40 },
+      (note) => notes.push(note),
+    ),
+  ).toEqual([{ type: "join", from: "a", to: "a-2" }]);
+  expect(notes).toEqual([
+    "Can't join these pieces of music.wav: the second does not pick up the source where the first ends, or a setting differs.",
+  ]);
+  expect(
+    editKeys.editM2JoinClip.commands(cut, {
+      selection: new Set(),
+      frame: 0,
+      editPoint: { from: "a", to: "a-2", mode: "roll" },
+    }),
+  ).toEqual(join);
+  expect(press("editM2JoinClip", cut, 0, ["a", "a-2"])).toEqual(join);
+  expect(apply(cut, join).clips).toEqual(timeline.clips);
+  // One piece selected names no cut, and the playhead off a cut finds none.
+  expect(() => press("editM2JoinClip", cut, 0, ["a-2"])).toThrow(
+    "Nothing to join.",
+  );
+  expect(() => press("editM2JoinClip", cut, 41)).toThrow("Nothing to join.");
 });
