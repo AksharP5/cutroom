@@ -4,13 +4,18 @@ import {
 } from "../../shared/timeline/clipTiming";
 import { mediaSettings, peakLevels } from "../../shared/media";
 import type { Clip, Fps } from "../../shared/timeline/schema";
+import { clipEnd } from "../../shared/timeline/apply";
 import {
+  clipNamed,
+  clipRuns,
   clipsInRange,
-  filmTiles,
+  RUN_MAX_WIDTH,
+  filmTileOffsets,
   frameStep,
   peakLevel,
   rowsBetween,
   sourceSecondsPerPixel,
+  tileTime,
 } from "./math";
 import type { FrameRange, Row, TrackClips } from "./math";
 import { PEAK_CHUNK, createTimelineMedia } from "./media";
@@ -26,6 +31,8 @@ export interface BodyScene {
   fps: Fps;
   imageSources: ReadonlyMap<string, string>;
   mix: TrackMix;
+  /** Clips whose file is gone. Their boxes say so, and nothing is drawn over them. */
+  offline: ReadonlySet<string>;
 }
 export type Bodies = ReturnType<typeof createBodies>;
 /** A clip's way from where it was drawn to where it is, as its box takes it. */
@@ -58,6 +65,12 @@ const bucketSeconds = (level: number) =>
  * canvas is two views wide and sits in the scrolling content, so scrolling moves it on the
  * compositor; it is drawn again when the zoom changes, when the view leaves it, and when media
  * arrives. React never renders for any of it.
+ *
+ * A clip draws by its width. With room for a name (`clipNamed`) its picture sits under the name
+ * strip. Narrower, the picture takes the whole height under the rail and shows the middle of its
+ * frame. A run of narrow clips from one source averaging under 6px draws as one
+ * filmstrip and one waveform under their rails, so the picture and sound continue across cuts
+ * at Fit.
  */
 export function createBodies(
   canvas: HTMLCanvasElement,
@@ -75,6 +88,14 @@ export function createBodies(
     locked: Number(token("--track-locked-opacity")),
     seam: token("--clip-filmstrip-seam"),
     scrim: token("--clip-video-body"),
+    body: {
+      video: token("--clip-video-body"),
+      image: token("--clip-image-body"),
+      audio: token("--clip-audio-body"),
+      voiceover: token("--clip-vo-body"),
+      composition: token("--clip-comp-body"),
+      element: token("--clip-comp-body"),
+    } satisfies Record<Clip["kind"], string>,
     wave: {
       audio: token("--wave-audio"),
       video: token("--wave-video"),
@@ -203,7 +224,10 @@ export function createBodies(
     /** A row's waveform columns by colour, filled once per row. */
     let waves = paths();
 
-    /** A clip's sound between device pixels `x0` and `x1`: centred, or as a strip rising from `y1`. */
+    /**
+     * A clip's sound between device pixels `x0` and `x1`: centred, or as a strip rising from `y1`.
+     * A clip in a run starts at `from`, over the seam its neighbour leaves.
+     */
     function wave(
       clip: Clip,
       src: string,
@@ -212,22 +236,25 @@ export function createBodies(
       y0: number,
       y1: number,
       strip: boolean,
+      from = x0,
     ) {
-      const xa = Math.max(x0, 0);
+      const xa = Math.max(from, 0);
       const xb = Math.min(x1, width);
       if (xb <= xa) return;
+      // The seam plays what the clip's first column does.
+      const xr = Math.max(xa, x0);
       const perPixel = sourceSecondsPerPixel(ppf, fps, clip.playbackRate) / dpr;
       const start = (clip.mediaStart ?? 0) - x0 * perPixel;
       // A ramp reads each column's edges off the clip's own curve, one entry per edge.
       const ramp = rampSourceSeconds(
         clip,
         fps,
-        (xa - x0) / (ppf * dpr),
+        (xr - x0) / (ppf * dpr),
         sourceSecondsPerPixel(ppf, fps, 1) / dpr,
-        xb - xa + 1,
+        xb - xr + 1,
       );
       const sourceAt = (x: number) =>
-        ramp ? ramp[x - xa]! : start + x * perPixel;
+        ramp ? ramp[Math.max(x, xr) - xr]! : start + x * perPixel;
       const loaded = (level: number, fetch: boolean) => {
         if (level < 0 || level >= peakLevels.length) return false;
         const chunk = bucketSeconds(level) * PEAK_CHUNK;
@@ -299,7 +326,7 @@ export function createBodies(
         const gain = waveformScale(
           clip,
           fps,
-          (x - x0) * framesPerPixel,
+          Math.max(0, x - x0) * framesPerPixel,
           lane,
           fades,
         );
@@ -318,20 +345,28 @@ export function createBodies(
       }
     }
 
-    /** A clip's pictures in tiles from its left edge, cut off at device pixel `x1`. */
+    /**
+     * Pictures in tiles from the left edge of `parts`, cut off at device pixel `x1`: one clip, or
+     * a run of clips from one source that touch. Each tile shows what plays under its left edge.
+     * With `middle`, a clip narrower than a tile shows the middle of its frame, where the subject
+     * of a talking head sits.
+     */
     function film(
-      clip: Clip,
+      parts: readonly Clip[],
       src: string,
       x1: number,
       y0: number,
       y1: number,
       inView: boolean,
+      middle: boolean,
     ) {
-      const start = clip.start * ppf;
+      const first = parts[0]!;
+      const start = first.start * ppf;
+      const length = (clipEnd(parts.at(-1)!) - first.start) * ppf;
       const from = left - start;
-      const to = Math.min(right - start, clip.duration * ppf);
-      const grade = clip.grade && media.grade(clip.grade);
+      const to = Math.min(right - start, length);
       const draw = (
+        clip: Clip,
         picture: ImageBitmap,
         sx: number,
         sy: number,
@@ -345,6 +380,7 @@ export function createBodies(
         const wide = Math.round((start + x + tile) * dpr) - originX - at;
         const shown = Math.min(wide, x1 - at);
         if (shown <= 0) return true;
+        const grade = clip.grade && media.grade(clip.grade);
         const graded = grade
           ? media.grades.tile(
               clip.id,
@@ -357,9 +393,10 @@ export function createBodies(
             )
           : undefined;
         if (requireGrade && !graded) return false;
+        const centred = middle && shown < wide;
         ctx.drawImage(
           graded ?? picture,
-          graded ? 0 : sx,
+          (graded ? 0 : sx) + (centred ? (sw * (wide - shown)) / wide / 2 : 0),
           graded ? 0 : sy,
           (sw * shown) / wide,
           sh,
@@ -368,22 +405,21 @@ export function createBodies(
           shown,
           y1 - y0,
         );
+        // The ground between two narrow clips already parts them.
+        if (centred) return true;
         ctx.fillStyle = tokens.seam;
         ctx.fillRect(at, y0, hair, y1 - y0);
         return true;
       };
-      if (clip.kind === "image") {
+      if (first.kind === "image") {
         const picture = media.still(src);
         if (!picture) return;
-        const tile = Math.round(
-          (((y1 - y0) / dpr) * picture.width) / picture.height,
+        const tile = Math.max(
+          1,
+          Math.round((((y1 - y0) / dpr) * picture.width) / picture.height),
         );
-        for (
-          let x = Math.max(0, Math.floor(from / tile)) * tile;
-          x < to;
-          x += tile
-        )
-          draw(picture, 0, 0, picture.width, picture.height, x, tile);
+        for (const x of filmTileOffsets(tile, from, to))
+          draw(first, picture, 0, 0, picture.width, picture.height, x, tile);
         return;
       }
       const strip = media.film(src);
@@ -391,26 +427,44 @@ export function createBodies(
       const tile = Math.round(
         (((y1 - y0) / dpr) * strip.tileWidth) / strip.tileHeight,
       );
-      const perPixel = sourceSecondsPerPixel(ppf, fps, clip.playbackRate);
-      const step = frameStep(tile * perPixel);
-      const exact = step < mediaSettings.filmstripInterval;
-      // A ramp's tile shows what plays under its left edge, read off the clip's own curve.
-      const ramped = !!clip.automation && !!readClipSource(clip).lane;
-      for (const { x, time } of filmTiles(
-        clip,
-        tile,
-        perPixel,
-        step,
-        from,
-        to,
-        ramped
-          ? (x) => rampSourceSeconds(clip, fps, x / ppf, 0, 1)![0]!
-          : undefined,
-      )) {
+      let part = 0;
+      for (const x of filmTileOffsets(tile, from, to)) {
+        while (
+          part < parts.length - 1 &&
+          (clipEnd(parts[part]!) - first.start) * ppf <= x
+        )
+          part++;
+        const clip = parts[part]!;
+        // Pixels from this clip's own left edge to the tile's.
+        const inside = Math.max(0, x - (clip.start - first.start) * ppf);
+        const perPixel = sourceSecondsPerPixel(ppf, fps, clip.playbackRate);
+        const step = frameStep(tile * perPixel);
+        const exact = step < mediaSettings.filmstripInterval;
+        // A ramp's tile shows what plays under its left edge, read off the clip's own curve.
+        const ramped = !!clip.automation && !!readClipSource(clip).lane;
+        const time = tileTime(
+          clip,
+          inside,
+          perPixel,
+          step,
+          ramped
+            ? (x) => rampSourceSeconds(clip, fps, x / ppf, 0, 1)![0]!
+            : undefined,
+        );
         const frame = exact ? media.frame(src, time) : undefined;
         if (
           frame &&
-          draw(frame, 0, 0, frame.width, frame.height, x, tile, !!grade)
+          draw(
+            clip,
+            frame,
+            0,
+            0,
+            frame.width,
+            frame.height,
+            x,
+            tile,
+            !!clip.grade,
+          )
         ) {
           continue;
         }
@@ -432,11 +486,13 @@ export function createBodies(
           strip.sheets[Math.floor(index / mediaSettings.tilesPerSheet)];
         const sprite = sheet && media.sheet(sheet.spriteUrl);
         if (!sprite) {
-          if (frame) draw(frame, 0, 0, frame.width, frame.height, x, tile);
+          if (frame)
+            draw(clip, frame, 0, 0, frame.width, frame.height, x, tile);
           continue;
         }
         const cell = index - sheet.start;
         draw(
+          clip,
           sprite,
           (cell % sheet.columns) * strip.tileWidth,
           Math.floor(cell / sheet.columns) * strip.tileHeight,
@@ -452,9 +508,13 @@ export function createBodies(
     for (const row of rowsBetween(scene.rows, top, bottom)) {
       const track = scene.tracks.get(row.track.index);
       if (!track) continue;
+      const under = (strip: number) =>
+        Math.round((row.top + 1 + strip) * dpr) - originY;
       // Sound has no name strip: its waveform takes the lane under the kind rail.
-      const strip = row.track.kind === "audio" ? tokens.rail : tokens.name;
-      const y0 = Math.round((row.top + 1 + strip) * dpr) - originY;
+      const strip = under(
+        row.track.kind === "audio" ? tokens.rail : tokens.name,
+      );
+      const bare = under(tokens.rail);
       const y1 = Math.round((row.top + row.height - 1) * dpr) - originY;
       const inView =
         row.top < visible.y.to && row.top + row.height > visible.y.from;
@@ -462,14 +522,84 @@ export function createBodies(
       ctx.globalAlpha = alpha;
       waves = paths();
       const corners: [number, number][] = [];
+      /** A clip that is off is grey and dimmed, as its box is. */
+      const dim = (off: boolean) => {
+        ctx.filter = off ? tokens.off.filter : "none";
+        ctx.globalAlpha = alpha * (off ? tokens.off.opacity : 1);
+      };
+      /** The clip's box as the browser snaps it: a pixel short of the next clip. */
+      const box = (clip: Clip) => {
+        const x0 = Math.round(clip.start * ppf * dpr) - originX;
+        return {
+          x0,
+          x1: Math.max(
+            x0 + hair,
+            Math.round(((clip.start + clip.duration) * ppf - 1) * dpr) -
+              originX,
+          ),
+        };
+      };
+      const pictures = (clip: Clip) =>
+        row.track.kind === "video" &&
+        (clip.kind === "video" || clip.kind === "image");
+      // Runs of narrow clips draw as one body until an edit animates the individual clips.
+      const joined = new Set<Clip>();
+      for (const run of offsets.size ? [] : clipRuns(track.clips, ppf)) {
+        const { first } = run;
+        const { src } = first;
+        const pictured = pictures(first);
+        if (
+          (run.end - run.start) * ppf >= RUN_MAX_WIDTH * run.clips.length ||
+          run.end <= frames.from ||
+          run.start >= frames.to ||
+          src === null ||
+          scene.offline.has(first.id) ||
+          (!pictured && !first.hasAudio)
+        )
+          continue;
+        const parts = run.clips.filter(
+          (clip) => clipEnd(clip) > frames.from && clip.start < frames.to,
+        );
+        const boxes = parts.map(box);
+        dim(!clipVisible(first, scene.mix));
+        // The seams between the boxes take the body's colour: one body under a rail of cuts.
+        ctx.fillStyle = tokens.body[first.kind];
+        for (const [index, { x0 }] of boxes.entries()) {
+          joined.add(parts[index]!);
+          if (index)
+            ctx.fillRect(
+              boxes[index - 1]!.x1,
+              bare,
+              x0 - boxes[index - 1]!.x1,
+              y1 - bare,
+            );
+        }
+        const end = boxes.at(-1)!.x1;
+        if (pictured) film(run.clips, src, end, bare, y1, inView, false);
+        dim(false);
+        for (const [index, clip] of parts.entries())
+          if (clip.hasAudio)
+            wave(
+              clipVisible(clip, scene.mix) === clip.enabled
+                ? clip
+                : { ...clip, enabled: false },
+              src,
+              boxes[index]!.x0,
+              boxes[index]!.x1,
+              pictured ? y1 - Math.round(BAND * dpr) : bare,
+              y1,
+              pictured,
+              boxes[index - 1]?.x1,
+            );
+        if (pictured) corners.push([boxes[0]!.x0, y1], [end - hair, y1]);
+      }
       for (const placed of clipsInRange(track, frames)) {
+        if (joined.has(placed) || scene.offline.has(placed.id)) continue;
         const image = placed.variableBindings?.image;
         const src =
           (image ? scene.imageSources.get(image) : undefined) ?? placed.src;
         if (src === null) continue;
-        const pictured =
-          row.track.kind === "video" &&
-          (placed.kind === "video" || placed.kind === "image");
+        const pictured = pictures(placed);
         if (!pictured && !placed.hasAudio) continue;
         // A clip an edit moved is drawn where its box is on its way there.
         const shift = offsets.get(placed.id);
@@ -479,24 +609,15 @@ export function createBodies(
           x || enabled !== placed.enabled
             ? { ...placed, start: placed.start + x / ppf, enabled }
             : placed;
+        const { x0, x1 } = box(clip);
+        const named = clipNamed(placed.duration, ppf);
         const down = Math.round((shift?.y ?? 0) * dpr);
-        const clipTop = y0 + down;
+        const clipTop = (named ? strip : bare) + down;
         const clipBottom = y1 + down;
-        // The clip's box as the browser snaps it: a pixel short of the next clip.
-        const x0 = Math.round(clip.start * ppf * dpr) - originX;
-        const x1 = Math.max(
-          x0 + hair,
-          Math.round(((clip.start + clip.duration) * ppf - 1) * dpr) - originX,
-        );
         if (pictured) {
-          // A clip that is off is grey and dimmed, as its box is.
-          if (!clip.enabled) {
-            ctx.filter = tokens.off.filter;
-            ctx.globalAlpha = alpha * tokens.off.opacity;
-          }
-          film(clip, src, x1, clipTop, clipBottom, inView);
-          ctx.filter = "none";
-          ctx.globalAlpha = alpha;
+          dim(!clip.enabled);
+          film([clip], src, x1, clipTop, clipBottom, inView, !named);
+          dim(false);
         }
         if (clip.hasAudio)
           wave(
@@ -513,13 +634,11 @@ export function createBodies(
       }
       for (const state of ["on", "off"] as const)
         for (const kind of ["audio", "video", "voiceover"] as const) {
-          ctx.filter = state === "off" ? tokens.off.filter : "none";
-          ctx.globalAlpha = alpha * (state === "off" ? tokens.off.opacity : 1);
+          dim(state === "off");
           ctx.fillStyle = tokens.wave[kind];
           ctx.fill(waves[state][kind]);
         }
-      ctx.filter = "none";
-      ctx.globalAlpha = alpha;
+      dim(false);
       // The clips' rounded bottom corners, which square tiles and strips would cover.
       for (const [x, y] of corners) ctx.clearRect(x, y - hair, hair, hair);
     }

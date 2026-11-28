@@ -62,6 +62,10 @@ export const MAX_PPF = 32;
 export const LABEL_SPACING = 96;
 /** A clip shows its duration once it is this wide. */
 export const LENGTH_MIN_WIDTH = 200;
+/** A clip shows its own name once it is this wide. Narrower, it is picture and sound alone. */
+export const NAME_MIN_WIDTH = 48;
+/** A same-source run averaging below this width draws as one body. */
+export const RUN_MAX_WIDTH = 6;
 /** Room kept after the last frame when the whole timeline is fitted. */
 const FIT_TAIL = 32;
 
@@ -300,6 +304,85 @@ export function mountedRange(
   };
 }
 
+/** Zooms at which clips can show their own names, in ascending order. */
+export function clipNameZooms(clips: readonly Clip[]): number[] {
+  return [...new Set(clips.map((clip) => NAME_MIN_WIDTH / clip.duration))].sort(
+    (a, b) => a - b,
+  );
+}
+
+/** Names and run membership only change on a width threshold, even during continuous zoom. */
+export function clipNameZoom(stops: readonly number[], ppf: number): number {
+  let from = 0;
+  let to = stops.length;
+  while (from < to) {
+    const at = Math.floor((from + to) / 2);
+    if (stops[at]! <= ppf) from = at + 1;
+    else to = at;
+  }
+  return stops[from - 1] ?? 0;
+}
+
+export const clipNamed = (duration: number, ppf: number) =>
+  ppf >= NAME_MIN_WIDTH / duration;
+
+export interface ClipRun {
+  first: Clip;
+  clips: readonly Clip[];
+  start: number;
+  end: number;
+}
+
+/**
+ * Stretches of two or more adjacent clips from one file, all too narrow to show their own name.
+ * The track is in start order. Overlapping clips retain their own stacking and drawing.
+ */
+export function clipRuns(clips: readonly Clip[], ppf: number): ClipRun[] {
+  const runs: ClipRun[] = [];
+  let parts: Clip[] = [];
+  let previousEnd = -Infinity;
+  const close = () => {
+    const first = parts[0];
+    if (first && parts.length > 1)
+      runs.push({
+        first,
+        clips: parts,
+        start: first.start,
+        end: clipEnd(parts.at(-1)!),
+      });
+    parts = [];
+  };
+  for (const [index, clip] of clips.entries()) {
+    const end = clipEnd(clip);
+    const overlaps =
+      clip.start < previousEnd || end > (clips[index + 1]?.start ?? Infinity);
+    previousEnd = Math.max(previousEnd, end);
+    if (
+      overlaps ||
+      clip.src === null ||
+      clip.variableBindings?.image ||
+      clipNamed(clip.duration, ppf)
+    ) {
+      close();
+      continue;
+    }
+    const last = parts.at(-1);
+    if (
+      last &&
+      (last.src !== clip.src ||
+        last.kind !== clip.kind ||
+        last.hasAudio !== clip.hasAudio ||
+        last.enabled !== clip.enabled ||
+        last.authoredAudioGroupId !== clip.authoredAudioGroupId ||
+        clipEnd(last) !== clip.start)
+    )
+      close();
+    parts.push(clip);
+  }
+  close();
+  return runs;
+}
+
 export interface TrackClips {
   clips: readonly Clip[];
   /** `ends[i]` is the latest end among `clips[0..i]`, so overlapping clips are still found. */
@@ -370,42 +453,28 @@ export function frameStep(tileSeconds: number): number {
   return step;
 }
 
-export interface FilmTile {
-  /** Pixels from the clip's left edge to the tile's. */
-  x: number;
-  /** Source seconds of the frame the tile shows. */
-  time: number;
+/** Tile positions touching the visible range, anchored to the start of a clip or run. */
+export function* filmTileOffsets(width: number, from: number, to: number) {
+  for (
+    let x = Math.max(0, Math.floor(from / width)) * width;
+    x < to;
+    x += width
+  )
+    yield x;
 }
 
-/**
- * The filmstrip tiles of a clip that touch `[from, to)`, measured in pixels from the clip's left
- * edge. Tiles are `width` wide and the first starts on the clip's first frame, so no tile moves
- * when the view scrolls. Each shows the source frame under its left edge, held back to a whole
- * number of `step`s after the clip's media start: the first tile is exactly the clip's first
- * frame, and a clip asks for the same frames at every zoom that shares a step. A ramp passes
- * `sourceAt`, the source seconds it plays `x` pixels in; a constant speed is a straight line.
- */
-export function filmTiles(
-  clip: Pick<Clip, "mediaStart" | "playbackRate">,
-  width: number,
+/** The source seconds of the frame a tile shows when its left edge is `x` pixels into a clip. */
+export function tileTime(
+  clip: Pick<Clip, "mediaStart">,
+  x: number,
   secondsPerPixel: number,
   step: number,
-  from: number,
-  to: number,
   sourceAt?: (x: number) => number,
-): FilmTile[] {
+) {
   const mediaStart = clip.mediaStart ?? 0;
-  const first = Math.max(0, Math.floor(from / width));
-  return Array.from(
-    { length: Math.max(0, Math.ceil(to / width) - first) },
-    (_, index) => {
-      const x = (first + index) * width;
-      // An offset a hair under a step, from the division, belongs to that step.
-      const offset = sourceAt ? sourceAt(x) - mediaStart : x * secondsPerPixel;
-      const steps = Math.floor(offset / step + 1e-6);
-      return { x, time: mediaStart + steps * step };
-    },
-  );
+  // An offset a hair under a step, from the division, belongs to that step.
+  const offset = sourceAt ? sourceAt(x) - mediaStart : x * secondsPerPixel;
+  return mediaStart + Math.floor(offset / step + 1e-6) * step;
 }
 
 /** Frames of the labelled ruler ticks that fall in a range. */
