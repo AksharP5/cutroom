@@ -7,7 +7,9 @@ import {
   PositionWarningSchema,
   TextWarningSchema,
   PositionFoldSchema,
+  PREVIEW_FRAME_TIMEOUT,
   PreviewLevelsSchema,
+  PreviewFootageSchema,
   PreviewFrameStatusSchema,
   PlaybackClockSchema,
   PreviewReplySchema,
@@ -69,12 +71,13 @@ const PreviewCopiesSchema = z.object({
     .nullable(),
 });
 type PreviewCopies = z.infer<typeof PreviewCopiesSchema>["copies"];
-/**
- * The editing proxies the shown preview waits for, as HyperFrames' runtime counts them: videos
- * this browser cannot decode play from a proxy the server makes in the background.
- */
-export const usePreparing = create<{ copies: PreviewCopies }>(() => ({
+/** The shown preview's editing proxies and whether it is waiting for a piece. */
+export const usePreparing = create<{
+  copies: PreviewCopies;
+  footagePending: boolean;
+}>(() => ({
   copies: null,
+  footagePending: false,
 }));
 let preparingSource: HTMLIFrameElement | null = null;
 let observedClip: string | null = null;
@@ -357,14 +360,19 @@ export function connectPreview(
     { resolve(reply: Reply): void; reject(error: Error): void; timer: number }
   >();
   let copies: PreviewCopies = null;
+  let footagePending = false;
+  const publishPreparation = () => {
+    // The first document may report preparation before it can show anything.
+    preparingSource ??= frame;
+    if (preparingSource === frame)
+      usePreparing.setState({ copies, footagePending });
+  };
   const receive = (event: MessageEvent<unknown>) => {
     if (event.source !== frame.contentWindow) return;
     const preparing = PreviewCopiesSchema.safeParse(event.data);
     if (preparing.success) {
       copies = preparing.data.copies;
-      // The first document says so before it can show anything; later ones once they show.
-      if (preparingSource === frame || preparingSource === null)
-        usePreparing.setState({ copies });
+      publishPreparation();
       return;
     }
     if (
@@ -375,6 +383,14 @@ export function connectPreview(
     ) {
       const status = PreviewFrameStatusSchema.safeParse(event.data);
       if (status.success) reportFrameError(status.data.error);
+      return;
+    }
+    const footage = PreviewFootageSchema.safeParse(event.data);
+    if (footage.success) {
+      footagePending = footage.data.pending;
+      if (footagePending) frame.dataset.standin = "true";
+      else delete frame.dataset.standin;
+      publishPreparation();
       return;
     }
     if (
@@ -524,9 +540,8 @@ export function connectPreview(
       };
       const timer = window.setTimeout(() => {
         finish();
-        const message = "The preview did not draw the frame in time.";
-        if (id === playbackRequest) reportFrameError(message);
-        reject(new Error(message));
+        if (id === playbackRequest) reportFrameError(PREVIEW_FRAME_TIMEOUT);
+        reject(new Error(PREVIEW_FRAME_TIMEOUT));
       }, 10_000);
       signal.addEventListener("abort", cancel, { once: true });
       pending.set(id, {
@@ -706,9 +721,10 @@ export function connectPreview(
       pictureBox.publish(null);
     }
     if (pictureTarget === picture) pictureTarget = null;
+    delete frame.dataset.standin;
     if (preparingSource === frame) {
       preparingSource = null;
-      usePreparing.setState({ copies: null });
+      usePreparing.setState({ copies: null, footagePending: false });
     }
     unwatchStripMetering();
     send("meter", { enabled: false });
@@ -813,13 +829,13 @@ export function connectPreview(
         edit.push(picture);
       });
       active = true;
-      preparingSource = frame;
-      usePreparing.setState({ copies });
       showDiagnostics();
     },
     /** Selection belongs to the shown document, including a retained picture after a superseded handoff. */
     present() {
       if (closing.signal.aborted) return;
+      preparingSource = frame;
+      publishPreparation();
       if (warningSource !== frame)
         reportEditorError("previewFrame", frameError);
       warningSource = frame;

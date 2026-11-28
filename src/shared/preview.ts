@@ -142,10 +142,20 @@ export const PreviewReplySchema = z.object({
   diagnostics: z.array(CompositionDiagnosticSchema).max(20).optional(),
 });
 
+export const PREVIEW_FRAME_TIMEOUT =
+  "The preview did not draw the frame in time.";
+
 export const PreviewFrameStatusSchema = z.object({
   source: z.literal("cutroom-preview"),
   type: z.literal("frame-status"),
   error: z.string().nullable(),
+});
+
+/** Whether a video waits for a piece of its editing proxy, so the picture lacks its frame. */
+export const PreviewFootageSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("footage-pending"),
+  pending: z.boolean(),
 });
 
 export const ClipBoxSchema = z.object({

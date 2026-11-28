@@ -1303,10 +1303,11 @@ test("a late native playback frame clears the preview warning", async ({
   await expect(page.locator(".toast")).toHaveCount(0);
 });
 
-test("the ordinary paused picture is pixel-identical and a timed-out hold keeps it", async ({
+test("the ordinary paused picture is pixel-identical and exhausted paint retries keep it", async ({
   page,
   request,
 }) => {
+  test.setTimeout(90_000);
   const { seek } = await openMedia(page, request);
   await seek("0311");
   const live = page.frameLocator("iframe[data-live]");
@@ -1346,7 +1347,7 @@ test("the ordinary paused picture is pixel-identical and a timed-out hold keeps 
     await page.keyboard.press("e");
     await expect(page.locator(".status-error")).toContainText(
       "did not draw the frame in time",
-      { timeout: 12_000 },
+      { timeout: 40_000 },
     );
     await expect(page.locator("iframe[data-live]")).toHaveAttribute(
       "src",
@@ -1554,14 +1555,18 @@ for (const withheld of [false, true]) {
           expect((await resourceCounts()).maxDocuments).toBeLessThanOrEqual(2);
         }
         if (withheld) {
-          // When the stalled candidate expires, the confirmed frame is briefly the only
-          // one before the coalesced destination navigates. Only the latest saved label
-          // shows that the destination for the whole burst was tried.
+          // One iframe can mean backoff. Wait for the latest saved edit to be tried
+          // and its retries to finish before checking what remains mounted.
           await expect(
             page.frameLocator(".edit-frame").last().locator("#picture"),
           ).toHaveAttribute("data-timeline-label", `Picture ${batch}-49`, {
             timeout: 20000,
           });
+          await expect(page.locator(".edit-stage")).toHaveAttribute(
+            "data-handoff",
+            "showing",
+            { timeout: 55_000 },
+          );
         }
         await expect(page.locator(".edit-frame")).toHaveCount(1, {
           timeout: 20000,
@@ -1674,35 +1679,37 @@ for (const withheld of [false, true]) {
   });
 }
 
-test("a navigation that never loads expires and keeps the confirmed picture", async ({
+test("a navigation that never loads exhausts two retries and keeps the confirmed picture", async ({
   page,
   request,
 }) => {
+  test.setTimeout(90_000);
   const { seek } = await openMedia(page, request);
   await seek("0311");
   const before = await page.locator("iframe[data-live]").getAttribute("src");
-  let release = () => {};
-  await page.route("**/isolated-preview?*", async (route) => {
-    if (new URL(route.request().url()).searchParams.has("cutroom-mix")) {
-      await route.fallback();
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await route.abort();
-  });
+  const blocked = Promise.withResolvers<void>();
+  const attempts = new Set<string>();
+  await page.route(
+    (url) =>
+      url.pathname.endsWith("/isolated-preview") &&
+      url.searchParams.has("document"),
+    async (route) => {
+      if (!route.request().isNavigationRequest()) return route.fallback();
+      attempts.add(route.request().url());
+      await blocked.promise;
+      await route.abort();
+    },
+  );
   const capture = await capturePicture(page);
   capture.reset();
-  const started = Date.now();
   try {
     await page.keyboard.press("e");
     await expect(page.locator(".edit-frame")).toHaveCount(2);
     await expect(page.locator(".status-error")).toContainText(
       "did not finish loading",
-      { timeout: 17_000 },
+      { timeout: 55_000 },
     );
-    expect(Date.now() - started).toBeLessThan(17_000);
+    expect(attempts.size).toBe(3);
     await expect(page.locator(".edit-frame")).toHaveCount(1);
     await expect(page.locator("iframe[data-live]")).toHaveAttribute(
       "src",
@@ -1715,7 +1722,7 @@ test("a navigation that never loads expires and keeps the confirmed picture", as
       ),
     ).toEqual([]);
   } finally {
-    release();
+    blocked.resolve();
     await capture.stop();
   }
 });

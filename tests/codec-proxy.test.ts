@@ -324,9 +324,24 @@ test.skipIf(!tools)(
         new URL(redirect.headers.get("location")!).pathname,
       )![1];
       const asset = `${server.url.origin}${capability}preview/recording.mkv`;
+      // The preview draws without a video whose piece is not made yet, rather than wait for it.
+      const samples = async (at: number) => {
+        const response = await ready(async () => {
+          const response = await fetch(
+            `${server.url.origin}${capability}proxy-samples?path=recording.mkv&at=${at}`,
+          );
+          // 409 until the pieces are planned.
+          return response.status === 409
+            ? new Response(null, { status: 202 })
+            : response;
+        });
+        expect(response.status).toBe(200);
+        return response.json();
+      };
+      expect(await samples(0)).toMatchObject({ made: false });
 
-      // The playhead's piece, asked for before any other is made, so it is made first: from a
-      // seek into the source, without its neighbours' frames.
+      // The playhead's piece, asked for as the proxy begins, is made next: from a seek into the
+      // source, without its neighbours' frames.
       const asked = await ready(async () => {
         const response = await fetch(`${asset}?hf-proxy=h264&cutroom-piece=2`);
         // 409 until the pieces are planned.
@@ -405,6 +420,7 @@ test.skipIf(!tools)(
         });
       };
       await piece(2, playhead);
+      expect(await samples(cuts[2]!)).toMatchObject({ made: true });
       await piece(0);
 
       const finished = await ready(() =>

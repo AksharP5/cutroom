@@ -10,7 +10,10 @@ export interface Picture {
 interface Candidate {
   gen: number;
   deadline: number;
+  attempt?: number;
 }
+
+const RETRY_BACKOFF = [1_000, 2_000];
 
 export type Handoff = (
   | { kind: "showing"; confirmed: Picture | null }
@@ -24,6 +27,11 @@ export type Handoff = (
       kind: "promoting";
       confirmed: Picture | null;
       candidate: Candidate & Picture;
+    }
+  | {
+      kind: "retrying";
+      confirmed: Picture | null;
+      retry: { gen: number; attempt: number; delay: number };
     }
   | { kind: "failed"; confirmed: Picture | null; reason: unknown }
 ) & {
@@ -39,12 +47,12 @@ type Event =
   | { type: "check"; revision: number; deadline: number }
   | { type: "mixed"; revision: number }
   | { type: "check-failed"; revision: number; reason: unknown }
-  | { type: "navigate"; gen: number; deadline: number }
+  | ({ type: "navigate" } & Candidate)
   | { type: "loaded"; gen: number; deadline: number }
   | { type: "unloaded"; gen: number; deadline: number }
   | { type: "prepared"; picture: Picture }
   | { type: "painted"; gen: number }
-  | { type: "failed"; gen: number; reason: unknown }
+  | { type: "failed"; gen: number; reason: unknown; timedOut?: boolean }
   | { type: "cancelled"; gen: number }
   | { type: "updated"; gen: number; revision: number }
   | { type: "reported" }
@@ -104,12 +112,14 @@ function advance(
       ? { kind: "showing", confirmed: state.confirmed }
       : { kind: "failed", confirmed: state.confirmed, reason: event.reason };
   }
-  if (event.type === "navigate")
+  if (event.type === "navigate") {
+    const { type, ...candidate } = event;
     return {
       kind: "loading",
       confirmed: state.confirmed,
-      candidate: { gen: event.gen, deadline: event.deadline },
+      candidate,
     };
+  }
   // The confirmed document reloading itself (not a new edit) starts its lifecycle again, so
   // the reloaded document is prepared, painted and reattached to the transport like any other.
   if (event.type === "loaded" || event.type === "unloaded") {
@@ -117,7 +127,13 @@ function advance(
       return {
         kind: "loading",
         confirmed: state.confirmed,
-        candidate: { gen: event.gen, deadline: state.candidate.deadline },
+        candidate: {
+          gen: event.gen,
+          deadline: state.candidate.deadline,
+          ...(state.candidate.attempt === undefined
+            ? {}
+            : { attempt: state.candidate.attempt }),
+        },
       };
     return (state.kind === "showing" || state.kind === "checking") &&
       state.confirmed?.gen === event.gen
@@ -136,6 +152,10 @@ function advance(
     return state.kind === "failed"
       ? { kind: "showing", confirmed: state.confirmed }
       : state;
+  if (event.type === "cancelled" && state.kind === "retrying")
+    return state.retry.gen === event.gen
+      ? { kind: "showing", confirmed: state.confirmed }
+      : state;
   if (state.kind !== "loading" && state.kind !== "promoting") return state;
   const gen = event.type === "prepared" ? event.picture.gen : event.gen;
   if (gen !== state.candidate.gen) return state;
@@ -152,12 +172,21 @@ function advance(
       return state.kind === "promoting"
         ? { kind: "showing", confirmed: state.candidate }
         : state;
-    case "failed":
+    case "failed": {
+      const attempt = state.candidate.attempt ?? 0;
+      const delay = RETRY_BACKOFF[attempt];
+      if (event.timedOut && delay !== undefined)
+        return {
+          kind: "retrying",
+          confirmed: state.confirmed,
+          retry: { gen, attempt: attempt + 1, delay },
+        };
       return {
         kind: "failed",
         confirmed: state.confirmed,
         reason: event.reason,
       };
+    }
     case "cancelled":
       return { kind: "showing", confirmed: state.confirmed };
   }
