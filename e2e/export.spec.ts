@@ -6,10 +6,9 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { expect, test } from "./fixtures";
-import type { APIRequestContext, Download, Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { z } from "zod";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
-import { embeddedEditor } from "./embedded";
 import { ExportJobSchema, ResolveExportSchema } from "../src/shared/export";
 
 /** A one-second 320x240 composition with one picture clip, and the page's uncaught errors. */
@@ -56,12 +55,6 @@ async function exportable(page: Page, request: APIRequestContext) {
   );
   expect(written.ok()).toBeTruthy();
   return { project, errors };
-}
-
-/** The download is an MP4 that plays: 320x240 and one second long. */
-async function expectPlayable(download: Download, path: string, duration = 1) {
-  expect(download.suggestedFilename()).toMatch(/\.mp4$/);
-  await download.saveAs(path);
 }
 
 async function expectEncoded(path: string, duration = 1) {
@@ -513,42 +506,6 @@ test("Location initializes before accepting edits and keeps the typed destinatio
     .getByLabel("File name", { exact: true })
     .fill("My cut.mp4");
   await expect(location).toHaveValue(project.path);
-});
-
-test("the embedded editor exports a local composition and downloads a playable MP4", async ({
-  page,
-  request,
-}, testInfo) => {
-  await embeddedEditor(page);
-  const { project, errors } = await exportable(page, request);
-
-  await page.goto(`/#project/${project.id}?v=1&rc=1&tv=1`);
-  await expect(
-    page.frameLocator("hyperframes-player iframe").locator("#picture"),
-  ).toBeVisible();
-  const started = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith(`/api/projects/${project.id}/render`),
-  );
-  await page.getByRole("button", { name: "Export", exact: true }).click();
-  const response = await started;
-  expect(response.ok(), await response.text()).toBeTruthy();
-  await expect(
-    page.getByRole("tab", { name: /^Renders(?: \(\d+\))?$/ }),
-  ).toBeVisible();
-
-  const downloadButton = page.getByRole("button", {
-    name: /^Download .+\.mp4$/,
-  });
-  await expect(downloadButton).toBeEnabled({ timeout: 45_000 });
-  const pendingDownload = page.waitForEvent("download");
-  await downloadButton.click();
-  await expectPlayable(
-    await pendingDownload,
-    testInfo.outputPath("export.mp4"),
-  );
-  expect(errors).toEqual([]);
 });
 
 test("Shift+8 defaults to marked frames and exports their exact duration", async ({

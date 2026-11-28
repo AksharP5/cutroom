@@ -21,7 +21,7 @@ The composer result does not show a reliable improvement. Browser-driver typing 
 
 The editor bundle contains one CodeMirror View instance instead of eight. The editor JavaScript fell from 6,176,227 to 5,110,853 bytes, and from 1,848,339 to 1,501,964 bytes with gzip. It retains the pinned upstream editor version and source-editing functionality.
 
-The new editor's code panel loads CodeMirror only when it first opens: its editor chunk (4.7 KB) and the CodeMirror chunk it shares with the embedded editor (511 KB, 177 KB with gzip) are not preloaded with the editor. On November 16, 2026 the panel added 0.2 KB to the app's entry script and 9 KB (3 KB with gzip) to the editor's own chunk, and the embedded editor's chunk shrank by the CodeMirror it now shares. Opening a project to a ready preview took a median 838 ms with the panel against 840 ms without (20 headed runs each, alternating builds). The first open of the panel showed the source in about 390 ms, and selecting a clip showed its element in about 110 ms.
+The code panel loads CodeMirror only when it first opens: its editor chunk (48 KB, 16 KB with gzip) and the CodeMirror chunk (465 KB, 162 KB with gzip) are not preloaded with the editor. Until November 27, 2026 the embedded HyperFrames editor shared that CodeMirror chunk. On November 16, 2026 the panel added 0.2 KB to the app's entry script and 9 KB (3 KB with gzip) to the editor's own chunk, and the embedded editor's chunk shrank by the CodeMirror it now shares. Opening a project to a ready preview took a median 838 ms with the panel against 840 ms without (20 headed runs each, alternating builds). The first open of the panel showed the source in about 390 ms, and selecting a clip showed its element in about 110 ms.
 
 `bun run bench:transcripts` measures transcript listing separately. Reusing one parsed source per request reduced the 100-clip, 5,000-word workload from about 154 ms to 7 ms warm. The request still reads current source files; this does not rely on a cross-request cache.
 
@@ -389,7 +389,7 @@ The spec's budgets, measured on the owner's desktop (i5-14400F, RTX 5060). Matte
 
 The request includes reading the source and settings, checking media files for lengths, two parses (before the edit and to verify the written result), and the history write. These figures were taken on a shared machine (load average about 4). Parsing builds the HTML spec tree with parse5. Generating edits scans the opening tags once to find attribute offsets. The ownership check visits only the clip's subtree and the owned bytes that can reach its range, found by binary search on a running maximum of their ends (text fostered out of a table can span later tags, so the ends alone are not sorted); scanning every node per removal took 121 ms for the 1,000-clip lift.
 
-## New editor playback
+## Editor playback
 
 Playback must hold the display rate with no React work per frame. On November 10, 2026, headless Chromium played a 12-second, 30 fps composition with two 1080p H.264 clips, a title, and music in the new editor at 1720x1050. The page counted animation-frame intervals, React commits through the devtools hook, and DOM changes outside the timecode.
 
@@ -403,7 +403,7 @@ Playback must hold the display rate with no React work per frame. On November 10
 
 The commits and DOM changes are the transport buttons and shuttle readout changing state once per key press. The timecode is written directly, twice per composition frame.
 
-## New editor timeline
+## Editor timeline
 
 The timeline must stay at the display rate with 500 clips. On November 10, 2026, Chromium 1720x1050 (headless, hardware GL) opened the timeline benchmark's composition in the new editor: 240 linked picture and sound pieces cut from one 720p H.264 file plus 20 titles, ten minutes at 30 fps. Each gesture was driven at one input event per frame under a Chromium trace. A late frame is an animation-frame interval over 20 ms. The machine was shared (load average 3 to 11), and three runs are summarised.
 

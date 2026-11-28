@@ -273,7 +273,7 @@ ${adjustment ? "window.__cutroomAdjustmentCapture = (" + adjustmentCapture.toStr
 }`;
 }
 
-/** Version-checked host changes, like studioPlugin. No dependency files are modified. */
+/** Version-checked host changes. No dependency files are modified. */
 export function registerRenderIsolation(
   sources: Record<string, string> = {},
   range?: {

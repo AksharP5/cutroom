@@ -117,29 +117,15 @@ test("author undo and redo preserve migrated review marks, acceptance, and unrel
     await writeFile(join(project.path, "assets/outside.png"), media);
     await expect(page.getByText("imported.png", { exact: true })).toBeVisible();
     await expect(page.getByText("outside.png", { exact: true })).toBeVisible();
-    expect(
-      (
-        await request.post(`/api/projects/${project.id}/history/checkpoint`)
-      ).ok(),
-    ).toBe(true);
-    const historyBefore = await (await request.get(`${api}/history`)).json();
-    expect(historyBefore.entries).toContainEqual(
+    const entries = async () =>
+      (await (await request.get(`${api}/history`)).json()).entries;
+    expect(await entries()).toContainEqual(
       expect.objectContaining({
         label: "Imported 1 file",
         author: { kind: "person", name: "You" },
         step: false,
         files: expect.arrayContaining([
           expect.objectContaining({ path: "assets/imported.png" }),
-        ]),
-      }),
-    );
-    expect(historyBefore.entries).toContainEqual(
-      expect.objectContaining({
-        label: "Added 1 file",
-        author: { kind: "outside", name: "Outside" },
-        step: false,
-        files: expect.arrayContaining([
-          expect.objectContaining({ path: "assets/outside.png" }),
         ]),
       }),
     );
@@ -158,6 +144,17 @@ test("author undo and redo preserve migrated review marks, acceptance, and unrel
     );
     expect(await readFile(join(project.path, "assets/outside.png"))).toEqual(
       media,
+    );
+    // The undo recorded the outside file as its own entry, and left it alone.
+    expect(await entries()).toContainEqual(
+      expect.objectContaining({
+        label: "Added 1 file",
+        author: { kind: "outside", name: "Outside" },
+        step: false,
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: "assets/outside.png" }),
+        ]),
+      }),
     );
 
     await page.keyboard.press("Control+z");
