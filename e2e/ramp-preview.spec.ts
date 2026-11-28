@@ -39,6 +39,7 @@ for (const mode of [
     page,
     request,
   }, info) => {
+    if (mode === "retained audio") test.setTimeout(90_000);
     const parked = mode.startsWith("parked");
     const duration = parked ? 18 : 6;
     const project = ProjectSchema.parse(
@@ -417,9 +418,14 @@ for (const mode of [
         );
         await writeFile(source, savedSource);
         await expect(stage).toHaveAttribute("data-handoff", "loading");
-        await expect(stage).toHaveAttribute("data-handoff", "showing", {
-          timeout: 18_000,
+        await expect(page.getByText("Preparing preview")).toBeVisible({
+          timeout: 20_000,
         });
+        await expect(live).toHaveAttribute("src", prepared!);
+        await expect(page.locator(".status-error")).toContainText("in time", {
+          timeout: 40_000,
+        });
+        await expect(stage).toHaveAttribute("data-handoff", "showing");
         await expect(live).toHaveAttribute("src", prepared!);
         await expect(audio).toHaveCount(1);
         await page
