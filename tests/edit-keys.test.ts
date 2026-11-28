@@ -441,8 +441,8 @@ test("Alt+\\ joins the cut at the playhead, a selected cut, or the cut between s
   const withMusic = withSource(sequence());
   const everything = apply(withMusic, press("editBladeRazor", withMusic, 40));
   expect(press("editM2JoinClip", everything, 40)).toEqual([
-    { type: "join", from: "a", to: "a-2" },
-    { type: "join", from: "music", to: "music-2" },
+    { type: "join", from: "a", to: "a-2", skipUnsupportedSource: true },
+    { type: "join", from: "music", to: "music-2", skipUnsupportedSource: true },
   ]);
   // A track changed since the cut is left, and the note names it; the rest still join.
   const quieter = apply(everything, [

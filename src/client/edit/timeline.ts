@@ -685,6 +685,7 @@ function name(commands: Command[], timeline: Timeline, composition: string) {
 function needsServerProjection(commands: readonly Command[]) {
   return commands.some(
     (command) =>
+      command.type === "join" ||
       (command.type === "routeAudioGroup" &&
         command.group !== null &&
         typeof command.group !== "string") ||
@@ -1227,6 +1228,7 @@ export async function editTimeline(
               ? [command.clipId]
               : command.type === "setTransition" ||
                   command.type === "roll" ||
+                  command.type === "join" ||
                   command.type === "swap"
                 ? [command.from, command.to]
                 : command.type === "setTransitions"

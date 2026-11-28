@@ -639,19 +639,21 @@ const join = (
         );
   // The engine joins linked partners with their clip, so each linked group is named once.
   const links = new Set<string>();
-  const commands = candidates.flatMap((to): CommandInput[] => {
-    const from = timeline.clips.find(
-      (clip) =>
-        clip.track === to.track &&
-        clipEnd(clip) === to.start &&
-        (point
-          ? clip.id === point.from?.id
-          : !selected.length || target.selection.has(clip.id)),
-    );
-    if (!from || (to.link !== null && links.has(to.link))) return [];
-    if (to.link !== null) links.add(to.link);
-    return [{ type: "join", from: from.id, to: to.id }];
-  });
+  const commands = candidates.flatMap(
+    (to): Extract<CommandInput, { type: "join" }>[] => {
+      const from = timeline.clips.find(
+        (clip) =>
+          clip.track === to.track &&
+          clipEnd(clip) === to.start &&
+          (point
+            ? clip.id === point.from?.id
+            : !selected.length || target.selection.has(clip.id)),
+      );
+      if (!from || (to.link !== null && links.has(to.link))) return [];
+      if (to.link !== null) links.add(to.link);
+      return [{ type: "join", from: from.id, to: to.id }];
+    },
+  );
   if (!commands.length)
     throw new TimelineError(
       "not_found",
@@ -672,7 +674,9 @@ const join = (
   if (!joins.length) throw refusals[0]!;
   if (refusals.length)
     note?.(refusals.map((refusal) => refusal.message).join(" "));
-  return joins;
+  return joins.length > 1
+    ? joins.map((command) => ({ ...command, skipUnsupportedSource: true }))
+    : joins;
 };
 
 /** Clips with a speed to reset: a ramp, or a constant speed other than 100%. */

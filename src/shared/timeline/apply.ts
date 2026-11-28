@@ -163,6 +163,7 @@ interface Batch {
   newId: NewId;
   onSkip: (clip: Clip, reason: string) => void;
   onNotice: (notice: string) => void;
+  joinSourceRefusal?: (pairs: readonly [Clip, Clip][]) => string | undefined;
   onRippleCut?: RippleCutObserver;
 }
 /**
@@ -178,6 +179,8 @@ interface ApplyOptions {
   onSkip?: Batch["onSkip"];
   /** Feedback when an edit fits within source limits at a different speed. */
   onNotice?: Batch["onNotice"];
+  /** The server checks the authored elements for every pair in a linked join. */
+  joinSourceRefusal?: Batch["joinSourceRefusal"];
   /** Agent ripples cover every unlocked track. Observe cuts outside the command target. */
   onRippleCut?: RippleCutObserver;
   onCreate?: OnCreate;
@@ -350,6 +353,7 @@ export function apply(
     clipboards = new Map(),
     onSkip = () => {},
     onNotice = () => {},
+    joinSourceRefusal,
     onRippleCut,
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -367,6 +371,7 @@ export function apply(
     retired,
     onSkip,
     onNotice,
+    joinSourceRefusal,
     onRippleCut,
     onCreate,
     mediaLengths,
@@ -388,6 +393,7 @@ export function applyAll(
     onApply,
     onSkip = () => {},
     onNotice = () => {},
+    joinSourceRefusal,
     onRippleCut,
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -406,6 +412,7 @@ export function applyAll(
     retired,
     onSkip,
     onNotice,
+    joinSourceRefusal,
     onRippleCut,
     mediaLengths,
     silentMedia,
@@ -1035,6 +1042,13 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             "locked",
             `Track ${trackLabel(timeline, from.track)} is locked.`,
           );
+      const reason = batch.joinSourceRefusal?.(pairs);
+      if (reason) {
+        if (!command.skipUnsupportedSource)
+          throw new TimelineError("unsupported", reason);
+        batch.onNotice(reason);
+        return timeline;
+      }
       const joined = new Map(
         pairs.map(([from, to]) => [from.id, joinedClip(from, to)]),
       );
@@ -3714,6 +3728,7 @@ function notThroughEdit(from: Clip, to: Clip, fps: Fps): string | null {
         link: original.link,
         startRef: original.startRef,
         mediaStart: 0,
+        sourceRestrictions: undefined,
         ...(!animated && { keyframes: null, automation: null }),
       }),
     ) ===
@@ -3721,6 +3736,7 @@ function notThroughEdit(from: Clip, to: Clip, fps: Fps): string | null {
         canonical({
           ...original,
           mediaStart: 0,
+          sourceRestrictions: undefined,
           ...(!animated && { keyframes: null, automation: null }),
         }),
       );
