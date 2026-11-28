@@ -16,10 +16,11 @@
         "@codemirror/state": "6.7.6",
         "@codemirror/view": "6.40.0",
         "@fontsource/ibm-plex-sans": "5.3.0",
-        "@hyperframes/core": "0.9.26",
-        "@hyperframes/parsers": "0.9.26",
-        "@hyperframes/producer": "0.9.26",
-        "@hyperframes/studio-server": "0.9.26",
+        "@hyperframes/core": "workspace:*",
+        "@hyperframes/engine": "workspace:*",
+        "@hyperframes/parsers": "workspace:*",
+        "@hyperframes/producer": "workspace:*",
+        "@hyperframes/studio-server": "workspace:*",
         "@lezer/highlight": "1.2.5",
         "@modelcontextprotocol/sdk": "1.32.2",
         "@phosphor-icons/react": "2.1.10",
@@ -50,15 +51,100 @@
         "vite": "6.4.2",
       },
     },
+    "vendor/@hyperframes/core": {
+      "name": "@hyperframes/core",
+      "version": "0.9.26",
+      "dependencies": {
+        "@chenglou/pretext": "^0.0.5",
+        "@hyperframes/lint": "0.9.26",
+        "@hyperframes/parsers": "0.9.26",
+        "@hyperframes/studio-server": "0.9.26",
+        "acorn": "^8.17.0",
+        "linkedom": "^0.18.12",
+        "postcss": "^8.5.8",
+        "wawoff2": "^2.0.1",
+      },
+      "optionalDependencies": {
+        "esbuild": "^0.28.2",
+      },
+    },
+    "vendor/@hyperframes/engine": {
+      "name": "@hyperframes/engine",
+      "version": "0.9.26",
+      "dependencies": {
+        "@hono/node-server": "^2.0.5",
+        "@hyperframes/core": "^0.9.26",
+        "@hyperframes/parsers": "^0.9.26",
+        "hono": "^4.6.0",
+        "linkedom": "^0.18.12",
+        "puppeteer": "~25.11.0",
+        "puppeteer-core": "^25.11.0",
+        "undici": "7.25.0",
+      },
+    },
+    "vendor/@hyperframes/lint": {
+      "name": "@hyperframes/lint",
+      "version": "0.9.26",
+      "dependencies": {
+        "@hyperframes/parsers": "0.9.26",
+        "acorn": "^8.17.0",
+        "acorn-walk": "^8.3.5",
+        "htmlparser2": "^10.1.0",
+        "ignore": "^5.3.2",
+        "linkedom": "^0.18.12",
+        "postcss": "^8.5.8",
+        "postcss-selector-parser": "^7.1.4",
+      },
+    },
+    "vendor/@hyperframes/parsers": {
+      "name": "@hyperframes/parsers",
+      "version": "0.9.26",
+      "dependencies": {
+        "@babel/parser": "^7.27.0",
+        "acorn": "^8.17.0",
+        "acorn-walk": "^8.3.5",
+        "entities": "^7.0.1",
+        "linkedom": "^0.18.12",
+        "magic-string": "^0.30.21",
+        "recast": "^0.23.11",
+      },
+    },
+    "vendor/@hyperframes/producer": {
+      "name": "@hyperframes/producer",
+      "version": "0.9.26",
+      "dependencies": {
+        "@hono/node-server": "^2.0.5",
+        "@hyperframes/core": "0.9.26",
+        "@hyperframes/engine": "0.9.26",
+        "@hyperframes/lint": "0.9.26",
+        "@hyperframes/parsers": "0.9.26",
+        "@hyperframes/studio-server": "0.9.26",
+        "hono": "^4.6.0",
+        "linkedom": "^0.18.12",
+        "postcss": "^8.4.0",
+        "puppeteer": "~25.11.0",
+        "puppeteer-core": "^25.11.0",
+      },
+    },
+    "vendor/@hyperframes/studio-server": {
+      "name": "@hyperframes/studio-server",
+      "version": "0.9.26",
+      "dependencies": {
+        "@hyperframes/core": "0.9.26",
+        "@hyperframes/parsers": "0.9.26",
+        "hono": "^4.0.0",
+        "linkedom": "^0.18.12",
+        "postcss": "^8.5.8",
+        "postcss-selector-parser": "^7.1.2",
+      },
+      "optionalDependencies": {
+        "sharp": "^0.35.0",
+      },
+    },
   },
   "trustedDependencies": [
     "electron",
   ],
-  "patchedDependencies": {
-    "@hyperframes/producer@0.9.26": "patches/@hyperframes+producer@0.9.26.patch",
-    "@hyperframes/studio-server@0.9.26": "patches/@hyperframes%2Fstudio-server@0.9.26.patch",
-    "@hyperframes/core@0.9.26": "patches/@hyperframes+core@0.9.26.patch",
-  },
   "packages": {
     "@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@0.3.321", "", { "optionalDependencies": { "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.321", "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.321", "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.321", "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.321", "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.321", "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.321", "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.321", "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.321" }, "peerDependencies": { "@anthropic-ai/sdk": ">=0.93.0", "@modelcontextprotocol/sdk": "^1.29.0", "zod": "^4.0.0" } }, "sha512-Smer/h/jQLTtT+l4sxaAUwZq7wif/9RzzuqltS5Gy+kAFo/iP89H7JHa8avhVT0xGkPBvBD/1Bbdg3pcArhQcw=="],
 
@@ -206,17 +292,17 @@
 
     "@hono/node-server": ["@hono/node-server@2.1.6", "", { "peerDependencies": { "hono": "^4 || ^5.0.0-0" } }, "sha512-p/KH9MnfNcsm3sR6x4lNgm5j+QN4Et8srKredl9DZfXiyZ1UQ3aQ2YVpFLbqktYN5JI+DB+VZFKM2PqE5hLKjQ=="],
 
-    "@hyperframes/core": ["@hyperframes/core@0.9.26", "", { "dependencies": { "@chenglou/pretext": "^0.0.5", "@hyperframes/lint": "0.9.26", "@hyperframes/parsers": "0.9.26", "@hyperframes/studio-server": "0.9.26", "acorn": "^8.17.0", "linkedom": "^0.18.12", "postcss": "^8.5.8", "wawoff2": "^2.0.1" }, "optionalDependencies": { "esbuild": "^0.28.2" } }, "sha512-AmbrLvB3pDrxQm6OW3PwbagYVFs9I91qo1qqcFp8Y+QwbxhV8+Nw88KRCkfRIvpjFM+I4Y8mi9/DDfgoz+XIEQ=="],
+    "@hyperframes/core": ["@hyperframes/core@workspace:vendor/@hyperframes/core"],
 
-    "@hyperframes/engine": ["@hyperframes/engine@0.9.26", "", { "dependencies": { "@hono/node-server": "^2.0.5", "@hyperframes/core": "^0.9.26", "@hyperframes/parsers": "^0.9.26", "hono": "^4.6.0", "linkedom": "^0.18.12", "puppeteer": "~25.11.0", "puppeteer-core": "^25.11.0", "undici": "7.25.0" } }, "sha512-+GKBLUn1rxn7+fQNV6vfWd57tltu/QoZFb4RZFGJv9uGcuqKOwKIzZSPN8qIJvCeu2co356y1CN5FEIM8rTYWA=="],
+    "@hyperframes/engine": ["@hyperframes/engine@workspace:vendor/@hyperframes/engine"],
 
-    "@hyperframes/lint": ["@hyperframes/lint@0.9.26", "", { "dependencies": { "@hyperframes/parsers": "0.9.26", "acorn": "^8.17.0", "acorn-walk": "^8.3.5", "htmlparser2": "^10.1.0", "ignore": "^5.3.2", "linkedom": "^0.18.12", "postcss": "^8.5.8", "postcss-selector-parser": "^7.1.4" } }, "sha512-FLFRX254fcGwtizYwDpOTWncmMyzkmi6UP98MFMDdZHBVTJAYzgsaZFeaZo5TcHR/vND3p5Gei7k0RIR2ZwI4Q=="],
+    "@hyperframes/lint": ["@hyperframes/lint@workspace:vendor/@hyperframes/lint"],
 
-    "@hyperframes/parsers": ["@hyperframes/parsers@0.9.26", "", { "dependencies": { "@babel/parser": "^7.27.0", "acorn": "^8.17.0", "acorn-walk": "^8.3.5", "entities": "^7.0.1", "linkedom": "^0.18.12", "magic-string": "^0.30.21", "recast": "^0.23.11" } }, "sha512-8N7dy5HnG9gYjTDIhbTNGNrFrPU1ypqIrvu0jId+FK+m5N0CJdf3wW+GC3ymV/7VOVMWanLFrHrZ3irqTp2ksQ=="],
+    "@hyperframes/parsers": ["@hyperframes/parsers@workspace:vendor/@hyperframes/parsers"],
 
-    "@hyperframes/producer": ["@hyperframes/producer@0.9.26", "", { "dependencies": { "@hono/node-server": "^2.0.5", "@hyperframes/core": "0.9.26", "@hyperframes/engine": "0.9.26", "@hyperframes/lint": "0.9.26", "@hyperframes/parsers": "0.9.26", "@hyperframes/studio-server": "0.9.26", "hono": "^4.6.0", "linkedom": "^0.18.12", "postcss": "^8.4.0", "puppeteer": "~25.11.0", "puppeteer-core": "^25.11.0" } }, "sha512-q5P/HEBFxmM1w8ntDLj5zemBdglcWStvXicedlOziqILjJ1rzo+jrqLywxBMNmYeunbogm/Sy4+XuBn8Z/wsAg=="],
+    "@hyperframes/producer": ["@hyperframes/producer@workspace:vendor/@hyperframes/producer"],
 
-    "@hyperframes/studio-server": ["@hyperframes/studio-server@0.9.26", "", { "dependencies": { "@hyperframes/core": "0.9.26", "@hyperframes/parsers": "0.9.26", "hono": "^4.0.0", "linkedom": "^0.18.12", "postcss": "^8.5.8", "postcss-selector-parser": "^7.1.2" }, "optionalDependencies": { "sharp": "^0.35.0" } }, "sha512-AMnEjS2NL3WDI4HjY6wo5xfEFlZiQMMvNPJDb/1OGbEXiTmnxEt+6ZOvYv8i8KiaxR4N8JIJB9gR1YwZQ3kBUQ=="],
+    "@hyperframes/studio-server": ["@hyperframes/studio-server@workspace:vendor/@hyperframes/studio-server"],
 
     "@img/colour": ["@img/colour@1.1.0", "", {}, "sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ=="],
 

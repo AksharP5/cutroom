@@ -4,7 +4,9 @@ Cutroom's original code is MIT-licensed. Dependencies retain their own licenses;
 
 ## HyperFrames
 
-The public `@hyperframes/*` packages and `hyperframes` CLI are pinned to version 0.9.26 from [heygen-com/hyperframes](https://github.com/heygen-com/hyperframes). The public framework is Apache-2.0 licensed; its license is preserved in [licenses/HYPERFRAMES.txt](licenses/HYPERFRAMES.txt).
+Cutroom vendors six packages from [HyperFrames v0.9.26](https://github.com/heygen-com/hyperframes/tree/v0.9.26), copyright 2026 HeyGen, Inc., under Apache-2.0. The source and its license are in [vendor/hyperframes](vendor/hyperframes). The packaged app includes the build output under [licenses/HYPERFRAMES.txt](licenses/HYPERFRAMES.txt). The separate `hyperframes` CLI stays pinned to the published 0.9.26 package.
+
+Cutroom trims the source workspace to its build dependencies and applies the changes listed in [patches](patches) to the compiled packages. See the [source and update notes](docs/hyperframes.md) for the affected source manifests and the build procedure.
 
 Cutroom does not ship the `@hyperframes/studio` editor. Capture and rendering adapters build on the public Studio server and CLI implementations.
 
@@ -14,7 +16,7 @@ The authored Motion inspector uses the public `parseGsapScript`, `parseGsapScrip
 
 Freeze frame follows the two-second hold in public `@hyperframes/studio-server` 0.9.26. Cutroom extracts the picture on its preview frame grid and uses its timeline commands and project history to write the edit. The history engine gives Cutroom the recorded history before replay so it can protect referenced stills. It rolls back earlier file writes when replay fails partway through.
 
-Cutroom includes modified copies of the [HyperFrames v0.9.26 history engine source](https://github.com/heygen-com/hyperframes/tree/v0.9.26/packages/studio-server/src/history) in `src/server/history/` under [Apache-2.0](licenses/HYPERFRAMES.txt), copyright 2026 HeyGen, Inc. The attributed tests and log fixture in `tests/history/` come from the same release. Cutroom adjusted imports, moved its replay validation and rollback patch into TypeScript, retained the history-writing portion of `videoState.ts`, and adapted the tests for Bun. Studio owns its routes, file mutation helpers, project signature, safe paths, write receipts, and active preview file streams. An export-only Bun patch exposes the shared helpers to Cutroom's engine without creating separate registries.
+Cutroom includes modified copies of the [HyperFrames v0.9.26 history engine source](https://github.com/heygen-com/hyperframes/tree/v0.9.26/packages/studio-server/src/history) in `src/server/history/` under [Apache-2.0](licenses/HYPERFRAMES.txt), copyright 2026 HeyGen, Inc. The attributed tests and log fixture in `tests/history/` come from the same release. Cutroom adjusted imports, moved its replay validation and rollback patch into TypeScript, retained the history-writing portion of `videoState.ts`, and adapted the tests for Bun. Studio owns its routes, file mutation helpers, project signature, safe paths, write receipts, and active preview file streams. An export-only patch exposes the shared helpers to Cutroom's engine without creating separate registries.
 
 The Library's categories in `src/server/library/registry.ts` follow `resolveBlockCategory` from HyperFrames v0.9.26 `packages/core/src/registry/types.ts` (Apache-2.0), which the package does not export; Cutroom adds titles and lower thirds. Library items themselves are downloaded from the HyperFrames registry when an owner or agent adds one, and keep the license their registry entry states, or the registry repository's Apache-2.0 when they state none, recorded in the project's `cutroom.json`. Cutroom copies GSAP's own plugins from its pinned `gsap` package into a project when an added item uses them.
 

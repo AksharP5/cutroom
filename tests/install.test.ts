@@ -4,14 +4,16 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  rename,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installDesktop } from "../scripts/install";
 
-test("desktop installation survives spaces, preserves arguments, clears Electron's CLI mode, and reuses a managed version", async () => {
+test("desktop installation preserves arguments and package links and reuses a managed version", async () => {
   const root = await mkdtemp(join(tmpdir(), "cutroom install-"));
   try {
     const source = join(root, "package");
@@ -20,6 +22,17 @@ test("desktop installation survives spaces, preserves arguments, clears Electron
       join(source, "resources/app/package.json"),
       JSON.stringify({ name: "cutroom", version: "0.1.0" }),
     );
+    const core = "resources/app/vendor/@hyperframes/core";
+    const dependency = "resources/app/node_modules/@hyperframes/core";
+    await mkdir(join(source, core), { recursive: true });
+    await mkdir(join(source, "resources/app/node_modules/@hyperframes"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(source, core, "package.json"),
+      '{"name":"@hyperframes/core"}',
+    );
+    await symlink("../../vendor/@hyperframes/core", join(source, dependency));
     await writeFile(
       join(source, "cutroom"),
       '#!/bin/sh\nprintf "%s\\n" "${ELECTRON_RUN_AS_NODE-unset}" "$@"\n',
@@ -51,6 +64,10 @@ test("desktop installation survives spaces, preserves arguments, clears Electron
     );
     expect(await child.exited).toBe(0);
     expect(await installDesktop(options)).toEqual(installed);
+    await rename(source, join(root, "moved-package"));
+    expect(await realpath(join(installed.installed, dependency))).toBe(
+      join(installed.installed, core),
+    );
     const entry = await readFile(installed.desktop, "utf8");
     expect(entry).toContain("Name=Cutroom");
     expect(entry).toContain('Exec="');

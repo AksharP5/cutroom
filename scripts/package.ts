@@ -62,12 +62,11 @@ try {
     join(app, "desktop", "preload.cjs"),
   );
   await cp(join(root, "dist"), join(app, "dist"), { recursive: true });
-  await cp(join(root, "src", "server"), join(app, "src", "server"), {
-    recursive: true,
-  });
-  await cp(join(root, "src", "shared"), join(app, "src", "shared"), {
-    recursive: true,
-  });
+  for (const directory of ["server", "shared", "local"]) {
+    await cp(join(root, "src", directory), join(app, "src", directory), {
+      recursive: true,
+    });
+  }
   await mkdir(join(app, "src", "client", "fonts"), { recursive: true });
   await cp(
     join(root, "src", "client", "fonts", "InstrumentSans-var.woff2"),
@@ -85,7 +84,16 @@ try {
     `${JSON.stringify({ ...manifest, main: "desktop/main.cjs" }, null, 2)}\n`,
   );
   await cp(join(root, "bun.lock"), join(app, "bun.lock"));
+  // Include the patch files as notices for the changes in the shipped builds.
   await cp(join(root, "patches"), join(app, "patches"), { recursive: true });
+  await cp(
+    join(root, "vendor", "@hyperframes"),
+    join(app, "vendor", "@hyperframes"),
+    {
+      recursive: true,
+      filter: (path) => ![".build-id", "node_modules"].includes(basename(path)),
+    },
+  );
   await run(
     [
       process.execPath,
@@ -93,6 +101,7 @@ try {
       "--production",
       "--frozen-lockfile",
       "--ignore-scripts",
+      "--linker=hoisted",
     ],
     app,
   );

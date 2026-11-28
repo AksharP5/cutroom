@@ -1,0 +1,333 @@
+import { timeAtSourceTime, type RateSpec } from "../speedRamp.js";
+import { playRangeHoldTime } from "./protocol.js";
+
+export type TransportClockSnapshot = {
+  time: number;
+  playing: boolean;
+  rate: number;
+  duration: number;
+  source: "monotonic" | "audio";
+};
+
+export type AudioClockSource =
+  | {
+      el: HTMLMediaElement;
+      compositionStart: number;
+      mediaStart: number;
+      /** The clip's rate lane; a constant rate is read from `el.playbackRate`. */
+      rate?: RateSpec;
+    }
+  | {
+      currentTimeSeconds: number;
+      webAudio?: boolean;
+    };
+
+/** GSAP's own `lagSmoothing` default — see the PR body for why this clock needs its own copy. */
+const STALL_THRESHOLD_MS = 500;
+const STALL_ADJUSTED_LAG_MS = 33;
+const HAVE_FUTURE_DATA = 3;
+const AUDIO_START_WAIT_MS = 1500;
+const MEDIA_SYNC_STEER_TOLERANCE_SECONDS = 0.04;
+const MAX_MEDIA_STEP_SECONDS = 0.25;
+const MEDIA_STEPS_KEPT = 8;
+
+type PendingAudioStart = { sinceMs: number; at: number; from: number | null };
+type MediaReading = {
+  el: HTMLMediaElement;
+  time: number;
+  steps: number[];
+  from: number;
+  fromMs: number;
+};
+
+const furthestAhead = (reading: MediaReading | null) =>
+  reading ? Math.max(0, ...reading.steps) : 0;
+
+function noteStep(reading: MediaReading, time: number): void {
+  const step = time - reading.time;
+  if (step > 0 && step <= MAX_MEDIA_STEP_SECONDS)
+    reading.steps = [...reading.steps.slice(1 - MEDIA_STEPS_KEPT), step];
+  reading.time = time;
+}
+
+export class TransportClock {
+  private _baseTime = 0;
+  private _playStartMs: number | null = null;
+  private _rate = 1;
+  private _duration = Infinity;
+  private _playStart = 0;
+  private _playEnd = Infinity;
+  private _playHold = Infinity;
+  private _nowMs: () => number;
+  private _audioSource: AudioClockSource | null = null;
+  /** Wall-clock time of the last `now()` read while playing; null while paused. */
+  private _lastReadMs: number | null = null;
+  private _lastNow = 0;
+  private _audioStart: PendingAudioStart | null = null;
+  private _reading: MediaReading | null = null;
+  private _ahead: { el: HTMLMediaElement; seconds: number } | null = null;
+
+  constructor(opts?: {
+    initialTime?: number;
+    rate?: number;
+    duration?: number;
+    nowMs?: () => number;
+  }) {
+    this._baseTime = opts?.initialTime ?? 0;
+    this._rate = opts?.rate ?? 1;
+    this._duration = opts?.duration ?? Infinity;
+    this._nowMs = opts?.nowMs ?? (() => performance.now());
+  }
+
+  now(): number {
+    this._ahead = null;
+    if (this._playStartMs === null) return this._baseTime;
+
+    // Audio-master: drift is impossible because audio IS the clock. Clearing
+    // `_lastReadMs` (not stamping it) means the next monotonic read starts
+    // fresh from `_playStartMs` instead of a timestamp audio just made
+    // meaningless — see the PR body.
+    if (this._audioSource) {
+      let audioTime: number | null = null;
+      if ("currentTimeSeconds" in this._audioSource) {
+        audioTime = this._audioSource.currentTimeSeconds;
+      } else {
+        audioTime = this._elementTimeNeverBehind(this._audioSource);
+      }
+      if (audioTime !== null) {
+        const t = Math.min(audioTime, this.getEnd());
+        this._baseTime = Math.max(0, t);
+        this._playStartMs = this._nowMs();
+        this._lastReadMs = null;
+        this._lastNow = this._baseTime;
+        return this._baseTime;
+      }
+    }
+
+    this._applyStallCorrection();
+    const elapsed = (this._nowMs() - this._playStartMs) / 1000;
+    const t = this._baseTime + elapsed * this._rate;
+    this._lastNow = Math.max(0, Math.min(t, this.getEnd()));
+    return this._lastNow;
+  }
+
+  private _elementTimeNeverBehind(
+    source: Extract<AudioClockSource, { el: HTMLMediaElement }>,
+  ): number | null {
+    const { el, compositionStart, mediaStart, rate } = source;
+    if (el.paused || !Number.isFinite(el.currentTime)) return null;
+    const spec = rate ?? 1;
+    const time = timeAtSourceTime(spec, el.currentTime - mediaStart) + compositionStart;
+    const held = this._heldUntilAudioOutputStarts(el.seeking, time);
+    if (held !== undefined) {
+      this._reading = null;
+      return held;
+    }
+    const between = this._betweenUpdates(el, time);
+    if (between !== null) return between;
+    const wrapped = el.loop && this._lastNow - time > timeAtSourceTime(spec, el.duration) / 2;
+    return !wrapped && el.readyState < HAVE_FUTURE_DATA ? this._lastNow : null;
+  }
+
+  // Chromium moves currentTime in 10-50 ms steps, so reading it as is holds a frame, then jumps. Run on at the play
+  // rate, kept within [element time, element time + its largest recent step], never back; null when time is behind
+  // the playhead by more than that step (a late clip, not a step).
+  private _betweenUpdates(el: HTMLMediaElement, time: number): number | null {
+    const nowMs = this._nowMs();
+    const last = this._reading?.el === el ? this._reading : null;
+    if (time < this._lastNow - furthestAhead(last)) return null;
+    if (!last) {
+      this._reading = { el, time, steps: [], from: time, fromMs: nowMs };
+      return this._runAhead(el, time, Math.max(time, this._lastNow));
+    }
+    noteStep(last, time);
+    const run = last.from + ((nowMs - last.fromMs) / 1000) * this._rate;
+    const held = Math.min(Math.max(run, time), time + furthestAhead(last));
+    if (held !== run) Object.assign(last, { from: held, fromMs: nowMs });
+    return this._runAhead(el, time, Math.max(held, this._lastNow));
+  }
+
+  private _runAhead(el: HTMLMediaElement, time: number, now: number): number {
+    this._ahead = { el, seconds: now - time };
+    return now;
+  }
+
+  aheadOf(el: HTMLMediaElement): number {
+    return this._ahead?.el === el ? this._ahead.seconds : 0;
+  }
+
+  private _heldUntilAudioOutputStarts(seeking: boolean, time: number): number | null | undefined {
+    const pending = this._pendingAudioStart();
+    if (seeking) return pending ? this._lastNow : null;
+    if (!pending) return undefined;
+    pending.from ??= time;
+    const startsHere = Math.abs(pending.from - pending.at) <= MEDIA_SYNC_STEER_TOLERANCE_SECONDS;
+    if (startsHere && time === pending.from) return time;
+    this._audioStart = null;
+    return undefined;
+  }
+
+  private _pendingAudioStart(): PendingAudioStart | null {
+    const pending = this._audioStart;
+    if (pending && this._nowMs() - pending.sinceMs > AUDIO_START_WAIT_MS) this._audioStart = null;
+    return this._audioStart;
+  }
+
+  /** Folds a >500ms gap since the last read into `_playStartMs` so it's never reported as played time. */
+  private _applyStallCorrection(): void {
+    if (this._playStartMs === null) return;
+    const nowMs = this._nowMs();
+    if (this._lastReadMs !== null) {
+      const gapMs = nowMs - this._lastReadMs;
+      if (gapMs > STALL_THRESHOLD_MS) {
+        this._playStartMs += gapMs - STALL_ADJUSTED_LAG_MS;
+      }
+    }
+    this._lastReadMs = nowMs;
+  }
+
+  play(): boolean {
+    if (this._playStartMs !== null) return false;
+    if (this._baseTime >= this.getEnd()) return false;
+    this._playStartMs = this._nowMs();
+    this._audioStart = { sinceMs: this._playStartMs, at: this._baseTime, from: null };
+    this._lastNow = this._baseTime;
+    this._reading = null;
+    // Not a stall: the gap since the clock was last read (possibly a long
+    // paused idle) says nothing about lost playback time, since none was
+    // playing. `_applyStallCorrection` treats null as "nothing to compare
+    // against yet" and starts the window fresh from the next read.
+    this._lastReadMs = null;
+    return true;
+  }
+
+  pause(): boolean {
+    if (this._playStartMs === null) return false;
+    this._baseTime = this.now();
+    this._playStartMs = null;
+    this._reading = null;
+    return true;
+  }
+
+  seek(timeSeconds: number): void {
+    const clamped = Number.isFinite(this._duration)
+      ? Math.max(0, Math.min(timeSeconds, this._duration))
+      : Math.max(0, timeSeconds);
+    this._baseTime = clamped;
+    this._lastNow = clamped;
+    this._reading = null;
+    if (this._playStartMs !== null) {
+      this._playStartMs = this._nowMs();
+      this._audioStart = { sinceMs: this._playStartMs, at: clamped, from: null };
+      // Same reasoning as `play()`: the seek itself, not any elapsed gap
+      // since the last read, is why the reported time is moving now.
+      this._lastReadMs = null;
+    }
+  }
+
+  isPlaying(): boolean {
+    return this._playStartMs !== null;
+  }
+
+  setRate(rate: number): void {
+    const safe = Number.isFinite(rate) && rate > 0 ? Math.max(0.1, Math.min(5, rate)) : 1;
+    this._reading = null;
+    if (this._playStartMs !== null) {
+      this._baseTime = this.now();
+      this._playStartMs = this._nowMs();
+      this._lastReadMs = null;
+    }
+    this._rate = safe;
+  }
+
+  getRate(): number {
+    return this._rate;
+  }
+
+  setDuration(duration: number): void {
+    this._duration = Number.isFinite(duration) && duration > 0 ? duration : Infinity;
+    if (this._baseTime > this._duration) {
+      this._baseTime = this._duration;
+    }
+  }
+
+  getDuration(): number {
+    return this._duration;
+  }
+
+  setPlayRange(start: number, end: number | null, fps: number): void {
+    this._playStart = Number.isFinite(start) && start > 0 ? start : 0;
+    this._playEnd = end !== null && Number.isFinite(end) && end > this._playStart ? end : Infinity;
+    this._playHold = playRangeHoldTime(this._playStart, this._playEnd, fps);
+  }
+
+  getPlayStart(): number {
+    return this._playStart;
+  }
+
+  getEnd(): number {
+    return Math.min(this._duration, this._playEnd);
+  }
+
+  /** Where a stop parks: the film's end, or a range's last frame, since the moment is [start, end). */
+  getStopTime(): number {
+    return this._playEnd < this._duration ? this._playHold : this.getEnd();
+  }
+
+  attachAudioSource(source: AudioClockSource): void {
+    this._audioSource = source;
+  }
+
+  detachAudioSource(): void {
+    if (this._audioSource && this._playStartMs !== null) {
+      this._baseTime = this.now();
+      this._playStartMs = this._nowMs();
+      // Falling back to monotonic timing fresh, same reasoning as `play()`:
+      // any gap while audio was the time source is not a monotonic stall.
+      this._lastReadMs = null;
+    }
+    this._audioSource = null;
+    this._reading = null;
+  }
+
+  /** The element the playhead currently follows, if the source is one. */
+  // fallow-ignore-next-line unused-class-member
+  audioElement(): HTMLMediaElement | null {
+    return this._audioSource && "el" in this._audioSource ? this._audioSource.el : null;
+  }
+
+  hasAudioSource(): boolean {
+    return this._audioSource !== null;
+  }
+
+  getSource(): "monotonic" | "audio" {
+    if (this._audioSource && this._playStartMs !== null) {
+      if ("currentTimeSeconds" in this._audioSource) return "audio";
+      const { el } = this._audioSource;
+      if (!el.paused && Number.isFinite(el.currentTime)) return "audio";
+    }
+    return "monotonic";
+  }
+
+  followedClock(): "audio" | "webaudio" | "monotonic" {
+    if (this.getSource() === "monotonic") return "monotonic";
+    return this._audioSource && "webAudio" in this._audioSource && this._audioSource.webAudio
+      ? "webaudio"
+      : "audio";
+  }
+
+  snapshot(): TransportClockSnapshot {
+    return {
+      time: this.now(),
+      playing: this.isPlaying(),
+      rate: this._rate,
+      duration: this._duration,
+      source: this.getSource(),
+    };
+  }
+
+  reachedEnd(): boolean {
+    const time = this.now();
+    return time >= this.getEnd() || (this._playStartMs === null && time >= this.getStopTime());
+  }
+}
