@@ -1,4 +1,8 @@
-import { EDIT_HISTORY_HEADER } from "../../shared/timeline/schema";
+import {
+  EDIT_HISTORY_HEADER,
+  TAB_ORIGIN_HEADER,
+  TabOriginSchema,
+} from "../../shared/timeline/schema";
 import { projectMutationGuard } from "./authorization";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -8,6 +12,7 @@ import { z } from "zod";
 import { fileContentVersion } from "@hyperframes/studio-server";
 import { historyActor } from "./historyActor";
 import type { createTimelineRoutes } from "../timeline/routes";
+import { captureTimelineWrite } from "../timeline/watch";
 import { HistoryRequestSchema, historySummary, replayHistory } from "./history";
 import {
   AnnotationInputSchema,
@@ -660,14 +665,33 @@ export function createProjectRoutes(
         body ? JSON.parse(body) : {},
       );
       const actor = historyActor(reviews, c, project);
-      const composition =
-        input.composition && canonicalProjectPath(input.composition);
+      const composition = input.composition
+        ? canonicalProjectPath(input.composition)
+        : undefined;
+      const origin =
+        composition && !input.withEntries && actor.review.kind === "human"
+          ? parseInput(
+              TabOriginSchema.optional(),
+              c.req.header(TAB_ORIGIN_HEADER),
+            )
+          : undefined;
+      let confirmWrite: (() => void) | undefined;
       const result = await replayHistory(
         reviews,
         project,
         actor,
         direction,
         input,
+        origin
+          ? (path, absolute, version) => {
+              if (path === composition)
+                confirmWrite = captureTimelineWrite(
+                  absolute,
+                  () => version,
+                  origin,
+                );
+            }
+          : undefined,
       );
       if (!result.ok) return c.json(result, 409);
       // A timeline the step removed, such as an undone duplicate, takes its view settings along.
@@ -697,12 +721,22 @@ export function createProjectRoutes(
         },
       );
       const history = await store.history(project);
-      return c.json({
+      const activeView = view && !view.error ? view : null;
+      const response = c.json({
         ...result,
         ...(timelines && { timelines }),
-        view: view && !view.error ? view : null,
+        view: activeView,
         history: await historySummary(project, history.list(), actor.who),
       });
+      const [file] = result.entry.files;
+      if (
+        activeView &&
+        result.entry.files.length === 1 &&
+        file?.before &&
+        file.after
+      )
+        confirmWrite?.();
+      return response;
     });
   }
   return api;
