@@ -5,15 +5,9 @@ import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { seekFrame } from "./position-helpers";
 
-/**
- * One edit writes several project files. A burst of notifications gets one read,
- * including in another tab that did not receive the command response.
- */
-test("file events make one read and outside edits still show", async ({
-  page,
-  request,
-}) => {
+async function makeReadProject(request: APIRequestContext) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", { data: { name: "Reads" } })
@@ -33,6 +27,18 @@ test("file events make one read and outside edits still show", async ({
     ),
   );
   const api = `/api/cutroom/projects/${project.id}`;
+  return { project, api, index };
+}
+
+/**
+ * One edit writes several project files. A burst of notifications gets one read,
+ * including in another tab that did not receive the command response.
+ */
+test("file events make one read and outside edits still show", async ({
+  page,
+  request,
+}) => {
+  const { project, api, index } = await makeReadProject(request);
   const reads = { timeline: 0, history: 0 };
   page.on("request", (sent) => {
     if (sent.method() !== "GET") return;
@@ -148,6 +154,121 @@ test("file events make one read and outside edits still show", async ({
     expect(finishedWriting).toBe(false);
   } finally {
     await writes;
+  }
+});
+
+test("Undo and Redo skip their own timeline read and keep another writer's change", async ({
+  page,
+  request,
+}) => {
+  const { project, api, index } = await makeReadProject(request);
+  const url = `/#project/${project.id}`;
+  await page.goto(url);
+  const clips = page
+    .getByRole("region", { name: "Timeline" })
+    .locator("[data-clip]");
+  await expect(clips).toHaveCount(4);
+  async function split(frame: number) {
+    await seekFrame(page, frame);
+    await page.getByRole("region", { name: "Viewer" }).click();
+    const saved = page.waitForResponse((response) =>
+      response.url().endsWith(`${api}/commands`),
+    );
+    await page.keyboard.press("e");
+    expect((await saved).ok()).toBe(true);
+  }
+  // The first edit also records inferred track settings. The second changes just the HTML.
+  await split(30);
+  const beforeSplit = await readFile(index);
+  await split(60);
+  const afterSplit = await readFile(index);
+  await expect(clips).toHaveCount(6);
+
+  const other = await page.context().newPage();
+  try {
+    await other.goto(url);
+    const otherClips = other
+      .getByRole("region", { name: "Timeline" })
+      .locator("[data-clip]");
+    await expect(otherClips).toHaveCount(6);
+    await page.bringToFront();
+    await page.waitForTimeout(1000);
+    const reads: string[] = [];
+    page.on("request", (sent) => {
+      const path = new URL(sent.url()).pathname;
+      if (
+        sent.method() === "GET" &&
+        (path === `${api}/timeline` || path === `${api}/history`)
+      )
+        reads.push(path);
+    });
+    for (const [key, count, bytes] of [
+      ["Control+z", 5, beforeSplit],
+      ["Control+Shift+z", 6, afterSplit],
+    ] as const) {
+      await page.keyboard.press(key);
+      await expect(clips).toHaveCount(count);
+      // The observing tab has only the file event. Its watcher read must still land.
+      await expect(otherClips).toHaveCount(count);
+      // Allow the initiating tab's event coalescing window to drain.
+      await page.waitForTimeout(500);
+      expect(reads).toEqual([]);
+      expect(await readFile(index)).toEqual(bytes);
+    }
+
+    const undoRoute = `**${api}/history/undo`;
+    const redo = page.getByRole("button", { name: "Redo", exact: true });
+    // A save can land even if its response is lost. The initiating tab must read again.
+    await page.route(
+      undoRoute,
+      async (route) => {
+        expect((await route.fetch()).ok()).toBe(true);
+        await route.abort("failed");
+      },
+      { times: 1 },
+    );
+    await page.keyboard.press("Control+z");
+    await expect(otherClips).toHaveCount(5);
+    await expect(redo).toBeEnabled();
+    await expect(clips).toHaveCount(5);
+    await page
+      .getByRole("alert")
+      .getByRole("button", { name: "Dismiss", exact: true })
+      .click();
+    await page.keyboard.press("Control+Shift+z");
+    await expect(redo).toBeDisabled();
+    await expect(otherClips).toHaveCount(6);
+
+    // Deliver an already-computed Undo response after an outside rewrite of the same file.
+    const answered = Promise.withResolvers<void>();
+    const deliver = Promise.withResolvers<void>();
+    await page.route(undoRoute, async (route) => {
+      const response = await route.fetch();
+      answered.resolve();
+      await deliver.promise;
+      await route.fulfill({ response });
+    });
+    try {
+      await page.keyboard.press("Control+z");
+      await answered.promise;
+      const outside = beforeSplit
+        .toString("utf8")
+        .replace(/<div[^>]*\bid="shot-4"[^>]*>Shot 4<\/div>/, "");
+      await writeFile(index, outside);
+      await expect(otherClips).toHaveCount(4);
+      deliver.resolve();
+      await expect(clips).toHaveCount(4);
+      await expect(page.locator('[data-clip="shot-4"]')).toHaveCount(0);
+      await expect(
+        page.getByRole("status").filter({ hasText: "Outside edit" }),
+      ).toBeVisible();
+      expect(await readFile(index, "utf8")).toBe(outside);
+    } finally {
+      deliver.resolve();
+      await page.unroute(undoRoute);
+    }
+  } finally {
+    await other.close();
   }
 });
 

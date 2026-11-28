@@ -1,0 +1,70 @@
+{
+  "name": "@hyperframes/engine",
+  "version": "0.9.26",
+  "description": "Seekable web page to video rendering engine (Puppeteer + FFmpeg)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/heygen-com/hyperframes",
+    "directory": "packages/engine"
+  },
+  "files": [
+    "dist",
+    "!dist/services/__fixtures__/blurDifferential.*",
+    "!dist/services/__fixtures__/motionBlur",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./alpha-blit": {
+      "import": "./dist/utils/alphaBlit.js",
+      "types": "./dist/utils/alphaBlit.d.ts"
+    },
+    "./chrome-host-ceiling": {
+      "import": "./dist/services/chromeHostCeiling.js",
+      "types": "./dist/services/chromeHostCeiling.d.ts"
+    },
+    "./chrome-startup": {
+      "import": "./dist/services/chromeStartup.js",
+      "types": "./dist/services/chromeStartup.d.ts"
+    },
+    "./system-memory": {
+      "import": "./dist/services/systemMemory.js",
+      "types": "./dist/services/systemMemory.d.ts"
+    },
+    "./wsl-host": {
+      "import": "./dist/services/wslHost.js",
+      "types": "./dist/services/wslHost.d.ts"
+    },
+    "./shader-transitions": {
+      "import": "./dist/utils/shaderTransitions.js",
+      "types": "./dist/utils/shaderTransitions.d.ts"
+    },
+    "./package.json": "./package.json",
+    "./network-policy": {
+      "import": "./dist/utils/networkPolicy.js",
+      "types": "./dist/utils/networkPolicy.d.ts"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.5",
+    "@hyperframes/core": "^0.9.26",
+    "@hyperframes/parsers": "^0.9.26",
+    "hono": "^4.6.0",
+    "linkedom": "^0.18.12",
+    "puppeteer": "~25.11.0",
+    "puppeteer-core": "^25.11.0",
+    "undici": "7.25.0"
+  }
+}

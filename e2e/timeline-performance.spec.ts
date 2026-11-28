@@ -36,7 +36,7 @@ for (const count of [400, 500] as const)
           }),
         )
         .toBe(true);
-      const filmstrip = await filmstripSettle(page, (count - 20) / 2);
+      const filmstrip = await filmstripSettle(page);
       console.log(JSON.stringify({ count, filmstrip }));
       const renderer = await page.evaluate(() => {
         const gl = document.createElement("canvas").getContext("webgl");

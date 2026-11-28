@@ -179,7 +179,7 @@ test(
       console.log(
         JSON.stringify({
           count: 500,
-          filmstrip: await filmstripSettle(page, 240),
+          filmstrip: await filmstripSettle(page),
         }),
       );
     else await page.waitForTimeout(3000);

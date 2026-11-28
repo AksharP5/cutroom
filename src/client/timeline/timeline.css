@@ -575,7 +575,12 @@ input.tl-track-gain {
 .tl-lane.audio {
 }
 
-/* Clip: a 2px kind rail on a tinted name strip over a flat body. Filmstrips and waveforms are drawn over the bodies on .tl-bodies. */
+/*
+  Clip: a 2px kind rail on a tinted name strip over a flat body. Filmstrips and waveforms are drawn
+  over the bodies on .tl-bodies. A clip under 48px wide is bare: no name strip, so its picture has
+  the whole height. When a same-source run averages under 6px a clip, bodies.ts draws one body
+  under the clips' rails. The 1px between each pair of boxes leaves a notch at the cut.
+*/
 .tl-clip,
 .tl-selected {
   position: absolute;
@@ -655,12 +660,12 @@ input.tl-track-gain {
   color: var(--text-primary);
 }
 /*
-  Sound and titles have no name strip. A waveform takes the whole lane under its kind rail, with
-  the name over it on a backing as wide as the text; a title's words are its body. Selected, the
-  name's backing turns to paper.
+  Sound, titles and bare clips have no name strip. A waveform takes the whole lane under its kind
+  rail, with the name over it on a backing as wide as the text; a title's words are its body.
+  Selected, the name's backing turns to paper.
 */
-.tl-clip:is(.on-audio, .titled),
-.tl-clip:is(.on-audio, .titled).selected {
+.tl-clip:is(.on-audio, .titled, .bare),
+.tl-clip:is(.on-audio, .titled, .bare).selected {
   --head: var(--body);
 }
 .tl-label.on-audio {
@@ -668,12 +673,57 @@ input.tl-track-gain {
   --clip-head-meta: var(--text-secondary);
   --text-quiet: inherit;
 }
-.tl-label.on-audio :is(.tl-name, .tl-length) {
+.tl-label:is(.on-audio, .run) :is(.tl-name, .tl-length) {
   border-radius: var(--radius-clip);
   background: var(--clip-name-backing);
 }
-.tl-label.on-audio .tl-name {
+.tl-label:is(.on-audio, .run) .tl-name {
   padding-inline: 2px;
+}
+/*
+  A run of clips too narrow to name themselves has one name, over their picture or sound, with how
+  many clips it stands for. It stays at the run's visible left edge, as a clip's name does.
+*/
+.tl-label.run.on-audio {
+  --clip-head-text: var(--text-primary);
+  --clip-head-meta: var(--text-secondary);
+}
+.tl-count {
+  margin-left: 6px;
+  color: var(--clip-head-meta);
+  font: var(--type-micro) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-variant-numeric: tabular-nums;
+}
+/*
+  A bare clip says what it is when it is pointed at or selected alone: its name and duration hang
+  from its left edge, as wide as they need, on its kind's strip or on paper. lanes.ts moves the
+  one hovered tag by transform.
+*/
+.tl-label.tag {
+  z-index: 1;
+  width: max-content;
+  border-radius: var(--radius-clip);
+  background: var(--head);
+}
+.tl-label.tag.on-audio {
+  background: none;
+}
+.tl-label.tag.hover {
+  top: 0;
+  left: 0;
+}
+.tl-label.tag.timed {
+  view-timeline: none;
+}
+/* The tag starts at its clip's edge, in view or not: a held name would cover its own duration. */
+.tl-label.tag .tl-name {
+  position: static;
+}
+.tl-label.tag .tl-length {
+  max-width: none;
+  margin-left: 0;
+  animation: none;
 }
 /* The duration's backing goes with it under the width it shows at. */
 .tl-label.on-audio .tl-length {
@@ -830,7 +880,7 @@ input.tl-track-gain {
   font-stretch: var(--stretch-condensed);
   white-space: nowrap;
 }
-/* The name follows the visible left edge of its clip. It hides when the clip is under 28px wide. */
+/* The name follows the visible left edge of its clip. */
 .tl-name {
   position: sticky;
   left: calc(var(--size-track-head) + 6px);

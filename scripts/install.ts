@@ -105,7 +105,7 @@ export async function installDesktop(options: {
   if (!installed) {
     const stage = await mkdtemp(join(installRoot, ".install-"));
     try {
-      await cp(source, stage, { recursive: true });
+      await cp(source, stage, { recursive: true, verbatimSymlinks: true });
       await writeFile(
         join(stage, ".cutroom-install.json"),
         JSON.stringify(manifest),

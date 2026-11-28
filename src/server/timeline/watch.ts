@@ -27,13 +27,24 @@ export function rememberTimelineWrite(
   version: () => string,
   origin?: string,
 ) {
+  captureTimelineWrite(path, version, origin)?.();
+}
+
+/** Capture the file at publication. A history replay confirms it only after the response has a view. */
+export function captureTimelineWrite(
+  path: string,
+  version: () => string,
+  origin?: string,
+) {
   if (!origin) return;
   const fresh = fileIdentity(path);
   if (!fresh) return;
-  recentWrites.delete(path);
-  recentWrites.set(path, { origin, version: version(), identity: fresh });
-  if (recentWrites.size > 256)
-    recentWrites.delete(recentWrites.keys().next().value!);
+  return () => {
+    recentWrites.delete(path);
+    recentWrites.set(path, { origin, version: version(), identity: fresh });
+    if (recentWrites.size > 256)
+      recentWrites.delete(recentWrites.keys().next().value!);
+  };
 }
 
 export async function isTimelineWriteEcho(path: string, origin: string) {

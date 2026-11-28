@@ -14,11 +14,46 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  hyperframes:
+    name: Build HyperFrames packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      cache-key: ${{ steps.inputs.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: inputs
+        env:
+          HASH: ${{ hashFiles('vendor/hyperframes/**', 'vendor/@hyperframes/*/package.json', 'patches/@hyperframes*.patch', 'scripts/build-hyperframes.ts') }}
+        run: echo "key=hyperframes-${{ runner.os }}-${{ runner.arch }}-bun1.4.4-node24-$HASH" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: packages
+        with:
+          key: ${{ steps.inputs.outputs.key }}
+          path: |
+            vendor/@hyperframes/.build-id
+            vendor/@hyperframes/*/dist
+            vendor/@hyperframes/*/LICENSE
+            vendor/@hyperframes/*/README.md
+            vendor/@hyperframes/core/docs
+            vendor/@hyperframes/core/schemas
+      - if: steps.packages.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - if: steps.packages.outputs.cache-hit != 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - if: steps.packages.outputs.cache-hit != 'true'
+        run: bun run build:hyperframes
+
   verify:
     name: verify (${{ matrix.suite }})
     runs-on: ubuntu-24.04
-    # Leave three minutes beyond Playwright's 27-minute budget for build and runner setup.
-    timeout-minutes: 30
+    needs: hyperframes
+    # Allow a local build if the shared package cache cannot be restored.
+    timeout-minutes: 33
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +76,16 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: actions/cache/restore@v4
+        with:
+          key: ${{ needs.hyperframes.outputs.cache-key }}
+          path: |
+            vendor/@hyperframes/.build-id
+            vendor/@hyperframes/*/dist
+            vendor/@hyperframes/*/LICENSE
+            vendor/@hyperframes/*/README.md
+            vendor/@hyperframes/core/docs
+            vendor/@hyperframes/core/schemas
       - run: bun install --frozen-lockfile
       # Static FFmpeg from GitHub instead of apt: Ubuntu mirrors can stall apt-get until the job times out.
       - name: Install FFmpeg

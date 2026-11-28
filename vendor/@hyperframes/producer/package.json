@@ -1,0 +1,47 @@
+{
+  "name": "@hyperframes/producer",
+  "version": "0.9.26",
+  "description": "HTML-to-video rendering engine using Chrome's BeginFrame API",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/heygen-com/hyperframes",
+    "directory": "packages/producer"
+  },
+  "files": [
+    "dist/"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./server": "./dist/public-server.js",
+    "./distributed": {
+      "import": "./dist/distributed.js",
+      "types": "./dist/distributed.d.ts"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.5",
+    "@hyperframes/core": "0.9.26",
+    "@hyperframes/engine": "0.9.26",
+    "@hyperframes/lint": "0.9.26",
+    "@hyperframes/parsers": "0.9.26",
+    "@hyperframes/studio-server": "0.9.26",
+    "hono": "^4.6.0",
+    "linkedom": "^0.18.12",
+    "postcss": "^8.4.0",
+    "puppeteer": "~25.11.0",
+    "puppeteer-core": "^25.11.0"
+  }
+}

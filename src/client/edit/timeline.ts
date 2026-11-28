@@ -1520,16 +1520,19 @@ export function stepHistory(
           replay = await api(
             `${project(projectId)}/history/${step}`,
             HistoryReplaySchema,
-            request,
+            {
+              ...request,
+              headers: { [TAB_ORIGIN_HEADER]: tabOrigin },
+            },
           );
         } catch (error) {
           unshow();
-          if (
-            !(error instanceof ApiError) ||
-            error.status !== 409 ||
-            useTimeline.getState().projectId !== projectId
-          )
+          if (useTimeline.getState().projectId !== projectId) throw error;
+          if (!(error instanceof ApiError) || error.status !== 409) {
+            // The step may have landed and its file event may have been recognized as our own.
+            await refreshOpenTimeline(projectId);
             throw error;
+          }
           const refusal = HistoryConflictSchema.safeParse(error.body);
           const conflict = refusal.success ? refusal.data.conflict : undefined;
           const group = conflict?.undoTogether;

@@ -1,0 +1,19 @@
+{
+  "name": "hyperframes-monorepo",
+  "x-cutroom-modified": "Cutroom keeps only the workspace packages and tools needed for its build.",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build:hyperframes-runtime:modular": "bun run --filter @hyperframes/core build:hyperframes-runtime:modular"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "esbuild": "^0.28.2",
+    "oxfmt": "^0.41.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.0.0"
+  }
+}
