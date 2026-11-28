@@ -530,15 +530,24 @@ test("fake microphone records over the cut, preserves audio, undoes once, and ex
       Math.abs(captured[i]! - rawInput[captureMatch.offset + i]!),
     );
   expect(maxSampleError).toBeLessThanOrEqual(1);
-  // Still verify the fake device supplies our file, beyond its startup artifact.
+  // Still verify the fake device supplies our file, beyond its startup artifact. Under load it
+  // drops or repeats a 10 ms buffer now and then, and a window across one matches poorly, so
+  // most half-second windows, not every one, must be the file.
   const stableInput = rawInput.subarray(rate);
-  const sourceMatch = correlate(
-    source,
-    stableInput,
-    0,
-    source.length - stableInput.length,
+  const sourceMatches = Array.from(
+    { length: Math.floor((stableInput.length - 7200) / (rate / 2)) + 1 },
+    (_, i) =>
+      correlate(
+        source,
+        stableInput.subarray(i * (rate / 2), i * (rate / 2) + 7200),
+        0,
+        source.length - 7200,
+      ).correlation,
   );
-  expect(sourceMatch.correlation).toBeGreaterThan(0.95);
+  expect(
+    sourceMatches.filter((correlation) => correlation > 0.95).length,
+    `source correlations ${sourceMatches.join(", ")}`,
+  ).toBeGreaterThan(sourceMatches.length / 2);
   const expected = (take.start / 30) * rate;
   const exportMatch = correlate(
     rendered,
@@ -557,8 +566,7 @@ test("fake microphone records over the cut, preserves audio, undoes once, and ex
         clipStartFrame: take.start,
         clipEndFrame: take.start + take.duration,
         stoppedFrame,
-        sourceOffsetSamples: sourceMatch.offset,
-        sourceCorrelation: sourceMatch.correlation,
+        sourceCorrelations: sourceMatches,
         captureCorrelation: captureMatch.correlation,
         captureStartInputFrame: firstInputFrame + captureMatch.offset,
         maxSampleError,
