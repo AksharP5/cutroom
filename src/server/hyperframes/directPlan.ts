@@ -55,7 +55,15 @@ const FREE_PROPERTIES = new Set([
   "letter-spacing",
   "z-index",
 ]);
-export const declarationsOf = (css: string) => {
+/**
+ * Clips repeat a handful of inline styles, and a plan reads each clip's style several times, so
+ * each distinct style is parsed once. A style that fails to parse throws every time.
+ */
+const parsedStyles = new Map<string, readonly Declaration[]>();
+const PARSED_STYLES_KEPT = 4096;
+export const declarationsOf = (css: string): readonly Declaration[] => {
+  const kept = parsedStyles.get(css);
+  if (kept) return kept;
   const found: Declaration[] = [];
   transformStyleAttribute({
     code: Buffer.from(css),
@@ -65,6 +73,8 @@ export const declarationsOf = (css: string) => {
       },
     },
   });
+  if (parsedStyles.size >= PARSED_STYLES_KEPT) parsedStyles.clear();
+  parsedStyles.set(css, Object.freeze(found));
   return found;
 };
 export const key = (declaration: Declaration) => JSON.stringify(declaration);
@@ -785,7 +795,7 @@ export function placedClip(
     return { reason: `${id} is not a file in the project` };
   if (seconds(attribute(element, "data-media-start") ?? "0") === null)
     return { reason: `${id} has an unreadable media start` };
-  let declarations: Declaration[];
+  let declarations: readonly Declaration[];
   try {
     declarations = declarationsOf(attribute(element, "style") ?? "");
   } catch {
