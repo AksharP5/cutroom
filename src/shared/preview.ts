@@ -142,6 +142,9 @@ export const PreviewReplySchema = z.object({
   diagnostics: z.array(CompositionDiagnosticSchema).max(20).optional(),
 });
 
+export const PREVIEW_FRAME_TIMEOUT =
+  "The preview did not draw the frame in time.";
+
 export const PreviewFrameStatusSchema = z.object({
   source: z.literal("cutroom-preview"),
   type: z.literal("frame-status"),

@@ -720,7 +720,7 @@ test("playback keeps its sound and its place when a promoted preview is replaced
   await expect(live.locator("#title")).toHaveText("Held second");
   await expect(stage).toHaveAttribute("data-handoff", "promoting");
   await expect(stage).toHaveAttribute("data-handoff", "showing", {
-    timeout: 20_000,
+    timeout: 40_000,
   });
   await expect(live.locator("#title")).toHaveText("Before");
   await page.waitForTimeout(500);

@@ -17,6 +17,7 @@ import type { CompositionScope } from "../timeline/composition";
 import { TimelineError } from "../../shared/timeline/apply";
 import { canonicalText } from "../../shared/timeline/schema";
 import { previewTiming, snappedPreviewWindow } from "./previewTiming";
+import { PREVIEW_FRAME_TIMEOUT } from "../../shared/preview";
 import type { PreviewTiming } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
 import { adjustmentCapture } from "./adjustmentCapture";
@@ -230,6 +231,7 @@ function installPreviewBridge(
   rampWindows: [src: string, seconds: number][],
   /** Every placed video of this document, to select its resting picture as export does. */
   initialPictures: PictureTable | null,
+  frameTimeoutMessage: string,
 ) {
   const adjustment = createAdjustmentCapture?.();
   const adjustmentState = adjustment && { adjustment: true };
@@ -2375,8 +2377,9 @@ function installPreviewBridge(
   let footagePending = false;
   /** Tells the editor whether the picture lacks a frame that is still being made. */
   const reportUnmade = () => {
-    if (footagePending === unmade.size > 0) return;
-    footagePending = !footagePending;
+    const pending = unmade.size > 0;
+    if (footagePending === pending) return;
+    footagePending = pending;
     parent.postMessage(
       {
         source: "cutroom-preview",
@@ -2572,7 +2575,7 @@ function installPreviewBridge(
           // and so would an editing proxy's piece that is still being made.
           let settled = false;
           const unmadeFound = (async () => {
-            while (!settled && !unmade.size) {
+            while (current() && !settled && !unmade.size) {
               findUnmade();
               await new Promise((resolve) => requestAnimationFrame(resolve));
             }
@@ -2581,7 +2584,9 @@ function installPreviewBridge(
             await Promise.race([
               waitForSeek(capturePage ? { videoFrames: false } : undefined),
               unmadeFound.then(() =>
-                settled ? undefined : waitForSeek({ videoFrames: false }),
+                settled || !current()
+                  ? undefined
+                  : waitForSeek({ videoFrames: false }),
               ),
             ]);
           } finally {
@@ -2768,6 +2773,10 @@ function installPreviewBridge(
               if (redrawGrade) grading?.redraw();
               exactVersion = version;
               frameStatus(null);
+              if (footagePending && unmade.size === 0) {
+                await paint();
+                if (!current()) return;
+              }
               reportUnmade();
             } finally {
               for (const frame of frames.values()) frame.close();
@@ -2777,8 +2786,7 @@ function installPreviewBridge(
         })(),
         new Promise<never>((_, reject) => {
           timer = window.setTimeout(
-            () =>
-              reject(new Error("The preview did not draw the frame in time.")),
+            () => reject(new Error(frameTimeoutMessage)),
             FRAME_TIMEOUT,
           );
         }),
@@ -5039,6 +5047,7 @@ export function previewDocument(
     rampPending,
     rampWindows,
     pictures,
+    PREVIEW_FRAME_TIMEOUT,
   ]).replaceAll("<", "\\u003c");
   const createAdjustment = hasAdjustment
     ? `() => (${adjustmentCapture.toString()})(${spanIndex.toString()})`

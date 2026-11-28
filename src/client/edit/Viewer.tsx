@@ -7,7 +7,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { TrackGainPreviewSchema } from "../../shared/preview";
+import {
+  PREVIEW_FRAME_TIMEOUT,
+  TrackGainPreviewSchema,
+} from "../../shared/preview";
 import type { EditorMode } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
 import { frameTime } from "../../shared/timeline/apply";
@@ -101,6 +104,7 @@ export function Viewer({
   const pipeline = useRef<ReturnType<typeof attachPipeline>>(null);
   const pipelineEnabled = usePipeline((state) => state.enabled);
   const copies = usePreparing((state) => state.copies);
+  const footagePending = usePreparing((state) => state.footagePending);
   const pipelineActive = usePipeline((state) => state.active);
   const pipelineDrawn = usePipeline((state) => state.drawn);
   const pipelineNative = usePipeline((state) => state.native);
@@ -179,7 +183,7 @@ export function Viewer({
           mixedRevision === revision) &&
         preview !== null &&
         !preview.hasAttribute("data-seek-pending") &&
-        !preview.hasAttribute("data-footage-pending") &&
+        preview.getAttribute("data-standin") !== "true" &&
         (!pipelineActive ||
           state.kind !== "stopped" ||
           (canvas?.dataset.frame === String(frame) &&
@@ -194,7 +198,6 @@ export function Viewer({
       attributes: true,
       attributeFilter: [
         "data-seek-pending",
-        "data-footage-pending",
         "data-frame",
         "data-standin",
         "data-live",
@@ -226,23 +229,15 @@ export function Viewer({
   const settled = useRef<(() => void) | null>(null);
   useLayoutEffect(() => {
     shownHandoff.current = handoff;
-    if (
-      handoff.kind === "showing" ||
-      handoff.kind === "checking" ||
-      handoff.kind === "failed"
-    ) {
+    if (handoff.kind !== "loading" && handoff.kind !== "promoting") {
       settled.current?.();
       settled.current = null;
     }
   }, [handoff]);
   const waitForPicture = () =>
     new Promise<void>((resolve) => {
-      if (
-        shownHandoff.current.kind === "showing" ||
-        shownHandoff.current.kind === "checking" ||
-        shownHandoff.current.kind === "failed"
-      )
-        resolve();
+      const { kind } = shownHandoff.current;
+      if (kind !== "loading" && kind !== "promoting") resolve();
       else settled.current = resolve;
     });
   /**
@@ -302,6 +297,7 @@ export function Viewer({
     revision: number,
     deadline = performance.now() + READY_TIMEOUT,
     ramp?: { previous: number } | "native",
+    attempt?: number,
   ) => {
     latest.current += 1;
     rampSwap.current =
@@ -316,7 +312,7 @@ export function Viewer({
     );
     documentAuditions.current.set(latest.current, auditionClip());
     loadingRevision.current = { gen: latest.current, revision };
-    transition({ type: "navigate", gen: latest.current, deadline });
+    transition({ type: "navigate", gen: latest.current, deadline, attempt });
   };
   const canPromote = (gen: number) => {
     const ramp = rampSwap.current;
@@ -526,7 +522,7 @@ export function Viewer({
       },
       (reason) => reportEditorError("viewer", reason),
     );
-    reload(0);
+    reload(shownRevision.current);
     return () => {
       closing.abort();
       checking.current?.abort();
@@ -537,6 +533,8 @@ export function Viewer({
   }, []);
   useLayoutEffect(() => {
     if (!change.revision) return;
+    if (candidate?.attempt && loadingRevision.current?.revision !== revision)
+      transition({ type: "cancelled", gen: candidate.gen });
     checking.current?.abort();
     refresh.current?.push(change);
   }, [change]);
@@ -632,6 +630,7 @@ export function Viewer({
         transition({
           type: "failed",
           gen: candidate.gen,
+          timedOut: true,
           reason: new Error(
             "The preview did not finish loading or drawing in time.",
           ),
@@ -650,6 +649,43 @@ export function Viewer({
     });
     return () => cancelAnimationFrame(frame);
   }, [handoff.retiring]);
+
+  useLayoutEffect(() => {
+    if (handoff.kind !== "retrying") return;
+    const { gen, attempt, delay } = handoff.retry;
+    const loading = loadingRevision.current;
+    const requestedRevision =
+      loading?.gen === gen
+        ? loading.revision
+        : handoff.confirmed?.gen === gen
+          ? handoff.confirmed.revision
+          : undefined;
+    if (gen !== latest.current || requestedRevision !== revision) {
+      transition({ type: "cancelled", gen });
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (gen !== latest.current || requestedRevision !== shownRevision.current)
+        return;
+      const ramp =
+        rampSwap.current?.gen === gen
+          ? { previous: rampSwap.current.previous }
+          : nativeRampDocuments.current.has(gen)
+            ? "native"
+            : undefined;
+      reload(requestedRevision, undefined, ramp, attempt);
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [handoff, revision, composition]);
+
+  const failHandoff = (gen: number, reason: unknown) =>
+    transition({
+      type: "failed",
+      gen,
+      reason,
+      timedOut:
+        reason instanceof Error && reason.message === PREVIEW_FRAME_TIMEOUT,
+    });
 
   useEffect(() => {
     if (handoff.kind !== "failed") return;
@@ -679,8 +715,7 @@ export function Viewer({
       if (!canPromote(candidate.gen)) return;
       transition({ type: "painted", gen: candidate.gen });
     })().catch((reason: unknown) => {
-      if (!preview.signal.aborted)
-        transition({ type: "failed", gen: candidate.gen, reason });
+      if (!preview.signal.aborted) failHandoff(candidate.gen, reason);
     });
   }, [handoff]);
 
@@ -742,7 +777,13 @@ export function Viewer({
         transport.dispatch({ type: "stop" });
         showToast("Playback paused. Reloading the original audio.");
       }
-      reload(revision, undefined, "native");
+      const state = shownHandoff.current;
+      const attempt =
+        (state.kind === "loading" || state.kind === "promoting") &&
+        state.candidate.gen === gen
+          ? state.candidate.attempt
+          : undefined;
+      reload(revision, undefined, "native", attempt);
     };
     const preview = connectPreview(frame, {
       mixScope: {
@@ -876,7 +917,7 @@ export function Viewer({
       });
     } catch (reason) {
       if (preview.signal.aborted || gen !== latest.current) return;
-      transition({ type: "failed", gen, reason });
+      failHandoff(gen, reason);
     }
   };
 
@@ -986,11 +1027,18 @@ export function Viewer({
             Drop media in, or ask your agent to start.
           </p>
         )}
-        {copies && copies.ready < copies.total && (
+        {((copies && copies.ready < copies.total) ||
+          footagePending ||
+          handoff.kind === "retrying" ||
+          candidate?.attempt) && (
           <div className="edit-preparing" role="status">
-            {copies.failed
-              ? "Footage could not be prepared"
-              : `Preparing footage ${Math.floor(copies.progress * 100)}%`}
+            {copies && copies.ready < copies.total
+              ? copies.failed
+                ? "Footage could not be prepared"
+                : `Preparing footage ${Math.floor(copies.progress * 100)}%`
+              : footagePending
+                ? "Preparing footage"
+                : "Preparing preview"}
           </div>
         )}
         <div ref={editLabels} className="edit-edge-labels" hidden>

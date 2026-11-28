@@ -84,6 +84,44 @@ test("promotion keeps the navigation deadline and failure reports only once with
   );
 });
 
+test("a timed-out handoff keeps its picture for two backoff retries and then reports", () => {
+  let state: Handoff = showing;
+  const reason = new Error("Deadline");
+  for (const [attempt, delay] of [
+    [0, 1000],
+    [1, 2000],
+    [2, null],
+  ] as const) {
+    const gen = attempt + 2;
+    state = transitionHandoff(state, {
+      type: "navigate",
+      gen,
+      deadline: 15_000,
+      attempt,
+    });
+    state = transitionHandoff(state, {
+      type: "failed",
+      gen,
+      reason,
+      timedOut: true,
+    });
+    if (delay !== null) {
+      expect(state).toEqual({
+        kind: "retrying",
+        confirmed,
+        retry: { gen, attempt: attempt + 1, delay },
+      });
+      expect(
+        transitionHandoff(state, {
+          type: "prepared",
+          picture: { ...confirmed, gen },
+        }),
+      ).toBe(state);
+    }
+  }
+  expect(state).toEqual({ kind: "failed", confirmed, reason });
+});
+
 test("a dropped promotion stays mounted, hidden, until the parent has painted without it", () => {
   const promote = (state: Handoff, gen: number) =>
     transitionHandoff(
