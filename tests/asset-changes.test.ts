@@ -172,6 +172,15 @@ test("watcher attributes direct media writes to the active turn, while owner upl
       body: form,
     });
   };
+  const remove = (agent?: string) =>
+    f.app.request(`/api/cutroom/projects/${f.project.id}/media/remove`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(agent && { "x-cutroom-agent": agent }),
+      },
+      body: JSON.stringify({ path: "card.png", confirmUsed: true }),
+    });
   try {
     expect((await f.app.request(base)).status).toBe(200);
     const turn = await f.review.beginTurn(f.project, {
@@ -180,19 +189,13 @@ test("watcher attributes direct media writes to the active turn, while owner upl
       token: "test",
     });
     try {
-      expect(
-        (await f.app.request(`${base}/files/card.png`, { method: "DELETE" }))
-          .status,
-      ).toBe(200);
+      expect((await remove()).status).toBe(200);
       const owner = await upload();
       expect(owner.status, await owner.clone().text()).toBe(201);
       expect((await owner.json()).files).toEqual(["card.png"]);
       await f.review.observeAssets(f.project);
       expect((await f.read()).agentChanges).toEqual([]);
-      const agent = await f.app.request(`${base}/files/card.png`, {
-        method: "DELETE",
-        headers: { "x-cutroom-agent": "external" },
-      });
+      const agent = await remove("external");
       expect(agent.status, await agent.text()).toBe(200);
       expect((await f.read()).agentChanges).toEqual(["title"]);
       await f.review.acceptChanges(f.project);

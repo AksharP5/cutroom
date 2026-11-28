@@ -454,11 +454,31 @@ export function scopeElements(
   return template ? [...descendants(template.content)] : live;
 }
 
+/**
+ * The source trees of the latest revisions. An edit's readback, review, the next timeline read
+ * and the next edit all read the same bytes, so they share one parse. Callers only read a tree.
+ */
+const markups: Record<CompositionScope, Map<string, CompositionMarkup>> = {
+  document: new Map(),
+  "sub-composition": new Map(),
+};
+const MARKUPS_KEPT = 8;
+
 /** Read a composition's source tree once for media discovery and timeline projection. */
 export function compositionMarkup(
   html: string,
   scope: CompositionScope = "document",
-) {
+): CompositionMarkup {
+  const kept = markups[scope];
+  const markup = kept.get(html) ?? readMarkup(html, scope);
+  // Most recently read last, so the oldest is first to go.
+  kept.delete(html);
+  kept.set(html, markup);
+  if (kept.size > MARKUPS_KEPT) kept.delete(kept.keys().next().value!);
+  return markup;
+}
+
+function readMarkup(html: string, scope: CompositionScope) {
   const tree = parseElements(html);
   const all = scopeElements(tree.roots, scope);
   const sources = ({ images = false, versions = false } = {}) => {
@@ -497,7 +517,7 @@ export function mediaSources(
   return compositionMarkup(html, scope).sources({ images, versions });
 }
 
-type CompositionMarkup = ReturnType<typeof compositionMarkup>;
+type CompositionMarkup = ReturnType<typeof readMarkup>;
 
 /**
  * Reads `data-fps` the way HyperFrames does: absent means 30, and anything `parseFps` rejects,
@@ -1029,7 +1049,39 @@ export function parseComposition(
   return projectTimeline(compositionMarkup(html, scope), settings, options);
 }
 
+const projections = new WeakMap<
+  CompositionMarkup,
+  { inputs: string; parsed: ParsedComposition }
+>();
+
+/**
+ * The timeline a source tree projects to. Projection is pure, so a tree keeps its latest
+ * projection and every reader with the same inputs shares it. Callers only read it.
+ */
 export function projectTimeline(
+  markup: CompositionMarkup,
+  settings: TimelineSettings,
+  options: ProjectionOptions = {},
+): ParsedComposition {
+  const sorted = (values: Iterable<string> | undefined) =>
+    values && [...values].sort();
+  const inputs = JSON.stringify([
+    settings,
+    options.rootId,
+    sorted(options.fonts),
+    options.mediaLengths &&
+      [...options.mediaLengths].sort(([a], [b]) => (a < b ? -1 : 1)),
+    sorted(options.silentMedia),
+    sorted(options.mediaFiles),
+  ]);
+  const kept = projections.get(markup);
+  if (kept?.inputs === inputs) return kept.parsed;
+  const parsed = projectMarkup(markup, settings, options);
+  projections.set(markup, { inputs, parsed });
+  return parsed;
+}
+
+function projectMarkup(
   markup: CompositionMarkup,
   settings: TimelineSettings,
   {

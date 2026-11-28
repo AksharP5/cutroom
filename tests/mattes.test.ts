@@ -14,8 +14,9 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMatteService } from "../src/server/matte/service";
+import type { MatteRequest, MatteService } from "../src/server/matte/service";
 import { mattedVideos, prepareMatteExport } from "../src/server/matte/export";
-import type { MatteStatus } from "../src/shared/matte";
+import type { MatteJob, MatteStatus } from "../src/shared/matte";
 import { MatteManifestSchema } from "../src/shared/matte";
 
 const tools = !!Bun.which("ffmpeg") && !!Bun.which("ffprobe");
@@ -80,7 +81,7 @@ async function matteFrames(path: string) {
 }
 
 function settled(
-  service: ReturnType<typeof createMatteService>,
+  service: MatteService,
   project: { id: string; path: string },
   done: (status: MatteStatus) => boolean,
 ) {
@@ -97,8 +98,25 @@ function settled(
     });
   });
 }
-const idle = (status: MatteStatus) =>
-  status.jobs.every((job) => !["waiting", "running"].includes(job.status));
+const busy = (job: MatteJob) => ["waiting", "running"].includes(job.status);
+const idle = (status: MatteStatus) => !status.jobs.some(busy);
+
+/**
+ * Asks for a range and resolves once every job that request queued has finished. A status event
+ * scheduled before the request can still show the project idle, so this follows the jobs by id.
+ */
+async function requestSettled(
+  service: MatteService,
+  project: { id: string; path: string },
+  request: MatteRequest,
+) {
+  const { jobs } = await service.request(project, request);
+  const queued = new Set(jobs.filter(busy).map(({ id }) => id));
+  const finished = (status: MatteStatus) =>
+    !status.jobs.some((job) => queued.has(job.id) && busy(job));
+  const now = await service.status(project);
+  return finished(now) ? now : settled(service, project, finished);
+}
 
 const manifest = async (project: { path: string }) =>
   MatteManifestSchema.parse(
@@ -114,14 +132,12 @@ test.skipIf(!tools)(
     await alternating(join(project.path, "talk.mp4"));
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    const finished = settled(service, project, idle);
     // From frame 37, an odd frame in the middle of a GOP, to frame 57.
-    await service.request(project, {
+    const status = await requestSettled(service, project, {
       src: "talk.mp4",
       from: 37 / 30,
       to: 57 / 30,
     });
-    const status = await finished;
     expect(status.jobs).toMatchObject([
       { status: "done", first: 37, frames: 20, done: 20 },
     ]);
@@ -152,23 +168,19 @@ test.skipIf(!tools)(
     await alternating(join(project.path, "talk.mp4"));
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    let finished = settled(service, project, idle);
-    await service.request(project, { src: "talk.mp4", from: 0, to: 1 });
-    await finished;
+    await requestSettled(service, project, { src: "talk.mp4", from: 0, to: 1 });
     const again = await service.request(project, {
       src: "talk.mp4",
       from: 0,
       to: 1,
     });
     expect(again.jobs).toEqual([]);
-    finished = settled(service, project, idle);
-    const longer = await service.request(project, {
+    const longer = await requestSettled(service, project, {
       src: "talk.mp4",
       from: 0.5,
       to: 2,
     });
     expect(longer.jobs).toMatchObject([{ first: 30, frames: 30 }]);
-    await finished;
     expect(
       (await manifest(project)).mattes.map(({ first, frames }) => [
         first,
@@ -189,9 +201,15 @@ test.skipIf(!tools)(
     await alternating(source, "0");
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    let finished = settled(service, project, idle);
-    await service.request(project, { src: "empty.mp4", from: 0, to: 1 });
-    expect((await finished).jobs).toMatchObject([{ status: "no-subject" }]);
+    expect(
+      (
+        await requestSettled(service, project, {
+          src: "empty.mp4",
+          from: 0,
+          to: 1,
+        })
+      ).jobs,
+    ).toMatchObject([{ status: "no-subject" }]);
     expect((await manifest(project)).mattes).toMatchObject([
       { subject: false, file: "" },
     ]);
@@ -206,14 +224,14 @@ test.skipIf(!tools)(
 
     await alternating(source);
     await utimes(source, new Date(), new Date(Date.now() + 5000));
-    finished = settled(service, project, idle);
-    const remade = await service.request(project, {
+    const remade = await requestSettled(service, project, {
       src: "empty.mp4",
       from: 0,
       to: 1,
     });
-    expect(remade.jobs).toMatchObject([{ first: 0, frames: 30 }]);
-    expect((await finished).jobs).toMatchObject([{ status: "done" }]);
+    expect(remade.jobs).toMatchObject([
+      { first: 0, frames: 30, status: "done" },
+    ]);
     // The stale entry is gone; only the new source's matte is listed.
     expect((await manifest(project)).mattes).toMatchObject([{ subject: true }]);
   },
@@ -360,14 +378,14 @@ test.skipIf(!tools)(
     ] as const) {
       await alternatingAt(join(project.path, name), rate, 90);
       const [num, den] = rate.split("/").map(Number) as [number, number];
-      const finished = settled(service, project, idle);
       // From frame 31, an odd frame, for 20 frames.
-      await service.request(project, {
-        src: name,
-        from: (31 * den) / num,
-        to: (51 * den) / num,
-      });
-      const [job] = (await finished).jobs;
+      const [job] = (
+        await requestSettled(service, project, {
+          src: name,
+          from: (31 * den) / num,
+          to: (51 * den) / num,
+        })
+      ).jobs;
       expect(job, rate).toMatchObject({
         status: "done",
         first: 31,
@@ -416,9 +434,15 @@ test.skipIf(!tools)(
     expect(await child.exited).toBe(0);
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    const finished = settled(service, project, idle);
-    await service.request(project, { src: "vfr.mp4", from: 0, to: 1 });
-    expect((await finished).jobs).toMatchObject([{ status: "done" }]);
+    expect(
+      (
+        await requestSettled(service, project, {
+          src: "vfr.mp4",
+          from: 0,
+          to: 1,
+        })
+      ).jobs,
+    ).toMatchObject([{ status: "done" }]);
     const [entry] = (await manifest(project)).mattes;
     expect(entry).toMatchObject({ first: 0 });
     // The average rate, as FFmpeg measures it over the file.
@@ -540,13 +564,12 @@ test.skipIf(!tools)(
     await alternatingAt(join(project.path, "short.mp4"), "30", 73);
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    const finished = settled(service, project, idle);
-    await service.request(project, {
+    const finished = await requestSettled(service, project, {
       src: "short.mp4",
       from: 1,
       to: 73 / 30 + 1,
     });
-    expect((await finished).jobs).toMatchObject([{ status: "done" }]);
+    expect(finished.jobs).toMatchObject([{ status: "done" }]);
     const [entry] = (await manifest(project)).mattes;
     expect(entry!.first + entry!.frames).toBe(73);
     expect(entry!.count).toBe(73);
@@ -613,9 +636,15 @@ test.skipIf(!tools)(
     );
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    const finished = settled(service, project, idle);
-    await service.request(project, { src: "talk.mp4", from: 0, to: 1 });
-    expect((await finished).jobs).toMatchObject([{ status: "done" }]);
+    expect(
+      (
+        await requestSettled(service, project, {
+          src: "talk.mp4",
+          from: 0,
+          to: 1,
+        })
+      ).jobs,
+    ).toMatchObject([{ status: "done" }]);
     expect(existsSync(outside)).toBe(false);
     const [entry] = (await manifest(project)).mattes;
     expect(entry!.file).toBe("mattes/talk 00-00-00 to 00-00-01 2.mp4");
@@ -637,15 +666,11 @@ test.skipIf(!tools)(
     await alternating(source);
     const service = createMatteService({ model, segmenter, modelFile });
     cleanup.push(() => service.close());
-    let finished = settled(service, project, idle);
-    await service.request(project, { src: "talk.mp4", from: 0, to: 1 });
-    await finished;
+    await requestSettled(service, project, { src: "talk.mp4", from: 0, to: 1 });
     const [old] = (await manifest(project)).mattes;
     await alternating(source, "255");
     await utimes(source, new Date(), new Date(Date.now() + 5000));
-    finished = settled(service, project, idle);
-    await service.request(project, { src: "talk.mp4", from: 0, to: 2 });
-    await finished;
+    await requestSettled(service, project, { src: "talk.mp4", from: 0, to: 2 });
     const mattes = (await manifest(project)).mattes;
     expect(mattes).toHaveLength(1);
     expect(existsSync(join(project.path, old!.file))).toBe(false);
@@ -664,11 +689,15 @@ test.skipIf(!tools)(
       segmenter: new URL("./fixtures/failing-segmenter.ts", import.meta.url),
     });
     cleanup.push(() => failing.close());
-    const finished = settled(failing, project, idle);
-    await failing.request(project, { src: "talk.mp4", from: 0, to: 1 });
-    expect((await finished).jobs).toMatchObject([
-      { status: "failed", memory: true },
-    ]);
+    expect(
+      (
+        await requestSettled(failing, project, {
+          src: "talk.mp4",
+          from: 0,
+          to: 1,
+        })
+      ).jobs,
+    ).toMatchObject([{ status: "failed", memory: true }]);
     expect(
       existsSync(join(project.path, "mattes/talk 00-00-00 to 00-00-01.mp4")),
     ).toBe(false);

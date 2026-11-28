@@ -535,7 +535,7 @@ test("lint checks the open timeline's media and scenes in full, and every timeli
       .findings.filter(({ file }) => file === composition)
       .map(({ code }) => code);
   const missing = (codes: string[]) => codes.includes("missing_local_asset");
-  // project_lint and the legacy editor name no timeline: the broken copy is reported.
+  // project_lint names no timeline: the broken copy is reported.
   expect(missing(await lint())).toBe(true);
   expect(missing(await lint(composition))).toBe(true);
   // While index.html is open the copy gets its own file's lint, and it follows the copy's bytes.

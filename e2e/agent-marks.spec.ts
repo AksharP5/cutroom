@@ -292,13 +292,12 @@ test("replacing rendered media reviews its clip and keeps owner replacements unm
       });
   await expect.poll(pixel).toEqual([253, 0, 0]);
   await page.screenshot({ path: testInfo.outputPath("asset-before.png") });
-  expect(
-    (
-      await request.delete(`${media}/files/card.png`, {
-        headers: { "x-cutroom-agent": "external" },
-      })
-    ).ok(),
-  ).toBe(true);
+  const remove = (agent?: string) =>
+    request.post(`${base}/media/remove`, {
+      data: { path: "card.png", confirmUsed: true },
+      ...(agent && { headers: { "x-cutroom-agent": agent } }),
+    });
+  expect((await remove("external")).ok()).toBe(true);
   await upload(blue, true);
   await expect.poll(pixel).toEqual([0, 0, 254]);
   await expect(page.locator("[data-agent-change]")).toHaveCount(1);
@@ -315,7 +314,7 @@ test("replacing rendered media reviews its clip and keeps owner replacements unm
     .getByRole("button", { name: "Accept all agent changes", exact: true })
     .click();
   await expect(page.locator("[data-agent-change]")).toHaveCount(0);
-  expect((await request.delete(`${media}/files/card.png`)).ok()).toBe(true);
+  expect((await remove()).ok()).toBe(true);
   await upload(red);
   await expect.poll(pixel).toEqual([253, 0, 0]);
   expect(
