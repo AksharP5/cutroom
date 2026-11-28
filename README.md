@@ -29,7 +29,7 @@ For the browser interface, run `bun start` and open `http://127.0.0.1:4317`. For
 
 Create a project or open a HyperFrames folder containing `index.html`. New projects live in `~/Videos/Cutroom`, and application data lives in `~/.local/share/cutroom`. Set `CUTROOM_PROJECTS_DIR` or `CUTROOM_DATA_DIR` to change those paths.
 
-Right-click a project on Home to rename, duplicate, or remove it from the list. Duplicate makes "<name> copy" in a folder beside the original, with its own empty undo history. On disks that clone files (btrfs, APFS) the copy costs almost no space; on others its media is copied in full. Removing never deletes files: open the folder again to bring the project back with its undo history.
+Right-click a project on Home to rename, duplicate, or remove it from the list. Duplicate makes "<name> copy" in a folder beside the original, with its own empty undo history. On disks that clone files (btrfs, APFS) the copy costs almost no space; on others its media is copied in full. The copy reuses the original's finished editing proxies and picture indexes, so it plays as soon as it opens. Removing never deletes files: open the folder again to bring the project back with its undo history.
 
 Install and authenticate Codex or Claude Code to use the Agent panel. Type `$` in the composer to choose a native skill. Cutroom uses the provider's own configuration and shows its approvals in chat. [Agent setup and review workflow](docs/agents.md).
 

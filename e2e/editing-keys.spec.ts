@@ -194,6 +194,50 @@ test("I, O and Shift+X with nothing selected ripple delete the range in one undo
   expect((await read()).timeline.range).toEqual({ in: 60, out: 135 });
 });
 
+for (const [key, at] of [
+  ["x", 90],
+  ["Shift+X", 165],
+] as const)
+  test(`${key} preserves a clip inserted before the marked edit saves`, async ({
+    page,
+    request,
+  }) => {
+    const { agent, clips, hold, read, seek } = await open(
+      page,
+      request,
+      "Concurrent range edit",
+    );
+    await seek("0200");
+    await page.keyboard.press("i");
+    await seek("0414");
+    await page.keyboard.press("o");
+    const range = { in: 60, out: 135 };
+    await expect.poll(async () => (await read()).timeline.range).toEqual(range);
+    const release = await hold();
+    await page.keyboard.press(key);
+    const after = await agent([
+      {
+        type: "insert",
+        at,
+        track: 2,
+        clip: {
+          kind: "title",
+          id: "late-title",
+          text: "New title",
+          duration: 15,
+        },
+      },
+    ]);
+    release();
+    await expect(page.locator(".toast")).toContainText(
+      "An agent changed those clips first.",
+    );
+    expect(await clips()).toEqual(
+      after.map(({ id, start, duration }) => [id, start, duration]),
+    );
+    expect((await read()).timeline.range).toEqual(range);
+  });
+
 test("Ctrl+Shift+X ripple cuts a shot for pasting, and Ctrl+Alt+' finds the gap a lift leaves", async ({
   page,
   request,

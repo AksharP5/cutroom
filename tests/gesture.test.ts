@@ -1060,6 +1060,40 @@ test("a queued ripple delete survives a read of the same dissolve", () => {
   expect(anchorsChanged(anchors, withDissolve(16))).toBe(true);
 });
 
+test("a marked edit checks newly occupied tracks, ripple followers, and the marks it clears", () => {
+  const before = { ...sequence(), range: { in: 105, out: 150 } };
+  const planned = (ripple: boolean) => {
+    const commands = [
+      CommandSchema.parse({ type: "removeRange", from: 105, to: 150, ripple }),
+      CommandSchema.parse({ type: "setRange", in: null, out: null }),
+    ];
+    return editAnchors(before, applyAll(before, commands), commands);
+  };
+  const add = (late: Clip) =>
+    normalizeTimeline({ ...before, clips: [...before.clips, late] });
+  const lift = planned(false);
+  const ripple = planned(true);
+  const newTrack = add(clip("new-track", 3, 110, 10, { mediaStart: null }));
+  expect(anchorsChanged(lift, newTrack)).toBe(true);
+  expect(anchorsChanged(ripple, newTrack)).toBe(true);
+  const follower = add(clip("follower", 1, 200, 10, { mediaStart: null }));
+  expect(anchorsChanged(lift, follower)).toBe(false);
+  expect(anchorsChanged(ripple, follower)).toBe(true);
+  const changedFollower = {
+    ...before,
+    clips: before.clips.map((item) =>
+      item.id === "c" ? { ...item, label: "New shot name" } : item,
+    ),
+  };
+  expect(anchorsChanged(lift, changedFollower)).toBe(false);
+  expect(anchorsChanged(ripple, changedFollower)).toBe(true);
+  expect(anchorsChanged(ripple, structuredClone(before))).toBe(false);
+  expect(
+    anchorsChanged(lift, { ...before, range: { in: 105, out: 160 } }),
+  ).toBe(true);
+  expect(anchorsChanged(ripple, add(clip("before", 1, 30, 10)))).toBe(false);
+});
+
 test.each([
   {
     name: "crop",

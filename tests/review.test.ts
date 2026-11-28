@@ -33,7 +33,6 @@ import type {
 import { createAgentService } from "../src/server/agents/service";
 import type { AgentService } from "../src/server/agents/service";
 import type { RuntimeFactory } from "../src/server/agents/runtime";
-import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createReviewService } from "../src/server/projects/review";
 import { createProjectRoutes } from "../src/server/projects/routes";
@@ -1038,30 +1037,6 @@ describe("review round 2 regressions", () => {
       { type: "release" },
     );
     expect((await queue.status())["Trim the end"]).toBe("queued");
-  });
-});
-
-test("the editor's own undo button withdraws a sent note as the owner", async () => {
-  const queue = await setup();
-  const editor = createHyperframesApi(queue.store, queue.review);
-  cleanup.push(() => editor.dispose());
-  const id = await queue.note("Swap the logo");
-  await send(queue.agents, queue.project, "Go");
-  const undo = await editor.request(
-    `/projects/${queue.project.id}/history/step`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ direction: "back" }),
-    },
-  );
-  expect(undo.status).toBe(200);
-  expect(
-    (await queue.items()).find((item) => item.id === id)?.review,
-  ).toMatchObject({
-    status: "withdrawn",
-    reason: "Removed by undo",
-    by: "human",
   });
 });
 

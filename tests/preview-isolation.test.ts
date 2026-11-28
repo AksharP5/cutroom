@@ -184,21 +184,14 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       expect(rtcPackets).toBe(0);
     };
     try {
-      // The retained legacy route is also a before-fix control using exactly the same attack.
-      const legacy = await pendingProject("Legacy control");
-      const old = await browser.newPage();
-      await old.goto(`${baseUrl}/api/projects/${legacy.project.id}/preview`);
-      await old.waitForFunction("window.attacks?.done === true");
-      expect(await old.evaluate("window.attacks.annotation")).toBe(201);
-      expect(await old.evaluate("window.attacks.approval")).toBe(200);
-      expect(await old.evaluate("window.attacks.projects")).toBe(200);
-      expect(await old.evaluate("window.attacks.parent")).toBe(201);
-      expect(externalRequests).toBeGreaterThan(0);
+      // Opened by URL on Cutroom's own origin, the same document runs no script at all.
+      const direct = await pendingProject("Direct document");
+      const opened = await browser.newPage();
+      await opened.goto(`${baseUrl}/api/projects/${direct.project.id}/preview`);
       await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(rtcPackets).toBeGreaterThan(0);
-      await old.close();
-      externalRequests = 0;
-      rtcPackets = 0;
+      expect(await opened.evaluate("typeof window.attacks")).toBe("undefined");
+      await unchanged(direct);
+      await opened.close();
 
       const preview = await pendingProject("Isolated preview");
       const page = await browser.newPage();

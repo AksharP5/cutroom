@@ -3,7 +3,6 @@ import { z } from "zod";
 import { create } from "zustand";
 import { compactLint } from "../shared/lint";
 import { useTimeline } from "./edit/timeline";
-import { useWorkspace } from "./workspace";
 import { subscribeProjectEvents } from "./api";
 
 type Lint = ReturnType<typeof compactLint>;
@@ -36,20 +35,14 @@ function watch(projectId: string) {
     let request = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const check = async () => {
-      // Until the editor knows which timeline it opens, there is nothing to lint in full. The
-      // legacy editor opens none, so it lints every timeline in full.
-      const opened = useTimeline.getState().projectId === projectId;
-      if (!opened && useWorkspace.getState().newEditor) return;
+      // Until the editor knows which timeline it opens, there is nothing to lint in full.
+      if (useTimeline.getState().projectId !== projectId) return;
       request.abort();
       request = new AbortController();
       const { signal } = request;
       try {
         const response = await fetch(
-          `/api/projects/${encodeURIComponent(projectId)}/lint${
-            opened
-              ? `?${new URLSearchParams({ composition: openTimeline() })}`
-              : ""
-          }`,
+          `/api/projects/${encodeURIComponent(projectId)}/lint?${new URLSearchParams({ composition: openTimeline() })}`,
           { signal },
         );
         const body: unknown = await response.json();
