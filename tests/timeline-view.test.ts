@@ -38,6 +38,7 @@ import {
   pruneSelection,
   selectionAtPlayhead,
   selectionFromPlayhead,
+  selectedSpan,
 } from "../src/client/timeline/selection";
 
 const fps30 = { num: 30, den: 1 };
@@ -733,4 +734,32 @@ test("a ramped clip's filmstrip and waveform show the source it plays, not a str
   expect(
     rampSourceSeconds(clip("plain", 0, 0, 150), fps30, 0, 1, 4),
   ).toBeNull();
+});
+
+test("/ plays around the selected clips, gap or cut, and the playhead when nothing is selected", () => {
+  const state = timeline(
+    [clip("a", 0, 0, 60), clip("b", 0, 60, 30), clip("c", 0, 120, 30)],
+    [track(0)],
+  );
+  const selected = (ids: string[]) => ({
+    ...emptySelection,
+    ids: new Set(ids),
+  });
+  expect(selectedSpan(state, selected(["c", "a"]))).toEqual({
+    from: 0,
+    to: 150,
+  });
+  expect(
+    selectedSpan(state, {
+      ...emptySelection,
+      editPoint: { from: "a", to: "b", mode: "roll" },
+    }),
+  ).toEqual({ from: 60, to: 60 });
+  expect(
+    selectedSpan(state, {
+      ...emptySelection,
+      gap: { track: 0, from: 90, to: 120 },
+    }),
+  ).toEqual({ from: 90, to: 120 });
+  expect(selectedSpan(state, emptySelection)).toBeNull();
 });
