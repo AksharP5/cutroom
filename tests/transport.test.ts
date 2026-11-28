@@ -233,3 +233,97 @@ test("the jog counts only keys that are down: a menu's Play then K just stops", 
   jog.release("stop");
   expect(events.slice(2)).toEqual([stop, step(1)]);
 });
+
+test("/ plays from the pre-roll to the post-roll once and returns the playhead; K stops it there", () => {
+  const globals = globalThis as Record<string, unknown>;
+  const saved = [globals.requestAnimationFrame, globals.cancelAnimationFrame];
+  let next: FrameRequestCallback | undefined;
+  globals.requestAnimationFrame = (callback: FrameRequestCallback) => {
+    next = callback;
+    return 1;
+  };
+  globals.cancelAnimationFrame = () => {};
+  let seconds = 0;
+  let playing = true;
+  const tickAt = (at: number) => {
+    seconds = at;
+    next?.(0);
+  };
+  try {
+    const transport = createTransport();
+    transport.setTimeline({
+      fps: { num: 30, den: 1 },
+      duration: 900,
+      range: { in: null, out: null },
+    });
+    transport.attach({
+      play() {},
+      pause() {},
+      seek: (at) => (seconds = at),
+      time: () => seconds,
+      clock: () => null,
+      playing: () => playing,
+      setMuted() {},
+    });
+    transport.seek(300);
+    transport.playAround(240, 360);
+    expect(transport.use.getState()).toMatchObject({
+      frame: 240,
+      state: { kind: "playing" },
+    });
+    tickAt(11);
+    expect(transport.use.getState().frame).toBe(330);
+    tickAt(12);
+    expect(transport.use.getState()).toMatchObject({
+      frame: 300,
+      state: { kind: "stopped" },
+    });
+
+    transport.playAround(240, 360);
+    tickAt(9);
+    transport.dispatch({ type: "stop" });
+    expect(transport.use.getState()).toMatchObject({
+      frame: 270,
+      state: { kind: "stopped" },
+    });
+
+    // / again mid-pass plays the same pass from its start, not one around the moving playhead,
+    // and still returns to where the first press began.
+    transport.seek(300);
+    transport.playAround(240, 360);
+    tickAt(11);
+    transport.playAround(270, 390);
+    expect(transport.use.getState().frame).toBe(240);
+    tickAt(12);
+    expect(transport.use.getState()).toMatchObject({
+      frame: 300,
+      state: { kind: "stopped" },
+    });
+
+    // With Loop on, the pass repeats until stopped.
+    transport.use.setState({ loop: true });
+    transport.playAround(240, 360);
+    tickAt(12);
+    expect(transport.use.getState()).toMatchObject({
+      frame: 240,
+      state: { kind: "playing" },
+    });
+
+    transport.use.setState({ loop: false });
+    transport.seek(420);
+    transport.playAround(240, 360);
+    transport.setTimeline({
+      fps: { num: 30, den: 1 },
+      duration: 345,
+      range: { in: null, out: null },
+    });
+    playing = false;
+    tickAt(344 / 30);
+    expect(transport.use.getState()).toMatchObject({
+      frame: 344,
+      state: { kind: "stopped" },
+    });
+  } finally {
+    [globals.requestAnimationFrame, globals.cancelAnimationFrame] = saved;
+  }
+});

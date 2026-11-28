@@ -80,6 +80,11 @@ export const keymap = {
     keys: ["Shift+J"],
   },
   controlStop: { area: "Playback", label: "Stop", keys: ["K"] },
+  controlPlayAroundToPlayAroundCurrentSelection: {
+    area: "Playback",
+    label: "Play around the selection or playhead",
+    keys: ["/"],
+  },
   controlStepReverse: {
     area: "Playhead",
     label: "Previous frame",

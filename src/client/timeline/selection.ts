@@ -34,6 +34,25 @@ export function clipsAtEditPoint(timeline: Timeline, point: EditPoint) {
   return null;
 }
 
+/** The frames a selection covers: its clips, gap, or cut. Null when nothing is selected. */
+export function selectedSpan(
+  timeline: Timeline,
+  { ids, gap, editPoint }: Selection,
+): FrameRange | null {
+  if (gap) return { from: gap.from, to: gap.to };
+  if (editPoint) {
+    const sides = clipsAtEditPoint(timeline, editPoint);
+    const at = sides?.to?.start ?? (sides?.from && clipEnd(sides.from));
+    return at === undefined ? null : { from: at, to: at };
+  }
+  const clips = timeline.clips.filter((clip) => ids.has(clip.id));
+  if (!clips.length) return null;
+  return {
+    from: Math.min(...clips.map((clip) => clip.start)),
+    to: Math.max(...clips.map(clipEnd)),
+  };
+}
+
 /** Find the nearest edge on the enabled picture destination, or on the sound destination. */
 export function nearestEditPoint(
   timeline: Timeline,

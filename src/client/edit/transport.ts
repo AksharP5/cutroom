@@ -125,6 +125,8 @@ export function createTransport() {
   let tick = 0;
   let follows = 0;
   let origin = { frame: 0, at: 0 };
+  /** One pass of Play Around: plays `first` to `end`, then the playhead goes back to `back`. */
+  let around: { first: number; end: number; back: number } | null = null;
 
   const clamp = (frame: number) =>
     Math.max(0, Math.min(get().duration - 1, frame));
@@ -144,6 +146,7 @@ export function createTransport() {
   /** Playback wraps inside the range while loop is on, and otherwise runs the whole length. */
   function bounds() {
     const { loop, range, duration, span } = get();
+    if (around) return around;
     if (span) return { first: span.first, end: Math.min(span.end, duration) };
     return loop
       ? { first: range.in ?? 0, end: Math.min(range.out ?? duration, duration) }
@@ -151,6 +154,7 @@ export function createTransport() {
   }
 
   function park(frame: number, held: Hold = false) {
+    around = null;
     cancelAnimationFrame(tick);
     player?.pause();
     set({ state: stopped, frame, held });
@@ -185,6 +189,8 @@ export function createTransport() {
     )
       frame = end;
     const loops = get().loop || get().span !== null;
+    // Loop repeats Play Around, as in Resolve; otherwise one pass returns the playhead.
+    if (frame >= end && around && !get().loop) return park(clamp(around.back));
     if (frame >= end) {
       if (loops) restart(first);
       else return park(end - 1);
@@ -244,7 +250,25 @@ export function createTransport() {
       );
     },
     dispatch(event: TransportEvent) {
+      around = null;
       run(transition(get().state, event));
+    },
+    /**
+     * Plays `first` to `end` once and puts the playhead back where it was, as Resolve's Play
+     * Around does, or over and over while Loop is on. Pressed again during a pass, it plays
+     * that pass again from its start. Any other playback or seek ends it where it is.
+     */
+    playAround(first: number, end: number) {
+      const { frame, duration } = get();
+      if (!duration) return;
+      const pass = around ?? {
+        first: clamp(first),
+        end: Math.min(Math.max(end, first + 1), duration),
+        back: frame,
+      };
+      park(pass.first);
+      around = pass;
+      run({ kind: "playing" });
     },
     /** Moves the playhead and stops playback; the latest seek wins. */
     seek(frame: number) {
@@ -302,6 +326,7 @@ export function createTransport() {
         transport.seek(snap(before.frame));
         return;
       }
+      if (around && around.end > duration) around.end = duration;
       set({ fps, duration, range });
       if (get().frame >= duration) transport.seek(duration - 1);
     },
