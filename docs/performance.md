@@ -1259,6 +1259,21 @@ The same 4K60 clip then ran for 30 seconds in the desktop editor on a 60 Hz disp
 
 Software was already fast enough to decode all 540 frames when the probe fed them at 60 per second. In the editor, two software decoders accepted 7,312 chunks for 808 canvas updates in the same 30-second window. Decoder throughput alone leaves that extra work and the compositor's cost in the playback path. Keep the current software decode configuration and the raw 4K guard.
 
+## Footage plan reads
+
+Every edit makes the editor read the timeline's footage plan again (`GET /pipeline`). At 1,000 clips most of that read went to Lightning CSS: the plan parsed each clip's inline style up to five times, though the clips share a handful of styles. Each distinct style is now parsed once and kept, shared with the direct export's plan and the timeline projection, so an edit parses only the styles it wrote. `tests/pipeline-plan-styles.test.ts` fails when planning 300 clips with two styles parses more than a few. Planning the 300 clips parsed 1,505 styles before.
+
+Measured on November 27, 2026 on a shared machine under load, three runs alternating with `main` on the numbered camera fixture. The plan rows are the fastest of 12 plans per run, as a range over the runs. The other rows are a ripple delete or a ripple trim through the API routes followed by the editor's timeline, changes and footage plan reads, the median of eight edits per run, then the median of the three runs.
+
+| Clips |                         |     Before |    After |
+| ----: | ----------------------- | ---------: | -------: |
+|   100 | Plan                    |   14–18 ms |   6–8 ms |
+| 1,000 | Plan                    | 132–144 ms | 35–40 ms |
+|   100 | Ripple delete and reads |      67 ms |    58 ms |
+|   100 | W and reads             |      79 ms |    52 ms |
+| 1,000 | Ripple delete and reads |     333 ms |   237 ms |
+| 1,000 | W and reads             |     295 ms |   233 ms |
+
 ## Editing proxies
 
 Measured on November 16, 2026, on the owner's machine (16 threads, RTX 5060, FFmpeg 9.0), through the media service's own job, from ffmpeg stand-ins with grain at OBS-like settings (x265, a keyframe every 2 s, two B-frames, BT.709, AAC). CPU is the job's processes' user time.

@@ -39,14 +39,27 @@ const RotateSchema = z.object({
   }),
 });
 
+type ReadStyle = Readonly<ClipStyle & { restriction?: string }>;
+/** Clips repeat a handful of inline styles, so each distinct style is read once. */
+const readStyles = new Map<string, ReadStyle>();
+const READ_STYLES_KEPT = 4096;
+
 /**
  * Reads the static inline values Cutroom owns. Stylesheets and expressions stay authored:
  * opacity reads as null, and a transform Cutroom cannot read or rewrite exactly gives the
- * reason it stays source-only.
+ * reason it stays source-only. Callers share the result and only read it.
  */
-export function readClipStyle(style: string | undefined): ClipStyle & {
-  restriction?: string;
-} {
+export function readClipStyle(style: string | undefined): ReadStyle {
+  const key = style ?? "";
+  const kept = readStyles.get(key);
+  if (kept) return kept;
+  if (readStyles.size >= READ_STYLES_KEPT) readStyles.clear();
+  const read = Object.freeze(readStyle(style));
+  readStyles.set(key, read);
+  return read;
+}
+
+function readStyle(style: string | undefined) {
   const read: ClipStyle & { restriction?: string } = {
     opacity: null,
     scaleX: null,
