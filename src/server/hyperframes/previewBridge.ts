@@ -2366,10 +2366,102 @@ function installPreviewBridge(
       ([media, facts]) => facts.browserHostile && path.endsWith(media),
     );
   };
+  /**
+   * Paused editing proxies whose time falls in a piece the server has not made yet. On a busy
+   * machine that can take minutes, so the picture goes ahead without them, as it does before the
+   * proxy exists, and each one's frame is held when its piece comes.
+   */
+  const unmade = new Set<HTMLVideoElement>();
+  let footagePending = false;
+  /** Tells the editor whether the picture lacks a frame that is still being made. */
+  const reportUnmade = () => {
+    if (footagePending === unmade.size > 0) return;
+    footagePending = !footagePending;
+    parent.postMessage(
+      {
+        source: "cutroom-preview",
+        type: "footage-pending",
+        pending: footagePending,
+      },
+      "*",
+    );
+  };
+  const waitingFor = (video: HTMLVideoElement) =>
+    video.seeking || video.readyState < 2
+      ? pictureTarget(video, mediaTime.get.call(video))
+      : null;
+  /**
+   * Asks once per time whether each waiting editing proxy's piece is made, and forgets videos
+   * that left the picture while they waited.
+   */
+  const askedPieces = new WeakMap<HTMLVideoElement, number>();
+  const findUnmade = () => {
+    for (const video of unmade)
+      if (
+        !video.isConnected ||
+        video.preload === "none" ||
+        waitingFor(video) === null
+      )
+        unmade.delete(video);
+    for (const video of document.querySelectorAll("video")) {
+      if (video.preload === "none" || unmade.has(video)) continue;
+      const target = waitingFor(video);
+      if (target === null) continue;
+      const path = editingProxyPath(video);
+      if (
+        !path ||
+        askedPieces.get(video) === target ||
+        cachedSamples(path, target)?.made
+      )
+        continue;
+      askedPieces.set(video, target);
+      loadSamples(path, target).then(
+        (page) => {
+          const now = waitingFor(video);
+          if (
+            !page ||
+            page.made ||
+            now === null ||
+            (page.from !== null && now < page.from) ||
+            (page.to !== null && now >= page.to)
+          )
+            return;
+          unmade.add(video);
+          reportUnmade();
+        },
+        () => {
+          // The paused picture request reports a failed sample lookup.
+        },
+      );
+    }
+  };
+  for (const type of ["seeked", "loadeddata"])
+    document.addEventListener(
+      type,
+      (event) => {
+        const video = event.target;
+        if (
+          !(video instanceof HTMLVideoElement) ||
+          !unmade.has(video) ||
+          video.seeking ||
+          video.readyState < 2 ||
+          Math.abs(
+            nativeTime.get!.call(video) -
+              (asked.get(video)?.at ?? nativeTime.get!.call(video)),
+          ) > 1e-3
+        )
+          return;
+        unmade.delete(video);
+        if (win.__player?.isPlaying()) reportUnmade();
+        else void refreshPicture().catch(reportFrameFailure);
+      },
+      true,
+    );
   /** The editor can carry on while an unsupported source's editing proxy is made. */
   const awaitingProxy = (video: HTMLVideoElement) =>
-    !!(video.error || (video.readyState && !video.videoWidth)) &&
-    browserHostile(video);
+    unmade.has(video) ||
+    (!!(video.error || (video.readyState && !video.videoWidth)) &&
+      browserHostile(video));
   const captureFromSource = (video: HTMLVideoElement) =>
     capturePage && browserHostile(video) && scrubPath(video) !== null;
   document.addEventListener(
@@ -2476,8 +2568,25 @@ function installPreviewBridge(
       await Promise.race([
         (async () => {
           // The capture draws unsupported local sources from their exact indexed picture.
-          // Waiting for the runtime's pending whole-video proxy would hold every frame behind it.
-          await waitForSeek(capturePage ? { videoFrames: false } : undefined);
+          // Waiting for the runtime's pending whole-video proxy would hold every frame behind it,
+          // and so would an editing proxy's piece that is still being made.
+          let settled = false;
+          const unmadeFound = (async () => {
+            while (!settled && !unmade.size) {
+              findUnmade();
+              await new Promise((resolve) => requestAnimationFrame(resolve));
+            }
+          })();
+          try {
+            await Promise.race([
+              waitForSeek(capturePage ? { videoFrames: false } : undefined),
+              unmadeFound.then(() =>
+                settled ? undefined : waitForSeek({ videoFrames: false }),
+              ),
+            ]);
+          } finally {
+            settled = true;
+          }
           for (;;) {
             if (!current()) return;
             const showing = visibleVideos();
@@ -2493,6 +2602,7 @@ function installPreviewBridge(
                 `The preview could not load ${failed.getAttribute("src")}.`,
               );
             if (videos.some((video) => video.readyState < 2 || video.seeking)) {
+              findUnmade();
               await new Promise<void>((resolve) =>
                 requestAnimationFrame(() => resolve()),
               );
@@ -2635,8 +2745,10 @@ function installPreviewBridge(
                 if (failed) throw failed.reason;
               }
               if (!current()) return;
+              // A video whose piece is still being made keeps its last frame until it comes.
               for (const [video] of holds) {
-                if (!showing.includes(video)) removeHold(video);
+                if (!showing.includes(video) && !unmade.has(video))
+                  removeHold(video);
               }
               for (const [video, frame] of frames) {
                 showHold(video, frame, false);
@@ -2656,6 +2768,7 @@ function installPreviewBridge(
               if (redrawGrade) grading?.redraw();
               exactVersion = version;
               frameStatus(null);
+              reportUnmade();
             } finally {
               for (const frame of frames.values()) frame.close();
             }
@@ -2916,6 +3029,8 @@ function installPreviewBridge(
     from: number | null;
     to: number | null;
     times: number[];
+    /** Whether the server has made the piece. A made piece stays made. */
+    made: boolean;
   };
   const samplePages: SamplePage[] = [];
   const otherProxies = new Set<string>();
@@ -2972,10 +3087,25 @@ function installPreviewBridge(
         !body.times.length ||
         !body.times.every(
           (time: unknown) => typeof time === "number" && Number.isFinite(time),
-        )
+        ) ||
+        !("made" in body) ||
+        typeof body.made !== "boolean"
       )
         throw new Error("The editing proxy has invalid frame times.");
-      const page = { path, from: body.from, to: body.to, times: body.times };
+      const known = samplePages.find(
+        (page) => page.path === path && page.from === body.from,
+      );
+      if (known) {
+        known.made ||= body.made;
+        return known;
+      }
+      const page = {
+        path,
+        from: body.from,
+        to: body.to,
+        times: body.times,
+        made: body.made,
+      };
       samplePages.push(page);
       if (samplePages.length > 8) samplePages.shift();
       return page;
@@ -3091,6 +3221,7 @@ function installPreviewBridge(
       if (event.target instanceof HTMLVideoElement) {
         forgetDecodedSeek(event.target);
         asked.delete(event.target);
+        if (unmade.delete(event.target)) reportUnmade();
       }
     },
     true,

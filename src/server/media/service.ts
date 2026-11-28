@@ -835,7 +835,10 @@ export function createMediaService(
         },
       };
     },
-    /** The requested piece's presentation times, with its neighbours at either boundary. */
+    /**
+     * The requested piece's presentation times, with its neighbours at either boundary, and
+     * whether the piece is made yet.
+     */
     async proxySamples(project: Project, path: string, time: number) {
       const plan = await request(project, path, "pieces").catch(
         (error: unknown) => {
@@ -862,10 +865,12 @@ export function createMediaService(
       const first = header + Math.max(0, offsets[0]! - 1);
       const last = header + offsets[1]! + (index < pieces.cuts.length ? 1 : 0);
       const bytes = await file.slice(first * width, last * width).arrayBuffer();
+      const proxy = await request(project, path, "proxy");
       return {
         from: pieces.cuts[index - 1] ?? null,
         to: pieces.cuts[index] ?? null,
         times: Array.from(new Float64Array(bytes)),
+        made: !!proxy.artifact || !!proxy.job?.work?.done.has(index),
       };
     },
     sprite(project: Project, key: string, sheet = 0) {

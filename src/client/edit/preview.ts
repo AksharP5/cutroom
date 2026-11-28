@@ -8,6 +8,7 @@ import {
   TextWarningSchema,
   PositionFoldSchema,
   PreviewLevelsSchema,
+  PreviewFootageSchema,
   PreviewFrameStatusSchema,
   PlaybackClockSchema,
   PreviewReplySchema,
@@ -375,6 +376,11 @@ export function connectPreview(
     ) {
       const status = PreviewFrameStatusSchema.safeParse(event.data);
       if (status.success) reportFrameError(status.data.error);
+      return;
+    }
+    const footage = PreviewFootageSchema.safeParse(event.data);
+    if (footage.success) {
+      frame.toggleAttribute("data-footage-pending", footage.data.pending);
       return;
     }
     if (
