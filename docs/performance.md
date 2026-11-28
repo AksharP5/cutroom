@@ -652,7 +652,20 @@ On November 20, 2026, the local server handled 12 saves of each edit on the numb
 
 At 1,000 clips, median Undo server time was 10–11 ms before and 9–10 ms after. All 72 edits and their undo steps produced identical composition, project settings and clip ID ledger bytes when replayed with the same piece IDs.
 
-Review indexes linked sound by link ID and uses the timeline's clip ownership rules to find authored byte ranges. It skips editor-only fields such as style and source restrictions, and still checks the referenced files on disk. The editor uses one HTML tree for media discovery and timeline projection. It parses each distinct inline clip style once per projection and still projects saved HTML to verify the edit before writing it. In a separate run, sharing the saved HTML tree with review changed the 1,000-clip medians to 132 ms, 111 ms and 114 ms for ripple delete, W and razor. The change did not consistently help across edits, so review keeps its independent source read.
+Review indexes linked sound by link ID and uses the timeline's clip ownership rules to find authored byte ranges. It skips editor-only fields such as style and source restrictions, and still checks the referenced files on disk. The editor uses one HTML tree for media discovery and timeline projection. It parses each distinct inline clip style once per projection and still projects saved HTML to verify the edit before writing it. Review reads the same shared tree; see below.
+
+## One parse per revision
+
+Before November 27, 2026, one edit at 1,000 clips parsed its 226 KB document four times before the editor's next read: the edit's own read, the readback of the written bytes, review's clip signatures, and the timeline read that follows. The timeline changes and footage plan reads each parsed it again. The server now keeps the parsed tree per distinct document, and each tree its latest projection, so the readback is the only parse. `tests/timeline-parse-once.test.ts` fails when an edit and the next read parse the document more than once.
+
+Measured on November 27, 2026 on a shared machine, in process through the API routes on the numbered 1080p60 camera fixture (`scripts/scale-performance-project.ts`). Each edit is followed by the three reads the editor makes after it: the timeline, its changes and the footage plan. Medians of eight edits per run, three runs per build alternating with `main`; each cell is the median of the three runs.
+
+| Clips | Edit          | Edit before | Edit after | Reads before | Reads after | Edit and reads before | Edit and reads after |
+| ----: | ------------- | ----------: | ---------: | -----------: | ----------: | --------------------: | -------------------: |
+|   100 | Ripple delete |       38 ms |      29 ms |        39 ms |       16 ms |                 78 ms |                44 ms |
+|   100 | W             |       41 ms |      28 ms |        39 ms |       17 ms |                 80 ms |                49 ms |
+| 1,000 | Ripple delete |      191 ms |     121 ms |       255 ms |       94 ms |                453 ms |               214 ms |
+| 1,000 | W             |      204 ms |     119 ms |       236 ms |       95 ms |                445 ms |               213 ms |
 
 ## Trim preview
 
