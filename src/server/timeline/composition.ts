@@ -1115,18 +1115,6 @@ function projectMarkup(
     managedAudioGroups(root).map((bus) => bus.attrs.id),
   );
   const authoredMembers = new Set<SourceElement>();
-  const styles = new Map<
-    string | undefined,
-    ReturnType<typeof readClipStyle>
-  >();
-  const styleOf = ({ attrs }: SourceElement) => {
-    let style = styles.get(attrs.style);
-    if (!style) {
-      style = readClipStyle(attrs.style);
-      styles.set(attrs.style, style);
-    }
-    return style;
-  };
   const clips = rows.map(({ id, element, read, start, end, edges }): Clip => {
     const kind = clipKind(element);
     const title =
@@ -1139,7 +1127,7 @@ function projectMarkup(
     const referenced = reference && clipIds.get(reference);
     const referencedEnd = reference && timing(reference).finish;
     const volume = parseNumeric(element.attrs["data-volume"]);
-    const style = styleOf(element);
+    const style = readClipStyle(element.attrs.style);
     // Stored at element-local frames; the element starts before the clip under a transition.
     const keyframes = isAudioKind(kind)
       ? null
@@ -1432,7 +1420,7 @@ function projectMarkup(
         parsed,
         clip,
         element,
-        styleOf(element).restriction,
+        readClipStyle(element.attrs.style).restriction,
       );
       return restrictions
         ? { ...clip, sourceRestrictions: restrictions }
