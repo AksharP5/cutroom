@@ -2377,7 +2377,8 @@ function installPreviewBridge(
   let footagePending = false;
   /** Tells the editor whether the picture lacks a frame that is still being made. */
   const reportUnmade = () => {
-    const pending = unmade.size > 0;
+    const pending =
+      unmade.size > 0 && visibleVideos(true).some((video) => unmade.has(video));
     if (footagePending === pending) return;
     footagePending = pending;
     parent.postMessage(
@@ -2467,6 +2468,8 @@ function installPreviewBridge(
       browserHostile(video));
   const captureFromSource = (video: HTMLVideoElement) =>
     capturePage && browserHostile(video) && scrubPath(video) !== null;
+  const canCaptureVideo = (video: HTMLVideoElement) =>
+    captureFromSource(video) || !awaitingProxy(video);
   document.addEventListener(
     "loadedmetadata",
     (event) => {
@@ -2486,7 +2489,7 @@ function installPreviewBridge(
     },
     true,
   );
-  const visibleVideos = () => {
+  const visibleVideos = (includePending = false) => {
     const hidden = new Set([
       ...holds.keys(),
       ...deferredSeeks.keys(),
@@ -2500,7 +2503,7 @@ function installPreviewBridge(
           checkOpacity: true,
           checkVisibilityCSS: true,
         }) &&
-        (captureFromSource(video) || !awaitingProxy(video)),
+        (includePending || canCaptureVideo(video)),
     );
     for (const video of hidden) video.setAttribute("data-cutroom-held", "");
     return videos;
@@ -2623,7 +2626,8 @@ function installPreviewBridge(
             if (!current()) return;
             // The footage pipeline can take a video while its index loads; it no longer shows
             // natively, so look again at which videos do before checking where they rest.
-            const nowShowing = visibleVideos();
+            const nowVisible = visibleVideos(true);
+            const nowShowing = nowVisible.filter(canCaptureVideo);
             if (
               nowShowing.length !== showing.length ||
               nowShowing.some((video, index) => video !== showing[index])
@@ -2750,9 +2754,12 @@ function installPreviewBridge(
                 if (failed) throw failed.reason;
               }
               if (!current()) return;
-              // A video whose piece is still being made keeps its last frame until it comes.
+              // Pending footage can hold its last frame only while it belongs in the picture.
               for (const [video] of holds) {
-                if (!showing.includes(video) && !unmade.has(video))
+                if (
+                  !nowShowing.includes(video) &&
+                  !(unmade.has(video) && nowVisible.includes(video))
+                )
                   removeHold(video);
               }
               for (const [video, frame] of frames) {
@@ -2773,7 +2780,10 @@ function installPreviewBridge(
               if (redrawGrade) grading?.redraw();
               exactVersion = version;
               frameStatus(null);
-              if (footagePending && unmade.size === 0) {
+              if (
+                footagePending &&
+                !nowVisible.some((video) => unmade.has(video))
+              ) {
                 await paint();
                 if (!current()) return;
               }

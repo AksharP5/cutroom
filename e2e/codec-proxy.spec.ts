@@ -955,6 +955,10 @@ test("a recording placed while its proxy is made shows the new timeline at once 
   // Matroska forces the editing proxy regardless of Chromium's HEVC support.
   const duration = 64;
   await makeHevcRecording(join(project.path, "take.mkv"), duration);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><body style="margin:0;background:white"><main id="main" data-composition-id="main" data-fps="30" data-width="640" data-height="360" data-duration="2"><div id="gap" class="clip" data-start="0" data-duration="2" data-track-index="0"></div></main></body></html>`,
+  );
   // A long take's proxy is still being made when it is placed. Source and the footage pipeline
   // are told so, as they would be, so the preview's request starts it.
   await page.route(
@@ -1005,6 +1009,10 @@ test("a recording placed while its proxy is made shows the new timeline at once 
     },
   );
   await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-preview-ready",
+  );
+  await seekFrame(page, 30);
   const take = page
     .getByRole("region", { name: "Media", exact: true })
     .getByRole("listitem", { name: "take.mkv" });
@@ -1041,7 +1049,7 @@ test("a recording placed while its proxy is made shows the new timeline at once 
 
   hold = holdPiece(7);
   try {
-    await seekFrame(page, 900);
+    await seekFrame(page, 930);
     await hold.requested.promise;
     await expect(preparing).toBeVisible();
     await expect(page.locator("iframe[data-live]")).toHaveAttribute(
@@ -1050,9 +1058,18 @@ test("a recording placed while its proxy is made shows the new timeline at once 
     );
     await expect(stage).not.toHaveAttribute("data-preview-ready");
     expect(await shownFrame(page, 16)).toBe(duration * 30 - 1);
+    await seekFrame(page, 5);
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    await expect(preparing).toBeHidden();
+    await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
+      "data-standin",
+    );
+    expect(await shownFrame(page, 16)).toBe(0xffff);
   } finally {
     hold.release.resolve();
   }
+  hold = holdPiece(-1);
+  await seekFrame(page, 930);
   await expect(stage).toHaveAttribute("data-preview-ready");
   await expect(preparing).toBeHidden();
   expect(await shownFrame(page, 16)).toBe(900);
