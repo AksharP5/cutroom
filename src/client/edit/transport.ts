@@ -190,7 +190,7 @@ export function createTransport() {
       frame = end;
     const loops = get().loop || get().span !== null;
     // Loop repeats Play Around, as in Resolve; otherwise one pass returns the playhead.
-    if (frame >= end && around && !get().loop) return park(around.back);
+    if (frame >= end && around && !get().loop) return park(clamp(around.back));
     if (frame >= end) {
       if (loops) restart(first);
       else return park(end - 1);
@@ -326,6 +326,7 @@ export function createTransport() {
         transport.seek(snap(before.frame));
         return;
       }
+      if (around && around.end > duration) around.end = duration;
       set({ fps, duration, range });
       if (get().frame >= duration) transport.seek(duration - 1);
     },

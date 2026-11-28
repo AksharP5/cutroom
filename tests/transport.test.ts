@@ -244,6 +244,7 @@ test("/ plays from the pre-roll to the post-roll once and returns the playhead; 
   };
   globals.cancelAnimationFrame = () => {};
   let seconds = 0;
+  let playing = true;
   const tickAt = (at: number) => {
     seconds = at;
     next?.(0);
@@ -261,7 +262,7 @@ test("/ plays from the pre-roll to the post-roll once and returns the playhead; 
       seek: (at) => (seconds = at),
       time: () => seconds,
       clock: () => null,
-      playing: () => true,
+      playing: () => playing,
       setMuted() {},
     });
     transport.seek(300);
@@ -306,6 +307,21 @@ test("/ plays from the pre-roll to the post-roll once and returns the playhead; 
     expect(transport.use.getState()).toMatchObject({
       frame: 240,
       state: { kind: "playing" },
+    });
+
+    transport.use.setState({ loop: false });
+    transport.seek(420);
+    transport.playAround(240, 360);
+    transport.setTimeline({
+      fps: { num: 30, den: 1 },
+      duration: 345,
+      range: { in: null, out: null },
+    });
+    playing = false;
+    tickAt(344 / 30);
+    expect(transport.use.getState()).toMatchObject({
+      frame: 344,
+      state: { kind: "stopped" },
     });
   } finally {
     [globals.requestAnimationFrame, globals.cancelAnimationFrame] = saved;
